@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "odds:load": "tsx scripts/oddsLoader.ts"
+    "odds:load": "tsx scripts/oddsLoader.ts",
+    "ratings:build": "tsx scripts/ratingsBuilder.ts"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
