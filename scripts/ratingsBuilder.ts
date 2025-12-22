@@ -1,35 +1,73 @@
+/**
+ * ratingsBuilder.ts — KenPom → Opponent-Adjusted Ratings (Per-100 Possessions)
+ * ---------------------------------------------------------
+ * HARD RULES (per your notes):
+ *  1) Only count teams that exist in `team_map.canonical`
+ *  2) Only include KenPom games where BOTH teams map via `team_map.KenPom -> canonical`
+ *  3) Do NOT create big tables of game results — compute in-memory and upsert ratings
+ *
+ * Supabase tables used:
+ *  - team_map: canonical, KenPom, (other variations ignored here)
+ *  - team_possessions: canonical, season, poss
+ *  - team_ratings: canonical (FK -> team_map.canonical), season, ...
+ *
+ * Run: npm run ratings:build
+ */
+
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
+
+type KpParsedLine = {
+  dateStr: string;
+  team1Raw: string;
+  team2Raw: string;
+  score1: number;
+  score2: number;
+  suffix: string;
+};
 
 type KpGame = {
   season: string;
   date: Date;
   team1: string; // canonical
   team2: string; // canonical
-  score1: number;
-  score2: number;
+  score1: number; // regulation-equivalent points
+  score2: number; // regulation-equivalent points
   suffix: string;
   neutral: boolean;
-  gamePoss: number;
+  gamePoss: number; // regulation-equivalent poss
 };
 
-const SPORT_KEY = "basketball_ncaab";
+type TeamGame = {
+  team: string; // canonical
+  opponent: string; // canonical
+  off100: number;
+  oppOff100: number;
+  rawScore: number;
+  oppRawScore: number;
+  neutral: boolean;
+  homeAway: "home" | "away" | "neutral";
+  baseWeight: number;
+  gamePoss: number;
+  suffix: string;
+};
+
+// === CONFIG (match Apps Script defaults) ===
+const SPORT_KEY = "basketball_ncaab"; // not used in DB writes unless you add it
 const KP_URL = "https://kenpom.com/cbbga26.txt";
 const SEASON = "2025-26";
 
-// Match Apps Script defaults
 const HFA_POINTS = 2.0;
 const MAX_ITER = 1000;
 const TOL = 1e-6;
 const RECENCY_HALF_LIFE_DAYS = 30;
-const RECENCY_FLOOR = 0.30;
+const RECENCY_FLOOR = 0.3;
 const MARGIN_CAP = 25;
 const PRIOR_GAMES = 5;
 
 const DEFAULT_LEAGUE_AVG_POSS = 70;
 
-// ---------------- utils ----------------
-
+// === helpers ===
 function normalizeKey(s: string) {
   return String(s || "")
     .toLowerCase()
@@ -52,19 +90,19 @@ function parseMMDDYYYY(s: string): Date | null {
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
+function average(arr: number[]) {
+  if (!arr.length) return 0;
+  let s = 0;
+  for (const x of arr) s += x;
+  return s / arr.length;
+}
+
 function getRecencyWeight(gameDate: Date, maxDate: Date): number {
   const msPerDay = 1000 * 60 * 60 * 24;
   const ageDays = (maxDate.getTime() - gameDate.getTime()) / msPerDay;
   if (ageDays <= 0) return 1.0;
   const w = Math.pow(0.5, ageDays / RECENCY_HALF_LIFE_DAYS);
   return Math.max(RECENCY_FLOOR, w);
-}
-
-function average(arr: number[]) {
-  if (!arr.length) return 0;
-  let s = 0;
-  for (const x of arr) s += x;
-  return s / arr.length;
 }
 
 function computeNumOT(suffix: string): number {
@@ -75,17 +113,10 @@ function computeNumOT(suffix: string): number {
   return 1;
 }
 
-function isNeutral(suffix: string): boolean {
+function isNeutralFromSuffix(suffix: string): boolean {
+  // KenPom uses "N", "1N", etc
   return /\b[0-9]*\s*[Nn]\b/.test(suffix) || /\b[0-9]*[Nn]$/.test(suffix);
 }
-
-function chunk<T>(arr: T[], size: number) {
-  return Array.from({ length: Math.ceil(arr.length / size) }, (_, i) =>
-    arr.slice(i * size, (i + 1) * size)
-  );
-}
-
-// ---------------- KenPom fetch/parse ----------------
 
 async function fetchKenPomText(): Promise<string> {
   const res = await fetch(KP_URL, {
@@ -96,35 +127,30 @@ async function fetchKenPomText(): Promise<string> {
   });
   if (!res.ok) throw new Error(`KenPom fetch failed: ${res.status} ${await res.text()}`);
   const raw = await res.text();
+
+  // If wrapped in <pre>, extract it
   const pre = raw.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
   return pre ? pre[1] : raw;
 }
 
-function parseKpLines(text: string) {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+function parseKenPomLines(text: string): KpParsedLine[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
 
-  // Example:
-  // 11/03/2025 Florida 87 Arizona 93 N   Las Vegas, NV
-  const parsed: Array<{
-    dateStr: string;
-    team1: string;
-    score1: number;
-    team2: string;
-    score2: number;
-    suffix: string;
-  }> = [];
+  const parsed: KpParsedLine[] = [];
 
   for (const line of lines) {
-    const m = line.match(
-      /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d+)\s+(.+?)\s+(\d+)\s*(.*)$/
-    );
+    // 11/03/2025 Florida 87 Arizona 93 N   Las Vegas, NV
+    const m = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d+)\s+(.+?)\s+(\d+)\s*(.*)$/);
     if (!m) continue;
 
     parsed.push({
       dateStr: m[1],
-      team1: m[2].trim(),
+      team1Raw: m[2].trim(),
       score1: Number(m[3]),
-      team2: m[4].trim(),
+      team2Raw: m[4].trim(),
       score2: Number(m[5]),
       suffix: (m[6] || "").trim(),
     });
@@ -133,14 +159,25 @@ function parseKpLines(text: string) {
   return parsed;
 }
 
-// ---------------- Supabase loads ----------------
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
-async function loadTeamMapKenPomOnly(supabase: ReturnType<typeof createClient>) {
-  // only D1 teams you care about are those present in team_map
+// === DB loads ===
+async function loadTeamMapKenPomOnly(
+  supabase: ReturnType<typeof createClient>
+): Promise<{
+  canonSet: Set<string>;
+  kpToCanon: Map<string, string>;
+}> {
+  // D1 universe for THIS builder = rows with canonical AND KenPom populated.
   const { data, error } = await supabase
     .from("team_map")
     .select("canonical,KenPom")
-    .not("canonical", "is", null);
+    .not("canonical", "is", null)
+    .not("KenPom", "is", null);
 
   if (error) throw error;
 
@@ -149,13 +186,12 @@ async function loadTeamMapKenPomOnly(supabase: ReturnType<typeof createClient>) 
 
   for (const r of data || []) {
     const canonical = String((r as any).canonical || "").trim();
-    if (!canonical) continue;
-    canonSet.add(canonical);
+    const kpName = String((r as any).KenPom || "").trim();
 
-    const kp = (r as any).KenPom;
-    if (kp && String(kp).trim()) {
-      kpToCanon.set(normalizeKey(String(kp)), canonical);
-    }
+    if (!canonical || !kpName) continue;
+
+    canonSet.add(canonical);
+    kpToCanon.set(normalizeKey(kpName), canonical);
   }
 
   return { canonSet, kpToCanon };
@@ -163,12 +199,13 @@ async function loadTeamMapKenPomOnly(supabase: ReturnType<typeof createClient>) 
 
 async function loadPossessions(
   supabase: ReturnType<typeof createClient>,
+  season: string,
   canonSet: Set<string>
-) {
+): Promise<{ teamPoss: Map<string, number>; leagueAvgPoss: number }> {
   const { data, error } = await supabase
     .from("team_possessions")
     .select("canonical, poss")
-    .eq("season", SEASON);
+    .eq("season", season);
 
   if (error) throw error;
 
@@ -178,8 +215,11 @@ async function loadPossessions(
 
   for (const r of data || []) {
     const canonical = String((r as any).canonical || "").trim();
-    if (!canonical || !canonSet.has(canonical)) continue; // only count teams in team_map
     const p = Number((r as any).poss);
+
+    // Only keep possessions for teams we’re rating
+    if (!canonical || !canonSet.has(canonical)) continue;
+
     if (Number.isFinite(p) && p > 0) {
       teamPoss.set(canonical, p);
       leagueSum += p;
@@ -187,85 +227,50 @@ async function loadPossessions(
     }
   }
 
-  const leagueAvgPoss = leagueCnt ? leagueSum / leagueCnt : DEFAULT_LEAGUE_AVG_POSS;
+  const leagueAvgPoss = leagueCnt > 0 ? leagueSum / leagueCnt : DEFAULT_LEAGUE_AVG_POSS;
   return { teamPoss, leagueAvgPoss };
 }
 
-// ---------------- main ----------------
-
-async function main() {
-  const SUPABASE_URL = process.env.SUPABASE_URL!;
-  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("Missing env vars: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY");
-  }
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-  // 1) D1 universe = whatever is in team_map
-  const { canonSet, kpToCanon } = await loadTeamMapKenPomOnly(supabase);
-
-  if (!canonSet.size) {
-    throw new Error("team_map is empty — cannot build D1-only ratings.");
-  }
-
-  // 2) possessions restricted to team_map
-  const { teamPoss, leagueAvgPoss } = await loadPossessions(supabase, canonSet);
-
-  // 3) fetch + parse KenPom
-  const text = await fetchKenPomText();
-  const rawGames = parseKpLines(text);
-
-  const missingKpCounts = new Map<string, number>();
-  const addMissing = (name: string) => {
-    const k = normalizeKey(name);
-    missingKpCounts.set(k, (missingKpCounts.get(k) || 0) + 1);
-  };
-
-  const gameRows: KpGame[] = [];
+// === core compute ===
+function buildGamesFromKenPom(
+  rawLines: KpParsedLine[],
+  kpToCanon: Map<string, string>,
+  canonSet: Set<string>,
+  teamPoss: Map<string, number>,
+  leagueAvgPoss: number
+): { games: KpGame[]; maxDate: Date } {
+  const games: KpGame[] = [];
   let maxDate: Date | null = null;
 
-  let scanned = 0;
-  let skippedNotInMap = 0;
-
-  for (const g of rawGames) {
-    scanned++;
-
+  // STRICT: only include games where BOTH teams map from team_map.KenPom -> canonical
+  for (const g of rawLines) {
     const date = parseMMDDYYYY(g.dateStr);
     if (!date) continue;
 
-    const k1 = normalizeKey(g.team1);
-    const k2 = normalizeKey(g.team2);
+    const c1 = kpToCanon.get(normalizeKey(g.team1Raw));
+    const c2 = kpToCanon.get(normalizeKey(g.team2Raw));
+    if (!c1 || !c2) continue;
 
-    const team1 = kpToCanon.get(k1);
-    const team2 = kpToCanon.get(k2);
+    // STRICT: only allow canonicals that are in our “KenPom-populated” team_map slice
+    if (!canonSet.has(c1) || !canonSet.has(c2)) continue;
 
-    // HARD FILTER: both must exist in team_map.KenPom mapping
-    if (!team1 || !team2) {
-      skippedNotInMap++;
-      if (!team1) addMissing(g.team1);
-      if (!team2) addMissing(g.team2);
-      continue;
-    }
+    const neutral = isNeutralFromSuffix(g.suffix);
 
-    // (extra safety) canonical must be in team_map
-    if (!canonSet.has(team1) || !canonSet.has(team2)) {
-      skippedNotInMap++;
-      continue;
-    }
-
-    const neutral = isNeutral(g.suffix);
-
-    const p1 = teamPoss.get(team1);
-    const p2 = teamPoss.get(team2);
-
+    // possessions (season avg)
+    const p1 = teamPoss.get(c1);
+    const p2 = teamPoss.get(c2);
     let gamePoss = leagueAvgPoss;
-    if (Number.isFinite(p1) && Number.isFinite(p2)) gamePoss = ((p1 as number) + (p2 as number)) / 2;
-    else if (Number.isFinite(p1)) gamePoss = p1 as number;
-    else if (Number.isFinite(p2)) gamePoss = p2 as number;
+    if (Number.isFinite(p1) && Number.isFinite(p2)) gamePoss = (p1! + p2!) / 2;
+    else if (Number.isFinite(p1)) gamePoss = p1!;
+    else if (Number.isFinite(p2)) gamePoss = p2!;
 
+    // OT scale back to 40-minute equivalent
     const numOT = computeNumOT(g.suffix);
-    const possScale = numOT > 0 ? 40 / (40 + 5 * numOT) : 1.0;
+    let possScale = 1.0;
+    if (numOT > 0) {
+      const totalMinutes = 40 + 5 * numOT;
+      possScale = 40 / totalMinutes;
+    }
 
     const regPoss = gamePoss * possScale;
     const regScore1 = g.score1 * possScale;
@@ -273,11 +278,11 @@ async function main() {
 
     if (!maxDate || date > maxDate) maxDate = date;
 
-    gameRows.push({
+    games.push({
       season: SEASON,
       date,
-      team1,
-      team2,
+      team1: c1,
+      team2: c2,
       score1: regScore1,
       score2: regScore2,
       suffix: g.suffix,
@@ -286,54 +291,27 @@ async function main() {
     });
   }
 
-  if (!gameRows.length) {
-    const topMissing = Array.from(missingKpCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 30)
-      .map(([k, c]) => ({ kp_normalized: k, count: c }));
-
-    console.error(
-      JSON.stringify(
-        {
-          ok: false,
-          reason: "No games remained after filtering to team_map.KenPom.",
-          scanned_lines: scanned,
-          skipped_not_in_team_map: skippedNotInMap,
-          team_map_count: canonSet.size,
-          top_missing_kenpom_names: topMissing,
-        },
-        null,
-        2
-      )
+  if (!games.length) {
+    throw new Error(
+      "No valid games after strict KenPom->canonical mapping. Check team_map.KenPom values."
     );
-    throw new Error("No D1-only games parsed. Update team_map.KenPom values.");
   }
-
   if (!maxDate) throw new Error("No maxDate computed.");
 
-  // 4) build team-games
-  type TeamGame = {
-    team: string;
-    opponent: string;
-    off100: number;
-    oppOff100: number;
-    rawScore: number;
-    oppRawScore: number;
-    neutral: boolean;
-    homeAway: "home" | "away" | "neutral";
-    baseWeight: number;
-    gamePoss: number;
-    suffix: string;
-  };
+  return { games, maxDate };
+}
 
+function buildTeamGames(games: KpGame[], maxDate: Date) {
   const teamGames: TeamGame[] = [];
   let totalPtsAll = 0;
   let totalPossAll = 0;
 
-  for (const g of gameRows) {
+  for (const g of games) {
     const recW = getRecencyWeight(g.date, maxDate);
-    const wBase = recW;
+    const wBase = 1.0 * recW;
 
+    // IMPORTANT: KenPom cbbga lines are ordered as AwayTeam score HomeTeam score (typical box format)
+    // Your Apps Script assumed team1=away, team2=home unless Neutral.
     const ha1: TeamGame["homeAway"] = g.neutral ? "neutral" : "away";
     const ha2: TeamGame["homeAway"] = g.neutral ? "neutral" : "home";
 
@@ -373,10 +351,18 @@ async function main() {
   }
 
   const leagueAvgOff100 = (totalPtsAll / totalPossAll) * 100;
+  return { teamGames, leagueAvgOff100 };
+}
 
-  // 5) index mapping
+function solveOffDef(
+  teamGames: TeamGame[],
+  leagueAvgOff100: number,
+  leagueAvgPoss: number
+) {
+  // index mapping
   const teamSet = new Set<string>();
   for (const tg of teamGames) teamSet.add(tg.team);
+
   const teams = Array.from(teamSet).sort();
   const nTeams = teams.length;
 
@@ -411,7 +397,7 @@ async function main() {
     gamesPerTeam[ti] += 1;
   }
 
-  // 6) solver
+  // iterative solver
   let Off = new Array<number>(nTeams).fill(0);
   let Def = new Array<number>(nTeams).fill(0);
 
@@ -442,6 +428,7 @@ async function main() {
       DefNew[t] = defW[t] > 0 ? defSum[t] / defW[t] : Def[t];
     }
 
+    // recenter so mean(Off)=mean(Def)=0
     const offMean = average(OffNew);
     const defMean = average(DefNew);
     for (let t = 0; t < nTeams; t++) {
@@ -449,6 +436,7 @@ async function main() {
       DefNew[t] -= defMean;
     }
 
+    // convergence
     let delta = 0;
     for (let t = 0; t < nTeams; t++) {
       delta = Math.max(delta, Math.abs(OffNew[t] - Off[t]), Math.abs(DefNew[t] - Def[t]));
@@ -460,7 +448,7 @@ async function main() {
     if (delta < TOL) break;
   }
 
-  // 7) shrink toward league avg
+  // shrink toward league avg (0 dev) using PRIOR_GAMES
   for (let t = 0; t < nTeams; t++) {
     const gCount = gamesPerTeam[t] || 0;
     const shrink = gCount / (gCount + PRIOR_GAMES);
@@ -468,6 +456,7 @@ async function main() {
     Def[t] = shrink * Def[t];
   }
 
+  // recenter after shrink
   const offMean2 = average(Off);
   const defMean2 = average(Def);
   for (let t = 0; t < nTeams; t++) {
@@ -475,11 +464,21 @@ async function main() {
     Def[t] -= defMean2;
   }
 
-  const engineAdjOff = Off.map((x) => 100 + x);
-  const engineAdjDef = Def.map((x) => 100 - x);
-  const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]);
+  return { teams, idx, teamIdx, oppIdx, gamesPerTeam, Off, Def };
+}
 
-  // 9) True HCA
+function computeTrueHca(
+  teamGames: TeamGame[],
+  teams: string[],
+  teamIdx: number[],
+  oppIdx: number[],
+  Off: number[],
+  Def: number[],
+  leagueAvgOff100: number
+) {
+  const nTeams = teams.length;
+  const nGames = teamGames.length;
+
   const homeResSum = new Array<number>(nTeams).fill(0);
   const homeResCnt = new Array<number>(nTeams).fill(0);
   const awayResSum = new Array<number>(nTeams).fill(0);
@@ -511,16 +510,148 @@ async function main() {
   for (let t = 0; t < nTeams; t++) {
     const h = homeResCnt[t];
     const a = awayResCnt[t];
-    if (h === 0 && a === 0) continue;
+    if (h === 0 && a === 0) {
+      trueHca[t] = HFA_POINTS;
+      continue;
+    }
     const homeAvg = h > 0 ? homeResSum[t] / h : 0;
     const awayAvg = a > 0 ? awayResSum[t] / a : 0;
     trueHca[t] = HFA_POINTS + (homeAvg - awayAvg);
   }
 
-  // 10) Fun factor + sigmas + pure averages
+  return trueHca;
+}
+
+function computeFunAndSigmas(teamGames: TeamGame[], teams: string[], leagueAvgOff100: number) {
+  const nTeams = teams.length;
+  const nGames = teamGames.length;
+
   const totalPer100Sum = new Array<number>(nTeams).fill(0);
   const totalPer100Sq = new Array<number>(nTeams).fill(0);
   const totalRawSum = new Array<number>(nTeams).fill(0);
+
+  const closeSum = new Array<number>(nTeams).fill(0);
+
+  const marginSignedPer100Sum = new Array<number>(nTeams).fill(0);
+  const marginSignedPer100Sq = new Array<number>(nTeams).fill(0);
+
+  const marginAbsPer100Sum = new Array<number>(nTeams).fill(0);
+  const marginAbsPer100Sq = new Array<number>(nTeams).fill(0);
+
+  const marginSignedRawSum = new Array<number>(nTeams).fill(0);
+  const gameCount = new Array<number>(nTeams).fill(0);
+  const otCount = new Array<number>(nTeams).fill(0);
+
+  for (let i = 0; i < nGames; i++) {
+    const g = teamGames[i];
+    const ti = teams.indexOf(g.team); // safe but O(n); we’ll optimize below if needed
+
+    // NOTE: we can’t rely on teams.indexOf in a tight loop if performance becomes an issue.
+    // With ~700 teams it’s fine, but if you want, we can pass teamIdx in.
+    if (ti < 0) continue;
+
+    const totalPer100 = g.off100 + g.oppOff100;
+    const signedMargin100 = g.off100 - g.oppOff100;
+    const absMargin100 = Math.abs(signedMargin100);
+
+    const totalRaw = g.rawScore + g.oppRawScore;
+    const signedMarginRaw = g.rawScore - g.oppRawScore;
+
+    const closeGame = Math.max(0, 1 - absMargin100 / 25);
+    const otFlag = /OT/i.test(g.suffix || "") ? 1 : 0;
+
+    totalPer100Sum[ti] += totalPer100;
+    totalPer100Sq[ti] += totalPer100 * totalPer100;
+    totalRawSum[ti] += totalRaw;
+
+    marginSignedPer100Sum[ti] += signedMargin100;
+    marginSignedPer100Sq[ti] += signedMargin100 * signedMargin100;
+
+    marginAbsPer100Sum[ti] += absMargin100;
+    marginAbsPer100Sq[ti] += absMargin100 * absMargin100;
+
+    marginSignedRawSum[ti] += signedMarginRaw;
+
+    closeSum[ti] += closeGame;
+    gameCount[ti] += 1;
+    otCount[ti] += otFlag;
+  }
+
+  const leagueAvgTotal100 = 2 * leagueAvgOff100;
+
+  const sigmaTotal100 = new Array<number>(nTeams).fill(0);
+  const sigmaMargin100 = new Array<number>(nTeams).fill(0);
+  const avgTotalPoints = new Array<number>(nTeams).fill(0);
+  const avgMarginPoints = new Array<number>(nTeams).fill(0);
+
+  const rawFun = new Array<number>(nTeams).fill(0);
+  let minFun: number | null = null;
+  let maxFun: number | null = null;
+
+  for (let t = 0; t < nTeams; t++) {
+    const gc = gameCount[t];
+    if (!gc) continue;
+
+    const meanTotalPer100 = totalPer100Sum[t] / gc;
+    const meanTotalPer100Sq = totalPer100Sq[t] / gc;
+    const varTotal = Math.max(0, meanTotalPer100Sq - meanTotalPer100 * meanTotalPer100);
+    sigmaTotal100[t] = Math.sqrt(varTotal);
+
+    const meanMarginSigned = marginSignedPer100Sum[t] / gc;
+    const meanMarginSignedSq = marginSignedPer100Sq[t] / gc;
+    const varMarginSigned = Math.max(0, meanMarginSignedSq - meanMarginSigned * meanMarginSigned);
+    sigmaMargin100[t] = Math.sqrt(varMarginSigned);
+
+    avgTotalPoints[t] = totalRawSum[t] / gc;
+    avgMarginPoints[t] = marginSignedRawSum[t] / gc;
+
+    const scoringScore = meanTotalPer100 / leagueAvgTotal100;
+    const closenessScore = closeSum[t] / gc;
+
+    const meanAbs = marginAbsPer100Sum[t] / gc;
+    const meanAbsSq = marginAbsPer100Sq[t] / gc;
+    const varAbs = Math.max(0, meanAbsSq - meanAbs * meanAbs);
+    const stdAbs = Math.sqrt(varAbs);
+    const volatilityScore = stdAbs / 10.0;
+
+    const otRate = otCount[t] / gc;
+
+    const rf =
+      0.4 * scoringScore +
+      0.3 * closenessScore +
+      0.2 * volatilityScore +
+      0.1 * (otRate * 2);
+
+    rawFun[t] = rf;
+    minFun = minFun === null ? rf : Math.min(minFun, rf);
+    maxFun = maxFun === null ? rf : Math.max(maxFun, rf);
+  }
+
+  const funFactor = new Array<number>(nTeams).fill(10);
+  if (minFun !== null && maxFun !== null && maxFun > minFun) {
+    const span = maxFun - minFun;
+    for (let t = 0; t < nTeams; t++) {
+      const norm = (rawFun[t] - minFun) / span;
+      funFactor[t] = 20 * norm;
+    }
+  }
+
+  return { funFactor, sigmaTotal100, sigmaMargin100, avgTotalPoints, avgMarginPoints };
+}
+
+// optimized fun/sigma computation (avoid teams.indexOf in loop)
+function computeFunAndSigmasFast(
+  teamGames: TeamGame[],
+  nTeams: number,
+  teamIdx: number[],
+  leagueAvgOff100: number
+) {
+  const nGames = teamGames.length;
+
+  const totalPer100Sum = new Array<number>(nTeams).fill(0);
+  const totalPer100Sq = new Array<number>(nTeams).fill(0);
+  const totalRawSum = new Array<number>(nTeams).fill(0);
+
   const closeSum = new Array<number>(nTeams).fill(0);
 
   const marginSignedPer100Sum = new Array<number>(nTeams).fill(0);
@@ -618,32 +749,89 @@ async function main() {
   if (minFun !== null && maxFun !== null && maxFun > minFun) {
     const span = maxFun - minFun;
     for (let t = 0; t < nTeams; t++) {
-      const norm = (rawFun[t] - (minFun as number)) / span;
+      const norm = (rawFun[t] - minFun) / span;
       funFactor[t] = 20 * norm;
     }
   }
 
-  // 11) rows + ranks
+  return { funFactor, sigmaTotal100, sigmaMargin100, avgTotalPoints, avgMarginPoints };
+}
+
+// === main ===
+async function main() {
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error("Missing env vars: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY");
+  }
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  // 1) STRICT D1 universe = team_map rows with KenPom populated
+  const { canonSet, kpToCanon } = await loadTeamMapKenPomOnly(supabase);
+
+  if (canonSet.size === 0) {
+    throw new Error("team_map contains 0 rows with KenPom populated. Cannot build ratings.");
+  }
+
+  // 2) possessions (only for canonSet)
+  const { teamPoss, leagueAvgPoss } = await loadPossessions(supabase, SEASON, canonSet);
+
+  // 3) fetch + parse KenPom
+  const text = await fetchKenPomText();
+  const rawLines = parseKenPomLines(text);
+
+  // 4) STRICT: only include games that map KenPom -> canonical for BOTH teams
+  const { games, maxDate } = buildGamesFromKenPom(rawLines, kpToCanon, canonSet, teamPoss, leagueAvgPoss);
+
+  // 5) build team-games + league avg off100
+  const { teamGames, leagueAvgOff100 } = buildTeamGames(games, maxDate);
+
+  // 6) solve Off/Def
+  const { teams, teamIdx, oppIdx, gamesPerTeam, Off, Def } = solveOffDef(teamGames, leagueAvgOff100, leagueAvgPoss);
+  const nTeams = teams.length;
+
+  // 7) engine metrics
+  const engineAdjOff = Off.map((x) => 100 + x);
+  const engineAdjDef = Def.map((x) => 100 - x);
+  const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]);
+
+  // 8) true HCA
+  const trueHca = computeTrueHca(teamGames, teams, teamIdx, oppIdx, Off, Def, leagueAvgOff100);
+
+  // 9) fun + sigmas + averages
+  const { funFactor, sigmaTotal100, sigmaMargin100, avgTotalPoints, avgMarginPoints } =
+    computeFunAndSigmasFast(teamGames, nTeams, teamIdx, leagueAvgOff100);
+
+  // 10) build rows + rank by engine_power desc
+  const nowIso = new Date().toISOString();
+
   const rows = teams.map((team, i) => ({
     canonical: team,
     season: SEASON,
-    updated_at: new Date().toISOString(),
+    updated_at: nowIso,
+
     engine_adj_off: engineAdjOff[i],
     engine_adj_def: engineAdjDef[i],
     engine_power: enginePower[i],
+
     true_hca: trueHca[i],
     fun_factor: funFactor[i],
+
     sigma_total_100: sigmaTotal100[i],
     sigma_margin_100: sigmaMargin100[i],
+
+    // keep your existing column names in Supabase:
     avg_total_points: avgTotalPoints[i],
     avg_margin_points: avgMarginPoints[i],
-    power_rank: 0,
   }));
 
+  // sort + assign power_rank
   rows.sort((a, b) => Number(b.engine_power ?? 0) - Number(a.engine_power ?? 0));
-  rows.forEach((r, i) => (r.power_rank = i + 1));
+  rows.forEach((r, i) => ((r as any).power_rank = i + 1));
 
-  // 12) upsert into team_ratings
+  // 11) upsert into team_ratings
   for (const batch of chunk(rows, 500)) {
     const { error } = await supabase.from("team_ratings").upsert(batch, {
       onConflict: "canonical,season",
@@ -651,27 +839,16 @@ async function main() {
     if (error) throw error;
   }
 
-  // log missing KP names to help you fix team_map.KenPom quickly
-  const topMissing = Array.from(missingKpCounts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 30)
-    .map(([kp_normalized, count]) => ({ kp_normalized, count }));
-
   console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        season: SEASON,
-        d1_team_map_count: canonSet.size,
-        teams_rated: rows.length,
-        games_used: gameRows.length,
-        scanned_lines: scanned,
-        skipped_not_in_team_map: skippedNotInMap,
-        top_missing_kenpom_names: topMissing,
-      },
-      null,
-      2
-    )
+    JSON.stringify({
+      ok: true,
+      season: SEASON,
+      teams_rated: rows.length,
+      games_used: games.length,
+      kenpom_lines_parsed: rawLines.length,
+      d1_universe_size_team_map_kenpom: canonSet.size,
+      leagueAvgPoss,
+    })
   );
 }
 
