@@ -1,0 +1,32 @@
+name: Odds Loader (NCAAB)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *" # every 15 minutes
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run odds loader
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          SPORT_KEY: basketball_ncaab
+          BOOKMAKERS: draftkings,fanduel,betmgm,betrivers,hardrockbet,betonlineag,pinnacle
+          MARKETS: h2h,spreads,totals
+        run: npm run odds:load
