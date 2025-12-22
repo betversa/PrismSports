@@ -590,8 +590,8 @@ async function main() {
 
     true_hca: round2(trueHca[i]),
 
-    pf_pg: round2(pfPg.get(team) || 0),
-    pa_pg: round2(paPg.get(team) || 0),
+    pf_points: round2(pfPg.get(team) || 0),
+    pa_points: round2(paPg.get(team) || 0),
     games_played: Number(gp.get(team) || 0),
   }));
 
