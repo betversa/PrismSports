@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "odds:load": "node scripts/odds/load.js"
+    "odds:load": "tsx scripts/oddsLoader.ts"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -66,7 +66,8 @@
     "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
     "tailwindcss": "4.1.12",
-    "vite": "6.3.5"
+    "vite": "6.3.5",
+    "tsx": "^4.19.2"
   },
   "peerDependencies": {
     "react": "18.3.1",
