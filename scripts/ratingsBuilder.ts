@@ -4,8 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 type KpGame = {
   season: string;
   date: Date;
-  team1: string;
-  team2: string;
+  team1: string; // canonical
+  team2: string; // canonical
   score1: number;
   score2: number;
   suffix: string;
@@ -96,8 +96,6 @@ async function fetchKenPomText(): Promise<string> {
   });
   if (!res.ok) throw new Error(`KenPom fetch failed: ${res.status} ${await res.text()}`);
   const raw = await res.text();
-
-  // If wrapped in <pre>, extract it
   const pre = raw.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
   return pre ? pre[1] : raw;
 }
@@ -135,35 +133,38 @@ function parseKpLines(text: string) {
   return parsed;
 }
 
-// ---------------- Supabase helpers ----------------
+// ---------------- Supabase loads ----------------
 
-async function loadKenPomCanonicalizer(supabase: ReturnType<typeof createClient>) {
-  /**
-   * Uses team_map.KenPom (variation) -> team_map.canonical
-   * Note: select("canonical,KenPom") works if the column name is exactly KenPom.
-   */
+async function loadTeamMapKenPomOnly(supabase: ReturnType<typeof createClient>) {
+  // only D1 teams you care about are those present in team_map
   const { data, error } = await supabase
     .from("team_map")
     .select("canonical,KenPom")
-    .not("KenPom", "is", null);
+    .not("canonical", "is", null);
 
   if (error) throw error;
 
+  const canonSet = new Set<string>();
   const kpToCanon = new Map<string, string>();
+
   for (const r of data || []) {
+    const canonical = String((r as any).canonical || "").trim();
+    if (!canonical) continue;
+    canonSet.add(canonical);
+
     const kp = (r as any).KenPom;
-    const canon = (r as any).canonical;
-    if (!kp || !canon) continue;
-    kpToCanon.set(normalizeKey(String(kp)), String(canon));
+    if (kp && String(kp).trim()) {
+      kpToCanon.set(normalizeKey(String(kp)), canonical);
+    }
   }
 
-  return (kpName: string) => {
-    const key = normalizeKey(kpName);
-    return kpToCanon.get(key) || kpName.trim();
-  };
+  return { canonSet, kpToCanon };
 }
 
-async function loadPossessions(supabase: ReturnType<typeof createClient>) {
+async function loadPossessions(
+  supabase: ReturnType<typeof createClient>,
+  canonSet: Set<string>
+) {
   const { data, error } = await supabase
     .from("team_possessions")
     .select("canonical, poss")
@@ -177,8 +178,8 @@ async function loadPossessions(supabase: ReturnType<typeof createClient>) {
 
   for (const r of data || []) {
     const canonical = String((r as any).canonical || "").trim();
+    if (!canonical || !canonSet.has(canonical)) continue; // only count teams in team_map
     const p = Number((r as any).poss);
-    if (!canonical) continue;
     if (Number.isFinite(p) && p > 0) {
       teamPoss.set(canonical, p);
       leagueSum += p;
@@ -190,78 +191,7 @@ async function loadPossessions(supabase: ReturnType<typeof createClient>) {
   return { teamPoss, leagueAvgPoss };
 }
 
-/**
- * FK-safe: ensure all canonicals exist in team_map before inserting into team_ratings.
- *
- * We insert missing rows into team_map with:
- *  - canonical = canonical
- *  - KenPom = canonical (safe default if you don’t have a better KP string)
- *  - "The Odds API" = canonical (optional helper)
- * All other columns left null.
- */
-async function ensureTeamsExistInTeamMap(
-  supabase: ReturnType<typeof createClient>,
-  canonicals: string[]
-) {
-  const unique = Array.from(new Set(canonicals.map((c) => String(c || "").trim()).filter(Boolean)));
-  if (!unique.length) return;
-
-  // Find existing canonicals in team_map
-  const existing = new Set<string>();
-  for (const batch of chunk(unique, 500)) {
-    const { data, error } = await supabase
-      .from("team_map")
-      .select("canonical")
-      .in("canonical", batch);
-
-    if (error) throw error;
-    for (const r of data || []) existing.add(String((r as any).canonical));
-  }
-
-  const missing = unique.filter((c) => !existing.has(c));
-  if (!missing.length) return;
-
-  const payload = missing.map((canonical) => ({
-    canonical,
-    KenPom: canonical,
-    // IMPORTANT: if your actual column is literally named "The Odds API" in Postgres,
-    // this object-key approach works (Supabase will quote it).
-    // If the real DB column is snake_case (e.g., the_odds_api), rename this key accordingly.
-    "The Odds API": canonical,
-    ESPN_Long: null,
-    SR_School: null,
-    SR_School_Short: null,
-    Elo: null,
-    HFA: null,
-    TR: null,
-  }));
-
-  const { error: upsertErr } = await supabase.from("team_map").upsert(payload, {
-    onConflict: "canonical",
-  });
-
-  if (upsertErr) {
-    console.error(
-      JSON.stringify(
-        {
-          message:
-            "Failed to upsert missing canonicals into team_map. This is almost always a column-name mismatch " +
-            '(ex: "The Odds API" is actually the_odds_api) or an RLS/permission issue.',
-          upsert_error: upsertErr,
-          missing_count: missing.length,
-          missing_sample: missing.slice(0, 25),
-        },
-        null,
-        2
-      )
-    );
-    throw upsertErr;
-  }
-
-  console.log(JSON.stringify({ ensured_team_map: true, inserted: missing.length }, null, 2));
-}
-
-// ------------------------- main -------------------------
+// ---------------- main ----------------
 
 async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL!;
@@ -272,36 +202,68 @@ async function main() {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  const canonicalize = await loadKenPomCanonicalizer(supabase);
-  const { teamPoss, leagueAvgPoss } = await loadPossessions(supabase);
+  // 1) D1 universe = whatever is in team_map
+  const { canonSet, kpToCanon } = await loadTeamMapKenPomOnly(supabase);
 
-  // Fetch + parse KenPom games
+  if (!canonSet.size) {
+    throw new Error("team_map is empty — cannot build D1-only ratings.");
+  }
+
+  // 2) possessions restricted to team_map
+  const { teamPoss, leagueAvgPoss } = await loadPossessions(supabase, canonSet);
+
+  // 3) fetch + parse KenPom
   const text = await fetchKenPomText();
   const rawGames = parseKpLines(text);
+
+  const missingKpCounts = new Map<string, number>();
+  const addMissing = (name: string) => {
+    const k = normalizeKey(name);
+    missingKpCounts.set(k, (missingKpCounts.get(k) || 0) + 1);
+  };
 
   const gameRows: KpGame[] = [];
   let maxDate: Date | null = null;
 
+  let scanned = 0;
+  let skippedNotInMap = 0;
+
   for (const g of rawGames) {
+    scanned++;
+
     const date = parseMMDDYYYY(g.dateStr);
     if (!date) continue;
 
-    // First map KP name -> canonical (via team_map.KenPom)
-    const team1 = canonicalize(g.team1);
-    const team2 = canonicalize(g.team2);
+    const k1 = normalizeKey(g.team1);
+    const k2 = normalizeKey(g.team2);
+
+    const team1 = kpToCanon.get(k1);
+    const team2 = kpToCanon.get(k2);
+
+    // HARD FILTER: both must exist in team_map.KenPom mapping
+    if (!team1 || !team2) {
+      skippedNotInMap++;
+      if (!team1) addMissing(g.team1);
+      if (!team2) addMissing(g.team2);
+      continue;
+    }
+
+    // (extra safety) canonical must be in team_map
+    if (!canonSet.has(team1) || !canonSet.has(team2)) {
+      skippedNotInMap++;
+      continue;
+    }
 
     const neutral = isNeutral(g.suffix);
 
-    // possessions
     const p1 = teamPoss.get(team1);
     const p2 = teamPoss.get(team2);
-    let gamePoss = leagueAvgPoss;
 
+    let gamePoss = leagueAvgPoss;
     if (Number.isFinite(p1) && Number.isFinite(p2)) gamePoss = ((p1 as number) + (p2 as number)) / 2;
     else if (Number.isFinite(p1)) gamePoss = p1 as number;
     else if (Number.isFinite(p2)) gamePoss = p2 as number;
 
-    // OT scale back to 40-minute equivalent
     const numOT = computeNumOT(g.suffix);
     const possScale = numOT > 0 ? 40 / (40 + 5 * numOT) : 1.0;
 
@@ -324,16 +286,32 @@ async function main() {
     });
   }
 
-  if (!gameRows.length) throw new Error("No games parsed from KenPom file.");
+  if (!gameRows.length) {
+    const topMissing = Array.from(missingKpCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 30)
+      .map(([k, c]) => ({ kp_normalized: k, count: c }));
+
+    console.error(
+      JSON.stringify(
+        {
+          ok: false,
+          reason: "No games remained after filtering to team_map.KenPom.",
+          scanned_lines: scanned,
+          skipped_not_in_team_map: skippedNotInMap,
+          team_map_count: canonSet.size,
+          top_missing_kenpom_names: topMissing,
+        },
+        null,
+        2
+      )
+    );
+    throw new Error("No D1-only games parsed. Update team_map.KenPom values.");
+  }
+
   if (!maxDate) throw new Error("No maxDate computed.");
 
-  // FK safety: ensure all canonicals exist in team_map BEFORE upserting team_ratings
-  await ensureTeamsExistInTeamMap(
-    supabase,
-    gameRows.flatMap((g) => [g.team1, g.team2])
-  );
-
-  // 4) Build team-game rows (two per game)
+  // 4) build team-games
   type TeamGame = {
     team: string;
     opponent: string;
@@ -396,7 +374,7 @@ async function main() {
 
   const leagueAvgOff100 = (totalPtsAll / totalPossAll) * 100;
 
-  // 5) Index mapping
+  // 5) index mapping
   const teamSet = new Set<string>();
   for (const tg of teamGames) teamSet.add(tg.team);
   const teams = Array.from(teamSet).sort();
@@ -433,7 +411,7 @@ async function main() {
     gamesPerTeam[ti] += 1;
   }
 
-  // 6) Iterative solver
+  // 6) solver
   let Off = new Array<number>(nTeams).fill(0);
   let Def = new Array<number>(nTeams).fill(0);
 
@@ -464,7 +442,6 @@ async function main() {
       DefNew[t] = defW[t] > 0 ? defSum[t] / defW[t] : Def[t];
     }
 
-    // recenter
     const offMean = average(OffNew);
     const defMean = average(DefNew);
     for (let t = 0; t < nTeams; t++) {
@@ -472,7 +449,6 @@ async function main() {
       DefNew[t] -= defMean;
     }
 
-    // convergence
     let delta = 0;
     for (let t = 0; t < nTeams; t++) {
       delta = Math.max(delta, Math.abs(OffNew[t] - Off[t]), Math.abs(DefNew[t] - Def[t]));
@@ -484,7 +460,7 @@ async function main() {
     if (delta < TOL) break;
   }
 
-  // 7) Shrink toward league avg
+  // 7) shrink toward league avg
   for (let t = 0; t < nTeams; t++) {
     const gCount = gamesPerTeam[t] || 0;
     const shrink = gCount / (gCount + PRIOR_GAMES);
@@ -492,7 +468,6 @@ async function main() {
     Def[t] = shrink * Def[t];
   }
 
-  // recenter
   const offMean2 = average(Off);
   const defMean2 = average(Def);
   for (let t = 0; t < nTeams; t++) {
@@ -500,7 +475,6 @@ async function main() {
     Def[t] -= defMean2;
   }
 
-  // 8) Engine Off/Def/Power
   const engineAdjOff = Off.map((x) => 100 + x);
   const engineAdjDef = Def.map((x) => 100 - x);
   const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]);
@@ -649,7 +623,7 @@ async function main() {
     }
   }
 
-  // 11) Build rows + rank by enginePower (desc)
+  // 11) rows + ranks
   const rows = teams.map((team, i) => ({
     canonical: team,
     season: SEASON,
@@ -669,7 +643,7 @@ async function main() {
   rows.sort((a, b) => Number(b.engine_power ?? 0) - Number(a.engine_power ?? 0));
   rows.forEach((r, i) => (r.power_rank = i + 1));
 
-  // 12) Upsert into team_ratings
+  // 12) upsert into team_ratings
   for (const batch of chunk(rows, 500)) {
     const { error } = await supabase.from("team_ratings").upsert(batch, {
       onConflict: "canonical,season",
@@ -677,13 +651,23 @@ async function main() {
     if (error) throw error;
   }
 
+  // log missing KP names to help you fix team_map.KenPom quickly
+  const topMissing = Array.from(missingKpCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([kp_normalized, count]) => ({ kp_normalized, count }));
+
   console.log(
     JSON.stringify(
       {
         ok: true,
         season: SEASON,
-        teams: rows.length,
-        games: gameRows.length,
+        d1_team_map_count: canonSet.size,
+        teams_rated: rows.length,
+        games_used: gameRows.length,
+        scanned_lines: scanned,
+        skipped_not_in_team_map: skippedNotInMap,
+        top_missing_kenpom_names: topMissing,
       },
       null,
       2
@@ -695,4 +679,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
