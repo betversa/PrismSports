@@ -14,8 +14,6 @@ type KpGame = {
 };
 
 const SPORT_KEY = "basketball_ncaab";
-
-// KenPom file for 2025-26 season
 const KP_URL = "https://kenpom.com/cbbga26.txt";
 const SEASON = "2025-26";
 
@@ -28,8 +26,9 @@ const RECENCY_FLOOR = 0.30;
 const MARGIN_CAP = 25;
 const PRIOR_GAMES = 5;
 
-// Fallback league avg possessions if you don't have possessions populated yet
 const DEFAULT_LEAGUE_AVG_POSS = 70;
+
+// ---------------- utils ----------------
 
 function normalizeKey(s: string) {
   return String(s || "")
@@ -68,11 +67,31 @@ function average(arr: number[]) {
   return s / arr.length;
 }
 
+function computeNumOT(suffix: string): number {
+  const s = String(suffix || "").toUpperCase();
+  if (!s.includes("OT")) return 0;
+  const m = s.match(/(\d+)\s*OT/i);
+  if (m?.[1]) return parseInt(m[1], 10);
+  return 1;
+}
+
+function isNeutral(suffix: string): boolean {
+  return /\b[0-9]*\s*[Nn]\b/.test(suffix) || /\b[0-9]*[Nn]$/.test(suffix);
+}
+
+function chunk<T>(arr: T[], size: number) {
+  return Array.from({ length: Math.ceil(arr.length / size) }, (_, i) =>
+    arr.slice(i * size, (i + 1) * size)
+  );
+}
+
+// ---------------- KenPom fetch/parse ----------------
+
 async function fetchKenPomText(): Promise<string> {
   const res = await fetch(KP_URL, {
     headers: {
       "User-Agent": "Mozilla/5.0",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     },
   });
   if (!res.ok) throw new Error(`KenPom fetch failed: ${res.status} ${await res.text()}`);
@@ -98,7 +117,9 @@ function parseKpLines(text: string) {
   }> = [];
 
   for (const line of lines) {
-    const m = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d+)\s+(.+?)\s+(\d+)\s*(.*)$/);
+    const m = line.match(
+      /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d+)\s+(.+?)\s+(\d+)\s*(.*)$/
+    );
     if (!m) continue;
 
     parsed.push({
@@ -114,18 +135,133 @@ function parseKpLines(text: string) {
   return parsed;
 }
 
-function computeNumOT(suffix: string): number {
-  const s = String(suffix || "").toUpperCase();
-  if (!s.includes("OT")) return 0;
-  const m = s.match(/(\d+)\s*OT/i);
-  if (m?.[1]) return parseInt(m[1], 10);
-  return 1;
+// ---------------- Supabase helpers ----------------
+
+async function loadKenPomCanonicalizer(supabase: ReturnType<typeof createClient>) {
+  /**
+   * Uses team_map.KenPom (variation) -> team_map.canonical
+   * Note: select("canonical,KenPom") works if the column name is exactly KenPom.
+   */
+  const { data, error } = await supabase
+    .from("team_map")
+    .select("canonical,KenPom")
+    .not("KenPom", "is", null);
+
+  if (error) throw error;
+
+  const kpToCanon = new Map<string, string>();
+  for (const r of data || []) {
+    const kp = (r as any).KenPom;
+    const canon = (r as any).canonical;
+    if (!kp || !canon) continue;
+    kpToCanon.set(normalizeKey(String(kp)), String(canon));
+  }
+
+  return (kpName: string) => {
+    const key = normalizeKey(kpName);
+    return kpToCanon.get(key) || kpName.trim();
+  };
 }
 
-function isNeutral(suffix: string): boolean {
-  // KenPom sometimes uses "N", "1N", etc
-  return /\b[0-9]*\s*[Nn]\b/.test(suffix) || /\b[0-9]*[Nn]$/.test(suffix);
+async function loadPossessions(supabase: ReturnType<typeof createClient>) {
+  const { data, error } = await supabase
+    .from("team_possessions")
+    .select("canonical, poss")
+    .eq("season", SEASON);
+
+  if (error) throw error;
+
+  const teamPoss = new Map<string, number>();
+  let leagueSum = 0;
+  let leagueCnt = 0;
+
+  for (const r of data || []) {
+    const canonical = String((r as any).canonical || "").trim();
+    const p = Number((r as any).poss);
+    if (!canonical) continue;
+    if (Number.isFinite(p) && p > 0) {
+      teamPoss.set(canonical, p);
+      leagueSum += p;
+      leagueCnt += 1;
+    }
+  }
+
+  const leagueAvgPoss = leagueCnt ? leagueSum / leagueCnt : DEFAULT_LEAGUE_AVG_POSS;
+  return { teamPoss, leagueAvgPoss };
 }
+
+/**
+ * FK-safe: ensure all canonicals exist in team_map before inserting into team_ratings.
+ *
+ * We insert missing rows into team_map with:
+ *  - canonical = canonical
+ *  - KenPom = canonical (safe default if you don’t have a better KP string)
+ *  - "The Odds API" = canonical (optional helper)
+ * All other columns left null.
+ */
+async function ensureTeamsExistInTeamMap(
+  supabase: ReturnType<typeof createClient>,
+  canonicals: string[]
+) {
+  const unique = Array.from(new Set(canonicals.map((c) => String(c || "").trim()).filter(Boolean)));
+  if (!unique.length) return;
+
+  // Find existing canonicals in team_map
+  const existing = new Set<string>();
+  for (const batch of chunk(unique, 500)) {
+    const { data, error } = await supabase
+      .from("team_map")
+      .select("canonical")
+      .in("canonical", batch);
+
+    if (error) throw error;
+    for (const r of data || []) existing.add(String((r as any).canonical));
+  }
+
+  const missing = unique.filter((c) => !existing.has(c));
+  if (!missing.length) return;
+
+  const payload = missing.map((canonical) => ({
+    canonical,
+    KenPom: canonical,
+    // IMPORTANT: if your actual column is literally named "The Odds API" in Postgres,
+    // this object-key approach works (Supabase will quote it).
+    // If the real DB column is snake_case (e.g., the_odds_api), rename this key accordingly.
+    "The Odds API": canonical,
+    ESPN_Long: null,
+    SR_School: null,
+    SR_School_Short: null,
+    Elo: null,
+    HFA: null,
+    TR: null,
+  }));
+
+  const { error: upsertErr } = await supabase.from("team_map").upsert(payload, {
+    onConflict: "canonical",
+  });
+
+  if (upsertErr) {
+    console.error(
+      JSON.stringify(
+        {
+          message:
+            "Failed to upsert missing canonicals into team_map. This is almost always a column-name mismatch " +
+            '(ex: "The Odds API" is actually the_odds_api) or an RLS/permission issue.',
+          upsert_error: upsertErr,
+          missing_count: missing.length,
+          missing_sample: missing.slice(0, 25),
+        },
+        null,
+        2
+      )
+    );
+    throw upsertErr;
+  }
+
+  console.log(JSON.stringify({ ensured_team_map: true, inserted: missing.length }, null, 2));
+}
+
+// ------------------------- main -------------------------
 
 async function main() {
   const SUPABASE_URL = process.env.SUPABASE_URL!;
@@ -136,46 +272,10 @@ async function main() {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  // 1) Load mapping for KenPom -> canonical
-  const { data: mapRows, error: mapErr } = await supabase
-    .from("team_map_source")
-    .select("source, source_name, canonical")
-    .eq("source", "kenpom");
+  const canonicalize = await loadKenPomCanonicalizer(supabase);
+  const { teamPoss, leagueAvgPoss } = await loadPossessions(supabase);
 
-  if (mapErr) throw mapErr;
-
-  const kpToCanon = new Map<string, string>();
-  for (const r of mapRows || []) {
-    kpToCanon.set(normalizeKey(r.source_name), r.canonical);
-  }
-
-  const canonicalize = (name: string) => {
-    const key = normalizeKey(name);
-    return kpToCanon.get(key) || name.trim();
-  };
-
-  // 2) Load possessions for this season
-  const { data: possRows, error: possErr } = await supabase
-    .from("team_possessions")
-    .select("canonical, poss")
-    .eq("season", SEASON);
-
-  if (possErr) throw possErr;
-
-  const teamPoss = new Map<string, number>();
-  let leagueSum = 0;
-  let leagueCnt = 0;
-  for (const r of possRows || []) {
-    const p = Number(r.poss);
-    if (Number.isFinite(p) && p > 0) {
-      teamPoss.set(r.canonical, p);
-      leagueSum += p;
-      leagueCnt += 1;
-    }
-  }
-  const leagueAvgPoss = leagueCnt > 0 ? leagueSum / leagueCnt : DEFAULT_LEAGUE_AVG_POSS;
-
-  // 3) Fetch + parse KenPom games
+  // Fetch + parse KenPom games
   const text = await fetchKenPomText();
   const rawGames = parseKpLines(text);
 
@@ -186,11 +286,9 @@ async function main() {
     const date = parseMMDDYYYY(g.dateStr);
     if (!date) continue;
 
+    // First map KP name -> canonical (via team_map.KenPom)
     const team1 = canonicalize(g.team1);
     const team2 = canonicalize(g.team2);
-
-    // If you want, you can filter to only teams that exist in team_map here.
-    // For now we allow unknowns but they’ll just form their own nodes.
 
     const neutral = isNeutral(g.suffix);
 
@@ -198,17 +296,14 @@ async function main() {
     const p1 = teamPoss.get(team1);
     const p2 = teamPoss.get(team2);
     let gamePoss = leagueAvgPoss;
-    if (Number.isFinite(p1) && Number.isFinite(p2)) gamePoss = (p1! + p2!) / 2;
-    else if (Number.isFinite(p1)) gamePoss = p1!;
-    else if (Number.isFinite(p2)) gamePoss = p2!;
+
+    if (Number.isFinite(p1) && Number.isFinite(p2)) gamePoss = ((p1 as number) + (p2 as number)) / 2;
+    else if (Number.isFinite(p1)) gamePoss = p1 as number;
+    else if (Number.isFinite(p2)) gamePoss = p2 as number;
 
     // OT scale back to 40-minute equivalent
     const numOT = computeNumOT(g.suffix);
-    let possScale = 1.0;
-    if (numOT > 0) {
-      const totalMinutes = 40 + 5 * numOT;
-      possScale = 40 / totalMinutes;
-    }
+    const possScale = numOT > 0 ? 40 / (40 + 5 * numOT) : 1.0;
 
     const regPoss = gamePoss * possScale;
     const regScore1 = g.score1 * possScale;
@@ -230,8 +325,13 @@ async function main() {
   }
 
   if (!gameRows.length) throw new Error("No games parsed from KenPom file.");
-
   if (!maxDate) throw new Error("No maxDate computed.");
+
+  // FK safety: ensure all canonicals exist in team_map BEFORE upserting team_ratings
+  await ensureTeamsExistInTeamMap(
+    supabase,
+    gameRows.flatMap((g) => [g.team1, g.team2])
+  );
 
   // 4) Build team-game rows (two per game)
   type TeamGame = {
@@ -254,7 +354,7 @@ async function main() {
 
   for (const g of gameRows) {
     const recW = getRecencyWeight(g.date, maxDate);
-    const wBase = 1.0 * recW; // season weight is 1 here since SEASON only
+    const wBase = recW;
 
     const ha1: TeamGame["homeAway"] = g.neutral ? "neutral" : "away";
     const ha2: TeamGame["homeAway"] = g.neutral ? "neutral" : "home";
@@ -290,8 +390,8 @@ async function main() {
       suffix: g.suffix,
     });
 
-    totalPtsAll += (g.score1 + g.score2);
-    totalPossAll += (g.gamePoss + g.gamePoss);
+    totalPtsAll += g.score1 + g.score2;
+    totalPossAll += g.gamePoss + g.gamePoss;
   }
 
   const leagueAvgOff100 = (totalPtsAll / totalPossAll) * 100;
@@ -384,14 +484,14 @@ async function main() {
     if (delta < TOL) break;
   }
 
-  // 7) Shrink toward priors (we’ll do league avg only for now)
-  // If you want to add Team_Ratings_Prior in Supabase later, we can.
+  // 7) Shrink toward league avg
   for (let t = 0; t < nTeams; t++) {
     const gCount = gamesPerTeam[t] || 0;
     const shrink = gCount / (gCount + PRIOR_GAMES);
-    Off[t] = 0 + shrink * (Off[t] - 0);
-    Def[t] = 0 + shrink * (Def[t] - 0);
+    Off[t] = shrink * Off[t];
+    Def[t] = shrink * Def[t];
   }
+
   // recenter
   const offMean2 = average(Off);
   const defMean2 = average(Def);
@@ -437,10 +537,7 @@ async function main() {
   for (let t = 0; t < nTeams; t++) {
     const h = homeResCnt[t];
     const a = awayResCnt[t];
-    if (h === 0 && a === 0) {
-      trueHca[t] = HFA_POINTS;
-      continue;
-    }
+    if (h === 0 && a === 0) continue;
     const homeAvg = h > 0 ? homeResSum[t] / h : 0;
     const awayAvg = a > 0 ? awayResSum[t] / a : 0;
     trueHca[t] = HFA_POINTS + (homeAvg - awayAvg);
@@ -450,7 +547,6 @@ async function main() {
   const totalPer100Sum = new Array<number>(nTeams).fill(0);
   const totalPer100Sq = new Array<number>(nTeams).fill(0);
   const totalRawSum = new Array<number>(nTeams).fill(0);
-
   const closeSum = new Array<number>(nTeams).fill(0);
 
   const marginSignedPer100Sum = new Array<number>(nTeams).fill(0);
@@ -548,7 +644,7 @@ async function main() {
   if (minFun !== null && maxFun !== null && maxFun > minFun) {
     const span = maxFun - minFun;
     for (let t = 0; t < nTeams; t++) {
-      const norm = (rawFun[t] - minFun) / span;
+      const norm = (rawFun[t] - (minFun as number)) / span;
       funFactor[t] = 20 * norm;
     }
   }
@@ -567,17 +663,13 @@ async function main() {
     sigma_margin_100: sigmaMargin100[i],
     avg_total_points: avgTotalPoints[i],
     avg_margin_points: avgMarginPoints[i],
+    power_rank: 0,
   }));
 
   rows.sort((a, b) => Number(b.engine_power ?? 0) - Number(a.engine_power ?? 0));
-  rows.forEach((r, i) => ((r as any).power_rank = i + 1));
+  rows.forEach((r, i) => (r.power_rank = i + 1));
 
   // 12) Upsert into team_ratings
-  const chunk = <T,>(arr: T[], size: number) =>
-    Array.from({ length: Math.ceil(arr.length / size) }, (_, i) =>
-      arr.slice(i * size, (i + 1) * size)
-    );
-
   for (const batch of chunk(rows, 500)) {
     const { error } = await supabase.from("team_ratings").upsert(batch, {
       onConflict: "canonical,season",
@@ -586,12 +678,16 @@ async function main() {
   }
 
   console.log(
-    JSON.stringify({
-      ok: true,
-      season: SEASON,
-      teams: rows.length,
-      games: gameRows.length,
-    })
+    JSON.stringify(
+      {
+        ok: true,
+        season: SEASON,
+        teams: rows.length,
+        games: gameRows.length,
+      },
+      null,
+      2
+    )
   );
 }
 
@@ -599,3 +695,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
