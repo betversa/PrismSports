@@ -77,8 +77,8 @@ const RECENCY_FLOOR = 0.3;
 
 // HCA in points (realistic bounds)
 const BASE_HFA_POINTS = 2.0;
-const HFA_CLAMP_MIN = 0.0;
-const HFA_CLAMP_MAX = 6.0;
+const HFA_CLAMP_MIN = -20.0;
+const HFA_CLAMP_MAX = 20.0;
 
 /* =========================
    HELPERS
