@@ -61,7 +61,7 @@ const BOOK_LOGO_H = 26;
 
 /** Header colors */
 const HDR_LEFT_BG = "bg-[#0a0a0a]"; // original
-const HDR_BOOK_BG = "bg-[#1b1b1b]"; // charcoal
+const HDR_BOOK_BG = "bg-[#4a4a4a]"; // charcoal
 const HDR_TEXT = "text-[#cfcfcf]";
 const HDR_BORDER = "border-[#2a2a2a]";
 
