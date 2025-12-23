@@ -109,8 +109,8 @@ export function MonteCarloScreen() {
         "sigma_margin_game",
         "projected_total",
         "sigma_total_game",
-        "projected_points_home",
-        "projected_points_away",
+        "projected_home_points",
+        "projected_away_points",
       ].join(",");
 
       const { data, error } = await supabase
@@ -156,8 +156,8 @@ export function MonteCarloScreen() {
       // Prefer stored projected points if present, else derive from total/margin
       // homePts = (total + marginHome)/2
       // awayPts = (total - marginHome)/2
-      const homePtsStored = numOrNullable(r.projected_points_home);
-      const awayPtsStored = numOrNullable(r.projected_points_away);
+      const homePtsStored = numOrNullable(r.projected_home_points);
+      const awayPtsStored = numOrNullable(r.projected_away_points);
 
       const homePts =
         homePtsStored ?? safeRound1((total + marginHome) / 2);
