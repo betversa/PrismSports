@@ -27,12 +27,12 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** ✅ Public folder book logos (pin is .png now) */
+/** ✅ Public folder book logos */
 const BOOK_LOGOS = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
   mgm: "/books/mgm.png",
-  pin: "/books/pin.png",
+  pin: "/books/pin.png", // ✅ updated
   bol: "/books/bol.png",
 } as const;
 
@@ -193,14 +193,11 @@ function median(nums: number[]) {
 function consensusForMarket(ev: EventOdds, market: Market) {
   const a = ev.away;
   const h = ev.home;
-
   const books = ["dk", "fd", "mgm", "pin", "bol"] as const;
 
   if (market === "spread") {
     const lines: number[] = [];
     const odds: number[] = [];
-
-    // use AWAY row for line + odds; line should be symmetric across sides
     if (a) {
       for (const b of books) {
         const line = a.spread[b]?.line;
@@ -209,7 +206,7 @@ function consensusForMarket(ev: EventOdds, market: Market) {
         if (typeof o === "number") odds.push(o);
       }
     }
-    return { label: "Spread", line: median(lines), odds: median(odds) };
+    return { kind: "spread" as const, line: median(lines), odds: median(odds) };
   }
 
   if (market === "total") {
@@ -231,22 +228,21 @@ function consensusForMarket(ev: EventOdds, market: Market) {
         if (typeof u === "number") underOdds.push(u);
       }
     }
-    return { label: "Total", line: median(lines), over: median(overOdds), under: median(underOdds) };
+
+    return { kind: "total" as const, line: median(lines), over: median(overOdds), under: median(underOdds) };
   }
 
-  // market === "ml"
   const awayOdds: number[] = [];
   const homeOdds: number[] = [];
   if (a) for (const b of books) if (typeof a.ml[b] === "number") awayOdds.push(a.ml[b] as number);
   if (h) for (const b of books) if (typeof h.ml[b] === "number") homeOdds.push(h.ml[b] as number);
-  return { label: "Moneyline", away: median(awayOdds), home: median(homeOdds) };
+  return { kind: "ml" as const, away: median(awayOdds), home: median(homeOdds) };
 }
 
 function ConsensusCell({ ev, market }: { ev: EventOdds; market: Market }) {
   const c = useMemo(() => consensusForMarket(ev, market), [ev, market]);
 
-  // render per selected market
-  if (market === "spread") {
+  if (c.kind === "spread") {
     return (
       <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
         <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
@@ -256,13 +252,13 @@ function ConsensusCell({ ev, market }: { ev: EventOdds; market: Market }) {
         </div>
         <div className="flex items-center justify-between gap-3">
           <span className="text-[12px] text-[#cfcfcf]">Odds</span>
-          <span className="text-[14px] text-white font-bold tabular-nums">{(c as any).odds == null ? "—" : (c as any).odds}</span>
+          <span className="text-[14px] text-white font-bold tabular-nums">{c.odds == null ? "—" : c.odds}</span>
         </div>
       </td>
     );
   }
 
-  if (market === "total") {
+  if (c.kind === "total") {
     return (
       <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
         <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
@@ -273,7 +269,7 @@ function ConsensusCell({ ev, market }: { ev: EventOdds; market: Market }) {
         <div className="flex items-center justify-between gap-3">
           <span className="text-[12px] text-[#cfcfcf]">O / U</span>
           <span className="text-[14px] text-white font-bold tabular-nums">
-            {(c as any).over == null ? "—" : (c as any).over} / {(c as any).under == null ? "—" : (c as any).under}
+            {c.over == null ? "—" : c.over} / {c.under == null ? "—" : c.under}
           </span>
         </div>
       </td>
@@ -286,17 +282,76 @@ function ConsensusCell({ ev, market }: { ev: EventOdds; market: Market }) {
       <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
       <div className="flex items-center justify-between gap-3">
         <span className="text-[12px] text-[#cfcfcf]">Away</span>
-        <span className="text-[14px] text-white font-bold tabular-nums">{(c as any).away == null ? "—" : (c as any).away}</span>
+        <span className="text-[14px] text-white font-bold tabular-nums">{c.away == null ? "—" : c.away}</span>
       </div>
       <div className="flex items-center justify-between gap-3">
         <span className="text-[12px] text-[#cfcfcf]">Home</span>
-        <span className="text-[14px] text-white font-bold tabular-nums">{(c as any).home == null ? "—" : (c as any).home}</span>
+        <span className="text-[14px] text-white font-bold tabular-nums">{c.home == null ? "—" : c.home}</span>
       </div>
     </td>
   );
 }
 
 /** --------------------- UI components --------------------- */
+function MarketButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 rounded-md text-xs border transition-colors",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function BookHeader({
+  src,
+  alt,
+  fallbackLabel,
+  borderLeft,
+}: {
+  src: string;
+  alt: string;
+  fallbackLabel: string;
+  borderLeft?: boolean;
+}) {
+  return (
+    <th
+      className={["text-center px-2 py-3", borderLeft ? "border-l border-black/10" : ""].join(" ")}
+      style={{ width: 128 }}
+    >
+      <span className="sr-only">{alt}</span>
+      <div className="flex items-center justify-center">
+        <div style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }} className="flex items-center justify-center">
+          <img
+            src={src}
+            alt={alt}
+            style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }}
+            className="object-contain"
+            loading="lazy"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+            }}
+          />
+        </div>
+      </div>
+    </th>
+  );
+}
+
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
     <td
@@ -336,41 +391,6 @@ function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | 
   );
 }
 
-function BookHeader({
-  src,
-  alt,
-  fallbackLabel,
-  borderLeft,
-}: {
-  src: string;
-  alt: string;
-  fallbackLabel: string;
-  borderLeft?: boolean;
-}) {
-  return (
-    <th
-      className={["text-center px-2 py-3", borderLeft ? "border-l border-black/10" : ""].join(" ")}
-      style={{ width: 128 }}
-    >
-      <span className="sr-only">{alt}</span>
-      <div className="flex items-center justify-center">
-        <div style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }} className="flex items-center justify-center">
-          <img
-            src={src}
-            alt={alt}
-            style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }}
-            className="object-contain"
-            loading="lazy"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
-            }}
-          />
-        </div>
-      </div>
-    </th>
-  );
-}
-
 function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   const away =
     ev.away ?? {
@@ -379,8 +399,20 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
     };
 
   const home =
@@ -390,8 +422,20 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
     };
 
   const mk = (s: SideOdds) => {
@@ -399,7 +443,13 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
     }
     if (market === "spread") {
-      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
+      return {
+        dk: fmtSpread(s.spread.dk),
+        fd: fmtSpread(s.spread.fd),
+        mgm: fmtSpread(s.spread.mgm),
+        pin: fmtSpread(s.spread.pin),
+        bol: fmtSpread(s.spread.bol),
+      };
     }
     return {
       dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
@@ -648,4 +698,3 @@ export function OddsScreen() {
     </div>
   );
 }
-
