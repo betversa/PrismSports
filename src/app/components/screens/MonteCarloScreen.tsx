@@ -1,187 +1,207 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../lib/supabaseClient"; // adjust path if needed
+import { supabase } from "../../lib/supabaseClient";
 
-type MonteCarloRow = {
-  ts: string; // timestamptz
-  event_id: string;
-  matchup: string;
-  // optional: side, canonical_team if you store them
-  projected_margin_home: number | null;
-  sigma_margin_game: number | null;
-  projected_total: number | null;
-  sigma_total_game: number | null;
-  possessions: number | null;
-
-  calib_slope_m: number | null;
-  calib_int_m: number | null;
-  calib_slope_t: number | null;
-  calib_int_t: number | null;
-
-  anchorw_spread: number | null; // 0..1
-  anchorw_total: number | null;  // 0..1
-
-  marketwidth_spread: number | null;
-  marketwidth_total: number | null;
+type MonteCarloRun = {
+  id: string;
+  created_at: string;
+  sport_key: string;
 };
 
-type MonteCarloGame = {
-  gameId: string;
+type MonteCarloResultRow = {
+  run_id: string;
+  event_id: string;
+  commence_time: string | null;
+  matchup: string | null;
+
+  home_team: string | null;
+  away_team: string | null;
+
+  projected_margin_home: number | null;
+  sigma_margin_game: number | null;
+
+  projected_total: number | null;
+  sigma_total_game: number | null;
+
+  // NEW (optional in DB): if not present, we derive from total + margin
+  projected_points_home?: number | null;
+  projected_points_away?: number | null;
+};
+
+type TeamRow = {
+  key: string;
+  eventId: string;
+
   matchup: string;
-  projectedMargin: number;
+  commenceTime: string | null;
+
+  side: "AWAY" | "HOME";
+  teamName: string;
+  opponentName: string;
+
+  projectedPoints: number;
+  projectedMargin: number; // team-view margin (HOME = +margin_home, AWAY = -margin_home)
+
   sigmaMargin: number;
   projectedTotal: number;
   sigmaTotal: number;
-  possessions: number;
-  calibSlope: number; // single display field
-  calibIntercept: number; // single display field
-  spreadAnchorWeight: number;
-  totalAnchorWeight: number;
-  marketWidth: number; // single display field
 };
 
 export function MonteCarloScreen() {
-  const [rows, setRows] = useState<MonteCarloRow[]>([]);
-  const [latestTs, setLatestTs] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [run, setRun] = useState<MonteCarloRun | null>(null);
+  const [results, setResults] = useState<MonteCarloResultRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 1) Get latest snapshot timestamp
+  // 1) Load latest run
   useEffect(() => {
     let alive = true;
 
-    async function loadLatestTs() {
+    async function loadLatestRun() {
       setLoading(true);
       setError(null);
 
       const { data, error } = await supabase
-        .from("monte_carlo_snapshot")
-        .select("ts")
-        .order("ts", { ascending: false })
+        .from("monte_carlo_runs")
+        .select("id, created_at, sport_key")
+        .order("created_at", { ascending: false })
         .limit(1);
 
       if (!alive) return;
 
       if (error) {
         setError(error.message);
-        setLatestTs(null);
-        setRows([]);
+        setRun(null);
+        setResults([]);
         setLoading(false);
         return;
       }
 
-      const ts = data?.[0]?.ts ?? null;
-      setLatestTs(ts);
+      const latest = (data?.[0] ?? null) as MonteCarloRun | null;
+      setRun(latest);
       setLoading(false);
     }
 
-    loadLatestTs();
+    loadLatestRun();
     return () => {
       alive = false;
     };
   }, []);
 
-  // 2) Load rows for that snapshot timestamp
+  // 2) Load results for that run
   useEffect(() => {
     let alive = true;
 
-    async function loadSnapshot(ts: string) {
+    async function loadResults(runId: string) {
       setLoading(true);
       setError(null);
 
+      // NOTE: select projected_points_* even if they don't exist yet.
+      // If your table truly doesn't have them, Supabase will error.
+      // In that case: remove them from this select OR add the columns.
+      const selectCols = [
+        "run_id",
+        "event_id",
+        "commence_time",
+        "matchup",
+        "home_team",
+        "away_team",
+        "projected_margin_home",
+        "sigma_margin_game",
+        "projected_total",
+        "sigma_total_game",
+        "projected_points_home",
+        "projected_points_away",
+      ].join(",");
+
       const { data, error } = await supabase
-        .from("monte_carlo_snapshot")
-        .select(
-          [
-            "ts",
-            "event_id",
-            "matchup",
-            "projected_margin_home",
-            "sigma_margin_game",
-            "projected_total",
-            "sigma_total_game",
-            "possessions",
-            "calib_slope_m",
-            "calib_int_m",
-            "calib_slope_t",
-            "calib_int_t",
-            "anchorw_spread",
-            "anchorw_total",
-            "marketwidth_spread",
-            "marketwidth_total",
-          ].join(",")
-        )
-        .eq("ts", ts)
-        .order("matchup", { ascending: true });
+        .from("monte_carlo_results")
+        .select(selectCols)
+        .eq("run_id", runId)
+        .order("commence_time", { ascending: true });
 
       if (!alive) return;
 
       if (error) {
         setError(error.message);
-        setRows([]);
+        setResults([]);
         setLoading(false);
         return;
       }
 
-      setRows((data ?? []) as MonteCarloRow[]);
+      setResults((data ?? []) as MonteCarloResultRow[]);
       setLoading(false);
     }
 
-    if (latestTs) loadSnapshot(latestTs);
+    if (run?.id) loadResults(run.id);
+
     return () => {
       alive = false;
     };
-  }, [latestTs]);
+  }, [run?.id]);
 
-  const games: MonteCarloGame[] = useMemo(() => {
-    // If your snapshot table has two rows per game (HOME/AWAY), you probably want ONE per game.
-    // This chooses the "home view" row implicitly by grouping on event_id.
-    // If you store only one row per event already, this will just pass through.
-    const byEvent = new Map<string, MonteCarloRow>();
+  const teamRows: TeamRow[] = useMemo(() => {
+    const out: TeamRow[] = [];
 
-    for (const r of rows) {
-      if (!r.event_id) continue;
-      if (!byEvent.has(r.event_id)) byEvent.set(r.event_id, r);
-      // If later you add `side`, you can prefer HOME here.
-      // else byEvent.set(r.event_id, preferHome(existing, r))
+    for (const r of results) {
+      const home = (r.home_team ?? "").trim();
+      const away = (r.away_team ?? "").trim();
+      if (!home || !away) continue;
+
+      const matchup =
+        (r.matchup && r.matchup.trim()) || `${away} @ ${home}`;
+
+      const marginHome = numOr(r.projected_margin_home, 0);
+      const total = numOr(r.projected_total, 0);
+
+      // Prefer stored projected points if present, else derive from total/margin
+      // homePts = (total + marginHome)/2
+      // awayPts = (total - marginHome)/2
+      const homePtsStored = numOrNullable(r.projected_points_home);
+      const awayPtsStored = numOrNullable(r.projected_points_away);
+
+      const homePts =
+        homePtsStored ?? safeRound1((total + marginHome) / 2);
+      const awayPts =
+        awayPtsStored ?? safeRound1((total - marginHome) / 2);
+
+      const sigmaMargin = numOr(r.sigma_margin_game, 0);
+      const sigmaTotal = numOr(r.sigma_total_game, 0);
+
+      // AWAY row first (OddsScreen style)
+      out.push({
+        key: `${r.event_id}-AWAY`,
+        eventId: r.event_id,
+        matchup,
+        commenceTime: r.commence_time ?? null,
+        side: "AWAY",
+        teamName: away,
+        opponentName: home,
+        projectedPoints: awayPts,
+        projectedMargin: -marginHome,
+        sigmaMargin,
+        projectedTotal: total,
+        sigmaTotal,
+      });
+
+      // HOME row
+      out.push({
+        key: `${r.event_id}-HOME`,
+        eventId: r.event_id,
+        matchup,
+        commenceTime: r.commence_time ?? null,
+        side: "HOME",
+        teamName: home,
+        opponentName: away,
+        projectedPoints: homePts,
+        projectedMargin: marginHome,
+        sigmaMargin,
+        projectedTotal: total,
+        sigmaTotal,
+      });
     }
 
-    return Array.from(byEvent.values()).map((r) => {
-      const projectedMargin = numOr(r.projected_margin_home, 0);
-      const sigmaMargin = numOr(r.sigma_margin_game, 0);
-      const projectedTotal = numOr(r.projected_total, 0);
-      const sigmaTotal = numOr(r.sigma_total_game, 0);
-      const possessions = numOr(r.possessions, 0);
-
-      // Your table has single “Calib Slope / Calib Int”.
-      // We’ll display totals calibration by default (most intuitive), but you can swap to margin.
-      const calibSlope = numOr(r.calib_slope_t ?? r.calib_slope_m, 1);
-      const calibIntercept = numOr(r.calib_int_t ?? r.calib_int_m, 0);
-
-      const spreadAnchorWeight = clamp01(numOr(r.anchorw_spread, 0));
-      const totalAnchorWeight = clamp01(numOr(r.anchorw_total, 0));
-
-      // Your table has single “Market Width”.
-      // We’ll combine spread + total into one number (max), so it reflects the “widest” market.
-      const mwSpread = numOr(r.marketwidth_spread, 0);
-      const mwTotal = numOr(r.marketwidth_total, 0);
-      const marketWidth = Math.max(mwSpread, mwTotal);
-
-      return {
-        gameId: r.event_id,
-        matchup: r.matchup || "(Unknown matchup)",
-        projectedMargin,
-        sigmaMargin,
-        projectedTotal,
-        sigmaTotal,
-        possessions,
-        calibSlope,
-        calibIntercept,
-        spreadAnchorWeight,
-        totalAnchorWeight,
-        marketWidth,
-      };
-    });
-  }, [rows]);
+    return out;
+  }, [results]);
 
   return (
     <div className="space-y-4">
@@ -189,40 +209,47 @@ export function MonteCarloScreen() {
         <h2 className="text-xl text-white mb-1">Monte Carlo Debug View</h2>
         <p className="text-xs text-[#808080]">
           Internal simulation parameters · 10,000 iterations per game
-          {latestTs ? (
+          {run?.created_at ? (
             <span className="ml-2 text-[#5a5a5a]">
-              · Latest snapshot: {formatTs(latestTs)}
+              · Latest run: {formatTs(run.created_at)}
             </span>
           ) : null}
         </p>
       </div>
 
-      {/* Status */}
       {error ? (
         <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4 text-xs text-red-300">
           Supabase error: {error}
         </div>
       ) : null}
 
-      {/* Monte Carlo Table */}
+      {/* Table wrapper: fixed-height scroll like OddsScreen */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="max-h-[calc(100vh-220px)] overflow-y-auto overflow-x-auto">
           <table className="w-full text-xs">
-            <thead>
+            <thead className="sticky top-0 z-20">
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[180px]">
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[320px]">
                   Matchup
                 </th>
-                <th className="text-center p-3 text-[#d4af37]">Proj Margin</th>
-                <th className="text-center p-3 text-[#d4af37]">σ Margin</th>
-                <th className="text-center p-3 text-[#d4af37]">Proj Total</th>
-                <th className="text-center p-3 text-[#d4af37]">σ Total</th>
-                <th className="text-center p-3 text-[#d4af37]">Poss</th>
-                <th className="text-center p-3 text-[#d4af37]">Calib Slope</th>
-                <th className="text-center p-3 text-[#d4af37]">Calib Int</th>
-                <th className="text-center p-3 text-[#d4af37]">Spread Anchor</th>
-                <th className="text-center p-3 text-[#d4af37]">Total Anchor</th>
-                <th className="text-center p-3 text-[#d4af37]">Market Width</th>
+                <th className="text-left p-3 text-[#808080] min-w-[240px]">
+                  Team
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[110px]">
+                  Proj Pts
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[110px]">
+                  Proj Margin
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">
+                  σ Margin
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[110px]">
+                  Proj Total
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">
+                  σ Total
+                </th>
               </tr>
             </thead>
 
@@ -231,72 +258,104 @@ export function MonteCarloScreen() {
                 <tr>
                   <td
                     className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10"
-                    colSpan={11}
+                    colSpan={7}
                   >
-                    Loading Monte Carlo snapshot…
+                    Loading Monte Carlo results…
                   </td>
                 </tr>
-              ) : games.length === 0 ? (
+              ) : teamRows.length === 0 ? (
                 <tr>
                   <td
                     className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10"
-                    colSpan={11}
+                    colSpan={7}
                   >
-                    No Monte Carlo rows found.
+                    No Monte Carlo rows found for latest run.
                   </td>
                 </tr>
               ) : (
-                games.map((data) => (
-                  <tr
-                    key={data.gameId}
-                    className="hover:bg-[#0f0f0f]/50 transition-colors"
-                  >
-                    <td className="p-3 text-white sticky left-0 bg-[#0f0f0f] z-10">
-                      {data.matchup}
-                    </td>
+                teamRows.map((row, idx) => {
+                  const isTopRowOfEvent = idx % 2 === 0; // AWAY row
+                  return (
+                    <tr
+                      key={row.key}
+                      className="hover:bg-[#0f0f0f]/50 transition-colors"
+                    >
+                      {/* Matchup cell only on first of the 2 rows */}
+                      <td className="p-3 text-white sticky left-0 bg-[#0f0f0f] z-10 align-top">
+                        {isTopRowOfEvent ? (
+                          <div className="space-y-1">
+                            <div className="text-sm font-semibold text-white">
+                              {row.matchup}
+                            </div>
+                            {row.commenceTime ? (
+                              <div className="text-[11px] text-[#808080]">
+                                {formatTimeOnly(row.commenceTime)}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="opacity-0 select-none">.</div>
+                        )}
+                      </td>
 
-                    <td className="text-center p-3 text-white">
-                      {data.projectedMargin > 0 ? "+" : ""}
-                      {data.projectedMargin.toFixed(1)}
-                    </td>
+                      {/* Team */}
+                      <td className="p-3">
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={teamLogoSrc(row.teamName)}
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).style.display =
+                                "none";
+                            }}
+                            alt={row.teamName}
+                            className="w-6 h-6 object-contain"
+                            style={{
+                              filter:
+                                "drop-shadow(0 0 6px rgba(212,175,55,0.25))",
+                            }}
+                          />
+                          <div className="leading-tight">
+                            <div className="text-sm font-bold text-white">
+                              {row.teamName}
+                              <span className="ml-2 text-[11px] font-semibold text-[#808080]">
+                                ({row.side})
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-[#808080]">
+                              vs {row.opponentName}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
 
-                    <td className="text-center p-3 text-[#b0b0b0]">
-                      {data.sigmaMargin.toFixed(1)}
-                    </td>
+                      {/* Proj Pts */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.projectedPoints.toFixed(1)}
+                      </td>
 
-                    <td className="text-center p-3 text-white">
-                      {data.projectedTotal.toFixed(1)}
-                    </td>
+                      {/* Proj Margin (team view) */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.projectedMargin > 0 ? "+" : ""}
+                        {row.projectedMargin.toFixed(1)}
+                      </td>
 
-                    <td className="text-center p-3 text-[#b0b0b0]">
-                      {data.sigmaTotal.toFixed(1)}
-                    </td>
+                      {/* σ Margin */}
+                      <td className="text-center p-3 text-[#b0b0b0]">
+                        {row.sigmaMargin.toFixed(1)}
+                      </td>
 
-                    <td className="text-center p-3 text-[#b0b0b0]">
-                      {data.possessions.toFixed(1)}
-                    </td>
+                      {/* Proj Total */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.projectedTotal.toFixed(1)}
+                      </td>
 
-                    <td className="text-center p-3 text-white">
-                      {data.calibSlope.toFixed(2)}
-                    </td>
-
-                    <td className="text-center p-3 text-[#b0b0b0]">
-                      {data.calibIntercept.toFixed(2)}
-                    </td>
-
-                    <td className="text-center p-3 text-[#d4af37]">
-                      {(data.spreadAnchorWeight * 100).toFixed(0)}%
-                    </td>
-
-                    <td className="text-center p-3 text-[#d4af37]">
-                      {(data.totalAnchorWeight * 100).toFixed(0)}%
-                    </td>
-
-                    <td className="text-center p-3 text-white">
-                      {data.marketWidth.toFixed(3)}
-                    </td>
-                  </tr>
-                ))
+                      {/* σ Total */}
+                      <td className="text-center p-3 text-[#b0b0b0]">
+                        {row.sigmaTotal.toFixed(1)}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -306,53 +365,33 @@ export function MonteCarloScreen() {
       {/* Parameter Explanations */}
       <div className="grid grid-cols-2 gap-4 mt-6">
         <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4">
-          <h3 className="text-sm text-white mb-3">Simulation Parameters</h3>
+          <h3 className="text-sm text-white mb-3">Simulation Outputs</h3>
           <div className="space-y-2 text-xs">
             <ParamExplanation
-              label="Projected Margin"
-              description="Expected home team margin from simulations (negative = away favored)"
+              label="Proj Pts"
+              description="Projected points for that team (derived from total + margin if not stored)"
             />
             <ParamExplanation
-              label="σ Margin"
-              description="Standard deviation of margin distribution (game volatility)"
+              label="Proj Margin"
+              description="Projected margin from that team’s perspective (HOME positive = home favored)"
             />
             <ParamExplanation
-              label="Projected Total"
-              description="Expected combined score from simulations"
-            />
-            <ParamExplanation
-              label="σ Total"
-              description="Standard deviation of total distribution"
-            />
-            <ParamExplanation
-              label="Possessions"
-              description="Estimated number of possessions per team"
+              label="Proj Total"
+              description="Projected combined score"
             />
           </div>
         </div>
 
         <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4">
-          <h3 className="text-sm text-white mb-3">Anchoring & Calibration</h3>
+          <h3 className="text-sm text-white mb-3">Volatility</h3>
           <div className="space-y-2 text-xs">
             <ParamExplanation
-              label="Calib Slope"
-              description="Historical accuracy adjustment (1.0 = perfect calibration)"
+              label="σ Margin"
+              description="Standard deviation of margin distribution (game volatility)"
             />
             <ParamExplanation
-              label="Calib Intercept"
-              description="Systematic bias correction term"
-            />
-            <ParamExplanation
-              label="Spread Anchor"
-              description="Weight given to sharp market spread (vs simulation)"
-            />
-            <ParamExplanation
-              label="Total Anchor"
-              description="Weight given to sharp market total (vs simulation)"
-            />
-            <ParamExplanation
-              label="Market Width"
-              description="Bid-ask spread proxy (liquidity/efficiency indicator)"
+              label="σ Total"
+              description="Standard deviation of total distribution"
             />
           </div>
         </div>
@@ -375,14 +414,44 @@ function numOr(v: number | null | undefined, fb: number) {
   return Number.isFinite(n) ? n : fb;
 }
 
-function clamp01(x: number) {
+function numOrNullable(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function safeRound1(x: number) {
   if (!Number.isFinite(x)) return 0;
-  return Math.max(0, Math.min(1, x));
+  return Math.round(x * 10) / 10;
 }
 
 function formatTs(ts: string) {
-  // keep it lightweight and readable
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString();
+}
+
+function formatTimeOnly(ts: string) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * Logo resolver:
+ * Swap this to match however OddsScreen resolves logos.
+ *
+ * Common options:
+ *  - `/logos/<slug>.png`
+ *  - `/team-logos/<slug>.png`
+ *  - a full URL stored in a table
+ */
+function teamLogoSrc(teamName: string) {
+  const slug = String(teamName || "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+
+  // CHANGE THIS PATH to match your app’s logo folder
+  return `/team-logos/${slug}.png`;
 }
