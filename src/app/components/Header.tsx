@@ -1,4 +1,5 @@
 // components/Header.tsx
+import { useMemo } from "react";
 import { Calendar, Menu } from "lucide-react";
 
 type HeaderProps = {
@@ -7,8 +8,44 @@ type HeaderProps = {
   onOpenMenu?: () => void;
 };
 
+const CT_TZ = "America/Chicago";
+
+// YYYY-MM-DD in Central Time
+function ctYmd(d: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const y = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const m = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${y}-${m}-${day}`;
+}
+
+// Creates a CT-local Date for display labels (safe midday)
+function dateFromYmdMidday(ymd: string) {
+  return new Date(`${ymd}T12:00:00`);
+}
+
 export function Header({ selectedDate, onChangeDate, onOpenMenu }: HeaderProps) {
-  const dates = ["2024-12-18", "2024-12-19", "2024-12-20", "2024-12-21", "2024-12-22"];
+  // Today + next 2 days (3 buttons total). Change "2" to "3" if you want 4 total.
+  const dates = useMemo(() => {
+    const now = new Date();
+    const list: string[] = [];
+    for (let i = 0; i <= 2; i++) {
+      const d = new Date(now);
+      d.setDate(now.getDate() + i);
+      list.push(ctYmd(d));
+    }
+    return list;
+  }, []);
+
+  // If selectedDate is not in the new range, default it to today.
+  // (This avoids having nothing "active" if user was on an old fixed date.)
+  const safeSelected = dates.includes(selectedDate) ? selectedDate : dates[0];
 
   return (
     <div className="h-16 bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 right-0 left-0 md:left-64 z-10 flex items-center justify-between px-3 md:px-6">
@@ -30,12 +67,12 @@ export function Header({ selectedDate, onChangeDate, onOpenMenu }: HeaderProps) 
               key={date}
               onClick={() => onChangeDate(date)}
               className={`px-3 py-1.5 text-xs rounded transition-colors whitespace-nowrap ${
-                selectedDate === date
+                safeSelected === date
                   ? "bg-[#d4af37] text-black"
                   : "bg-[#1a1a1a] text-[#b0b0b0] hover:bg-[#2a2a2a] hover:text-white"
               }`}
             >
-              {new Date(`${date}T12:00:00`).toLocaleDateString("en-US", {
+              {dateFromYmdMidday(date).toLocaleDateString("en-US", {
                 month: "short",
                 day: "numeric",
               })}
@@ -43,7 +80,13 @@ export function Header({ selectedDate, onChangeDate, onOpenMenu }: HeaderProps) 
           ))}
         </div>
       </div>
+
+      <div className="hidden sm:flex items-center gap-4 text-xs text-[#808080]">
+        <div>Live</div>
+        <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
+      </div>
     </div>
   );
 }
+
 
