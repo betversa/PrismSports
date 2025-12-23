@@ -41,6 +41,8 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => ctYmd(new Date()));
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  const showHeaderDates = activeScreen === "model" || activeScreen === "odds";
+
   // Prevent body scroll when drawer is open (mobile)
   useEffect(() => {
     if (sidebarOpen) document.body.style.overflow = "hidden";
@@ -53,14 +55,14 @@ export default function App() {
   const screens = useMemo<Record<Screen, JSX.Element>>(
     () => ({
       overview: <OverviewScreen />,
-      model: <ModelScreen />,
+      model: <ModelScreen selectedDate={selectedDate} />,
       "monte-carlo": <MonteCarloScreen />,
-      odds: <OddsScreen />,
+      odds: <OddsScreen selectedDate={selectedDate} />,
       results: <ResultsScreen />,
       calibration: <CalibrationScreen />,
       settings: <SettingsScreen />,
     }),
-    []
+    [selectedDate]
   );
 
   return (
@@ -73,13 +75,11 @@ export default function App() {
       {/* Mobile drawer */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">
-          {/* Backdrop */}
           <button
             className="absolute inset-0 bg-black/60"
             aria-label="Close sidebar backdrop"
             onClick={() => setSidebarOpen(false)}
           />
-          {/* Drawer */}
           <div className="absolute left-0 top-0 bottom-0 w-72 max-w-[85vw]">
             <Sidebar
               activeScreen={activeScreen}
@@ -94,11 +94,12 @@ export default function App() {
         </div>
       )}
 
-      {/* Header (hamburger on mobile) */}
+      {/* Header */}
       <Header
         selectedDate={selectedDate}
-        onChangeDate={(d) => setSelectedDate(d)}
+        onChangeDate={setSelectedDate}
         onOpenMenu={() => setSidebarOpen(true)}
+        showDates={showHeaderDates}
       />
 
       {/* Main Content */}
