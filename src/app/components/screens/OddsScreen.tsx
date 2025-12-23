@@ -27,20 +27,23 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** ✅ Public folder book logos */
+/** ✅ Public folder book logos (pin is .png now) */
 const BOOK_LOGOS = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
   mgm: "/books/mgm.png",
-  pin: "/books/pin.png", // ✅ updated
+  pin: "/books/pin.png",
   bol: "/books/bol.png",
 } as const;
 
-// ✅ uniform book-logo slot size
-const BOOK_LOGO_W = 110;
-const BOOK_LOGO_H = 28;
+// uniform book header slot + column widths
+const BOOK_LOGO_W = 104;
+const BOOK_LOGO_H = 26;
 
-/** --------------------- helpers --------------------- */
+const COL_MATCHUP = 420; // matchup (time + teams + logos)
+const COL_CONSENSUS = 180;
+const COL_BOOK = 132;
+
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
@@ -109,13 +112,11 @@ function fmtDateBtn(ymd: string) {
 function fmtML(v: number | null) {
   return v == null ? "—" : `${v}`;
 }
-
 function fmtSpread(cell: SpreadCell) {
   if (!cell || cell.line == null) return "—";
   if (cell.odds == null) return `${cell.line}`;
   return `${cell.line} (${cell.odds})`;
 }
-
 function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
   if (!cell || cell.line == null) return "—";
   const v = which === "over" ? cell.over : cell.under;
@@ -126,7 +127,6 @@ function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
 function pickLogoUrl(row: any): string | null {
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? null;
 }
-
 function pickUpdatedAt(row: any): string | null {
   return row.updated_at ?? row.last_updated ?? row.updatedAt ?? null;
 }
@@ -137,6 +137,7 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     team: row.team ?? row.side,
     logoUrl: pickLogoUrl(row),
     updatedAt: pickUpdatedAt(row),
+
     ml: {
       dk: row.dk_ml_odds ?? null,
       fd: row.fd_ml_odds ?? null,
@@ -144,6 +145,7 @@ function mapWideRowToSideOdds(row: any): SideOdds {
       pin: row.pin_ml_odds ?? null,
       bol: row.bol_ml_odds ?? null,
     },
+
     spread: {
       dk: { line: row.dk_spread_line ?? null, odds: row.dk_spread_odds ?? null },
       fd: { line: row.fd_spread_line ?? null, odds: row.fd_spread_odds ?? null },
@@ -151,6 +153,7 @@ function mapWideRowToSideOdds(row: any): SideOdds {
       pin: { line: row.pin_spread_line ?? null, odds: row.pin_spread_odds ?? null },
       bol: { line: row.bol_spread_line ?? null, odds: row.bol_spread_odds ?? null },
     },
+
     total: {
       dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
       fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
@@ -171,18 +174,7 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-function headerFallbackPillDataUri(label: string) {
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}">
-    <rect x="0" y="0" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}" rx="14" ry="14" fill="#EDEDED"/>
-    <text x="${BOOK_LOGO_W / 2}" y="${Math.floor(BOOK_LOGO_H * 0.70)}"
-      font-family="Arial, sans-serif" font-size="12" font-weight="700"
-      text-anchor="middle" fill="#111111">${label}</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
-}
-
-/** --------------------- consensus (selected market only) --------------------- */
+/** ---------- consensus: same presentation as book columns ---------- */
 function median(nums: number[]) {
   const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
   if (!a.length) return null;
@@ -190,109 +182,78 @@ function median(nums: number[]) {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
-function consensusForMarket(ev: EventOdds, market: Market) {
+function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME") {
   const a = ev.away;
   const h = ev.home;
   const books = ["dk", "fd", "mgm", "pin", "bol"] as const;
+  const src = side === "AWAY" ? a : h;
+
+  if (market === "ml") {
+    const odds: number[] = [];
+    if (src) for (const b of books) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
+    return fmtML(median(odds));
+  }
 
   if (market === "spread") {
     const lines: number[] = [];
     const odds: number[] = [];
-    if (a) {
+    if (src) {
       for (const b of books) {
-        const line = a.spread[b]?.line;
-        const o = a.spread[b]?.odds;
+        const line = src.spread[b]?.line;
+        const o = src.spread[b]?.odds;
         if (typeof line === "number") lines.push(line);
         if (typeof o === "number") odds.push(o);
       }
     }
-    return { kind: "spread" as const, line: median(lines), odds: median(odds) };
+    const mLine = median(lines);
+    const mOdds = median(odds);
+    if (mLine == null) return "—";
+    if (mOdds == null) return `${mLine}`;
+    return `${mLine} (${mOdds})`;
   }
 
-  if (market === "total") {
-    const lines: number[] = [];
-    const overOdds: number[] = [];
-    const underOdds: number[] = [];
+  // total: AWAY shows Over, HOME shows Under (same as books)
+  const lines: number[] = [];
+  const overOdds: number[] = [];
+  const underOdds: number[] = [];
 
-    if (a) {
-      for (const b of books) {
-        const line = a.total[b]?.line;
-        const o = a.total[b]?.over;
-        if (typeof line === "number") lines.push(line);
-        if (typeof o === "number") overOdds.push(o);
-      }
+  if (a) {
+    for (const b of books) {
+      const line = a.total[b]?.line;
+      const o = a.total[b]?.over;
+      if (typeof line === "number") lines.push(line);
+      if (typeof o === "number") overOdds.push(o);
     }
-    if (h) {
-      for (const b of books) {
-        const u = h.total[b]?.under;
-        if (typeof u === "number") underOdds.push(u);
-      }
+  }
+  if (h) {
+    for (const b of books) {
+      const u = h.total[b]?.under;
+      if (typeof u === "number") underOdds.push(u);
     }
-
-    return { kind: "total" as const, line: median(lines), over: median(overOdds), under: median(underOdds) };
   }
 
-  const awayOdds: number[] = [];
-  const homeOdds: number[] = [];
-  if (a) for (const b of books) if (typeof a.ml[b] === "number") awayOdds.push(a.ml[b] as number);
-  if (h) for (const b of books) if (typeof h.ml[b] === "number") homeOdds.push(h.ml[b] as number);
-  return { kind: "ml" as const, away: median(awayOdds), home: median(homeOdds) };
+  const mLine = median(lines);
+  const mOver = median(overOdds);
+  const mUnder = median(underOdds);
+
+  if (mLine == null) return "—";
+  if (side === "AWAY") return `${mLine} O${mOver == null ? "—" : mOver}`;
+  return `${mLine} U${mUnder == null ? "—" : mUnder}`;
 }
 
-function ConsensusCell({ ev, market }: { ev: EventOdds; market: Market }) {
-  const c = useMemo(() => consensusForMarket(ev, market), [ev, market]);
-
-  if (c.kind === "spread") {
-    return (
-      <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
-        <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[12px] text-[#cfcfcf]">Line</span>
-          <span className="text-[14px] text-white font-bold tabular-nums">{c.line == null ? "—" : c.line}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[12px] text-[#cfcfcf]">Odds</span>
-          <span className="text-[14px] text-white font-bold tabular-nums">{c.odds == null ? "—" : c.odds}</span>
-        </div>
-      </td>
-    );
-  }
-
-  if (c.kind === "total") {
-    return (
-      <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
-        <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[12px] text-[#cfcfcf]">Line</span>
-          <span className="text-[14px] text-white font-bold tabular-nums">{c.line == null ? "—" : c.line}</span>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[12px] text-[#cfcfcf]">O / U</span>
-          <span className="text-[14px] text-white font-bold tabular-nums">
-            {c.over == null ? "—" : c.over} / {c.under == null ? "—" : c.under}
-          </span>
-        </div>
-      </td>
-    );
-  }
-
-  // ml
-  return (
-    <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
-      <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[12px] text-[#cfcfcf]">Away</span>
-        <span className="text-[14px] text-white font-bold tabular-nums">{c.away == null ? "—" : c.away}</span>
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-[12px] text-[#cfcfcf]">Home</span>
-        <span className="text-[14px] text-white font-bold tabular-nums">{c.home == null ? "—" : c.home}</span>
-      </div>
-    </td>
-  );
+/** ---------- book header fallback (if a logo path is wrong) ---------- */
+function headerFallbackPillDataUri(label: string) {
+  const svg = `
+  <svg xmlns="http://www.w3.org/2000/svg" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}">
+    <rect x="0" y="0" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}" rx="13" ry="13" fill="#EFE9D8"/>
+    <text x="${BOOK_LOGO_W / 2}" y="${Math.floor(BOOK_LOGO_H * 0.70)}"
+      font-family="Arial, sans-serif" font-size="12" font-weight="700"
+      text-anchor="middle" fill="#111111">${label}</text>
+  </svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
 
-/** --------------------- UI components --------------------- */
+/** ---------- UI components ---------- */
 function MarketButton({
   active,
   onClick,
@@ -331,7 +292,7 @@ function BookHeader({
   return (
     <th
       className={["text-center px-2 py-3", borderLeft ? "border-l border-black/10" : ""].join(" ")}
-      style={{ width: 128 }}
+      style={{ width: COL_BOOK }}
     >
       <span className="sr-only">{alt}</span>
       <div className="flex items-center justify-center">
@@ -356,8 +317,7 @@ function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean 
   return (
     <td
       className={[
-        "p-3 text-white text-center tabular-nums font-semibold",
-        "text-[13px]",
+        "p-3 text-white text-center tabular-nums font-bold text-[13.5px]",
         borderLeft ? "border-l border-[#2a2a2a]" : "",
       ].join(" ")}
     >
@@ -366,25 +326,37 @@ function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean 
   );
 }
 
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+function ConsensusValue({ value }: { value: string }) {
+  return <td className="p-3 text-white text-center tabular-nums font-bold text-[13.5px] border-r border-[#2a2a2a]">{value}</td>;
+}
+
+function MiniTeamRow({
+  team,
+  logoUrl,
+  side,
+}: {
+  team: string;
+  logoUrl: string | null;
+  side: "AWAY" | "HOME";
+}) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
         <img
           src={logoUrl}
           alt={`${team} logo`}
-          className="w-10 h-10 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+          className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
           loading="lazy"
           onError={(e) => {
             (e.currentTarget as HTMLImageElement).style.display = "none";
           }}
         />
       ) : (
-        <div className="w-10 h-10 rounded-md bg-white border border-[#e5e5e5]" />
+        <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
       )}
 
       <div className="leading-tight">
-        <div className="text-white font-bold text-[15px]">{team}</div>
+        <div className="text-white font-extrabold text-[15.5px]">{team}</div>
         <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
       </div>
     </div>
@@ -463,9 +435,14 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   const awayCells = mk(away);
   const homeCells = mk(home);
 
+  const awayConsensus = consensusValueForRow(ev, market, "AWAY");
+  const homeConsensus = consensusValueForRow(ev, market, "HOME");
+
   return (
     <>
+      {/* AWAY row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
+        {/* matchup column (time + both teams) */}
         <td className="p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle border-r border-[#2a2a2a]" rowSpan={2}>
           <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
           <div className="space-y-3">
@@ -474,8 +451,10 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
           </div>
         </td>
 
-        <ConsensusCell ev={ev} market={market} />
+        {/* consensus (same style as book cells) */}
+        <ConsensusValue value={awayConsensus} />
 
+        {/* books */}
         <BookValue value={awayCells.dk} borderLeft />
         <BookValue value={awayCells.fd} />
         <BookValue value={awayCells.mgm} />
@@ -483,7 +462,10 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
         <BookValue value={awayCells.bol} />
       </tr>
 
+      {/* HOME row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
+        <ConsensusValue value={homeConsensus} />
+
         <BookValue value={homeCells.dk} borderLeft />
         <BookValue value={homeCells.fd} />
         <BookValue value={homeCells.mgm} />
@@ -494,7 +476,6 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   );
 }
 
-/** --------------------- main screen --------------------- */
 export function OddsScreen() {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
@@ -591,6 +572,7 @@ export function OddsScreen() {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
+      // hide already-started games for "today"
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -604,6 +586,7 @@ export function OddsScreen() {
 
   return (
     <div className="h-[calc(100vh-72px)] flex flex-col gap-4 overflow-hidden">
+      {/* title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
@@ -619,6 +602,7 @@ export function OddsScreen() {
         </div>
       </div>
 
+      {/* date buttons */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -637,6 +621,7 @@ export function OddsScreen() {
         ))}
       </div>
 
+      {/* market toggle */}
       <div className="flex items-center gap-2">
         <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
           Moneyline
@@ -649,6 +634,7 @@ export function OddsScreen() {
         </MarketButton>
       </div>
 
+      {/* scroll container: table scrolls, page doesn't */}
       <div className="flex-1 bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
         <div className="h-full overflow-y-auto overflow-x-auto">
           {loading ? (
@@ -659,22 +645,25 @@ export function OddsScreen() {
             <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>
           ) : (
             <table className="w-full table-fixed">
+              {/* fixed column widths for uniformity */}
               <colgroup>
-                <col style={{ width: 420 }} />
-                <col style={{ width: 220 }} />
-                <col style={{ width: 128 }} />
-                <col style={{ width: 128 }} />
-                <col style={{ width: 128 }} />
-                <col style={{ width: 128 }} />
-                <col style={{ width: 128 }} />
+                <col style={{ width: COL_MATCHUP }} />
+                <col style={{ width: COL_CONSENSUS }} />
+                <col style={{ width: COL_BOOK }} />
+                <col style={{ width: COL_BOOK }} />
+                <col style={{ width: COL_BOOK }} />
+                <col style={{ width: COL_BOOK }} />
+                <col style={{ width: COL_BOOK }} />
               </colgroup>
 
               <thead className="sticky top-0 z-20">
+                {/* lighter header so black book text works */}
                 <tr className="bg-[#E7E3D6] border-b border-black/10">
-                  <th className="text-left px-3 py-3 text-[#1a1a1a] sticky left-0 bg-[#E7E3D6] z-30 text-sm font-bold">
+                  <th className="text-left px-3 py-3 text-[#1a1a1a] sticky left-0 bg-[#E7E3D6] z-30 text-sm font-extrabold">
                     Matchup
                   </th>
-                  <th className="text-left px-3 py-3 text-[#1a1a1a] bg-[#E7E3D6] z-20 text-sm font-bold border-l border-black/10">
+
+                  <th className="text-left px-3 py-3 text-[#1a1a1a] bg-[#E7E3D6] z-20 text-sm font-extrabold border-l border-black/10">
                     Consensus
                   </th>
 
