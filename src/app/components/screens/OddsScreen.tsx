@@ -37,11 +37,11 @@ const CT_TZ = "America/Chicago";
  *   /public/bookmakers/bol.svg
  */
 const BOOK_LOGOS = {
-  dk: "/bookmakers/dk.svg",
-  fd: "/bookmakers/fd.svg",
-  mgm: "/bookmakers/mgm.svg",
-  pin: "/bookmakers/pin.svg",
-  bol: "/bookmakers/bol.svg",
+  dk: "/bookmakers/dk.png",
+  fd: "/bookmakers/fd.png",
+  mgm: "/bookmakers/mgm.png",
+  pin: "/bookmakers/pin.webp",
+  bol: "/bookmakers/bol.png",
 } as const;
 
 function fallbackBadgeDataUri(label: string) {
