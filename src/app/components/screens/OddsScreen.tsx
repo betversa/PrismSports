@@ -20,7 +20,6 @@ type SideOdds = {
 type EventOdds = {
   eventId: string;
   commenceTime: string;
-  matchup: string | null; // keep if your view provides it
   away?: SideOdds;
   home?: SideOdds;
   latestUpdatedAt: string | null;
@@ -29,24 +28,30 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 /**
- * Public folder bookmaker logos
- * Put these in: /public/bookmakers/{dk,fd,mgm,pin,bol}.svg
+ * ✅ Public folder bookmaker logos
+ * Put these in your repo:
+ *   /public/bookmakers/dk.svg
+ *   /public/bookmakers/fd.svg
+ *   /public/bookmakers/mgm.svg
+ *   /public/bookmakers/pin.svg
+ *   /public/bookmakers/bol.svg
  */
-function publicAsset(path: string) {
-  // supports Vite base path ("/" in dev, "/something/" in prod if configured)
-  const base = (import.meta as any).env?.BASE_URL ?? "/";
-  const cleanBase = base.endsWith("/") ? base.slice(0, -1) : base;
-  const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  return `${cleanBase}${cleanPath}`;
-}
-
 const BOOK_LOGOS = {
-  dk: publicAsset("/bookmakers/dk.svg"),
-  fd: publicAsset("/bookmakers/fd.svg"),
-  mgm: publicAsset("/bookmakers/mgm.svg"),
-  pin: publicAsset("/bookmakers/pin.svg"),
-  bol: publicAsset("/bookmakers/bol.svg"),
-};
+  dk: "/bookmakers/dk.svg",
+  fd: "/bookmakers/fd.svg",
+  mgm: "/bookmakers/mgm.svg",
+  pin: "/bookmakers/pin.svg",
+  bol: "/bookmakers/bol.svg",
+} as const;
+
+function fallbackBadgeDataUri(label: string) {
+  const svg = `
+  <svg xmlns="http://www.w3.org/2000/svg" width="120" height="40">
+    <rect x="0" y="0" width="120" height="40" rx="6" ry="6" fill="#ffffff"/>
+    <text x="60" y="26" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#111111">${label}</text>
+  </svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
+}
 
 /** Normalize Supabase timestamps so Date() parses consistently. */
 function normalizeIso(raw: string | null | undefined): string | null {
@@ -86,7 +91,6 @@ function fmtCTDateTime(iso: string | null | undefined) {
   }).format(d);
 }
 
-// YYYY-MM-DD (CT) from timestamp
 function ctYmdFromIso(iso: string | null | undefined) {
   const n = normalizeIso(iso);
   if (!n) return "";
@@ -111,7 +115,6 @@ function ctTodayYmd() {
 }
 
 function fmtDateBtn(ymd: string) {
-  // ymd YYYY-MM-DD -> "Dec 23"
   const d = new Date(`${ymd}T12:00:00`);
   if (Number.isNaN(d.getTime())) return ymd;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -178,7 +181,17 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-function BookHeader({ src, alt, borderLeft }: { src: string; alt: string; borderLeft?: boolean }) {
+function BookHeader({
+  src,
+  alt,
+  fallbackLabel,
+  borderLeft,
+}: {
+  src: string;
+  alt: string;
+  fallbackLabel: string;
+  borderLeft?: boolean;
+}) {
   return (
     <th className={`text-center p-3 ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
       <div className="flex items-center justify-center">
@@ -190,7 +203,8 @@ function BookHeader({ src, alt, borderLeft }: { src: string; alt: string; border
             className="h-6 w-auto max-w-[90px] object-contain"
             loading="lazy"
             onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = "none";
+              const img = e.currentTarget as HTMLImageElement;
+              img.src = fallbackBadgeDataUri(fallbackLabel);
             }}
           />
         </div>
@@ -210,7 +224,6 @@ export function OddsScreen() {
   async function load() {
     setError("");
 
-    // If your view has a `matchup` column, we’ll keep it.
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
@@ -235,12 +248,10 @@ export function OddsScreen() {
         byEvent.get(eventId) ?? {
           eventId,
           commenceTime: row.commence_time ?? "",
-          matchup: row.matchup ?? null,
           latestUpdatedAt: null,
         };
 
       cur.commenceTime = cur.commenceTime || row.commence_time || "";
-      cur.matchup = cur.matchup ?? row.matchup ?? null;
 
       const sideOdds = mapWideRowToSideOdds(row);
       if (sideOdds.side === "AWAY") cur.away = sideOdds;
@@ -270,7 +281,6 @@ export function OddsScreen() {
     return () => window.clearInterval(t);
   }, []);
 
-  // all date buttons based on events (CT)
   const availableDates = useMemo(() => {
     const set = new Set<string>();
     for (const ev of allEvents) {
@@ -280,7 +290,6 @@ export function OddsScreen() {
     return Array.from(set).sort();
   }, [allEvents]);
 
-  // default selected date
   useEffect(() => {
     if (!availableDates.length) return;
     const today = ctTodayYmd();
@@ -292,7 +301,6 @@ export function OddsScreen() {
     });
   }, [availableDates]);
 
-  // filtered by selected date; exclude already-started games if today (CT)
   const events = useMemo(() => {
     if (!selectedDate) return [];
     const todayCt = ctTodayYmd();
@@ -323,18 +331,16 @@ export function OddsScreen() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-              {/* ✅ time is now part of the MATCHUP cell (no separate Time column) */}
-              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[240px]">
+              {/* ✅ ONLY left column: time + teams + logos + home/away */}
+              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[340px]">
                 Matchup
               </th>
 
-              <th className="text-left p-3 text-[#808080] min-w-[260px]">Team</th>
-
-              <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" borderLeft />
-              <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" />
-              <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" />
-              <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" />
-              <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" />
+              <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
+              <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
+              <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
+              <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" fallbackLabel="PIN" />
+              <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" fallbackLabel="BOL" />
             </tr>
           </thead>
 
@@ -350,7 +356,6 @@ export function OddsScreen() {
 
   return (
     <div className="space-y-4">
-      {/* title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
@@ -419,7 +424,7 @@ function MarketButton({
         "px-3 py-1.5 rounded-md text-xs border transition-colors",
         active
           ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+          : "bg-[#0f0f0f] text-[#cfcfcf] border border-[#2a2a2a] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -435,20 +440,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: {
-        dk: { line: null, odds: null },
-        fd: { line: null, odds: null },
-        mgm: { line: null, odds: null },
-        pin: { line: null, odds: null },
-        bol: { line: null, odds: null },
-      },
-      total: {
-        dk: { line: null, over: null, under: null },
-        fd: { line: null, over: null, under: null },
-        mgm: { line: null, over: null, under: null },
-        pin: { line: null, over: null, under: null },
-        bol: { line: null, over: null, under: null },
-      },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
     };
 
   const home =
@@ -458,32 +451,9 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: {
-        dk: { line: null, odds: null },
-        fd: { line: null, odds: null },
-        mgm: { line: null, odds: null },
-        pin: { line: null, odds: null },
-        bol: { line: null, odds: null },
-      },
-      total: {
-        dk: { line: null, over: null, under: null },
-        fd: { line: null, over: null, under: null },
-        mgm: { line: null, over: null, under: null },
-        pin: { line: null, over: null, under: null },
-        bol: { line: null, over: null, under: null },
-      },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
     };
-
-  // ✅ time is shown in the Matchup column (rowSpan=2) so there is no separate time field
-  const matchupLine = useMemo(() => {
-    // Prefer building a clean matchup string without "Team1 vs Team2"
-    const a = away?.team && away.team !== "Away" ? away.team : null;
-    const h = home?.team && home.team !== "Home" ? home.team : null;
-
-    if (a && h) return `${a} @ ${h}`;
-    if (ev.matchup) return ev.matchup;
-    return "—";
-  }, [away?.team, home?.team, ev.matchup]);
 
   const mk = (s: SideOdds) => {
     if (market === "ml") {
@@ -493,7 +463,6 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
     }
 
-    // total split: AWAY row shows Over, HOME row shows Under
     const fmtTotalSplit = (cell: TotalCell, which: "over" | "under") => {
       if (!cell || cell.line == null) return "—";
       const v = which === "over" ? cell.over : cell.under;
@@ -517,15 +486,15 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
     <>
       {/* AWAY row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        {/* ✅ Matchup cell includes time + matchup (no standalone time column) */}
+        {/* ✅ one Matchup cell for the wholeW: time + both teams + logos + home/away */}
         <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 align-middle" rowSpan={2}>
-          <div className="leading-tight">
-            <div className="text-[11px] text-[#cfcfcf]">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-            <div className="text-[10px] text-[#606060] truncate max-w-[220px]">{matchupLine}</div>
+          <div className="text-[11px] text-[#cfcfcf] mb-2">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+
+          <div className="space-y-2">
+            <MiniTeamRow team={away.team} logoUrl={away.logoUrl} side="AWAY" />
+            <MiniTeamRow team={home.team} logoUrl={home.logoUrl} side="HOME" />
           </div>
         </td>
-
-        <TeamCell team={away.team} logoUrl={away.logoUrl} side="AWAY" />
 
         <BookValue value={awayCells.dk} borderLeft />
         <BookValue value={awayCells.fd} />
@@ -534,10 +503,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
         <BookValue value={awayCells.bol} />
       </tr>
 
-      {/* HOME row (divider after event) */}
+      {/* HOME row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
-        <TeamCell team={home.team} logoUrl={home.logoUrl} side="HOME" />
-
         <BookValue value={homeCells.dk} borderLeft />
         <BookValue value={homeCells.fd} />
         <BookValue value={homeCells.mgm} />
@@ -548,34 +515,36 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   );
 }
 
-function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
   return (
-    <td className="p-3 text-white">
-      <div className="flex items-center gap-3">
-        {logoUrl ? (
-          <img
-            src={logoUrl}
-            alt={`${team} logo`}
-            className="w-8 h-8 rounded-sm object-contain bg-white border border-[#e5e5e5] shadow-sm p-0.5"
-            loading="lazy"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).style.display = "none";
-            }}
-          />
-        ) : (
-          <div className="w-8 h-8 rounded-sm bg-white border border-[#e5e5e5]" />
-        )}
+    <div className="flex items-center gap-3">
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={`${team} logo`}
+          className="w-7 h-7 rounded-sm object-contain bg-white border border-[#e5e5e5] p-0.5"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).src = fallbackBadgeDataUri(team.slice(0, 3).toUpperCase());
+          }}
+        />
+      ) : (
+        <div className="w-7 h-7 rounded-sm bg-white border border-[#e5e5e5]" />
+      )}
 
-        <div className="leading-tight">
-          <div className="text-white">{team}</div>
-          <div className="text-[10px] text-[#606060]">{side}</div>
-        </div>
+      <div className="leading-tight">
+        <div className="text-white">{team}</div>
+        <div className="text-[10px] text-[#606060]">{side}</div>
       </div>
-    </td>
+    </div>
   );
 }
 
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
-  return <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>{value}</td>;
+  return (
+    <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
+      {value}
+    </td>
+  );
 }
 
