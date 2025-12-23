@@ -28,20 +28,15 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 /**
- * ✅ Public folder bookmaker logos
- * Put these in your repo:
- *   /public/bookmakers/dk.svg
- *   /public/bookmakers/fd.svg
- *   /public/bookmakers/mgm.svg
- *   /public/bookmakers/pin.svg
- *   /public/bookmakers/bol.svg
+ * ✅ IMPORTANT: your repo has PNG/WEBP files mislabeled as .svg
+ * After renaming the files, use these paths:
  */
 const BOOK_LOGOS = {
-  dk: "/bookmakers/dk.png",
-  fd: "/bookmakers/fd.png",
-  mgm: "/bookmakers/mgm.png",
-  pin: "/bookmakers/pin.webp",
-  bol: "/bookmakers/bol.png",
+  dk: "/books/dk.png",
+  fd: "/books/fd.png",
+  mgm: "/books/mgm.png",
+  pin: "/books/pin.webp", // or "/books/pin.png" if you convert it
+  bol: "/books/bol.png",
 } as const;
 
 function fallbackBadgeDataUri(label: string) {
@@ -53,7 +48,6 @@ function fallbackBadgeDataUri(label: string) {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
 
-/** Normalize Supabase timestamps so Date() parses consistently. */
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
@@ -96,14 +90,12 @@ function ctYmdFromIso(iso: string | null | undefined) {
   if (!n) return "";
   const d = new Date(n);
   if (Number.isNaN(d.getTime())) return "";
-
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: CT_TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).formatToParts(d);
-
   const y = parts.find((p) => p.type === "year")?.value ?? "1970";
   const m = parts.find((p) => p.type === "month")?.value ?? "01";
   const day = parts.find((p) => p.type === "day")?.value ?? "01";
@@ -203,8 +195,7 @@ function BookHeader({
             className="h-6 w-auto max-w-[90px] object-contain"
             loading="lazy"
             onError={(e) => {
-              const img = e.currentTarget as HTMLImageElement;
-              img.src = fallbackBadgeDataUri(fallbackLabel);
+              (e.currentTarget as HTMLImageElement).src = fallbackBadgeDataUri(fallbackLabel);
             }}
           />
         </div>
@@ -293,7 +284,6 @@ export function OddsScreen() {
   useEffect(() => {
     if (!availableDates.length) return;
     const today = ctTodayYmd();
-
     setSelectedDate((prev) => {
       if (prev && availableDates.includes(prev)) return prev;
       if (availableDates.includes(today)) return today;
@@ -331,7 +321,6 @@ export function OddsScreen() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-              {/* ✅ ONLY left column: time + teams + logos + home/away */}
               <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[340px]">
                 Matchup
               </th>
@@ -371,7 +360,6 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* date buttons (dates only) */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -390,17 +378,10 @@ export function OddsScreen() {
         ))}
       </div>
 
-      {/* market toggle */}
       <div className="flex items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
-          Moneyline
-        </MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
-          Spread
-        </MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
-          Total
-        </MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
       </div>
 
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">{body}</div>
@@ -462,14 +443,12 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
     if (market === "spread") {
       return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
     }
-
     const fmtTotalSplit = (cell: TotalCell, which: "over" | "under") => {
       if (!cell || cell.line == null) return "—";
       const v = which === "over" ? cell.over : cell.under;
       const tag = which === "over" ? "O" : "U";
       return `${cell.line} ${tag}${v == null ? "—" : v}`;
     };
-
     return {
       dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
       fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
@@ -484,12 +463,9 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
 
   return (
     <>
-      {/* AWAY row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        {/* ✅ one Matchup cell for the wholeW: time + both teams + logos + home/away */}
         <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 align-middle" rowSpan={2}>
           <div className="text-[11px] text-[#cfcfcf] mb-2">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-
           <div className="space-y-2">
             <MiniTeamRow team={away.team} logoUrl={away.logoUrl} side="AWAY" />
             <MiniTeamRow team={home.team} logoUrl={home.logoUrl} side="HOME" />
@@ -503,7 +479,6 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
         <BookValue value={awayCells.bol} />
       </tr>
 
-      {/* HOME row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
         <BookValue value={homeCells.dk} borderLeft />
         <BookValue value={homeCells.fd} />
@@ -541,10 +516,6 @@ function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | 
 }
 
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
-  return (
-    <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
-      {value}
-    </td>
-  );
+  return <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>{value}</td>;
 }
 
