@@ -1,6 +1,5 @@
 // components/Sidebar.tsx
 import { ChartBar, Calculator, TrendingUp, DollarSign, Target, Settings, House } from 'lucide-react';
-import logoImage from 'figma:asset/4aa2478d18792f46aa71cf7479926ef979c47df9.png';
 import type { Screen } from '../App';
 
 interface SidebarProps {
