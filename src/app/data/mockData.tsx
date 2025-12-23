@@ -1,6 +1,5 @@
 // components/Sidebar.tsx
 import { ChartBar, Calculator, TrendingUp, DollarSign, Target, Settings, House } from 'lucide-react';
-import logoImage from 'figma:asset/4aa2478d18792f46aa71cf7479926ef979c47df9.png';
 import type { Screen } from '../App';
 
 interface SidebarProps {
@@ -23,7 +22,6 @@ export function Sidebar({ activeScreen, onNavigate }: SidebarProps) {
     <div className="w-64 bg-[#0a0a0a] border-r border-[#2a2a2a] h-screen fixed left-0 top-0 z-20 flex flex-col overflow-hidden">
       {/* Logo */}
       <div className="p-6 border-b border-[#2a2a2a] flex items-center justify-center">
-        <img src={logoImage} alt="PrismSports Analytics" className="w-40 h-auto" />
       </div>
 
       {/* Navigation */}
