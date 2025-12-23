@@ -107,3 +107,39 @@ export const mockGames: Game[] = [
     totalUnits: 0,
   },
 ];
+
+/**
+ * MonteCarlo screen expects a named export: mockMonteCarloData
+ * We derive it from mockGames so there's a single source of truth.
+ *
+ * If your MonteCarloScreen expects a different shape, tell me what fields it reads
+ * and I'll match it exactly.
+ */
+export const mockMonteCarloData = mockGames.map((g) => ({
+  id: g.id,
+  matchup: `${g.awayTeam} @ ${g.homeTeam}`,
+  startTime: g.startTime,
+  commenced: g.commenced,
+
+  // lines
+  prismSpread: g.prismSpread,
+  bookSpread: g.bookSpread,
+  prismTotal: g.prismTotal,
+  bookTotal: g.bookTotal,
+  prismML: g.prismML,
+  bookML: g.bookML,
+
+  // EV / Score / Units
+  mlEV: g.mlEV,
+  mlPrismScore: g.mlPrismScore,
+  mlUnits: g.mlUnits,
+
+  spreadEV: g.spreadEV,
+  spreadPrismScore: g.spreadPrismScore,
+  spreadUnits: g.spreadUnits,
+
+  totalEV: g.totalEV,
+  totalPrismScore: g.totalPrismScore,
+  totalUnits: g.totalUnits,
+}));
+
