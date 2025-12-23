@@ -44,6 +44,12 @@ const COL_MATCHUP = 420; // matchup (time + teams + logos)
 const COL_CONSENSUS = 180;
 const COL_BOOK = 132;
 
+// header colors
+const HDR_LEFT_BG = "bg-[#0a0a0a]";   // original dark
+const HDR_BOOK_BG = "bg-[#1b1b1b]";   // charcoal (softer than black)
+const HDR_TEXT = "text-[#cfcfcf]";
+const HDR_DIV = "border-[#2a2a2a]";
+
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
@@ -212,7 +218,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     return `${mLine} (${mOdds})`;
   }
 
-  // total: AWAY shows Over, HOME shows Under (same as books)
+  // total: AWAY shows Over, HOME shows Under
   const lines: number[] = [];
   const overOdds: number[] = [];
   const underOdds: number[] = [];
@@ -241,14 +247,14 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   return `${mLine} U${mUnder == null ? "—" : mUnder}`;
 }
 
-/** ---------- book header fallback (if a logo path is wrong) ---------- */
+/** ---------- book header fallback ---------- */
 function headerFallbackPillDataUri(label: string) {
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}">
-    <rect x="0" y="0" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}" rx="13" ry="13" fill="#EFE9D8"/>
+    <rect x="0" y="0" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}" rx="13" ry="13" fill="#2A2A2A"/>
     <text x="${BOOK_LOGO_W / 2}" y="${Math.floor(BOOK_LOGO_H * 0.70)}"
       font-family="Arial, sans-serif" font-size="12" font-weight="700"
-      text-anchor="middle" fill="#111111">${label}</text>
+      text-anchor="middle" fill="#F5F5F5">${label}</text>
   </svg>`;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
@@ -291,7 +297,13 @@ function BookHeader({
 }) {
   return (
     <th
-      className={["text-center px-2 py-3", borderLeft ? "border-l border-black/10" : ""].join(" ")}
+      className={[
+        "text-center px-2 py-3",
+        HDR_BOOK_BG,
+        "border-b",
+        HDR_DIV,
+        borderLeft ? "border-l border-[#2a2a2a]" : "",
+      ].join(" ")}
       style={{ width: COL_BOOK }}
     >
       <span className="sr-only">{alt}</span>
@@ -315,30 +327,21 @@ function BookHeader({
 
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
-    <td
-      className={[
-        "p-3 text-white text-center tabular-nums font-bold text-[13.5px]",
-        borderLeft ? "border-l border-[#2a2a2a]" : "",
-      ].join(" ")}
-    >
+    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px]", borderLeft ? "border-l border-[#2a2a2a]" : ""].join(" ")}>
       {value}
     </td>
   );
 }
 
 function ConsensusValue({ value }: { value: string }) {
-  return <td className="p-3 text-white text-center tabular-nums font-bold text-[13.5px] border-r border-[#2a2a2a]">{value}</td>;
+  return (
+    <td className="p-3 text-white text-center tabular-nums font-bold text-[13.5px] border-r border-[#2a2a2a]">
+      {value}
+    </td>
+  );
 }
 
-function MiniTeamRow({
-  team,
-  logoUrl,
-  side,
-}: {
-  team: string;
-  logoUrl: string | null;
-  side: "AWAY" | "HOME";
-}) {
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -371,20 +374,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: {
-        dk: { line: null, odds: null },
-        fd: { line: null, odds: null },
-        mgm: { line: null, odds: null },
-        pin: { line: null, odds: null },
-        bol: { line: null, odds: null },
-      },
-      total: {
-        dk: { line: null, over: null, under: null },
-        fd: { line: null, over: null, under: null },
-        mgm: { line: null, over: null, under: null },
-        pin: { line: null, over: null, under: null },
-        bol: { line: null, over: null, under: null },
-      },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
     };
 
   const home =
@@ -394,20 +385,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: {
-        dk: { line: null, odds: null },
-        fd: { line: null, odds: null },
-        mgm: { line: null, odds: null },
-        pin: { line: null, odds: null },
-        bol: { line: null, odds: null },
-      },
-      total: {
-        dk: { line: null, over: null, under: null },
-        fd: { line: null, over: null, under: null },
-        mgm: { line: null, over: null, under: null },
-        pin: { line: null, over: null, under: null },
-        bol: { line: null, over: null, under: null },
-      },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
     };
 
   const mk = (s: SideOdds) => {
@@ -415,13 +394,7 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
     }
     if (market === "spread") {
-      return {
-        dk: fmtSpread(s.spread.dk),
-        fd: fmtSpread(s.spread.fd),
-        mgm: fmtSpread(s.spread.mgm),
-        pin: fmtSpread(s.spread.pin),
-        bol: fmtSpread(s.spread.bol),
-      };
+      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
     }
     return {
       dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
@@ -440,9 +413,7 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
 
   return (
     <>
-      {/* AWAY row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        {/* matchup column (time + both teams) */}
         <td className="p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle border-r border-[#2a2a2a]" rowSpan={2}>
           <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
           <div className="space-y-3">
@@ -451,10 +422,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
           </div>
         </td>
 
-        {/* consensus (same style as book cells) */}
         <ConsensusValue value={awayConsensus} />
 
-        {/* books */}
         <BookValue value={awayCells.dk} borderLeft />
         <BookValue value={awayCells.fd} />
         <BookValue value={awayCells.mgm} />
@@ -462,7 +431,6 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
         <BookValue value={awayCells.bol} />
       </tr>
 
-      {/* HOME row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
         <ConsensusValue value={homeConsensus} />
 
@@ -572,7 +540,6 @@ export function OddsScreen() {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
-      // hide already-started games for "today"
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -586,7 +553,6 @@ export function OddsScreen() {
 
   return (
     <div className="h-[calc(100vh-72px)] flex flex-col gap-4 overflow-hidden">
-      {/* title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
@@ -602,7 +568,6 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* date buttons */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -621,20 +586,12 @@ export function OddsScreen() {
         ))}
       </div>
 
-      {/* market toggle */}
       <div className="flex items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
-          Moneyline
-        </MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
-          Spread
-        </MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
-          Total
-        </MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
       </div>
 
-      {/* scroll container: table scrolls, page doesn't */}
       <div className="flex-1 bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
         <div className="h-full overflow-y-auto overflow-x-auto">
           {loading ? (
@@ -645,7 +602,6 @@ export function OddsScreen() {
             <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>
           ) : (
             <table className="w-full table-fixed">
-              {/* fixed column widths for uniformity */}
               <colgroup>
                 <col style={{ width: COL_MATCHUP }} />
                 <col style={{ width: COL_CONSENSUS }} />
@@ -657,16 +613,18 @@ export function OddsScreen() {
               </colgroup>
 
               <thead className="sticky top-0 z-20">
-                {/* lighter header so black book text works */}
-                <tr className="bg-[#E7E3D6] border-b border-black/10">
-                  <th className="text-left px-3 py-3 text-[#1a1a1a] sticky left-0 bg-[#E7E3D6] z-30 text-sm font-extrabold">
+                <tr className={"border-b " + HDR_DIV}>
+                  {/* Matchup header (original dark) */}
+                  <th className={["text-left px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-sm font-extrabold"].join(" ")}>
                     Matchup
                   </th>
 
-                  <th className="text-left px-3 py-3 text-[#1a1a1a] bg-[#E7E3D6] z-20 text-sm font-extrabold border-l border-black/10">
+                  {/* Consensus header (centered, original dark) */}
+                  <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-sm font-extrabold border-l", HDR_DIV].join(" ")}>
                     Consensus
                   </th>
 
+                  {/* Book headers (charcoal) */}
                   <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
                   <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
                   <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
@@ -687,3 +645,4 @@ export function OddsScreen() {
     </div>
   );
 }
+
