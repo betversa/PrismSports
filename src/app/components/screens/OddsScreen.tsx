@@ -28,26 +28,21 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 /**
- * ✅ IMPORTANT: your repo has PNG/WEBP files mislabeled as .svg
- * After renaming the files, use these paths:
+ * ✅ Public folder book logos (use REAL extensions!)
+ * From your repo zip we saw: public/books/*.svg were actually PNG/WEBP.
+ * Rename the files in /public/books to:
+ *   dk.png, fd.png, mgm.png, bol.png, pin.webp (or pin.png)
+ * Then these paths will work on Vercel:
  */
 const BOOK_LOGOS = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
   mgm: "/books/mgm.png",
-  pin: "/books/pin.webp", // or "/books/pin.png" if you convert it
+  pin: "/books/pin.webp", // change to "/books/pin.png" if you convert it
   bol: "/books/bol.png",
 } as const;
 
-function fallbackBadgeDataUri(label: string) {
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="120" height="40">
-    <rect x="0" y="0" width="120" height="40" rx="6" ry="6" fill="#ffffff"/>
-    <text x="60" y="26" font-family="Arial, sans-serif" font-size="16" text-anchor="middle" fill="#111111">${label}</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
-}
-
+/** --- helpers --- */
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
@@ -122,6 +117,13 @@ function fmtSpread(cell: SpreadCell) {
   return `${cell.line} (${cell.odds})`;
 }
 
+function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
+  if (!cell || cell.line == null) return "—";
+  const v = which === "over" ? cell.over : cell.under;
+  const tag = which === "over" ? "O" : "U";
+  return `${cell.line} ${tag}${v == null ? "—" : v}`;
+}
+
 function pickLogoUrl(row: any): string | null {
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? null;
 }
@@ -173,6 +175,41 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
+function headerFallbackPillDataUri(label: string) {
+  const svg = `
+  <svg xmlns="http://www.w3.org/2000/svg" width="80" height="24">
+    <rect x="0" y="0" width="80" height="24" rx="12" ry="12" fill="#EDEDED"/>
+    <text x="40" y="16" font-family="Arial, sans-serif" font-size="12" font-weight="700"
+      text-anchor="middle" fill="#111111">${label}</text>
+  </svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
+}
+
+/** --- UI components --- */
+function MarketButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 rounded-md text-xs border transition-colors",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
 function BookHeader({
   src,
   alt,
@@ -185,25 +222,159 @@ function BookHeader({
   borderLeft?: boolean;
 }) {
   return (
-    <th className={`text-center p-3 ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
+    <th
+      className={[
+        "text-center px-2 py-3",
+        borderLeft ? "border-l border-black/10" : "",
+      ].join(" ")}
+      style={{ width: 112 }}
+    >
+      <span className="sr-only">{alt}</span>
       <div className="flex items-center justify-center">
-        <span className="sr-only">{alt}</span>
-        <div className="bg-white rounded-sm px-2 py-1 border border-[#e5e5e5]">
-          <img
-            src={src}
-            alt={alt}
-            className="h-6 w-auto max-w-[90px] object-contain"
-            loading="lazy"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = fallbackBadgeDataUri(fallbackLabel);
-            }}
-          />
-        </div>
+        <img
+          src={src}
+          alt={alt}
+          className="h-6 w-[76px] object-contain"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+          }}
+        />
       </div>
     </th>
   );
 }
 
+function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
+  return (
+    <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
+      {value}
+    </td>
+  );
+}
+
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+  return (
+    <div className="flex items-center gap-3">
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={`${team} logo`}
+          className="w-7 h-7 rounded-sm object-contain bg-white border border-[#e5e5e5] p-0.5"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : (
+        <div className="w-7 h-7 rounded-sm bg-white border border-[#e5e5e5]" />
+      )}
+
+      <div className="leading-tight">
+        <div className="text-white">{team}</div>
+        <div className="text-[10px] text-[#606060]">{side}</div>
+      </div>
+    </div>
+  );
+}
+
+function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
+  const away =
+    ev.away ?? {
+      side: "AWAY" as const,
+      team: "Away",
+      logoUrl: null,
+      updatedAt: null,
+      ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
+    };
+
+  const home =
+    ev.home ?? {
+      side: "HOME" as const,
+      team: "Home",
+      logoUrl: null,
+      updatedAt: null,
+      ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
+    };
+
+  const mk = (s: SideOdds) => {
+    if (market === "ml") {
+      return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
+    }
+    if (market === "spread") {
+      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
+    }
+    return {
+      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
+      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
+      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
+      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
+      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
+    };
+  };
+
+  const awayCells = mk(away);
+  const homeCells = mk(home);
+
+  return (
+    <>
+      <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
+        {/* ✅ sticky matchup cell contains time + BOTH teams + logos + home/away labels */}
+        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 align-middle border-r border-[#2a2a2a]" rowSpan={2}>
+          <div className="text-[11px] text-[#cfcfcf] mb-2">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+          <div className="space-y-2">
+            <MiniTeamRow team={away.team} logoUrl={away.logoUrl} side="AWAY" />
+            <MiniTeamRow team={home.team} logoUrl={home.logoUrl} side="HOME" />
+          </div>
+        </td>
+
+        <BookValue value={awayCells.dk} borderLeft />
+        <BookValue value={awayCells.fd} />
+        <BookValue value={awayCells.mgm} />
+        <BookValue value={awayCells.pin} />
+        <BookValue value={awayCells.bol} />
+      </tr>
+
+      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
+        <BookValue value={homeCells.dk} borderLeft />
+        <BookValue value={homeCells.fd} />
+        <BookValue value={homeCells.mgm} />
+        <BookValue value={homeCells.pin} />
+        <BookValue value={homeCells.bol} />
+      </tr>
+    </>
+  );
+}
+
+/** --- main screen --- */
 export function OddsScreen() {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
@@ -318,10 +489,21 @@ export function OddsScreen() {
 
     return (
       <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+        <table className="w-full text-xs table-fixed">
+          {/* ✅ uniform column widths */}
+          <colgroup>
+            <col style={{ width: 340 }} />
+            <col style={{ width: 112 }} />
+            <col style={{ width: 112 }} />
+            <col style={{ width: 112 }} />
+            <col style={{ width: 112 }} />
+            <col style={{ width: 112 }} />
+          </colgroup>
+
           <thead>
-            <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[340px]">
+            {/* ✅ lighter header so black book logos/text are visible */}
+            <tr className="bg-[#E7E3D6] border-b border-black/10">
+              <th className="text-left px-3 py-3 text-[#1a1a1a] sticky left-0 bg-[#E7E3D6] z-10">
                 Matchup
               </th>
 
@@ -345,6 +527,7 @@ export function OddsScreen() {
 
   return (
     <div className="space-y-4">
+      {/* title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
@@ -360,6 +543,7 @@ export function OddsScreen() {
         </div>
       </div>
 
+      {/* date buttons */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -378,6 +562,7 @@ export function OddsScreen() {
         ))}
       </div>
 
+      {/* market toggle */}
       <div className="flex items-center gap-2">
         <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
         <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
@@ -387,135 +572,5 @@ export function OddsScreen() {
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">{body}</div>
     </div>
   );
-}
-
-function MarketButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={[
-        "px-3 py-1.5 rounded-md text-xs border transition-colors",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#cfcfcf] border border-[#2a2a2a] hover:border-[#3a3a3a]",
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
-function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
-  const away =
-    ev.away ?? {
-      side: "AWAY" as const,
-      team: "Away",
-      logoUrl: null,
-      updatedAt: null,
-      ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
-    };
-
-  const home =
-    ev.home ?? {
-      side: "HOME" as const,
-      team: "Home",
-      logoUrl: null,
-      updatedAt: null,
-      ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
-    };
-
-  const mk = (s: SideOdds) => {
-    if (market === "ml") {
-      return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
-    }
-    if (market === "spread") {
-      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
-    }
-    const fmtTotalSplit = (cell: TotalCell, which: "over" | "under") => {
-      if (!cell || cell.line == null) return "—";
-      const v = which === "over" ? cell.over : cell.under;
-      const tag = which === "over" ? "O" : "U";
-      return `${cell.line} ${tag}${v == null ? "—" : v}`;
-    };
-    return {
-      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
-      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
-      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
-      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
-      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
-    };
-  };
-
-  const awayCells = mk(away);
-  const homeCells = mk(home);
-
-  return (
-    <>
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 align-middle" rowSpan={2}>
-          <div className="text-[11px] text-[#cfcfcf] mb-2">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-          <div className="space-y-2">
-            <MiniTeamRow team={away.team} logoUrl={away.logoUrl} side="AWAY" />
-            <MiniTeamRow team={home.team} logoUrl={home.logoUrl} side="HOME" />
-          </div>
-        </td>
-
-        <BookValue value={awayCells.dk} borderLeft />
-        <BookValue value={awayCells.fd} />
-        <BookValue value={awayCells.mgm} />
-        <BookValue value={awayCells.pin} />
-        <BookValue value={awayCells.bol} />
-      </tr>
-
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
-        <BookValue value={homeCells.dk} borderLeft />
-        <BookValue value={homeCells.fd} />
-        <BookValue value={homeCells.mgm} />
-        <BookValue value={homeCells.pin} />
-        <BookValue value={homeCells.bol} />
-      </tr>
-    </>
-  );
-}
-
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
-  return (
-    <div className="flex items-center gap-3">
-      {logoUrl ? (
-        <img
-          src={logoUrl}
-          alt={`${team} logo`}
-          className="w-7 h-7 rounded-sm object-contain bg-white border border-[#e5e5e5] p-0.5"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).src = fallbackBadgeDataUri(team.slice(0, 3).toUpperCase());
-          }}
-        />
-      ) : (
-        <div className="w-7 h-7 rounded-sm bg-white border border-[#e5e5e5]" />
-      )}
-
-      <div className="leading-tight">
-        <div className="text-white">{team}</div>
-        <div className="text-[10px] text-[#606060]">{side}</div>
-      </div>
-    </div>
-  );
-}
-
-function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
-  return <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>{value}</td>;
 }
 
