@@ -43,7 +43,6 @@ type EventOdds = {
   commenceTime: string; // ISO string from DB
   away?: SideOdds;
   home?: SideOdds;
-  // convenience: latest update across its two rows
   latestUpdatedAt: string | null;
 };
 
@@ -62,17 +61,6 @@ function fmtCTDateTime(iso: string | null | undefined) {
   }).format(d);
 }
 
-function fmtCTTimeOnly(iso: string | null | undefined) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(d);
-}
-
 function fmtML(v: number | null) {
   return v == null ? "—" : `${v}`;
 }
@@ -83,20 +71,11 @@ function fmtSpread(cell: SpreadCell) {
   return `${cell.line} (${cell.odds})`;
 }
 
-function fmtTotal(cell: TotalCell) {
-  if (!cell || cell.line == null) return "—";
-  const o = cell.over == null ? "O—" : `O${cell.over}`;
-  const u = cell.under == null ? "U—" : `U${cell.under}`;
-  return `${cell.line} ${o} / ${u}`;
-}
-
 function pickLogoUrl(row: any): string | null {
-  // your table says it has logo_url; keep a couple safe fallbacks
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? null;
 }
 
 function pickUpdatedAt(row: any): string | null {
-  // common patterns; if you have a different column name, add it here
   return row.updated_at ?? row.last_updated ?? row.updatedAt ?? null;
 }
 
@@ -149,7 +128,6 @@ export function OddsScreen() {
   async function load() {
     setError("");
 
-    // ✅ select("*") avoids “column does not exist” errors when schema changes
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
@@ -178,7 +156,6 @@ export function OddsScreen() {
           latestUpdatedAt: null,
         };
 
-      // Keep commence_time
       cur.commenceTime = cur.commenceTime || row.commence_time || "";
 
       const sideOdds = mapWideRowToSideOdds(row);
@@ -199,10 +176,7 @@ export function OddsScreen() {
     });
 
     setEvents(list);
-
-    // If your rows don’t have updated_at yet, fallback to “now”
     setLastUpdatedIso(globalLatest ?? new Date().toISOString());
-
     setLoading(false);
   }
 
@@ -225,20 +199,20 @@ export function OddsScreen() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[150px]">
+              <th className="text-center p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[150px]">
                 Date/Time (CT)
               </th>
               <th className="text-left p-3 text-[#808080] min-w-[220px]">Matchup</th>
 
-              <th className="text-left p-3 text-[#d4af37] border-l border-[#2a2a2a]">DraftKings</th>
-              <th className="text-left p-3 text-[#d4af37]">FanDuel</th>
-              <th className="text-left p-3 text-[#d4af37]">BetMGM</th>
-              <th className="text-left p-3 text-[#d4af37]">Pinnacle</th>
-              <th className="text-left p-3 text-[#d4af37]">BetOnline</th>
+              <th className="text-center p-3 text-[#d4af37] border-l border-[#2a2a2a]">DraftKings</th>
+              <th className="text-center p-3 text-[#d4af37]">FanDuel</th>
+              <th className="text-center p-3 text-[#d4af37]">BetMGM</th>
+              <th className="text-center p-3 text-[#d4af37]">Pinnacle</th>
+              <th className="text-center p-3 text-[#d4af37]">BetOnline</th>
             </tr>
           </thead>
 
-          <tbody className="divide-y divide-[#1a1a1a]">
+          <tbody>
             {events.map((ev) => (
               <EventTwoRows key={ev.eventId} ev={ev} market={market} />
             ))}
@@ -250,13 +224,10 @@ export function OddsScreen() {
 
   return (
     <div className="space-y-4">
-      {/* Top header row with last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
-          <p className="text-xs text-[#808080]">
-            {headerLabel} · 5 books · Updated every 60 seconds
-          </p>
+          <p className="text-xs text-[#808080]">{headerLabel} · 5 books · Updated every 60 seconds</p>
         </div>
 
         <div className="text-right">
@@ -268,11 +239,16 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* Market toggle */}
       <div className="flex items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
+          Moneyline
+        </MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
+          Spread
+        </MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
+          Total
+        </MarketButton>
       </div>
 
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">{body}</div>
@@ -320,8 +296,20 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
     };
 
   const home =
@@ -331,11 +319,23 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
     };
 
-  const cell = (s: SideOdds) => {
+  const mk = (s: SideOdds) => {
     if (market === "ml") {
       return {
         dk: fmtML(s.ml.dk),
@@ -354,24 +354,35 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
         bol: fmtSpread(s.spread.bol),
       };
     }
-    // total
+
+    // total split: AWAY row shows Over, HOME row shows Under (same line)
+    const fmtTotalSplit = (cell: TotalCell, which: "over" | "under") => {
+      if (!cell || cell.line == null) return "—";
+      const v = which === "over" ? cell.over : cell.under;
+      const tag = which === "over" ? "O" : "U";
+      return `${cell.line} ${tag}${v == null ? "—" : v}`;
+    };
+
     return {
-      dk: fmtTotal(s.total.dk),
-      fd: fmtTotal(s.total.fd),
-      mgm: fmtTotal(s.total.mgm),
-      pin: fmtTotal(s.total.pin),
-      bol: fmtTotal(s.total.bol),
+      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
+      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
+      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
+      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
+      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
     };
   };
 
-  const awayCells = cell(away);
-  const homeCells = cell(home);
+  const awayCells = mk(away);
+  const homeCells = mk(home);
 
   return (
     <>
-      {/* AWAY row (first row also shows date/time) */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10 align-top" rowSpan={2}>
+        {/* Date/time centered vertically + horizontally */}
+        <td
+          className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10 align-middle text-center"
+          rowSpan={2}
+        >
           {fmtCTDateTime(ev.commenceTime)}
         </td>
 
@@ -384,8 +395,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
         <BookValue value={awayCells.bol} />
       </tr>
 
-      {/* HOME row */}
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/50">
+      {/* HOME row: thin line between away/home + thicker divider after event */}
+      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
         <TeamCell team={home.team} logoUrl={home.logoUrl} side="HOME" />
 
         <BookValue value={homeCells.dk} borderLeft />
@@ -401,16 +412,16 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
 function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
   return (
     <td className="p-3 text-white">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
         {logoUrl ? (
           <img
             src={logoUrl}
             alt={`${team} logo`}
-            className="w-5 h-5 rounded-sm object-contain bg-[#0a0a0a] border border-[#2a2a2a]"
+            className="w-8 h-8 rounded-sm object-contain bg-[#0a0a0a] border border-[#2a2a2a]"
             loading="lazy"
           />
         ) : (
-          <div className="w-5 h-5 rounded-sm bg-[#0a0a0a] border border-[#2a2a2a]" />
+          <div className="w-8 h-8 rounded-sm bg-[#0a0a0a] border border-[#2a2a2a]" />
         )}
 
         <div className="leading-tight">
@@ -424,8 +435,9 @@ function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | nul
 
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
-    <td className={`p-3 text-white ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
+    <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
       {value}
     </td>
   );
 }
+
