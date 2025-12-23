@@ -155,12 +155,16 @@ function bookTile(src: string, alt: string) {
   return (
     <div className="flex items-center justify-center">
       <span className="sr-only">{alt}</span>
-      <img
-        src={src}
-        alt={alt}
-        className="h-6 w-auto max-w-[70px] object-contain bg-white rounded-sm p-1"
-        loading="lazy"
-      />
+
+      {/* White tile so white logos are visible */}
+      <div className="bg-white rounded-sm px-2 py-1 border border-[#e5e5e5]">
+        <img
+          src={src}
+          alt={alt}
+          className="h-6 w-auto max-w-[90px] object-contain"
+          loading="lazy"
+        />
+      </div>
     </div>
   );
 }
