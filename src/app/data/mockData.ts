@@ -168,4 +168,23 @@ export const mockResultsData: ResultsDay[] = [
   { date: "2025-12-22", games: 148, mlWinPct: 55.7, spreadWinPct: 53.0, totalWinPct: 52.1, mlMAE: 8.0, spreadMAE: 10.8, totalRMSE: 19.0, unitsWon: 0.95, coverage: 97.5 },
 ];
 
+// src/app/data/mockData.ts
+
+export type CalibrationPoint = {
+  window: string;          // e.g. "W-7" or "Nov 10–Nov 16"
+  sampleCount: number;     // games
+  marginError: number;     // points
+  totalError: number;      // points
+  calibrationSlope: number; // 0.85–1.0
+};
+
+export const mockCalibrationData: CalibrationPoint[] = [
+  { window: "W-7", sampleCount: 1680, marginError: 9.8, totalError: 10.9, calibrationSlope: 0.94 },
+  { window: "W-6", sampleCount: 1715, marginError: 9.5, totalError: 10.7, calibrationSlope: 0.95 },
+  { window: "W-5", sampleCount: 1762, marginError: 9.2, totalError: 10.5, calibrationSlope: 0.96 },
+  { window: "W-4", sampleCount: 1801, marginError: 9.0, totalError: 10.3, calibrationSlope: 0.97 },
+  { window: "W-3", sampleCount: 1849, marginError: 9.1, totalError: 10.4, calibrationSlope: 0.96 },
+  { window: "W-2", sampleCount: 1893, marginError: 8.9, totalError: 10.2, calibrationSlope: 0.97 },
+  { window: "W-1", sampleCount: 1925, marginError: 8.7, totalError: 10.1, calibrationSlope: 0.98 },
+];
 
