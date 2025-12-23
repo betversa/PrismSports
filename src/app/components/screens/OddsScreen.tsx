@@ -27,12 +27,12 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** ✅ Book logos from /public/books */
+/** ✅ Public folder book logos (pin is .png now) */
 const BOOK_LOGOS = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
   mgm: "/books/mgm.png",
-  pin: "/books/pin.png", // or "/books/pin.png"
+  pin: "/books/pin.png",
   bol: "/books/bol.png",
 } as const;
 
@@ -182,15 +182,7 @@ function headerFallbackPillDataUri(label: string) {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
 
-/** --------------------- consensus (derived) --------------------- */
-type Consensus = {
-  spreadLine: number | null;
-  totalLine: number | null;
-  mlHome: number | null;
-  mlAway: number | null;
-};
-
-// consensus = median of available lines/odds across books (robust)
+/** --------------------- consensus (selected market only) --------------------- */
 function median(nums: number[]) {
   const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
   if (!a.length) return null;
@@ -198,67 +190,149 @@ function median(nums: number[]) {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
-function buildConsensus(ev: EventOdds): Consensus {
+function consensusForMarket(ev: EventOdds, market: Market) {
   const a = ev.away;
   const h = ev.home;
 
-  const spreadLines: number[] = [];
-  const totalLines: number[] = [];
-  const mlHome: number[] = [];
-  const mlAway: number[] = [];
+  const books = ["dk", "fd", "mgm", "pin", "bol"] as const;
 
-  // spread lines (use away row to read “the spread line” per book; should be symmetric)
-  if (a) {
-    for (const b of ["dk", "fd", "mgm", "pin", "bol"] as const) {
-      const line = a.spread[b]?.line;
-      if (typeof line === "number") spreadLines.push(line);
+  if (market === "spread") {
+    const lines: number[] = [];
+    const odds: number[] = [];
+
+    // use AWAY row for line + odds; line should be symmetric across sides
+    if (a) {
+      for (const b of books) {
+        const line = a.spread[b]?.line;
+        const o = a.spread[b]?.odds;
+        if (typeof line === "number") lines.push(line);
+        if (typeof o === "number") odds.push(o);
+      }
     }
-    for (const b of ["dk", "fd", "mgm", "pin", "bol"] as const) {
-      const line = a.total[b]?.line;
-      if (typeof line === "number") totalLines.push(line);
-    }
-    for (const b of ["dk", "fd", "mgm", "pin", "bol"] as const) {
-      const o = a.ml[b];
-      if (typeof o === "number") mlAway.push(o);
-    }
-  }
-  if (h) {
-    for (const b of ["dk", "fd", "mgm", "pin", "bol"] as const) {
-      const o = h.ml[b];
-      if (typeof o === "number") mlHome.push(o);
-    }
+    return { label: "Spread", line: median(lines), odds: median(odds) };
   }
 
-  return {
-    spreadLine: median(spreadLines),
-    totalLine: median(totalLines),
-    mlHome: median(mlHome),
-    mlAway: median(mlAway),
-  };
+  if (market === "total") {
+    const lines: number[] = [];
+    const overOdds: number[] = [];
+    const underOdds: number[] = [];
+
+    if (a) {
+      for (const b of books) {
+        const line = a.total[b]?.line;
+        const o = a.total[b]?.over;
+        if (typeof line === "number") lines.push(line);
+        if (typeof o === "number") overOdds.push(o);
+      }
+    }
+    if (h) {
+      for (const b of books) {
+        const u = h.total[b]?.under;
+        if (typeof u === "number") underOdds.push(u);
+      }
+    }
+    return { label: "Total", line: median(lines), over: median(overOdds), under: median(underOdds) };
+  }
+
+  // market === "ml"
+  const awayOdds: number[] = [];
+  const homeOdds: number[] = [];
+  if (a) for (const b of books) if (typeof a.ml[b] === "number") awayOdds.push(a.ml[b] as number);
+  if (h) for (const b of books) if (typeof h.ml[b] === "number") homeOdds.push(h.ml[b] as number);
+  return { label: "Moneyline", away: median(awayOdds), home: median(homeOdds) };
+}
+
+function ConsensusCell({ ev, market }: { ev: EventOdds; market: Market }) {
+  const c = useMemo(() => consensusForMarket(ev, market), [ev, market]);
+
+  // render per selected market
+  if (market === "spread") {
+    return (
+      <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
+        <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[12px] text-[#cfcfcf]">Line</span>
+          <span className="text-[14px] text-white font-bold tabular-nums">{c.line == null ? "—" : c.line}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[12px] text-[#cfcfcf]">Odds</span>
+          <span className="text-[14px] text-white font-bold tabular-nums">{(c as any).odds == null ? "—" : (c as any).odds}</span>
+        </div>
+      </td>
+    );
+  }
+
+  if (market === "total") {
+    return (
+      <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
+        <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[12px] text-[#cfcfcf]">Line</span>
+          <span className="text-[14px] text-white font-bold tabular-nums">{c.line == null ? "—" : c.line}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[12px] text-[#cfcfcf]">O / U</span>
+          <span className="text-[14px] text-white font-bold tabular-nums">
+            {(c as any).over == null ? "—" : (c as any).over} / {(c as any).under == null ? "—" : (c as any).under}
+          </span>
+        </div>
+      </td>
+    );
+  }
+
+  // ml
+  return (
+    <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
+      <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[12px] text-[#cfcfcf]">Away</span>
+        <span className="text-[14px] text-white font-bold tabular-nums">{(c as any).away == null ? "—" : (c as any).away}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[12px] text-[#cfcfcf]">Home</span>
+        <span className="text-[14px] text-white font-bold tabular-nums">{(c as any).home == null ? "—" : (c as any).home}</span>
+      </div>
+    </td>
+  );
 }
 
 /** --------------------- UI components --------------------- */
-function MarketButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
-    <button
-      onClick={onClick}
+    <td
       className={[
-        "px-3 py-1.5 rounded-md text-xs border transition-colors",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+        "p-3 text-white text-center tabular-nums font-semibold",
+        "text-[13px]",
+        borderLeft ? "border-l border-[#2a2a2a]" : "",
       ].join(" ")}
     >
-      {children}
-    </button>
+      {value}
+    </td>
+  );
+}
+
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+  return (
+    <div className="flex items-center gap-3">
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={`${team} logo`}
+          className="w-10 h-10 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : (
+        <div className="w-10 h-10 rounded-md bg-white border border-[#e5e5e5]" />
+      )}
+
+      <div className="leading-tight">
+        <div className="text-white font-bold text-[15px]">{team}</div>
+        <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
+      </div>
+    </div>
   );
 }
 
@@ -294,80 +368,6 @@ function BookHeader({
         </div>
       </div>
     </th>
-  );
-}
-
-function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
-  return (
-    <td
-      className={[
-        "p-3 text-white text-center tabular-nums font-semibold", // ✅ slightly bigger + bold
-        "text-[13px]", // ✅ up from text-xs
-        borderLeft ? "border-l border-[#2a2a2a]" : "",
-      ].join(" ")}
-    >
-      {value}
-    </td>
-  );
-}
-
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
-  return (
-    <div className="flex items-center gap-3">
-      {logoUrl ? (
-        <img
-          src={logoUrl}
-          alt={`${team} logo`}
-          className="w-10 h-10 rounded-md object-contain bg-white border border-[#e5e5e5] p-1" // ✅ bigger logo
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
-      ) : (
-        <div className="w-10 h-10 rounded-md bg-white border border-[#e5e5e5]" />
-      )}
-
-      <div className="leading-tight">
-        <div className="text-white font-bold text-[15px]"> {/* ✅ bigger + bold name */}
-          {team}
-        </div>
-        <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
-      </div>
-    </div>
-  );
-}
-
-function ConsensusCell({ ev }: { ev: EventOdds }) {
-  const c = useMemo(() => buildConsensus(ev), [ev]);
-
-  return (
-    <td className="p-3 bg-[#0f0f0f] border-r border-[#2a2a2a] align-middle">
-      <div className="text-[11px] text-[#808080] mb-1">Consensus</div>
-
-      <div className="space-y-1">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[12px] text-[#cfcfcf]">Spread</span>
-          <span className="text-[13px] text-white font-bold tabular-nums">
-            {c.spreadLine == null ? "—" : c.spreadLine}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[12px] text-[#cfcfcf]">Total</span>
-          <span className="text-[13px] text-white font-bold tabular-nums">
-            {c.totalLine == null ? "—" : c.totalLine}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[12px] text-[#cfcfcf]">ML (A/H)</span>
-          <span className="text-[13px] text-white font-bold tabular-nums">
-            {c.mlAway == null ? "—" : c.mlAway} / {c.mlHome == null ? "—" : c.mlHome}
-          </span>
-        </div>
-      </div>
-    </td>
   );
 }
 
@@ -416,7 +416,6 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   return (
     <>
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        {/* Matchup (sticky) */}
         <td className="p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle border-r border-[#2a2a2a]" rowSpan={2}>
           <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
           <div className="space-y-3">
@@ -425,8 +424,7 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
           </div>
         </td>
 
-        {/* ✅ NEW: Consensus column (not sticky) */}
-        <ConsensusCell ev={ev} />
+        <ConsensusCell ev={ev} market={market} />
 
         <BookValue value={awayCells.dk} borderLeft />
         <BookValue value={awayCells.fd} />
@@ -556,7 +554,6 @@ export function OddsScreen() {
 
   return (
     <div className="h-[calc(100vh-72px)] flex flex-col gap-4 overflow-hidden">
-      {/* title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
@@ -572,7 +569,6 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* date buttons */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -591,7 +587,6 @@ export function OddsScreen() {
         ))}
       </div>
 
-      {/* market toggle */}
       <div className="flex items-center gap-2">
         <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
           Moneyline
@@ -604,7 +599,6 @@ export function OddsScreen() {
         </MarketButton>
       </div>
 
-      {/* scrollable table card */}
       <div className="flex-1 bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
         <div className="h-full overflow-y-auto overflow-x-auto">
           {loading ? (
@@ -616,8 +610,8 @@ export function OddsScreen() {
           ) : (
             <table className="w-full table-fixed">
               <colgroup>
-                <col style={{ width: 420 }} /> {/* Matchup */}
-                <col style={{ width: 220 }} /> {/* Consensus */}
+                <col style={{ width: 420 }} />
+                <col style={{ width: 220 }} />
                 <col style={{ width: 128 }} />
                 <col style={{ width: 128 }} />
                 <col style={{ width: 128 }} />
@@ -654,3 +648,4 @@ export function OddsScreen() {
     </div>
   );
 }
+
