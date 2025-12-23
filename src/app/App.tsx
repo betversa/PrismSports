@@ -57,7 +57,7 @@ export default function App() {
       overview: <OverviewScreen />,
       model: <ModelScreen selectedDate={selectedDate} />,
       "monte-carlo": <MonteCarloScreen />,
-      odds: <OddsScreen selectedDate={selectedDate} />,
+      odds: <OddsScreen />,
       results: <ResultsScreen />,
       calibration: <CalibrationScreen />,
       settings: <SettingsScreen />,
