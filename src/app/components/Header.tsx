@@ -6,11 +6,11 @@ type HeaderProps = {
   selectedDate: string;
   onChangeDate: (date: string) => void;
   onOpenMenu?: () => void;
+  showDates?: boolean; // ✅ NEW
 };
 
 const CT_TZ = "America/Chicago";
 
-// YYYY-MM-DD in Central Time
 function ctYmd(d: Date) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: CT_TZ,
@@ -25,13 +25,12 @@ function ctYmd(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-// Creates a CT-local Date for display labels (safe midday)
+// Safe display label
 function dateFromYmdMidday(ymd: string) {
   return new Date(`${ymd}T12:00:00`);
 }
 
-export function Header({ selectedDate, onChangeDate, onOpenMenu }: HeaderProps) {
-  // Today + next 2 days (3 buttons total). Change "2" to "3" if you want 4 total.
+export function Header({ selectedDate, onChangeDate, onOpenMenu, showDates = true }: HeaderProps) {
   const dates = useMemo(() => {
     const now = new Date();
     const list: string[] = [];
@@ -43,14 +42,11 @@ export function Header({ selectedDate, onChangeDate, onOpenMenu }: HeaderProps) 
     return list;
   }, []);
 
-  // If selectedDate is not in the new range, default it to today.
-  // (This avoids having nothing "active" if user was on an old fixed date.)
   const safeSelected = dates.includes(selectedDate) ? selectedDate : dates[0];
 
   return (
     <div className="h-16 bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 right-0 left-0 md:left-64 z-10 flex items-center justify-between px-3 md:px-6">
       <div className="flex items-center gap-3 md:gap-4">
-        {/* Mobile hamburger */}
         <button
           onClick={onOpenMenu}
           className="md:hidden p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a]"
@@ -61,24 +57,29 @@ export function Header({ selectedDate, onChangeDate, onOpenMenu }: HeaderProps) 
 
         <Calendar className="w-5 h-5 text-[#d4af37]" />
 
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-          {dates.map((date) => (
-            <button
-              key={date}
-              onClick={() => onChangeDate(date)}
-              className={`px-3 py-1.5 text-xs rounded transition-colors whitespace-nowrap ${
-                safeSelected === date
-                  ? "bg-[#d4af37] text-black"
-                  : "bg-[#1a1a1a] text-[#b0b0b0] hover:bg-[#2a2a2a] hover:text-white"
-              }`}
-            >
-              {dateFromYmdMidday(date).toLocaleDateString("en-US", {
-                month: "short",
-                day: "numeric",
-              })}
-            </button>
-          ))}
-        </div>
+        {/* ✅ Dates ONLY when showDates is true */}
+        {showDates ? (
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+            {dates.map((date) => (
+              <button
+                key={date}
+                onClick={() => onChangeDate(date)}
+                className={`px-3 py-1.5 text-xs rounded transition-colors whitespace-nowrap ${
+                  safeSelected === date
+                    ? "bg-[#d4af37] text-black"
+                    : "bg-[#1a1a1a] text-[#b0b0b0] hover:bg-[#2a2a2a] hover:text-white"
+                }`}
+              >
+                {dateFromYmdMidday(date).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="h-[34px]" /> // keeps header height consistent without showing dates
+        )}
       </div>
 
       <div className="hidden sm:flex items-center gap-4 text-xs text-[#808080]">
