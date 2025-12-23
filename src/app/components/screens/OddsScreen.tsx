@@ -1,7 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+/**
+ * ODDS SCREEN (FULL REWRITE)
+ * - Bookmaker logos loaded from /public/books/*.png (pin.png confirmed)
+ * - Header: Matchup + Consensus use original dark; Books use charcoal
+ * - Subtle glow on logos for contrast
+ * - Matchup column contains time + BOTH teams (logos + away/home labels) in one field
+ * - Consensus column shows ONLY the selected market, rendered exactly like book cells
+ * - Table scrolls inside the panel (page does NOT scroll)
+ * - Bigger team logos + bold team names; odds slightly bigger + bold
+ */
+
 type Market = "ml" | "spread" | "total";
+
 type SpreadCell = { line: number | null; odds: number | null };
 type TotalCell = { line: number | null; over: number | null; under: number | null };
 
@@ -27,7 +39,7 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** ✅ Public folder book logos (pin is .png now) */
+/** ✅ Public folder book logos */
 const BOOK_LOGOS = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -36,20 +48,28 @@ const BOOK_LOGOS = {
   bol: "/books/bol.png",
 } as const;
 
-// uniform book header slot + column widths
+const BOOKS = ["dk", "fd", "mgm", "pin", "bol"] as const;
+type BookKey = (typeof BOOKS)[number];
+
+/** Layout */
+const COL_MATCHUP = 440; // time + both teams
+const COL_CONSENSUS = 190;
+const COL_BOOK = 132;
+
 const BOOK_LOGO_W = 104;
 const BOOK_LOGO_H = 26;
 
-const COL_MATCHUP = 420; // matchup (time + teams + logos)
-const COL_CONSENSUS = 180;
-const COL_BOOK = 132;
-
-// header colors
-const HDR_LEFT_BG = "bg-[#0a0a0a]";   // original dark
-const HDR_BOOK_BG = "bg-[#1b1b1b]";   // charcoal (softer than black)
+/** Header colors */
+const HDR_LEFT_BG = "bg-[#0a0a0a]"; // original
+const HDR_BOOK_BG = "bg-[#1b1b1b]"; // charcoal
 const HDR_TEXT = "text-[#cfcfcf]";
-const HDR_DIV = "border-[#2a2a2a]";
+const HDR_BORDER = "border-[#2a2a2a]";
 
+/** Subtle glow so low-contrast logos pop on charcoal */
+const BOOK_GLOW =
+  "drop-shadow(0 1px 0 rgba(0,0,0,0.65)) drop-shadow(0 0 8px rgba(255,255,255,0.14)) drop-shadow(0 0 8px rgba(212,175,55,0.22))";
+
+/** ---------- time helpers ---------- */
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
@@ -65,11 +85,7 @@ function fmtCTTimeOnly(iso: string | null | undefined) {
   if (!n) return "—";
   const d = new Date(n);
   if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(d);
+  return new Intl.DateTimeFormat("en-US", { timeZone: CT_TZ, hour: "numeric", minute: "2-digit" }).format(d);
 }
 
 function fmtCTDateTime(iso: string | null | undefined) {
@@ -98,7 +114,6 @@ function ctYmdFromIso(iso: string | null | undefined) {
     month: "2-digit",
     day: "2-digit",
   }).formatToParts(d);
-
   const y = parts.find((p) => p.type === "year")?.value ?? "1970";
   const m = parts.find((p) => p.type === "month")?.value ?? "01";
   const day = parts.find((p) => p.type === "day")?.value ?? "01";
@@ -115,14 +130,17 @@ function fmtDateBtn(ymd: string) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/** ---------- formatting helpers ---------- */
 function fmtML(v: number | null) {
   return v == null ? "—" : `${v}`;
 }
+
 function fmtSpread(cell: SpreadCell) {
   if (!cell || cell.line == null) return "—";
   if (cell.odds == null) return `${cell.line}`;
   return `${cell.line} (${cell.odds})`;
 }
+
 function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
   if (!cell || cell.line == null) return "—";
   const v = which === "over" ? cell.over : cell.under;
@@ -130,9 +148,11 @@ function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
   return `${cell.line} ${tag}${v == null ? "—" : v}`;
 }
 
+/** ---------- mapping helpers ---------- */
 function pickLogoUrl(row: any): string | null {
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? null;
 }
+
 function pickUpdatedAt(row: any): string | null {
   return row.updated_at ?? row.last_updated ?? row.updatedAt ?? null;
 }
@@ -180,7 +200,7 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-/** ---------- consensus: same presentation as book columns ---------- */
+/** ---------- consensus helpers ---------- */
 function median(nums: number[]) {
   const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
   if (!a.length) return null;
@@ -188,15 +208,20 @@ function median(nums: number[]) {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
+/**
+ * Consensus (median) rendered EXACTLY like book cells for selected market.
+ * - ML: odds
+ * - Spread: line (odds)
+ * - Total: AWAY row shows Over (line Oodds), HOME row shows Under (line Uodds)
+ */
 function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME") {
   const a = ev.away;
   const h = ev.home;
-  const books = ["dk", "fd", "mgm", "pin", "bol"] as const;
   const src = side === "AWAY" ? a : h;
 
   if (market === "ml") {
     const odds: number[] = [];
-    if (src) for (const b of books) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
+    if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
     return fmtML(median(odds));
   }
 
@@ -204,7 +229,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     const lines: number[] = [];
     const odds: number[] = [];
     if (src) {
-      for (const b of books) {
+      for (const b of BOOKS) {
         const line = src.spread[b]?.line;
         const o = src.spread[b]?.odds;
         if (typeof line === "number") lines.push(line);
@@ -218,13 +243,13 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     return `${mLine} (${mOdds})`;
   }
 
-  // total: AWAY shows Over, HOME shows Under
+  // total: AWAY over, HOME under
   const lines: number[] = [];
   const overOdds: number[] = [];
   const underOdds: number[] = [];
 
   if (a) {
-    for (const b of books) {
+    for (const b of BOOKS) {
       const line = a.total[b]?.line;
       const o = a.total[b]?.over;
       if (typeof line === "number") lines.push(line);
@@ -232,7 +257,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     }
   }
   if (h) {
-    for (const b of books) {
+    for (const b of BOOKS) {
       const u = h.total[b]?.under;
       if (typeof u === "number") underOdds.push(u);
     }
@@ -243,11 +268,12 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   const mUnder = median(underOdds);
 
   if (mLine == null) return "—";
-  if (side === "AWAY") return `${mLine} O${mOver == null ? "—" : mOver}`;
-  return `${mLine} U${mUnder == null ? "—" : mUnder}`;
+  return side === "AWAY"
+    ? `${mLine} O${mOver == null ? "—" : mOver}`
+    : `${mLine} U${mUnder == null ? "—" : mUnder}`;
 }
 
-/** ---------- book header fallback ---------- */
+/** ---------- header logo fallback ---------- */
 function headerFallbackPillDataUri(label: string) {
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}">
@@ -301,8 +327,8 @@ function BookHeader({
         "text-center px-2 py-3",
         HDR_BOOK_BG,
         "border-b",
-        HDR_DIV,
-        borderLeft ? "border-l border-[#2a2a2a]" : "",
+        HDR_BORDER,
+        borderLeft ? `border-l ${HDR_BORDER}` : "",
       ].join(" ")}
       style={{ width: COL_BOOK }}
     >
@@ -312,8 +338,8 @@ function BookHeader({
           <img
             src={src}
             alt={alt}
-            style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }}
-            className="object-contain"
+            style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H, filter: BOOK_GLOW }}
+            className="object-contain opacity-95"
             loading="lazy"
             onError={(e) => {
               (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
@@ -327,7 +353,12 @@ function BookHeader({
 
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
-    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px]", borderLeft ? "border-l border-[#2a2a2a]" : ""].join(" ")}>
+    <td
+      className={[
+        "p-3 text-white text-center tabular-nums font-bold text-[13.5px]",
+        borderLeft ? `border-l ${HDR_BORDER}` : "",
+      ].join(" ")}
+    >
       {value}
     </td>
   );
@@ -335,31 +366,39 @@ function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean 
 
 function ConsensusValue({ value }: { value: string }) {
   return (
-    <td className="p-3 text-white text-center tabular-nums font-bold text-[13.5px] border-r border-[#2a2a2a]">
+    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px]", `border-r ${HDR_BORDER}`].join(" ")}>
       {value}
     </td>
   );
 }
 
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+function MiniTeamRow({
+  team,
+  logoUrl,
+  side,
+}: {
+  team: string;
+  logoUrl: string | null;
+  side: "AWAY" | "HOME";
+}) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
         <img
           src={logoUrl}
           alt={`${team} logo`}
-          className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+          className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
           loading="lazy"
           onError={(e) => {
             (e.currentTarget as HTMLImageElement).style.display = "none";
           }}
         />
       ) : (
-        <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
+        <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
       )}
 
       <div className="leading-tight">
-        <div className="text-white font-extrabold text-[15.5px]">{team}</div>
+        <div className="text-white font-extrabold text-[16px]">{team}</div>
         <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
       </div>
     </div>
@@ -391,10 +430,22 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
 
   const mk = (s: SideOdds) => {
     if (market === "ml") {
-      return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
+      return {
+        dk: fmtML(s.ml.dk),
+        fd: fmtML(s.ml.fd),
+        mgm: fmtML(s.ml.mgm),
+        pin: fmtML(s.ml.pin),
+        bol: fmtML(s.ml.bol),
+      };
     }
     if (market === "spread") {
-      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
+      return {
+        dk: fmtSpread(s.spread.dk),
+        fd: fmtSpread(s.spread.fd),
+        mgm: fmtSpread(s.spread.mgm),
+        pin: fmtSpread(s.spread.pin),
+        bol: fmtSpread(s.spread.bol),
+      };
     }
     return {
       dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
@@ -413,8 +464,9 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
 
   return (
     <>
+      {/* AWAY row (matchup cell spans both rows) */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className="p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle border-r border-[#2a2a2a]" rowSpan={2}>
+        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
           <div className="space-y-3">
             <MiniTeamRow team={away.team} logoUrl={away.logoUrl} side="AWAY" />
@@ -431,7 +483,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
         <BookValue value={awayCells.bol} />
       </tr>
 
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
+      {/* HOME row */}
+      <tr className={["hover:bg-[#0f0f0f]/50 transition-colors", `border-t border-[#1a1a1a]/60 border-b-2 ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue value={homeConsensus} />
 
         <BookValue value={homeCells.dk} borderLeft />
@@ -540,6 +593,7 @@ export function OddsScreen() {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
+      // exclude already-started games for "today"
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -553,6 +607,7 @@ export function OddsScreen() {
 
   return (
     <div className="h-[calc(100vh-72px)] flex flex-col gap-4 overflow-hidden">
+      {/* title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
@@ -568,6 +623,7 @@ export function OddsScreen() {
         </div>
       </div>
 
+      {/* date buttons */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -586,12 +642,20 @@ export function OddsScreen() {
         ))}
       </div>
 
+      {/* market toggle */}
       <div className="flex items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
+          Moneyline
+        </MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
+          Spread
+        </MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
+          Total
+        </MarketButton>
       </div>
 
+      {/* scroll container (table scrolls, page doesn't) */}
       <div className="flex-1 bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
         <div className="h-full overflow-y-auto overflow-x-auto">
           {loading ? (
@@ -602,6 +666,7 @@ export function OddsScreen() {
             <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>
           ) : (
             <table className="w-full table-fixed">
+              {/* fixed column widths for uniformity */}
               <colgroup>
                 <col style={{ width: COL_MATCHUP }} />
                 <col style={{ width: COL_CONSENSUS }} />
@@ -613,14 +678,14 @@ export function OddsScreen() {
               </colgroup>
 
               <thead className="sticky top-0 z-20">
-                <tr className={"border-b " + HDR_DIV}>
+                <tr className={`border-b ${HDR_BORDER}`}>
                   {/* Matchup header (original dark) */}
                   <th className={["text-left px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-sm font-extrabold"].join(" ")}>
                     Matchup
                   </th>
 
                   {/* Consensus header (centered, original dark) */}
-                  <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-sm font-extrabold border-l", HDR_DIV].join(" ")}>
+                  <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
                     Consensus
                   </th>
 
