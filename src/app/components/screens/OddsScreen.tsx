@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-// ✅ sportsbook logos live in src/assets (confirmed from your repo zip)
-import dkLogo from "@/assets/dk.svg?url";
-import fdLogo from "@/assets/fd.svg?url";
-import mgmLogo from "@/assets/mgm.svg?url";
-import pinLogo from "@/assets/pin.svg?url";
-import bolLogo from "@/assets/bol.svg?url";
-
 type Market = "ml" | "spread" | "total";
 type SpreadCell = { line: number | null; odds: number | null };
 type TotalCell = { line: number | null; over: number | null; under: number | null };
@@ -27,12 +20,33 @@ type SideOdds = {
 type EventOdds = {
   eventId: string;
   commenceTime: string;
+  matchup: string | null; // keep if your view provides it
   away?: SideOdds;
   home?: SideOdds;
   latestUpdatedAt: string | null;
 };
 
 const CT_TZ = "America/Chicago";
+
+/**
+ * Public folder bookmaker logos
+ * Put these in: /public/bookmakers/{dk,fd,mgm,pin,bol}.svg
+ */
+function publicAsset(path: string) {
+  // supports Vite base path ("/" in dev, "/something/" in prod if configured)
+  const base = (import.meta as any).env?.BASE_URL ?? "/";
+  const cleanBase = base.endsWith("/") ? base.slice(0, -1) : base;
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  return `${cleanBase}${cleanPath}`;
+}
+
+const BOOK_LOGOS = {
+  dk: publicAsset("/bookmakers/dk.svg"),
+  fd: publicAsset("/bookmakers/fd.svg"),
+  mgm: publicAsset("/bookmakers/mgm.svg"),
+  pin: publicAsset("/bookmakers/pin.svg"),
+  bol: publicAsset("/bookmakers/bol.svg"),
+};
 
 /** Normalize Supabase timestamps so Date() parses consistently. */
 function normalizeIso(raw: string | null | undefined): string | null {
@@ -176,7 +190,6 @@ function BookHeader({ src, alt, borderLeft }: { src: string; alt: string; border
             className="h-6 w-auto max-w-[90px] object-contain"
             loading="lazy"
             onError={(e) => {
-              // if something weird happens, prevent broken icon spam
               (e.currentTarget as HTMLImageElement).style.display = "none";
             }}
           />
@@ -197,6 +210,7 @@ export function OddsScreen() {
   async function load() {
     setError("");
 
+    // If your view has a `matchup` column, we’ll keep it.
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
@@ -221,10 +235,12 @@ export function OddsScreen() {
         byEvent.get(eventId) ?? {
           eventId,
           commenceTime: row.commence_time ?? "",
+          matchup: row.matchup ?? null,
           latestUpdatedAt: null,
         };
 
       cur.commenceTime = cur.commenceTime || row.commence_time || "";
+      cur.matchup = cur.matchup ?? row.matchup ?? null;
 
       const sideOdds = mapWideRowToSideOdds(row);
       if (sideOdds.side === "AWAY") cur.away = sideOdds;
@@ -307,16 +323,18 @@ export function OddsScreen() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-              <th className="text-center p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[90px]">
-                Time (CT)
+              {/* ✅ time is now part of the MATCHUP cell (no separate Time column) */}
+              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[240px]">
+                Matchup
               </th>
-              <th className="text-left p-3 text-[#808080] min-w-[240px]">Team</th>
 
-              <BookHeader src={dkLogo} alt="DraftKings" borderLeft />
-              <BookHeader src={fdLogo} alt="FanDuel" />
-              <BookHeader src={mgmLogo} alt="BetMGM" />
-              <BookHeader src={pinLogo} alt="Pinnacle" />
-              <BookHeader src={bolLogo} alt="BetOnline" />
+              <th className="text-left p-3 text-[#808080] min-w-[260px]">Team</th>
+
+              <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" borderLeft />
+              <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" />
+              <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" />
+              <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" />
+              <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" />
             </tr>
           </thead>
 
@@ -348,7 +366,7 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* date buttons */}
+      {/* date buttons (dates only) */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -369,9 +387,15 @@ export function OddsScreen() {
 
       {/* market toggle */}
       <div className="flex items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
+          Moneyline
+        </MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
+          Spread
+        </MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
+          Total
+        </MarketButton>
       </div>
 
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">{body}</div>
@@ -411,8 +435,20 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
     };
 
   const home =
@@ -422,9 +458,32 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
-      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+      spread: {
+        dk: { line: null, odds: null },
+        fd: { line: null, odds: null },
+        mgm: { line: null, odds: null },
+        pin: { line: null, odds: null },
+        bol: { line: null, odds: null },
+      },
+      total: {
+        dk: { line: null, over: null, under: null },
+        fd: { line: null, over: null, under: null },
+        mgm: { line: null, over: null, under: null },
+        pin: { line: null, over: null, under: null },
+        bol: { line: null, over: null, under: null },
+      },
     };
+
+  // ✅ time is shown in the Matchup column (rowSpan=2) so there is no separate time field
+  const matchupLine = useMemo(() => {
+    // Prefer building a clean matchup string without "Team1 vs Team2"
+    const a = away?.team && away.team !== "Away" ? away.team : null;
+    const h = home?.team && home.team !== "Home" ? home.team : null;
+
+    if (a && h) return `${a} @ ${h}`;
+    if (ev.matchup) return ev.matchup;
+    return "—";
+  }, [away?.team, home?.team, ev.matchup]);
 
   const mk = (s: SideOdds) => {
     if (market === "ml") {
@@ -458,12 +517,12 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
     <>
       {/* AWAY row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        {/* time only once per event */}
-        <td
-          className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10 align-middle text-center"
-          rowSpan={2}
-        >
-          <div className="text-[11px] text-[#808080]">{fmtCTTimeOnly(ev.commenceTime)}</div>
+        {/* ✅ Matchup cell includes time + matchup (no standalone time column) */}
+        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 align-middle" rowSpan={2}>
+          <div className="leading-tight">
+            <div className="text-[11px] text-[#cfcfcf]">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+            <div className="text-[10px] text-[#606060] truncate max-w-[220px]">{matchupLine}</div>
+          </div>
         </td>
 
         <TeamCell team={away.team} logoUrl={away.logoUrl} side="AWAY" />
@@ -519,5 +578,4 @@ function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | nul
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>{value}</td>;
 }
-
 
