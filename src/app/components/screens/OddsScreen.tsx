@@ -451,7 +451,7 @@ type HistoryRow = {
 };
 
 // ✅ set this to your actual name
-const HISTORY_TABLE = "odds_snapshot_history_rows";
+const HISTORY_TABLE = "odds_snapshot_history";
 
 const UI_TO_HIST_MARKET: Record<Market, HistMarket> = {
   ml: "h2h",
