@@ -1,13 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-// ✅ Book logos (you said these exact paths/names exist)
-import dkLogo from "../../../assets/dk.svg";
-import fdLogo from "../../../assets/fd.svg";
-import mgmLogo from "../../../assets/mgm.svg";
-import pinLogo from "../../../assets/pin.svg";
-import bolLogo from "../../../assets/bol.svg";
-
 type Market = "ml" | "spread" | "total";
 
 type SpreadCell = { line: number | null; odds: number | null };
@@ -52,21 +45,27 @@ function normalizeIso(raw: string | null | undefined): string | null {
   return s;
 }
 
-function fmtCTDateTime(iso: string | null | undefined) {
+function fmtCTTimeOnly(iso: string | null | undefined) {
   if (!iso) return "—";
   const n = normalizeIso(iso);
   if (!n) return "—";
   const d = new Date(n);
-  if (Number.isNaN(d.getTime())) return iso;
+  if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("en-US", {
     timeZone: CT_TZ,
-    month: "short",
-    day: "2-digit",
     hour: "numeric",
     minute: "2-digit",
   }).format(d);
 }
 
+function fmtCTDateLabel(ymd: string) {
+  // ymd is YYYY-MM-DD; show "Dec 23"
+  const d = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// YYYY-MM-DD in Central Time for a timestamp
 function ctYmdFromIso(iso: string | null | undefined) {
   const n = normalizeIso(iso);
   if (!n) return "";
@@ -151,33 +150,34 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-function bookTile(src: string, alt: string) {
-  return (
-    <div className="flex items-center justify-center">
-      <span className="sr-only">{alt}</span>
-
-      {/* White tile so white logos are visible */}
-      <div className="bg-white rounded-sm px-2 py-1 border border-[#e5e5e5]">
-        <img
-          src={src}
-          alt={alt}
-          className="h-6 w-auto max-w-[90px] object-contain"
-          loading="lazy"
-        />
-      </div>
-    </div>
-  );
+function fmtCTDateTime(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const n = normalizeIso(iso);
+  if (!n) return "—";
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
 }
 
 function BookHeader({ src, alt, borderLeft }: { src: string; alt: string; borderLeft?: boolean }) {
   return (
     <th className={`text-center p-3 ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
-      {bookTile(src, alt)}
+      <div className="flex items-center justify-center">
+        <span className="sr-only">{alt}</span>
+        <div className="bg-white rounded-sm px-2 py-1 border border-[#e5e5e5]">
+          <img src={src} alt={alt} className="h-6 w-auto max-w-[90px] object-contain" loading="lazy" />
+        </div>
+      </div>
     </th>
   );
 }
 
-// ✅ No selectedDate prop now; date buttons live inside OddsScreen
 export function OddsScreen() {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>(""); // YYYY-MM-DD (CT)
@@ -253,13 +253,12 @@ export function OddsScreen() {
       const d = ctYmdFromIso(ev.commenceTime);
       if (d) set.add(d);
     }
-    return Array.from(set).sort(); // YYYY-MM-DD sorts correctly
+    return Array.from(set).sort();
   }, [allEvents]);
 
-  // ✅ Set default selected date: prefer today if present, else first available
+  // ✅ Default selected date: prefer today if present, else first available
   useEffect(() => {
     if (!availableDates.length) return;
-
     const today = ctTodayYmd();
 
     setSelectedDate((prev) => {
@@ -269,7 +268,7 @@ export function OddsScreen() {
     });
   }, [availableDates]);
 
-  // ✅ Filtered events for current selected date; hide started games if selected date is today (CT)
+  // ✅ Filtered events for current selected date; hide started games if today (CT)
   const events = useMemo(() => {
     if (!selectedDate) return [];
     const todayCt = ctTodayYmd();
@@ -282,9 +281,8 @@ export function OddsScreen() {
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
-        return startMs > nowMs; // strictly future only
+        return startMs > nowMs;
       }
-
       return true;
     });
   }, [allEvents, selectedDate]);
@@ -301,17 +299,17 @@ export function OddsScreen() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-              <th className="text-center p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[150px]">
-                Date/Time (CT)
+              {/* ✅ Matchup column now includes time */}
+              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[260px]">
+                Matchup
               </th>
-              <th className="text-left p-3 text-[#808080] min-w-[220px]">Matchup</th>
 
-              {/* ✅ Sportsbook logos instead of words */}
-              <BookHeader src={dkLogo} alt="DraftKings" borderLeft />
-              <BookHeader src={fdLogo} alt="FanDuel" />
-              <BookHeader src={mgmLogo} alt="BetMGM" />
-              <BookHeader src={pinLogo} alt="Pinnacle" />
-              <BookHeader src={bolLogo} alt="BetOnline" />
+              {/* ✅ Sportsbook logos from public/books */}
+              <BookHeader src="/books/dk.svg" alt="DraftKings" borderLeft />
+              <BookHeader src="/books/fd.svg" alt="FanDuel" />
+              <BookHeader src="/books/mgm.svg" alt="BetMGM" />
+              <BookHeader src="/books/pin.svg" alt="Pinnacle" />
+              <BookHeader src="/books/bol.svg" alt="BetOnline" />
             </tr>
           </thead>
 
@@ -332,7 +330,7 @@ export function OddsScreen() {
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
           <p className="text-xs text-[#808080]">
-            {headerLabel} · 5 books · {selectedDate ? `${selectedDate} (CT)` : "—"} · Updated every 60 seconds
+            {headerLabel} · 5 books · Updated every 60 seconds
           </p>
         </div>
 
@@ -345,7 +343,7 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* ✅ Date buttons moved into OddsScreen; show all dates with events */}
+      {/* ✅ Date buttons only show dates */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -357,8 +355,9 @@ export function OddsScreen() {
                 ? "bg-[#d4af37] text-black border-[#d4af37]"
                 : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
             ].join(" ")}
+            title={d}
           >
-            {new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+            {fmtCTDateLabel(d)}
           </button>
         ))}
       </div>
@@ -436,7 +435,7 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
     }
 
-    // Total split: AWAY row shows Over, HOME row shows Under (same line)
+    // Total split: AWAY row shows Over, HOME row shows Under
     const fmtTotalSplit = (cell: TotalCell, which: "over" | "under") => {
       if (!cell || cell.line == null) return "—";
       const v = which === "over" ? cell.over : cell.under;
@@ -459,11 +458,15 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   return (
     <>
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10 align-middle text-center" rowSpan={2}>
-          {fmtCTDateTime(ev.commenceTime)}
-        </td>
-
-        <TeamCell team={away.team} logoUrl={away.logoUrl} side="AWAY" />
+        {/* ✅ Matchup cell includes time; sticky so it stays visible on scroll */}
+        <MatchupCell
+          commenceTime={ev.commenceTime}
+          awayTeam={away.team}
+          awayLogoUrl={away.logoUrl}
+          homeTeam={home.team}
+          homeLogoUrl={home.logoUrl}
+          row="away"
+        />
 
         <BookValue value={awayCells.dk} borderLeft />
         <BookValue value={awayCells.fd} />
@@ -473,7 +476,14 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       </tr>
 
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/60 border-b-2 border-b-[#2a2a2a]">
-        <TeamCell team={home.team} logoUrl={home.logoUrl} side="HOME" />
+        <MatchupCell
+          commenceTime={ev.commenceTime}
+          awayTeam={away.team}
+          awayLogoUrl={away.logoUrl}
+          homeTeam={home.team}
+          homeLogoUrl={home.logoUrl}
+          row="home"
+        />
 
         <BookValue value={homeCells.dk} borderLeft />
         <BookValue value={homeCells.fd} />
@@ -485,31 +495,68 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   );
 }
 
-function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
-  return (
-    <td className="p-3 text-white">
-      <div className="flex items-center gap-3">
-        {logoUrl ? (
-          <img
-            src={logoUrl}
-            alt={`${team} logo`}
-            className="w-8 h-8 rounded-sm object-contain bg-white border border-[#e5e5e5] shadow-sm"
-            loading="lazy"
-          />
-        ) : (
-          <div className="w-8 h-8 rounded-sm bg-white border border-[#e5e5e5]" />
-        )}
+function MatchupCell({
+  commenceTime,
+  awayTeam,
+  awayLogoUrl,
+  homeTeam,
+  homeLogoUrl,
+  row,
+}: {
+  commenceTime: string;
+  awayTeam: string;
+  awayLogoUrl: string | null;
+  homeTeam: string;
+  homeLogoUrl: string | null;
+  row: "away" | "home";
+}) {
+  const time = fmtCTTimeOnly(commenceTime);
 
-        <div className="leading-tight">
-          <div className="text-white">{team}</div>
-          <div className="text-[10px] text-[#606060]">{side}</div>
+  // We show time only once (on away row) so it’s clean
+  const showTime = row === "away";
+
+  return (
+    <td className="p-3 text-white sticky left-0 bg-[#0f0f0f] z-10 min-w-[260px]">
+      <div className="flex items-start gap-3">
+        <div className="flex flex-col gap-2 pt-0.5">
+          <TeamMini team={awayTeam} logoUrl={awayLogoUrl} muted={row === "home"} />
+          <TeamMini team={homeTeam} logoUrl={homeLogoUrl} muted={row === "away"} />
+        </div>
+
+        <div className="flex-1">
+          {showTime && <div className="text-[11px] text-[#808080]">{time} CT</div>}
+          <div className="text-[12px] text-white">
+            {awayTeam} <span className="text-[#606060]">vs</span> {homeTeam}
+          </div>
         </div>
       </div>
     </td>
   );
 }
 
+function TeamMini({ team, logoUrl, muted }: { team: string; logoUrl: string | null; muted?: boolean }) {
+  return (
+    <div className={`flex items-center gap-2 ${muted ? "opacity-50" : ""}`}>
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={`${team} logo`}
+          className="w-6 h-6 rounded-sm object-contain bg-white border border-[#e5e5e5] shadow-sm p-0.5"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : (
+        <div className="w-6 h-6 rounded-sm bg-white border border-[#e5e5e5]" />
+      )}
+      <div className="text-[11px] text-white leading-none">{team}</div>
+    </div>
+  );
+}
+
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return <td className={`p-3 text-white text-center tabular-nums ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>{value}</td>;
 }
+
 
