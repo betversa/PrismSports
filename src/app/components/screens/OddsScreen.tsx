@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+// ✅ Book logos (you said these exact paths/names exist)
+import dkLogo from "../../assets/books/dk.svg";
+import fdLogo from "../../assets/books/fd.svg";
+import mgmLogo from "../../assets/books/mgm.svg";
+import pinLogo from "../../assets/books/pin.svg";
+import bolLogo from "../../assets/books/bol.svg";
+
 type Market = "ml" | "spread" | "total";
 
 type SpreadCell = { line: number | null; odds: number | null };
@@ -12,9 +19,7 @@ type SideOdds = {
   logoUrl: string | null;
 
   ml: { dk: number | null; fd: number | null; mgm: number | null; pin: number | null; bol: number | null };
-
   spread: { dk: SpreadCell; fd: SpreadCell; mgm: SpreadCell; pin: SpreadCell; bol: SpreadCell };
-
   total: { dk: TotalCell; fd: TotalCell; mgm: TotalCell; pin: TotalCell; bol: TotalCell };
 
   updatedAt: string | null;
@@ -30,26 +35,18 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Normalize Supabase timestamps so Date() parses consistently.
- * Handles:
- *  - "2025-12-22 19:00:00"  -> "2025-12-22T19:00:00Z"
- *  - "2025-12-22T19:00:00" -> "2025-12-22T19:00:00Z"
- * Leaves:
- *  - "...Z" or "...-06:00" alone
- */
+/** Normalize Supabase timestamps so Date() parses consistently. */
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
 
-  // Convert "YYYY-MM-DD HH:mm:ss" -> ISO-ish
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) {
-    s = s.replace(" ", "T");
-  }
+  // "YYYY-MM-DD HH:mm:ss" -> "YYYY-MM-DDTHH:mm:ss"
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) s = s.replace(" ", "T");
 
-  // If it already has timezone (Z or ±hh:mm), keep it
+  // Already has timezone
   if (/[zZ]$/.test(s) || /[+-]\d{2}:\d{2}$/.test(s)) return s;
 
-  // If it's ISO without timezone, assume UTC
+  // ISO without timezone -> assume UTC
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) return `${s}Z`;
 
   return s;
@@ -70,7 +67,6 @@ function fmtCTDateTime(iso: string | null | undefined) {
   }).format(d);
 }
 
-// YYYY-MM-DD in Central Time for a timestamp
 function ctYmdFromIso(iso: string | null | undefined) {
   const n = normalizeIso(iso);
   if (!n) return "";
@@ -90,7 +86,6 @@ function ctYmdFromIso(iso: string | null | undefined) {
   return `${y}-${m}-${day}`;
 }
 
-// Today as YYYY-MM-DD in CT
 function ctTodayYmd() {
   return ctYmdFromIso(new Date().toISOString());
 }
@@ -156,8 +151,32 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-export function OddsScreen({ selectedDate }: { selectedDate: string }) {
-  const [events, setEvents] = useState<EventOdds[]>([]);
+function bookTile(src: string, alt: string) {
+  return (
+    <div className="flex items-center justify-center">
+      <span className="sr-only">{alt}</span>
+      <img
+        src={src}
+        alt={alt}
+        className="h-6 w-auto max-w-[70px] object-contain bg-white rounded-sm p-1"
+        loading="lazy"
+      />
+    </div>
+  );
+}
+
+function BookHeader({ src, alt, borderLeft }: { src: string; alt: string; borderLeft?: boolean }) {
+  return (
+    <th className={`text-center p-3 ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
+      {bookTile(src, alt)}
+    </th>
+  );
+}
+
+// ✅ No selectedDate prop now; date buttons live inside OddsScreen
+export function OddsScreen() {
+  const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string>(""); // YYYY-MM-DD (CT)
   const [market, setMarket] = useState<Market>("spread");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -174,7 +193,7 @@ export function OddsScreen({ selectedDate }: { selectedDate: string }) {
 
     if (error) {
       setError(error.message);
-      setEvents([]);
+      setAllEvents([]);
       setLoading(false);
       return;
     }
@@ -196,7 +215,6 @@ export function OddsScreen({ selectedDate }: { selectedDate: string }) {
       cur.commenceTime = cur.commenceTime || row.commence_time || "";
 
       const sideOdds = mapWideRowToSideOdds(row);
-
       if (sideOdds.side === "AWAY") cur.away = sideOdds;
       if (sideOdds.side === "HOME") cur.home = sideOdds;
 
@@ -206,32 +224,13 @@ export function OddsScreen({ selectedDate }: { selectedDate: string }) {
       byEvent.set(eventId, cur);
     }
 
-    // Sort
     const list = Array.from(byEvent.values()).sort((a, b) => {
       const ta = new Date(normalizeIso(a.commenceTime) ?? a.commenceTime).getTime();
       const tb = new Date(normalizeIso(b.commenceTime) ?? b.commenceTime).getTime();
       return ta - tb;
     });
 
-    // ✅ Filter by selectedDate (Central Time)
-    const todayCt = ctTodayYmd();
-    const nowMs = Date.now();
-
-    const filtered = list.filter((ev) => {
-      const evCtDate = ctYmdFromIso(ev.commenceTime);
-      if (evCtDate !== selectedDate) return false;
-
-      // ✅ If browsing today (CT), exclude games that already started
-      if (selectedDate === todayCt) {
-        const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
-        if (!Number.isFinite(startMs)) return false;
-        return startMs > nowMs;
-      }
-
-      return true;
-    });
-
-    setEvents(filtered);
+    setAllEvents(list);
     setLastUpdatedIso(globalLatest ?? new Date().toISOString());
     setLoading(false);
   }
@@ -241,15 +240,57 @@ export function OddsScreen({ selectedDate }: { selectedDate: string }) {
     load();
     const t = window.setInterval(load, 60_000);
     return () => window.clearInterval(t);
-    // IMPORTANT: re-run when header date changes
-  }, [selectedDate]);
+  }, []);
+
+  // ✅ All available dates based on events in feed (CT)
+  const availableDates = useMemo(() => {
+    const set = new Set<string>();
+    for (const ev of allEvents) {
+      const d = ctYmdFromIso(ev.commenceTime);
+      if (d) set.add(d);
+    }
+    return Array.from(set).sort(); // YYYY-MM-DD sorts correctly
+  }, [allEvents]);
+
+  // ✅ Set default selected date: prefer today if present, else first available
+  useEffect(() => {
+    if (!availableDates.length) return;
+
+    const today = ctTodayYmd();
+
+    setSelectedDate((prev) => {
+      if (prev && availableDates.includes(prev)) return prev;
+      if (availableDates.includes(today)) return today;
+      return availableDates[0];
+    });
+  }, [availableDates]);
+
+  // ✅ Filtered events for current selected date; hide started games if selected date is today (CT)
+  const events = useMemo(() => {
+    if (!selectedDate) return [];
+    const todayCt = ctTodayYmd();
+    const nowMs = Date.now();
+
+    return allEvents.filter((ev) => {
+      const evDate = ctYmdFromIso(ev.commenceTime);
+      if (evDate !== selectedDate) return false;
+
+      if (selectedDate === todayCt) {
+        const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
+        if (!Number.isFinite(startMs)) return false;
+        return startMs > nowMs; // strictly future only
+      }
+
+      return true;
+    });
+  }, [allEvents, selectedDate]);
 
   const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
 
   const body = useMemo(() => {
     if (loading) return <div className="p-4 text-xs text-[#808080]">Loading odds_wide_latest…</div>;
     if (error) return <div className="p-4 text-xs text-red-400">Supabase error: {error}</div>;
-    if (!events.length) return <div className="p-4 text-xs text-[#808080]">No games for {selectedDate}.</div>;
+    if (!events.length) return <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>;
 
     return (
       <div className="overflow-x-auto">
@@ -261,11 +302,12 @@ export function OddsScreen({ selectedDate }: { selectedDate: string }) {
               </th>
               <th className="text-left p-3 text-[#808080] min-w-[220px]">Matchup</th>
 
-              <th className="text-center p-3 text-[#d4af37] border-l border-[#2a2a2a]">DraftKings</th>
-              <th className="text-center p-3 text-[#d4af37]">FanDuel</th>
-              <th className="text-center p-3 text-[#d4af37]">BetMGM</th>
-              <th className="text-center p-3 text-[#d4af37]">Pinnacle</th>
-              <th className="text-center p-3 text-[#d4af37]">BetOnline</th>
+              {/* ✅ Sportsbook logos instead of words */}
+              <BookHeader src={dkLogo} alt="DraftKings" borderLeft />
+              <BookHeader src={fdLogo} alt="FanDuel" />
+              <BookHeader src={mgmLogo} alt="BetMGM" />
+              <BookHeader src={pinLogo} alt="Pinnacle" />
+              <BookHeader src={bolLogo} alt="BetOnline" />
             </tr>
           </thead>
 
@@ -281,11 +323,12 @@ export function OddsScreen({ selectedDate }: { selectedDate: string }) {
 
   return (
     <div className="space-y-4">
+      {/* Title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
           <p className="text-xs text-[#808080]">
-            {headerLabel} · 5 books · {selectedDate} (CT) · Updated every 60 seconds
+            {headerLabel} · 5 books · {selectedDate ? `${selectedDate} (CT)` : "—"} · Updated every 60 seconds
           </p>
         </div>
 
@@ -298,10 +341,35 @@ export function OddsScreen({ selectedDate }: { selectedDate: string }) {
         </div>
       </div>
 
+      {/* ✅ Date buttons moved into OddsScreen; show all dates with events */}
+      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+        {availableDates.map((d) => (
+          <button
+            key={d}
+            onClick={() => setSelectedDate(d)}
+            className={[
+              "px-3 py-1.5 rounded-md text-xs border transition-colors whitespace-nowrap",
+              selectedDate === d
+                ? "bg-[#d4af37] text-black border-[#d4af37]"
+                : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+            ].join(" ")}
+          >
+            {new Date(`${d}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </button>
+        ))}
+      </div>
+
+      {/* Market toggle */}
       <div className="flex items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
+          Moneyline
+        </MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
+          Spread
+        </MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
+          Total
+        </MarketButton>
       </div>
 
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">{body}</div>
@@ -323,7 +391,9 @@ function MarketButton({
       onClick={onClick}
       className={[
         "px-3 py-1.5 rounded-md text-xs border transition-colors",
-        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -362,7 +432,7 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
     }
 
-    // total split: AWAY row shows Over, HOME row shows Under
+    // Total split: AWAY row shows Over, HOME row shows Under (same line)
     const fmtTotalSplit = (cell: TotalCell, which: "over" | "under") => {
       if (!cell || cell.line == null) return "—";
       const v = which === "over" ? cell.over : cell.under;
@@ -423,7 +493,7 @@ function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | nul
             loading="lazy"
           />
         ) : (
-          <div className="w-8 h-8 rounded-sm bg-[#0a0a0a] border border-[#2a2a2a]" />
+          <div className="w-8 h-8 rounded-sm bg-white border border-[#e5e5e5]" />
         )}
 
         <div className="leading-tight">
