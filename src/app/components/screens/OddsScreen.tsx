@@ -466,8 +466,6 @@ const BOOK_SERIES_COLOR: Record<string, string> = {
   betmgm: "#d4af37", // gold
   pinnacle: "#f97316", // orange
   betonlineag: "#a78bfa", // violet
-  hardrockbet: "#fb7185", // rose
-  betrivers: "#22c55e", // green
 };
 
 function seriesColor(bookmaker: string) {
