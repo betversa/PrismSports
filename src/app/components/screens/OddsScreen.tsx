@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 // ✅ Book logos (you said these exact paths/names exist)
-import dkLogo from "../../assets/books/dk.svg";
-import fdLogo from "../../assets/books/fd.svg";
-import mgmLogo from "../../assets/books/mgm.svg";
-import pinLogo from "../../assets/books/pin.svg";
-import bolLogo from "../../assets/books/bol.svg";
+import dkLogo from "../../../assets/dk.svg";
+import fdLogo from "../../../assets/fd.svg";
+import mgmLogo from "../../../assets/mgm.svg";
+import pinLogo from "../../../assets/pin.svg";
+import bolLogo from "../../../assets/bol.svg";
 
 type Market = "ml" | "spread" | "total";
 
