@@ -1,15 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend,
+} from "recharts";
 
 /**
- * ODDS SCREEN (FULL REWRITE)
- * - Bookmaker logos loaded from /public/books/*.png (pin.png confirmed)
+ * ODDS SCREEN (FULL REWRITE + HISTORY MODAL)
+ *
+ * ✅ Same screen behaviors you already liked:
+ * - Book logos from /public/books/*.png (pin.png)
  * - Header: Matchup + Consensus use original dark; Books use charcoal
  * - Subtle glow on logos for contrast
- * - Matchup column contains time + BOTH teams (logos + away/home labels) in one field
- * - Consensus column shows ONLY the selected market, rendered exactly like book cells
- * - Table scrolls inside the panel (page does NOT scroll)
+ * - Matchup cell contains time + BOTH teams (logos + away/home labels) in one field
+ * - Consensus shows ONLY selected market, rendered like book cells
+ * - Table scrolls inside panel (page does NOT scroll)
  * - Bigger team logos + bold team names; odds slightly bigger + bold
+ *
+ * ✅ New features:
+ * - Clickable "History" in Matchup cell opens a modal
+ * - Modal graphs line movement over time for ALL bookmakers found in history table
+ * - Bookmaker series use distinct color mapping (DK/FD/MGM/PIN/BOL/etc.)
+ * - Optional Market Width overlay (per timestamp) on a right-side axis
+ *
+ * IMPORTANT:
+ * - Set HISTORY_TABLE below to your actual Supabase table/view name
+ *   (based on your CSV, it may be "odds_snapshot_history_rows")
  */
 
 type Market = "ml" | "spread" | "total";
@@ -405,7 +427,470 @@ function MiniTeamRow({
   );
 }
 
-function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
+/** ---------- HISTORY MODAL + CHART ---------- */
+/**
+ * Your history rows (based on your CSV):
+ * ts, event_id, bookmaker, market(h2h/spreads/totals), side(home/away/over/under), line, odds
+ */
+type HistMarket = "h2h" | "spreads" | "totals";
+type HistSide = "home" | "away" | "over" | "under";
+type HistoryRow = {
+  id: number;
+  ts: string;
+  event_id: string;
+  bookmaker: string;
+  market: HistMarket;
+  side: HistSide;
+  line: number | null;
+  odds: number | null;
+  last_update?: string | null;
+  inserted_at?: string | null;
+};
+
+// ✅ SET THIS to your Supabase table/view name
+const HISTORY_TABLE = "odds_snapshot_history_rows";
+
+const UI_TO_HIST_MARKET: Record<Market, HistMarket> = {
+  ml: "h2h",
+  spread: "spreads",
+  total: "totals",
+};
+
+/**
+ * Book colors (series stroke colors).
+ * - This is for HISTORY bookmaker keys (draftkings/fanduel/etc.)
+ * - For unknown books we fall back to a neutral gray.
+ */
+const BOOK_SERIES_COLOR: Record<string, string> = {
+  // Core
+  draftkings: "#34d399", // emerald
+  fanduel: "#60a5fa", // blue
+  betmgm: "#d4af37", // gold
+  pinnacle: "#f97316", // orange
+  betonlineag: "#a78bfa", // violet
+
+  // Extras you mentioned exist
+  hardrockbet: "#fb7185", // rose
+  betrivers: "#22c55e", // green
+};
+
+function seriesColor(bookmaker: string) {
+  const k = String(bookmaker || "").toLowerCase();
+  return BOOK_SERIES_COLOR[k] ?? "#9ca3af"; // gray-400
+}
+
+function fmtCTShortLabel(iso: string) {
+  const n = normalizeIso(iso) ?? iso;
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+/** American odds -> implied probability (0..1), no-vig not applied */
+function impliedProbFromAmerican(odds: number) {
+  if (!Number.isFinite(odds) || odds === 0) return NaN;
+  if (odds > 0) return 100 / (odds + 100);
+  return Math.abs(odds) / (Math.abs(odds) + 100);
+}
+
+/**
+ * Convert history rows into chart points:
+ * {
+ *   ts, t,
+ *   draftkings: -2.5,
+ *   fanduel: -2.0,
+ *   ...
+ *   mw: 0.5 (market width overlay)
+ * }
+ *
+ * Market width overlay:
+ * - Spread/Total: max(line) - min(line) across books at that timestamp
+ * - ML: max(prob) - min(prob) across books at that timestamp (prob derived from odds)
+ */
+function rowsToSeriesPointsWithWidth(rows: HistoryRow[], market: Market, valueMode: "line" | "odds") {
+  const m = new Map<string, any>();
+
+  for (const r of rows) {
+    const key = r.ts;
+    const cur = m.get(key) ?? { ts: r.ts, t: fmtCTShortLabel(r.ts), mw: null as number | null, _vals: [] as number[], _probs: [] as number[] };
+
+    // value for each bookmaker series
+    const v = valueMode === "line" ? r.line : r.odds;
+    if (typeof v === "number" && Number.isFinite(v)) {
+      cur[r.bookmaker] = v;
+      cur._vals.push(v);
+    }
+
+    // width tracking for ML uses probabilities
+    if (market === "ml" && typeof r.odds === "number" && Number.isFinite(r.odds)) {
+      const p = impliedProbFromAmerican(r.odds);
+      if (Number.isFinite(p)) cur._probs.push(p);
+    }
+
+    m.set(key, cur);
+  }
+
+  const points = Array.from(m.values()).sort((a, b) => {
+    const ta = new Date(normalizeIso(a.ts) ?? a.ts).getTime();
+    const tb = new Date(normalizeIso(b.ts) ?? b.ts).getTime();
+    return ta - tb;
+  });
+
+  for (const p of points) {
+    if (market === "ml") {
+      const probs = (p._probs as number[]).filter((x) => Number.isFinite(x));
+      if (probs.length >= 2) {
+        const lo = Math.min(...probs);
+        const hi = Math.max(...probs);
+        p.mw = +(hi - lo).toFixed(4); // e.g. 0.0321
+      } else {
+        p.mw = null;
+      }
+    } else {
+      const vals = (p._vals as number[]).filter((x) => Number.isFinite(x));
+      if (vals.length >= 2) {
+        const lo = Math.min(...vals);
+        const hi = Math.max(...vals);
+        p.mw = +(hi - lo).toFixed(2); // e.g. 1.0 points
+      } else {
+        p.mw = null;
+      }
+    }
+
+    // cleanup
+    delete p._vals;
+    delete p._probs;
+  }
+
+  return points;
+}
+
+function ModalShell({
+  title,
+  subtitle,
+  onClose,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full max-w-6xl rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4">
+          <div>
+            <div className="text-white font-extrabold text-sm">{title}</div>
+            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5">{subtitle}</div>}
+          </div>
+          <button
+            className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
+            onClick={onClose}
+            type="button"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="p-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function TogglePill({
+  on,
+  onClick,
+  label,
+}: {
+  on: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-2.5 py-1 rounded-md text-[11px] font-extrabold border",
+        on
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+function LineMovementModal({
+  ev,
+  uiMarket,
+  onClose,
+}: {
+  ev: EventOdds;
+  uiMarket: Market;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  const [hoursBack] = useState(24);
+  const [showWidth, setShowWidth] = useState(true);
+
+  const [books, setBooks] = useState<string[]>([]);
+  const [seriesA, setSeriesA] = useState<any[]>([]);
+  const [seriesB, setSeriesB] = useState<any[]>([]);
+
+  // For spreads/totals you generally want "line", for ML you want "odds"
+  const valueMode: "line" | "odds" = uiMarket === "ml" ? "odds" : "line";
+
+  // Match your history `side` values:
+  const panelA: HistSide = uiMarket === "total" ? "over" : "away";
+  const panelB: HistSide = uiMarket === "total" ? "under" : "home";
+
+  useEffect(() => {
+    let alive = true;
+
+    async function run() {
+      setLoading(true);
+      setErr("");
+
+      const histMarket = UI_TO_HIST_MARKET[uiMarket];
+      const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+
+      const { data, error } = await supabase
+        .from(HISTORY_TABLE)
+        .select("id,ts,event_id,bookmaker,market,side,line,odds,last_update,inserted_at")
+        .eq("event_id", ev.eventId)
+        .eq("market", histMarket)
+        .gte("ts", since)
+        .order("ts", { ascending: true });
+
+      if (!alive) return;
+
+      if (error) {
+        setErr(error.message);
+        setBooks([]);
+        setSeriesA([]);
+        setSeriesB([]);
+        setLoading(false);
+        return;
+      }
+
+      const rows = (data ?? []) as HistoryRow[];
+
+      // dynamic set of books present for this event/market
+      const set = new Set<string>();
+      for (const r of rows) set.add(r.bookmaker);
+      const bookList = Array.from(set).sort((a, b) => a.localeCompare(b));
+      setBooks(bookList);
+
+      const aRows = rows.filter((r) => r.side === panelA);
+      const bRows = rows.filter((r) => r.side === panelB);
+
+      setSeriesA(rowsToSeriesPointsWithWidth(aRows, uiMarket, valueMode));
+      setSeriesB(rowsToSeriesPointsWithWidth(bRows, uiMarket, valueMode));
+
+      setLoading(false);
+    }
+
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [ev.eventId, uiMarket, hoursBack]);
+
+  const subtitle = [
+    ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
+    `Market: ${uiMarket.toUpperCase()} (${UI_TO_HIST_MARKET[uiMarket]})`,
+    `Window: last ${hoursBack}h`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const yLabel =
+    uiMarket === "spread" ? "Spread Line" :
+    uiMarket === "total" ? "Total Line" :
+    "ML Odds";
+
+  const mwLabel =
+    uiMarket === "ml" ? "Market Width (Prob)" : "Market Width (Pts)";
+
+  const panelTitleA = uiMarket === "total" ? "OVER" : "AWAY";
+  const panelTitleB = uiMarket === "total" ? "UNDER" : "HOME";
+
+  return (
+    <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="text-[11px] text-[#808080]">
+          Tip: width overlay = max−min across books at each timestamp
+          {uiMarket === "ml" ? " (computed on implied probability from odds)" : " (computed on line values)"}.
+        </div>
+        <div className="flex items-center gap-2">
+          <TogglePill on={showWidth} onClick={() => setShowWidth((v) => !v)} label="Market Width Overlay" />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-[#808080]">Loading snapshots…</div>
+      ) : err ? (
+        <div className="text-xs text-red-400">Supabase error: {err}</div>
+      ) : (!seriesA.length && !seriesB.length) ? (
+        <div className="text-xs text-[#808080]">No history rows found for this event/market in the selected window.</div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Panel A */}
+          <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+            <div className="text-white font-bold text-xs mb-2">{panelTitleA}</div>
+            <div className="h-[360px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={seriesA}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="t" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="main" tick={{ fontSize: 11 }} label={{ value: yLabel, angle: -90, position: "insideLeft" }} />
+                  {showWidth && (
+                    <YAxis
+                      yAxisId="mw"
+                      orientation="right"
+                      tick={{ fontSize: 11 }}
+                      label={{ value: mwLabel, angle: 90, position: "insideRight" }}
+                    />
+                  )}
+                  <Tooltip />
+                  <Legend />
+
+                  {books.map((b) => (
+                    <Line
+                      key={b}
+                      yAxisId="main"
+                      type="monotone"
+                      dataKey={b}
+                      name={b}
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      stroke={seriesColor(b)}
+                    />
+                  ))}
+
+                  {showWidth && (
+                    <Line
+                      yAxisId="mw"
+                      type="monotone"
+                      dataKey="mw"
+                      name="Market Width"
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      stroke="#e5e7eb"
+                      strokeDasharray="6 6"
+                    />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Panel B */}
+          <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+            <div className="text-white font-bold text-xs mb-2">{panelTitleB}</div>
+            <div className="h-[360px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={seriesB}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="t" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="main" tick={{ fontSize: 11 }} label={{ value: yLabel, angle: -90, position: "insideLeft" }} />
+                  {showWidth && (
+                    <YAxis
+                      yAxisId="mw"
+                      orientation="right"
+                      tick={{ fontSize: 11 }}
+                      label={{ value: mwLabel, angle: 90, position: "insideRight" }}
+                    />
+                  )}
+                  <Tooltip />
+                  <Legend />
+
+                  {books.map((b) => (
+                    <Line
+                      key={b}
+                      yAxisId="main"
+                      type="monotone"
+                      dataKey={b}
+                      name={b}
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      stroke={seriesColor(b)}
+                    />
+                  ))}
+
+                  {showWidth && (
+                    <Line
+                      yAxisId="mw"
+                      type="monotone"
+                      dataKey="mw"
+                      name="Market Width"
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      stroke="#e5e7eb"
+                      strokeDasharray="6 6"
+                    />
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* quick legend for colors */}
+      {!!books.length && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {books.map((b) => (
+            <div key={b} className="flex items-center gap-2 text-[11px] text-[#cfcfcf] border border-[#2a2a2a] rounded-md px-2 py-1 bg-black/20">
+              <span className="inline-block w-3 h-3 rounded-sm" style={{ background: seriesColor(b) }} />
+              <span className="font-semibold">{b}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </ModalShell>
+  );
+}
+
+/** ---------- Rows ---------- */
+function EventTwoRows({
+  ev,
+  market,
+  onOpenHistory,
+}: {
+  ev: EventOdds;
+  market: Market;
+  onOpenHistory: (ev: EventOdds) => void;
+}) {
   const away =
     ev.away ?? {
       side: "AWAY" as const,
@@ -467,7 +952,18 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       {/* AWAY row (matchup cell spans both rows) */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
         <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
-          <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+          <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3 flex items-center justify-between gap-3">
+            <span>{fmtCTTimeOnly(ev.commenceTime)} CT</span>
+            <button
+              type="button"
+              onClick={() => onOpenHistory(ev)}
+              className="text-[11px] font-extrabold text-[#d4af37] hover:underline"
+              title="View line movement history"
+            >
+              History
+            </button>
+          </div>
+
           <div className="space-y-3">
             <MiniTeamRow team={away.team} logoUrl={away.logoUrl} side="AWAY" />
             <MiniTeamRow team={home.team} logoUrl={home.logoUrl} side="HOME" />
@@ -497,6 +993,7 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   );
 }
 
+/** ---------- Screen ---------- */
 export function OddsScreen() {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
@@ -504,6 +1001,19 @@ export function OddsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdatedIso, setLastUpdatedIso] = useState<string | null>(null);
+
+  // modal state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyEvent, setHistoryEvent] = useState<EventOdds | null>(null);
+
+  function openHistory(ev: EventOdds) {
+    setHistoryEvent(ev);
+    setHistoryOpen(true);
+  }
+  function closeHistory() {
+    setHistoryOpen(false);
+    setHistoryEvent(null);
+  }
 
   async function load() {
     setError("");
@@ -700,13 +1210,18 @@ export function OddsScreen() {
 
               <tbody>
                 {events.map((ev) => (
-                  <EventTwoRows key={ev.eventId} ev={ev} market={market} />
+                  <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} />
                 ))}
               </tbody>
             </table>
           )}
         </div>
       </div>
+
+      {/* modal */}
+      {historyOpen && historyEvent?.eventId && (
+        <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
+      )}
     </div>
   );
 }
