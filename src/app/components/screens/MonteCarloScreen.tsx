@@ -23,8 +23,8 @@ type MonteCarloResultRow = {
   sigma_total_game: number | null;
 
   // NEW (optional in DB): if not present, we derive from total + margin
-  projected_points_home?: number | null;
-  projected_points_away?: number | null;
+  projected_home_points?: number | null;
+  projected_away_points?: number | null;
 };
 
 type TeamRow = {
