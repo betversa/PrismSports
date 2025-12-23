@@ -111,9 +111,6 @@ export function OddsScreen() {
           "side",
           // team/canonical columns vary; include a few common ones:
           "team",
-          "canonical_team",
-          "canonical",
-          "team_name",
 
           "dk_ml_odds","fd_ml_odds","mgm_ml_odds","pin_ml_odds","bol_ml_odds",
 
