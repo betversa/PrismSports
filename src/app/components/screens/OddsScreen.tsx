@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+type Market = "ml" | "spread" | "total";
+
 type SpreadCell = { line: number | null; odds: number | null };
 type TotalCell = { line: number | null; over: number | null; under: number | null };
 
 type SideOdds = {
   side: "AWAY" | "HOME";
   team: string;
+  logoUrl: string | null;
+
   ml: {
     dk: number | null;
     fd: number | null;
@@ -14,6 +18,7 @@ type SideOdds = {
     pin: number | null;
     bol: number | null;
   };
+
   spread: {
     dk: SpreadCell;
     fd: SpreadCell;
@@ -21,6 +26,7 @@ type SideOdds = {
     pin: SpreadCell;
     bol: SpreadCell;
   };
+
   total: {
     dk: TotalCell;
     fd: TotalCell;
@@ -28,15 +34,48 @@ type SideOdds = {
     pin: TotalCell;
     bol: TotalCell;
   };
+
+  updatedAt: string | null; // per-row
 };
 
 type EventOdds = {
   eventId: string;
-  matchup: string;
-  commenceTime: string;
+  commenceTime: string; // ISO string from DB
   away?: SideOdds;
   home?: SideOdds;
+  // convenience: latest update across its two rows
+  latestUpdatedAt: string | null;
 };
+
+const CT_TZ = "America/Chicago";
+
+function fmtCTDateTime(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function fmtCTTimeOnly(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function fmtML(v: number | null) {
+  return v == null ? "—" : `${v}`;
+}
 
 function fmtSpread(cell: SpreadCell) {
   if (!cell || cell.line == null) return "—";
@@ -51,21 +90,22 @@ function fmtTotal(cell: TotalCell) {
   return `${cell.line} ${o} / ${u}`;
 }
 
-function fmtML(v: number | null) {
-  return v == null ? "—" : `${v}`;
+function pickLogoUrl(row: any): string | null {
+  // your table says it has logo_url; keep a couple safe fallbacks
+  return row.logo_url ?? row.team_logo_url ?? row.logo ?? null;
+}
+
+function pickUpdatedAt(row: any): string | null {
+  // common patterns; if you have a different column name, add it here
+  return row.updated_at ?? row.last_updated ?? row.updatedAt ?? null;
 }
 
 function mapWideRowToSideOdds(row: any): SideOdds {
-  const team =
-    row.team ??
-    row.canonical_team ??
-    row.canonical ??
-    row.team_name ??
-    row.side; // last resort
-
   return {
     side: row.side,
-    team,
+    team: row.team ?? row.side,
+    logoUrl: pickLogoUrl(row),
+    updatedAt: pickUpdatedAt(row),
 
     ml: {
       dk: row.dk_ml_odds ?? null,
@@ -93,40 +133,26 @@ function mapWideRowToSideOdds(row: any): SideOdds {
   };
 }
 
+function maxIso(a: string | null, b: string | null) {
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
+}
+
 export function OddsScreen() {
   const [events, setEvents] = useState<EventOdds[]>([]);
+  const [market, setMarket] = useState<Market>("spread");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [lastUpdatedIso, setLastUpdatedIso] = useState<string | null>(null);
 
   async function load() {
     setError("");
 
+    // ✅ select("*") avoids “column does not exist” errors when schema changes
     const { data, error } = await supabase
       .from("odds_wide_latest")
-      .select(
-        [
-          "event_id",
-          "matchup",
-          "commence_time",
-          "side",
-          // team/canonical columns vary; include a few common ones:
-          "team",
-
-          "dk_ml_odds","fd_ml_odds","mgm_ml_odds","pin_ml_odds","bol_ml_odds",
-
-          "dk_spread_line","dk_spread_odds",
-          "fd_spread_line","fd_spread_odds",
-          "mgm_spread_line","mgm_spread_odds",
-          "pin_spread_line","pin_spread_odds",
-          "bol_spread_line","bol_spread_odds",
-
-          "dk_total_line","dk_total_over_odds","dk_total_under_odds",
-          "fd_total_line","fd_total_over_odds","fd_total_under_odds",
-          "mgm_total_line","mgm_total_over_odds","mgm_total_under_odds",
-          "pin_total_line","pin_total_over_odds","pin_total_under_odds",
-          "bol_total_line","bol_total_over_odds","bol_total_under_odds",
-        ].join(",")
-      )
+      .select("*")
       .in("side", ["AWAY", "HOME"])
       .order("commence_time", { ascending: true });
 
@@ -138,6 +164,7 @@ export function OddsScreen() {
     }
 
     const byEvent = new Map<string, EventOdds>();
+    let globalLatest: string | null = null;
 
     for (const row of data ?? []) {
       const eventId = row.event_id;
@@ -147,12 +174,11 @@ export function OddsScreen() {
         byEvent.get(eventId) ??
         {
           eventId,
-          matchup: row.matchup ?? "",
           commenceTime: row.commence_time ?? "",
+          latestUpdatedAt: null,
         };
 
-      // ensure base fields filled even if first row missing them
-      cur.matchup = cur.matchup || row.matchup || "";
+      // Keep commence_time
       cur.commenceTime = cur.commenceTime || row.commence_time || "";
 
       const sideOdds = mapWideRowToSideOdds(row);
@@ -160,11 +186,23 @@ export function OddsScreen() {
       if (sideOdds.side === "AWAY") cur.away = sideOdds;
       if (sideOdds.side === "HOME") cur.home = sideOdds;
 
+      cur.latestUpdatedAt = maxIso(cur.latestUpdatedAt, sideOdds.updatedAt);
+      globalLatest = maxIso(globalLatest, sideOdds.updatedAt);
+
       byEvent.set(eventId, cur);
     }
 
-    // Sort and ensure Away first in UI by always rendering away row then home row
-    setEvents(Array.from(byEvent.values()));
+    const list = Array.from(byEvent.values()).sort((a, b) => {
+      const ta = new Date(a.commenceTime).getTime();
+      const tb = new Date(b.commenceTime).getTime();
+      return ta - tb;
+    });
+
+    setEvents(list);
+
+    // If your rows don’t have updated_at yet, fallback to “now”
+    setLastUpdatedIso(globalLatest ?? new Date().toISOString());
+
     setLoading(false);
   }
 
@@ -174,6 +212,8 @@ export function OddsScreen() {
     const t = window.setInterval(load, 60_000);
     return () => window.clearInterval(t);
   }, []);
+
+  const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
 
   const body = useMemo(() => {
     if (loading) return <div className="p-4 text-xs text-[#808080]">Loading odds_wide_latest…</div>;
@@ -185,9 +225,11 @@ export function OddsScreen() {
         <table className="w-full text-xs">
           <thead>
             <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[100px]">Event ID</th>
-              <th className="text-left p-3 text-[#808080] min-w-[180px]">Matchup</th>
-              <th className="text-left p-3 text-[#808080] min-w-[160px]">Commence</th>
+              <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[150px]">
+                Date/Time (CT)
+              </th>
+              <th className="text-left p-3 text-[#808080] min-w-[220px]">Matchup</th>
+
               <th className="text-left p-3 text-[#d4af37] border-l border-[#2a2a2a]">DraftKings</th>
               <th className="text-left p-3 text-[#d4af37]">FanDuel</th>
               <th className="text-left p-3 text-[#d4af37]">BetMGM</th>
@@ -198,19 +240,39 @@ export function OddsScreen() {
 
           <tbody className="divide-y divide-[#1a1a1a]">
             {events.map((ev) => (
-              <EventOddsRows key={ev.eventId} ev={ev} />
+              <EventTwoRows key={ev.eventId} ev={ev} market={market} />
             ))}
           </tbody>
         </table>
       </div>
     );
-  }, [events, loading, error]);
+  }, [events, loading, error, market]);
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
-        <p className="text-xs text-[#808080]">Live sportsbook lines · 5 books · Updated every 60 seconds</p>
+      {/* Top header row with last updated */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
+          <p className="text-xs text-[#808080]">
+            {headerLabel} · 5 books · Updated every 60 seconds
+          </p>
+        </div>
+
+        <div className="text-right">
+          <div className="text-[10px] text-[#606060]">Last Updated (CT)</div>
+          <div className="text-xs text-white flex items-center justify-end gap-2">
+            <span>{fmtCTDateTime(lastUpdatedIso)}</span>
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+          </div>
+        </div>
+      </div>
+
+      {/* Market toggle */}
+      <div className="flex items-center gap-2">
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
       </div>
 
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">{body}</div>
@@ -226,89 +288,144 @@ export function OddsScreen() {
   );
 }
 
-function EventOddsRows({ ev }: { ev: EventOdds }) {
-  const away = ev.away ?? { side: "AWAY", team: "Away", ml: { dk: null, fd: null, mgm: null, pin: null, bol: null }, spread: { dk: {line:null,odds:null}, fd:{line:null,odds:null}, mgm:{line:null,odds:null}, pin:{line:null,odds:null}, bol:{line:null,odds:null} }, total: { dk:{line:null,over:null,under:null}, fd:{line:null,over:null,under:null}, mgm:{line:null,over:null,under:null}, pin:{line:null,over:null,under:null}, bol:{line:null,over:null,under:null} } };
-  const home = ev.home ?? { side: "HOME", team: "Home", ml: { dk: null, fd: null, mgm: null, pin: null, bol: null }, spread: { dk: {line:null,odds:null}, fd:{line:null,odds:null}, mgm:{line:null,odds:null}, pin:{line:null,odds:null}, bol:{line:null,odds:null} }, total: { dk:{line:null,over:null,under:null}, fd:{line:null,over:null,under:null}, mgm:{line:null,over:null,under:null}, pin:{line:null,over:null,under:null}, bol:{line:null,over:null,under:null} } };
+function MarketButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 rounded-md text-xs border transition-colors",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
 
-  // 6 rows per event: Away then Home for ML/SPR/TOT
-  const rowSpan = 6;
+function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
+  const away =
+    ev.away ?? {
+      side: "AWAY" as const,
+      team: "Away",
+      logoUrl: null,
+      updatedAt: null,
+      ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+    };
+
+  const home =
+    ev.home ?? {
+      side: "HOME" as const,
+      team: "Home",
+      logoUrl: null,
+      updatedAt: null,
+      ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
+    };
+
+  const cell = (s: SideOdds) => {
+    if (market === "ml") {
+      return {
+        dk: fmtML(s.ml.dk),
+        fd: fmtML(s.ml.fd),
+        mgm: fmtML(s.ml.mgm),
+        pin: fmtML(s.ml.pin),
+        bol: fmtML(s.ml.bol),
+      };
+    }
+    if (market === "spread") {
+      return {
+        dk: fmtSpread(s.spread.dk),
+        fd: fmtSpread(s.spread.fd),
+        mgm: fmtSpread(s.spread.mgm),
+        pin: fmtSpread(s.spread.pin),
+        bol: fmtSpread(s.spread.bol),
+      };
+    }
+    // total
+    return {
+      dk: fmtTotal(s.total.dk),
+      fd: fmtTotal(s.total.fd),
+      mgm: fmtTotal(s.total.mgm),
+      pin: fmtTotal(s.total.pin),
+      bol: fmtTotal(s.total.bol),
+    };
+  };
+
+  const awayCells = cell(away);
+  const homeCells = cell(home);
 
   return (
     <>
-      {/* ML AWAY */}
+      {/* AWAY row (first row also shows date/time) */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className="p-3 text-[#808080] sticky left-0 bg-[#0f0f0f] z-10 align-top" rowSpan={rowSpan}>
-          {ev.eventId}
-        </td>
-        <td className="p-3 text-white align-top" rowSpan={rowSpan}>
-          {ev.matchup}
-        </td>
-        <td className="p-3 text-[#b0b0b0] align-top" rowSpan={rowSpan}>
-          {ev.commenceTime}
+        <td className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10 align-top" rowSpan={2}>
+          {fmtCTDateTime(ev.commenceTime)}
         </td>
 
-        <BookCell label={`ML (${away.team})`} value={fmtML(away.ml.dk)} borderLeft />
-        <BookCell label={`ML (${away.team})`} value={fmtML(away.ml.fd)} />
-        <BookCell label={`ML (${away.team})`} value={fmtML(away.ml.mgm)} />
-        <BookCell label={`ML (${away.team})`} value={fmtML(away.ml.pin)} />
-        <BookCell label={`ML (${away.team})`} value={fmtML(away.ml.bol)} />
+        <TeamCell team={away.team} logoUrl={away.logoUrl} side="AWAY" />
+
+        <BookValue value={awayCells.dk} borderLeft />
+        <BookValue value={awayCells.fd} />
+        <BookValue value={awayCells.mgm} />
+        <BookValue value={awayCells.pin} />
+        <BookValue value={awayCells.bol} />
       </tr>
 
-      {/* ML HOME */}
+      {/* HOME row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/50">
-        <BookCell label={`ML (${home.team})`} value={fmtML(home.ml.dk)} borderLeft />
-        <BookCell label={`ML (${home.team})`} value={fmtML(home.ml.fd)} />
-        <BookCell label={`ML (${home.team})`} value={fmtML(home.ml.mgm)} />
-        <BookCell label={`ML (${home.team})`} value={fmtML(home.ml.pin)} />
-        <BookCell label={`ML (${home.team})`} value={fmtML(home.ml.bol)} />
-      </tr>
+        <TeamCell team={home.team} logoUrl={home.logoUrl} side="HOME" />
 
-      {/* SPR AWAY */}
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/50">
-        <BookCell label={`SPR (${away.team})`} value={fmtSpread(away.spread.dk)} borderLeft />
-        <BookCell label={`SPR (${away.team})`} value={fmtSpread(away.spread.fd)} />
-        <BookCell label={`SPR (${away.team})`} value={fmtSpread(away.spread.mgm)} />
-        <BookCell label={`SPR (${away.team})`} value={fmtSpread(away.spread.pin)} />
-        <BookCell label={`SPR (${away.team})`} value={fmtSpread(away.spread.bol)} />
-      </tr>
-
-      {/* SPR HOME */}
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/50">
-        <BookCell label={`SPR (${home.team})`} value={fmtSpread(home.spread.dk)} borderLeft />
-        <BookCell label={`SPR (${home.team})`} value={fmtSpread(home.spread.fd)} />
-        <BookCell label={`SPR (${home.team})`} value={fmtSpread(home.spread.mgm)} />
-        <BookCell label={`SPR (${home.team})`} value={fmtSpread(home.spread.pin)} />
-        <BookCell label={`SPR (${home.team})`} value={fmtSpread(home.spread.bol)} />
-      </tr>
-
-      {/* TOT AWAY */}
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/50">
-        <BookCell label="TOT" value={fmtTotal(away.total.dk)} borderLeft />
-        <BookCell label="TOT" value={fmtTotal(away.total.fd)} />
-        <BookCell label="TOT" value={fmtTotal(away.total.mgm)} />
-        <BookCell label="TOT" value={fmtTotal(away.total.pin)} />
-        <BookCell label="TOT" value={fmtTotal(away.total.bol)} />
-      </tr>
-
-      {/* TOT HOME */}
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors border-t border-[#1a1a1a]/50">
-        <BookCell label="TOT" value={fmtTotal(home.total.dk)} borderLeft />
-        <BookCell label="TOT" value={fmtTotal(home.total.fd)} />
-        <BookCell label="TOT" value={fmtTotal(home.total.mgm)} />
-        <BookCell label="TOT" value={fmtTotal(home.total.pin)} />
-        <BookCell label="TOT" value={fmtTotal(home.total.bol)} />
+        <BookValue value={homeCells.dk} borderLeft />
+        <BookValue value={homeCells.fd} />
+        <BookValue value={homeCells.mgm} />
+        <BookValue value={homeCells.pin} />
+        <BookValue value={homeCells.bol} />
       </tr>
     </>
   );
 }
 
-function BookCell({ label, value, borderLeft }: { label: string; value: string; borderLeft?: boolean }) {
+function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+  return (
+    <td className="p-3 text-white">
+      <div className="flex items-center gap-2">
+        {logoUrl ? (
+          <img
+            src={logoUrl}
+            alt={`${team} logo`}
+            className="w-5 h-5 rounded-sm object-contain bg-[#0a0a0a] border border-[#2a2a2a]"
+            loading="lazy"
+          />
+        ) : (
+          <div className="w-5 h-5 rounded-sm bg-[#0a0a0a] border border-[#2a2a2a]" />
+        )}
+
+        <div className="leading-tight">
+          <div className="text-white">{team}</div>
+          <div className="text-[10px] text-[#606060]">{side}</div>
+        </div>
+      </div>
+    </td>
+  );
+}
+
+function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
     <td className={`p-3 text-white ${borderLeft ? "border-l border-[#2a2a2a]" : ""}`}>
-      <div className="flex items-center gap-1.5">
-        <span className="text-[10px] text-[#606060] w-[72px]">{label}:</span>
-        <span>{value}</span>
-      </div>
+      {value}
     </td>
   );
 }
