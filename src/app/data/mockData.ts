@@ -143,3 +143,29 @@ export const mockMonteCarloData = mockGames.map((g) => ({
   totalUnits: g.totalUnits,
 }));
 
+// src/app/data/mockData.ts
+
+export type ResultsDay = {
+  date: string;        // ISO date string
+  games: number;
+  mlWinPct: number;
+  spreadWinPct: number;
+  totalWinPct: number;
+  mlMAE: number;
+  spreadMAE: number;
+  totalRMSE: number;
+  unitsWon: number;
+  coverage: number;    // %
+};
+
+export const mockResultsData: ResultsDay[] = [
+  { date: "2025-12-16", games: 182, mlWinPct: 56.0, spreadWinPct: 53.1, totalWinPct: 51.9, mlMAE: 7.8, spreadMAE: 10.6, totalRMSE: 18.9, unitsWon: 2.15, coverage: 98.4 },
+  { date: "2025-12-17", games: 195, mlWinPct: 54.9, spreadWinPct: 52.8, totalWinPct: 53.6, mlMAE: 7.6, spreadMAE: 10.4, totalRMSE: 18.2, unitsWon: 1.42, coverage: 99.1 },
+  { date: "2025-12-18", games: 210, mlWinPct: 57.2, spreadWinPct: 54.0, totalWinPct: 52.4, mlMAE: 7.4, spreadMAE: 10.2, totalRMSE: 17.8, unitsWon: 2.88, coverage: 99.0 },
+  { date: "2025-12-19", games: 198, mlWinPct: 55.3, spreadWinPct: 53.4, totalWinPct: 51.2, mlMAE: 7.9, spreadMAE: 10.7, totalRMSE: 19.4, unitsWon: 0.64, coverage: 98.7 },
+  { date: "2025-12-20", games: 173, mlWinPct: 53.8, spreadWinPct: 51.9, totalWinPct: 52.9, mlMAE: 8.1, spreadMAE: 10.9, totalRMSE: 19.1, unitsWon: -0.22, coverage: 97.9 },
+  { date: "2025-12-21", games: 160, mlWinPct: 54.4, spreadWinPct: 52.2, totalWinPct: 50.6, mlMAE: 8.3, spreadMAE: 11.1, totalRMSE: 19.8, unitsWon: 0.31, coverage: 96.8 },
+  { date: "2025-12-22", games: 148, mlWinPct: 55.7, spreadWinPct: 53.0, totalWinPct: 52.1, mlMAE: 8.0, spreadMAE: 10.8, totalRMSE: 19.0, unitsWon: 0.95, coverage: 97.5 },
+];
+
+
