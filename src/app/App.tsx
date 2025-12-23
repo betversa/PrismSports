@@ -19,9 +19,26 @@ export type Screen =
   | "calibration"
   | "settings";
 
+const CT_TZ = "America/Chicago";
+
+// YYYY-MM-DD in Central Time
+function ctYmd(d: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+
+  const y = parts.find((p) => p.type === "year")?.value ?? "1970";
+  const m = parts.find((p) => p.type === "month")?.value ?? "01";
+  const day = parts.find((p) => p.type === "day")?.value ?? "01";
+  return `${y}-${m}-${day}`;
+}
+
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("overview");
-  const [selectedDate, setSelectedDate] = useState<string>("2024-12-20");
+  const [selectedDate, setSelectedDate] = useState<string>(() => ctYmd(new Date()));
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Prevent body scroll when drawer is open (mobile)
@@ -80,7 +97,7 @@ export default function App() {
       {/* Header (hamburger on mobile) */}
       <Header
         selectedDate={selectedDate}
-        onChangeDate={setSelectedDate}
+        onChangeDate={(d) => setSelectedDate(d)}
         onOpenMenu={() => setSidebarOpen(true)}
       />
 
@@ -91,3 +108,4 @@ export default function App() {
     </div>
   );
 }
+
