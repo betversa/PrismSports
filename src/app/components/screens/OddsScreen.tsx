@@ -9,29 +9,33 @@ import {
   Tooltip,
   CartesianGrid,
   Legend,
+  ReferenceLine,
 } from "recharts";
 
 /**
- * ODDS SCREEN (FULL REWRITE + HISTORY MODAL)
+ * ODDS SCREEN (FULL REWRITE + HISTORY MODAL v2)
  *
- * ✅ Same screen behaviors you already liked:
- * - Book logos from /public/books/*.png (pin.png)
+ * ✅ Base screen (unchanged behavior):
+ * - Book logos loaded from /public/books/*.png (pin.png)
  * - Header: Matchup + Consensus use original dark; Books use charcoal
  * - Subtle glow on logos for contrast
- * - Matchup cell contains time + BOTH teams (logos + away/home labels) in one field
- * - Consensus shows ONLY selected market, rendered like book cells
- * - Table scrolls inside panel (page does NOT scroll)
+ * - Matchup column contains time + BOTH teams (logos + away/home labels) in one field
+ * - Consensus column shows ONLY the selected market, rendered exactly like book cells
+ * - Table scrolls inside the panel (page does NOT scroll)
  * - Bigger team logos + bold team names; odds slightly bigger + bold
  *
- * ✅ New features:
- * - Clickable "History" in Matchup cell opens a modal
- * - Modal graphs line movement over time for ALL bookmakers found in history table
- * - Bookmaker series use distinct color mapping (DK/FD/MGM/PIN/BOL/etc.)
- * - Optional Market Width overlay (per timestamp) on a right-side axis
+ * ✅ History modal upgrades:
+ * - Click "History" in matchup cell to open modal
+ * - Graphs line movement / odds movement for ALL books found in history table
+ * - Per-book color mapping
+ * - Market Width overlay (line-width or prob-width depending on mode)
+ * - Option: Soft Book Shading detection
+ * - Option: Sharp Move Detected (anchors on Pinnacle + consensus)
+ * - Buckets snapshots into 1-minute bins for cleaner graphs
  *
  * IMPORTANT:
- * - Set HISTORY_TABLE below to your actual Supabase table/view name
- *   (based on your CSV, it may be "odds_snapshot_history_rows")
+ * - Set HISTORY_TABLE to your actual history table/view name in Supabase.
+ * - Install recharts: npm i recharts
  */
 
 type Market = "ml" | "spread" | "total";
@@ -427,11 +431,10 @@ function MiniTeamRow({
   );
 }
 
-/** ---------- HISTORY MODAL + CHART ---------- */
-/**
- * Your history rows (based on your CSV):
- * ts, event_id, bookmaker, market(h2h/spreads/totals), side(home/away/over/under), line, odds
- */
+/** =========================
+ * HISTORY MODAL + DETECTION
+ * ========================= */
+
 type HistMarket = "h2h" | "spreads" | "totals";
 type HistSide = "home" | "away" | "over" | "under";
 type HistoryRow = {
@@ -447,8 +450,8 @@ type HistoryRow = {
   inserted_at?: string | null;
 };
 
-// ✅ SET THIS to your Supabase table/view name
-const HISTORY_TABLE = "odds_snapshot_history";
+// ✅ set this to your actual name
+const HISTORY_TABLE = "odds_snapshot_history_rows";
 
 const UI_TO_HIST_MARKET: Record<Market, HistMarket> = {
   ml: "h2h",
@@ -456,27 +459,20 @@ const UI_TO_HIST_MARKET: Record<Market, HistMarket> = {
   total: "totals",
 };
 
-/**
- * Book colors (series stroke colors).
- * - This is for HISTORY bookmaker keys (draftkings/fanduel/etc.)
- * - For unknown books we fall back to a neutral gray.
- */
+// Per-book line color mapping (history bookmaker keys)
 const BOOK_SERIES_COLOR: Record<string, string> = {
-  // Core
   draftkings: "#34d399", // emerald
   fanduel: "#60a5fa", // blue
   betmgm: "#d4af37", // gold
   pinnacle: "#f97316", // orange
   betonlineag: "#a78bfa", // violet
-
-  // Extras you mentioned exist
   hardrockbet: "#fb7185", // rose
   betrivers: "#22c55e", // green
 };
 
 function seriesColor(bookmaker: string) {
   const k = String(bookmaker || "").toLowerCase();
-  return BOOK_SERIES_COLOR[k] ?? "#9ca3af"; // gray-400
+  return BOOK_SERIES_COLOR[k] ?? "#9ca3af";
 }
 
 function fmtCTShortLabel(iso: string) {
@@ -492,85 +488,212 @@ function fmtCTShortLabel(iso: string) {
   }).format(d);
 }
 
-/** American odds -> implied probability (0..1), no-vig not applied */
 function impliedProbFromAmerican(odds: number) {
   if (!Number.isFinite(odds) || odds === 0) return NaN;
   if (odds > 0) return 100 / (odds + 100);
   return Math.abs(odds) / (Math.abs(odds) + 100);
 }
 
-/**
- * Convert history rows into chart points:
- * {
- *   ts, t,
- *   draftkings: -2.5,
- *   fanduel: -2.0,
- *   ...
- *   mw: 0.5 (market width overlay)
- * }
- *
- * Market width overlay:
- * - Spread/Total: max(line) - min(line) across books at that timestamp
- * - ML: max(prob) - min(prob) across books at that timestamp (prob derived from odds)
- */
-function rowsToSeriesPointsWithWidth(rows: HistoryRow[], market: Market, valueMode: "line" | "odds") {
-  const m = new Map<string, any>();
+function floorToMinuteIso(iso: string) {
+  const n = normalizeIso(iso) ?? iso;
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return iso;
+  d.setSeconds(0, 0);
+  return d.toISOString();
+}
+
+function medianOfKeys(point: any, keys: string[], valueMode: "line" | "odds") {
+  const vals: number[] = [];
+  for (const k of keys) {
+    const v = point?.[k];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      if (valueMode === "odds") {
+        const p = impliedProbFromAmerican(v);
+        if (Number.isFinite(p)) vals.push(p);
+      } else {
+        vals.push(v);
+      }
+    }
+  }
+  return median(vals);
+}
+
+type ChartPoint = {
+  ts: string;          // bucket timestamp (ISO)
+  t: string;           // CT label
+  mw: number | null;   // market width overlay
+  sharp: boolean;      // sharp move detected (bucket)
+  shade: boolean;      // soft shading detected (bucket)
+  pin?: number;        // pinnacle value (line or odds) if present
+  [book: string]: any; // book values
+};
+
+function buildChartSeries(
+  rows: HistoryRow[],
+  uiMarket: Market,
+  valueMode: "line" | "odds",
+  books: string[],
+  enableWidth: boolean,
+  enableShading: boolean,
+  enableSharp: boolean
+): ChartPoint[] {
+  // 1) bucket to 1-minute bins, keep latest per (bin, book)
+  const binMap = new Map<string, Map<string, HistoryRow>>();
 
   for (const r of rows) {
-    const key = r.ts;
-    const cur = m.get(key) ?? { ts: r.ts, t: fmtCTShortLabel(r.ts), mw: null as number | null, _vals: [] as number[], _probs: [] as number[] };
+    const bin = floorToMinuteIso(r.ts);
+    const byBook = binMap.get(bin) ?? new Map<string, HistoryRow>();
 
-    // value for each bookmaker series
-    const v = valueMode === "line" ? r.line : r.odds;
-    if (typeof v === "number" && Number.isFinite(v)) {
-      cur[r.bookmaker] = v;
-      cur._vals.push(v);
+    const prev = byBook.get(r.bookmaker);
+    if (!prev) {
+      byBook.set(r.bookmaker, r);
+    } else {
+      // keep the later ts within the same minute
+      const pt = new Date(normalizeIso(prev.ts) ?? prev.ts).getTime();
+      const rt = new Date(normalizeIso(r.ts) ?? r.ts).getTime();
+      if (rt >= pt) byBook.set(r.bookmaker, r);
     }
 
-    // width tracking for ML uses probabilities
-    if (market === "ml" && typeof r.odds === "number" && Number.isFinite(r.odds)) {
-      const p = impliedProbFromAmerican(r.odds);
-      if (Number.isFinite(p)) cur._probs.push(p);
-    }
-
-    m.set(key, cur);
+    binMap.set(bin, byBook);
   }
 
-  const points = Array.from(m.values()).sort((a, b) => {
-    const ta = new Date(normalizeIso(a.ts) ?? a.ts).getTime();
-    const tb = new Date(normalizeIso(b.ts) ?? b.ts).getTime();
-    return ta - tb;
-  });
+  const bins = Array.from(binMap.keys()).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
 
-  for (const p of points) {
-    if (market === "ml") {
-      const probs = (p._probs as number[]).filter((x) => Number.isFinite(x));
-      if (probs.length >= 2) {
-        const lo = Math.min(...probs);
-        const hi = Math.max(...probs);
-        p.mw = +(hi - lo).toFixed(4); // e.g. 0.0321
+  // 2) build points
+  const points: ChartPoint[] = bins.map((bin) => {
+    const byBook = binMap.get(bin)!;
+    const p: ChartPoint = {
+      ts: bin,
+      t: fmtCTShortLabel(bin),
+      mw: null,
+      sharp: false,
+      shade: false,
+    };
+
+    for (const b of books) {
+      const row = byBook.get(b);
+      if (!row) continue;
+      if (valueMode === "line") {
+        if (typeof row.line === "number" && Number.isFinite(row.line)) p[b] = row.line;
       } else {
-        p.mw = null;
-      }
-    } else {
-      const vals = (p._vals as number[]).filter((x) => Number.isFinite(x));
-      if (vals.length >= 2) {
-        const lo = Math.min(...vals);
-        const hi = Math.max(...vals);
-        p.mw = +(hi - lo).toFixed(2); // e.g. 1.0 points
-      } else {
-        p.mw = null;
+        if (typeof row.odds === "number" && Number.isFinite(row.odds)) p[b] = row.odds;
       }
     }
 
-    // cleanup
-    delete p._vals;
-    delete p._probs;
+    // convenience: pinnacle series value
+    if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
+
+    // 3) width overlay
+    if (enableWidth) {
+      if (valueMode === "line") {
+        const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
+        if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
+      } else {
+        const probs = books
+          .map((b) => p[b])
+          .filter((v) => typeof v === "number" && Number.isFinite(v))
+          .map((odds: number) => impliedProbFromAmerican(odds))
+          .filter((q) => Number.isFinite(q));
+        if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
+      }
+    }
+
+    return p;
+  });
+
+  // 4) soft shading detection (simple + effective)
+  // “soft shading” = line unchanged for the book, but implied probability shifts by >= 2% (0.02)
+  // For totals, this is usually the best signal (books move price more than line).
+  const SHADE_DP = 0.02;
+
+  if (enableShading) {
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const cur = points[i];
+
+      let shaded = false;
+
+      for (const b of books) {
+        const pv = prev[b];
+        const cv = cur[b];
+        if (typeof pv !== "number" || typeof cv !== "number") continue;
+
+        if (valueMode === "odds") {
+          const pp = impliedProbFromAmerican(pv);
+          const cp = impliedProbFromAmerican(cv);
+          if (!Number.isFinite(pp) || !Number.isFinite(cp)) continue;
+
+          // if line is tracked separately in table, we can’t “same line” check in odds-mode,
+          // so we approximate by only flagging shading when consensus line is stable (spreads/totals),
+          // or for totals always allow (odds tends to be the signal).
+          const dp = Math.abs(cp - pp);
+          if (dp >= SHADE_DP) {
+            shaded = true;
+            break;
+          }
+        } else {
+          // line mode shading is less useful; keep it off unless you turn odds-mode.
+        }
+      }
+
+      cur.shade = shaded;
+    }
+  }
+
+  // 5) sharp move detection
+  // “sharp move” = Pinnacle moves materially OR consensus moves materially with tight width.
+  // Thresholds:
+  // - spreads: 0.5 points
+  // - totals : 1.0 points
+  // In odds mode, use prob movement threshold 0.02 with tight width.
+  const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
+  const PROB_MOVE = 0.02;
+
+  if (enableSharp) {
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const cur = points[i];
+
+      const widthOk =
+        cur.mw != null &&
+        (valueMode === "line"
+          ? (uiMarket === "spread" ? cur.mw <= 0.5 : uiMarket === "total" ? cur.mw <= 1.0 : true)
+          : cur.mw <= 0.02);
+
+      let sharp = false;
+
+      // A) Pinnacle anchor movement
+      if (typeof prev.pin === "number" && typeof cur.pin === "number") {
+        if (valueMode === "line") {
+          if (Math.abs(cur.pin - prev.pin) >= LINE_MOVE) sharp = true;
+        } else {
+          const pp = impliedProbFromAmerican(prev.pin);
+          const cp = impliedProbFromAmerican(cur.pin);
+          if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharp = true;
+        }
+      }
+
+      // B) Consensus movement with tight width (books clustering = “real move”)
+      if (!sharp && widthOk) {
+        const consPrev = medianOfKeys(prev, books, valueMode);
+        const consCur = medianOfKeys(cur, books, valueMode);
+        if (consPrev != null && consCur != null) {
+          if (valueMode === "line") {
+            if (Math.abs(consCur - consPrev) >= LINE_MOVE) sharp = true;
+          } else {
+            if (Math.abs(consCur - consPrev) >= PROB_MOVE) sharp = true;
+          }
+        }
+      }
+
+      cur.sharp = sharp;
+    }
   }
 
   return points;
 }
 
+/** ---------- Modal shell ---------- */
 function ModalShell({
   title,
   subtitle,
@@ -643,6 +766,16 @@ function TogglePill({
   );
 }
 
+function Badge({ label, kind }: { label: string; kind: "gold" | "red" | "gray" }) {
+  const cls =
+    kind === "gold"
+      ? "bg-[#d4af37] text-black"
+      : kind === "red"
+      ? "bg-red-500 text-white"
+      : "bg-[#2a2a2a] text-[#cfcfcf]";
+  return <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold ${cls}`}>{label}</span>;
+}
+
 function LineMovementModal({
   ev,
   uiMarket,
@@ -656,16 +789,23 @@ function LineMovementModal({
   const [err, setErr] = useState("");
 
   const [hoursBack] = useState(24);
+
+  // mode toggles
   const [showWidth, setShowWidth] = useState(true);
+  const [showShading, setShowShading] = useState(true);
+  const [showSharp, setShowSharp] = useState(true);
+
+  const [valueMode, setValueMode] = useState<"line" | "odds">(
+    uiMarket === "ml" ? "odds" : uiMarket === "total" ? "odds" : "line"
+  );
+  useEffect(() => {
+    setValueMode(uiMarket === "ml" ? "odds" : uiMarket === "total" ? "odds" : "line");
+  }, [uiMarket]);
 
   const [books, setBooks] = useState<string[]>([]);
-  const [seriesA, setSeriesA] = useState<any[]>([]);
-  const [seriesB, setSeriesB] = useState<any[]>([]);
+  const [seriesA, setSeriesA] = useState<ChartPoint[]>([]);
+  const [seriesB, setSeriesB] = useState<ChartPoint[]>([]);
 
-  // For spreads/totals you generally want "line", for ML you want "odds"
-  const valueMode: "line" | "odds" = uiMarket === "ml" ? "odds" : "line";
-
-  // Match your history `side` values:
   const panelA: HistSide = uiMarket === "total" ? "over" : "away";
   const panelB: HistSide = uiMarket === "total" ? "under" : "home";
 
@@ -700,17 +840,19 @@ function LineMovementModal({
 
       const rows = (data ?? []) as HistoryRow[];
 
-      // dynamic set of books present for this event/market
       const set = new Set<string>();
-      for (const r of rows) set.add(r.bookmaker);
+      for (const r of rows) set.add(String(r.bookmaker || "").toLowerCase());
       const bookList = Array.from(set).sort((a, b) => a.localeCompare(b));
       setBooks(bookList);
 
-      const aRows = rows.filter((r) => r.side === panelA);
-      const bRows = rows.filter((r) => r.side === panelB);
+      const aRows = rows.filter((r) => String(r.bookmaker || "").toLowerCase() && String(r.side).toLowerCase() === panelA);
+      const bRows = rows.filter((r) => String(r.bookmaker || "").toLowerCase() && String(r.side).toLowerCase() === panelB);
 
-      setSeriesA(rowsToSeriesPointsWithWidth(aRows, uiMarket, valueMode));
-      setSeriesB(rowsToSeriesPointsWithWidth(bRows, uiMarket, valueMode));
+      const A = buildChartSeries(aRows, uiMarket, valueMode, bookList, showWidth, showShading, showSharp);
+      const B = buildChartSeries(bRows, uiMarket, valueMode, bookList, showWidth, showShading, showSharp);
+
+      setSeriesA(A);
+      setSeriesB(B);
 
       setLoading(false);
     }
@@ -719,36 +861,57 @@ function LineMovementModal({
     return () => {
       alive = false;
     };
-  }, [ev.eventId, uiMarket, hoursBack]);
+  }, [ev.eventId, uiMarket, hoursBack, valueMode, showWidth, showShading, showSharp]);
 
   const subtitle = [
     ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
     `Market: ${uiMarket.toUpperCase()} (${UI_TO_HIST_MARKET[uiMarket]})`,
+    `Mode: ${valueMode === "line" ? "Line" : "Odds"}`,
     `Window: last ${hoursBack}h`,
+    "Bucket: 1-min",
   ]
     .filter(Boolean)
     .join(" · ");
 
   const yLabel =
-    uiMarket === "spread" ? "Spread Line" :
-    uiMarket === "total" ? "Total Line" :
-    "ML Odds";
+    valueMode === "line"
+      ? uiMarket === "spread"
+        ? "Spread Line"
+        : uiMarket === "total"
+        ? "Total Line"
+        : "Line"
+      : uiMarket === "ml"
+      ? "ML Odds"
+      : "Odds";
 
-  const mwLabel =
-    uiMarket === "ml" ? "Market Width (Prob)" : "Market Width (Pts)";
-
+  const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
   const panelTitleA = uiMarket === "total" ? "OVER" : "AWAY";
   const panelTitleB = uiMarket === "total" ? "UNDER" : "HOME";
 
+  const anySharpA = seriesA.some((p) => p.sharp);
+  const anyShadeA = seriesA.some((p) => p.shade);
+  const anySharpB = seriesB.some((p) => p.sharp);
+  const anyShadeB = seriesB.some((p) => p.shade);
+
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
-      <div className="flex items-center justify-between gap-3 mb-3">
-        <div className="text-[11px] text-[#808080]">
-          Tip: width overlay = max−min across books at each timestamp
-          {uiMarket === "ml" ? " (computed on implied probability from odds)" : " (computed on line values)"}.
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div className="flex items-center gap-2">
-          <TogglePill on={showWidth} onClick={() => setShowWidth((v) => !v)} label="Market Width Overlay" />
+          {uiMarket !== "ml" && (
+            <>
+              <TogglePill on={valueMode === "line"} onClick={() => setValueMode("line")} label="Line" />
+              <TogglePill on={valueMode === "odds"} onClick={() => setValueMode("odds")} label="Odds" />
+            </>
+          )}
+          <TogglePill on={showWidth} onClick={() => setShowWidth((v) => !v)} label="Market Width" />
+          <TogglePill on={showShading} onClick={() => setShowShading((v) => !v)} label="Soft Shading" />
+          <TogglePill on={showSharp} onClick={() => setShowSharp((v) => !v)} label="Sharp Moves" />
+        </div>
+
+        <div className="flex items-center gap-2">
+          {(showSharp && (anySharpA || anySharpB)) && <Badge label="Sharp Move Detected" kind="red" />}
+          {(showShading && (anyShadeA || anyShadeB)) && <Badge label="Soft Shading" kind="gold" />}
+          {!anySharpA && !anySharpB && !anyShadeA && !anyShadeB && <Badge label="No Alerts" kind="gray" />}
         </div>
       </div>
 
@@ -762,7 +925,14 @@ function LineMovementModal({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Panel A */}
           <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-            <div className="text-white font-bold text-xs mb-2">{panelTitleA}</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-white font-bold text-xs">{panelTitleA}</div>
+              <div className="flex items-center gap-2">
+                {showSharp && anySharpA && <Badge label="Sharp" kind="red" />}
+                {showShading && anyShadeA && <Badge label="Shading" kind="gold" />}
+              </div>
+            </div>
+
             <div className="h-[360px]">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={seriesA}>
@@ -777,9 +947,29 @@ function LineMovementModal({
                       label={{ value: mwLabel, angle: 90, position: "insideRight" }}
                     />
                   )}
-                  <Tooltip />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row: any = payload[0]?.payload;
+                      return (
+                        <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf]">
+                          <div className="font-extrabold text-white mb-1">{label}</div>
+                          {showWidth && row?.mw != null && (
+                            <div className="mb-1">
+                              <span className="font-bold">Width:</span> {row.mw}
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            {showSharp && row?.sharp && <Badge label="Sharp" kind="red" />}
+                            {showShading && row?.shade && <Badge label="Shading" kind="gold" />}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
                   <Legend />
 
+                  {/* book series */}
                   {books.map((b) => (
                     <Line
                       key={b}
@@ -794,6 +984,7 @@ function LineMovementModal({
                     />
                   ))}
 
+                  {/* width overlay */}
                   {showWidth && (
                     <Line
                       yAxisId="mw"
@@ -807,6 +998,20 @@ function LineMovementModal({
                       strokeDasharray="6 6"
                     />
                   )}
+
+                  {/* sharp markers */}
+                  {showSharp &&
+                    seriesA
+                      .filter((p) => p.sharp)
+                      .map((p) => (
+                        <ReferenceLine
+                          key={`sharp-${p.ts}`}
+                          x={p.t}
+                          stroke="rgba(239,68,68,0.55)"
+                          strokeDasharray="3 3"
+                          yAxisId="main"
+                        />
+                      ))}
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -814,7 +1019,14 @@ function LineMovementModal({
 
           {/* Panel B */}
           <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-            <div className="text-white font-bold text-xs mb-2">{panelTitleB}</div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-white font-bold text-xs">{panelTitleB}</div>
+              <div className="flex items-center gap-2">
+                {showSharp && anySharpB && <Badge label="Sharp" kind="red" />}
+                {showShading && anyShadeB && <Badge label="Shading" kind="gold" />}
+              </div>
+            </div>
+
             <div className="h-[360px]">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={seriesB}>
@@ -829,7 +1041,26 @@ function LineMovementModal({
                       label={{ value: mwLabel, angle: 90, position: "insideRight" }}
                     />
                   )}
-                  <Tooltip />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row: any = payload[0]?.payload;
+                      return (
+                        <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf]">
+                          <div className="font-extrabold text-white mb-1">{label}</div>
+                          {showWidth && row?.mw != null && (
+                            <div className="mb-1">
+                              <span className="font-bold">Width:</span> {row.mw}
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            {showSharp && row?.sharp && <Badge label="Sharp" kind="red" />}
+                            {showShading && row?.shade && <Badge label="Shading" kind="gold" />}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
                   <Legend />
 
                   {books.map((b) => (
@@ -859,6 +1090,19 @@ function LineMovementModal({
                       strokeDasharray="6 6"
                     />
                   )}
+
+                  {showSharp &&
+                    seriesB
+                      .filter((p) => p.sharp)
+                      .map((p) => (
+                        <ReferenceLine
+                          key={`sharp-${p.ts}`}
+                          x={p.t}
+                          stroke="rgba(239,68,68,0.55)"
+                          strokeDasharray="3 3"
+                          yAxisId="main"
+                        />
+                      ))}
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -866,22 +1110,31 @@ function LineMovementModal({
         </div>
       )}
 
-      {/* quick legend for colors */}
+      {/* book color legend */}
       {!!books.length && (
         <div className="mt-3 flex flex-wrap gap-2">
           {books.map((b) => (
-            <div key={b} className="flex items-center gap-2 text-[11px] text-[#cfcfcf] border border-[#2a2a2a] rounded-md px-2 py-1 bg-black/20">
+            <div
+              key={b}
+              className="flex items-center gap-2 text-[11px] text-[#cfcfcf] border border-[#2a2a2a] rounded-md px-2 py-1 bg-black/20"
+            >
               <span className="inline-block w-3 h-3 rounded-sm" style={{ background: seriesColor(b) }} />
               <span className="font-semibold">{b}</span>
             </div>
           ))}
         </div>
       )}
+
+      <div className="mt-3 text-[11px] text-[#808080] leading-snug">
+        <span className="font-bold text-[#cfcfcf]">Soft Shading</span>: price (implied probability) shifts meaningfully without an obvious “line move” signal (especially useful for totals).
+        &nbsp;|&nbsp;
+        <span className="font-bold text-[#cfcfcf]">Sharp Move</span>: Pinnacle or consensus moves materially with tight market width (books clustering).
+      </div>
     </ModalShell>
   );
 }
 
-/** ---------- Rows ---------- */
+/** ---------- Two-row event renderer ---------- */
 function EventTwoRows({
   ev,
   market,
@@ -949,7 +1202,6 @@ function EventTwoRows({
 
   return (
     <>
-      {/* AWAY row (matchup cell spans both rows) */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
         <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3 flex items-center justify-between gap-3">
@@ -979,7 +1231,6 @@ function EventTwoRows({
         <BookValue value={awayCells.bol} />
       </tr>
 
-      {/* HOME row */}
       <tr className={["hover:bg-[#0f0f0f]/50 transition-colors", `border-t border-[#1a1a1a]/60 border-b-2 ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue value={homeConsensus} />
 
@@ -1117,7 +1368,6 @@ export function OddsScreen() {
 
   return (
     <div className="h-[calc(100vh-72px)] flex flex-col gap-4 overflow-hidden">
-      {/* title + last updated */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl text-white mb-1">Raw Odds Feed</h2>
@@ -1133,7 +1383,6 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* date buttons */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {availableDates.map((d) => (
           <button
@@ -1152,7 +1401,6 @@ export function OddsScreen() {
         ))}
       </div>
 
-      {/* market toggle */}
       <div className="flex items-center gap-2">
         <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
           Moneyline
@@ -1165,7 +1413,6 @@ export function OddsScreen() {
         </MarketButton>
       </div>
 
-      {/* scroll container (table scrolls, page doesn't) */}
       <div className="flex-1 bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
         <div className="h-full overflow-y-auto overflow-x-auto">
           {loading ? (
@@ -1176,7 +1423,6 @@ export function OddsScreen() {
             <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>
           ) : (
             <table className="w-full table-fixed">
-              {/* fixed column widths for uniformity */}
               <colgroup>
                 <col style={{ width: COL_MATCHUP }} />
                 <col style={{ width: COL_CONSENSUS }} />
@@ -1189,17 +1435,14 @@ export function OddsScreen() {
 
               <thead className="sticky top-0 z-20">
                 <tr className={`border-b ${HDR_BORDER}`}>
-                  {/* Matchup header (original dark) */}
                   <th className={["text-left px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-sm font-extrabold"].join(" ")}>
                     Matchup
                   </th>
 
-                  {/* Consensus header (centered, original dark) */}
                   <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
                     Consensus
                   </th>
 
-                  {/* Book headers (charcoal) */}
                   <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
                   <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
                   <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
@@ -1218,7 +1461,6 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* modal */}
       {historyOpen && historyEvent?.eventId && (
         <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
       )}
