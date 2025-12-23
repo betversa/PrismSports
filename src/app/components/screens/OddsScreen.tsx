@@ -28,21 +28,17 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 /**
- * ✅ Public folder book logos (use REAL extensions!)
- * From your repo zip we saw: public/books/*.svg were actually PNG/WEBP.
- * Rename the files in /public/books to:
- *   dk.png, fd.png, mgm.png, bol.png, pin.webp (or pin.png)
- * Then these paths will work on Vercel:
+ * ✅ Book logos from /public/books (must be REAL file extensions)
  */
 const BOOK_LOGOS = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
   mgm: "/books/mgm.png",
-  pin: "/books/pin.webp", // change to "/books/pin.png" if you convert it
+  pin: "/books/pin.webp", // change to .png if you convert it
   bol: "/books/bol.png",
 } as const;
 
-/** --- helpers --- */
+/** --------------------- helpers --------------------- */
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
@@ -177,15 +173,15 @@ function maxIso(a: string | null, b: string | null) {
 
 function headerFallbackPillDataUri(label: string) {
   const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="80" height="24">
-    <rect x="0" y="0" width="80" height="24" rx="12" ry="12" fill="#EDEDED"/>
-    <text x="40" y="16" font-family="Arial, sans-serif" font-size="12" font-weight="700"
+  <svg xmlns="http://www.w3.org/2000/svg" width="88" height="28">
+    <rect x="0" y="0" width="88" height="28" rx="14" ry="14" fill="#EDEDED"/>
+    <text x="44" y="19" font-family="Arial, sans-serif" font-size="12" font-weight="700"
       text-anchor="middle" fill="#111111">${label}</text>
   </svg>`;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
 
-/** --- UI components --- */
+/** --------------------- UI bits --------------------- */
 function MarketButton({
   active,
   onClick,
@@ -223,23 +219,24 @@ function BookHeader({
 }) {
   return (
     <th
-      className={[
-        "text-center px-2 py-3",
-        borderLeft ? "border-l border-black/10" : "",
-      ].join(" ")}
+      className={["text-center px-2 py-3", borderLeft ? "border-l border-black/10" : ""].join(" ")}
       style={{ width: 112 }}
     >
       <span className="sr-only">{alt}</span>
+
+      {/* ✅ SAME SIZE BOX FOR EVERY BOOK */}
       <div className="flex items-center justify-center">
-        <img
-          src={src}
-          alt={alt}
-          className="h-6 w-[76px] object-contain"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
-          }}
-        />
+        <div className="w-[88px] h-[28px] flex items-center justify-center">
+          <img
+            src={src}
+            alt={alt}
+            className="w-full h-full object-contain"
+            loading="lazy"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+            }}
+          />
+        </div>
       </div>
     </th>
   );
@@ -286,20 +283,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: {
-        dk: { line: null, odds: null },
-        fd: { line: null, odds: null },
-        mgm: { line: null, odds: null },
-        pin: { line: null, odds: null },
-        bol: { line: null, odds: null },
-      },
-      total: {
-        dk: { line: null, over: null, under: null },
-        fd: { line: null, over: null, under: null },
-        mgm: { line: null, over: null, under: null },
-        pin: { line: null, over: null, under: null },
-        bol: { line: null, over: null, under: null },
-      },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
     };
 
   const home =
@@ -309,20 +294,8 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
       logoUrl: null,
       updatedAt: null,
       ml: { dk: null, fd: null, mgm: null, pin: null, bol: null },
-      spread: {
-        dk: { line: null, odds: null },
-        fd: { line: null, odds: null },
-        mgm: { line: null, odds: null },
-        pin: { line: null, odds: null },
-        bol: { line: null, odds: null },
-      },
-      total: {
-        dk: { line: null, over: null, under: null },
-        fd: { line: null, over: null, under: null },
-        mgm: { line: null, over: null, under: null },
-        pin: { line: null, over: null, under: null },
-        bol: { line: null, over: null, under: null },
-      },
+      spread: { dk: { line: null, odds: null }, fd: { line: null, odds: null }, mgm: { line: null, odds: null }, pin: { line: null, odds: null }, bol: { line: null, odds: null } },
+      total: { dk: { line: null, over: null, under: null }, fd: { line: null, over: null, under: null }, mgm: { line: null, over: null, under: null }, pin: { line: null, over: null, under: null }, bol: { line: null, over: null, under: null } },
     };
 
   const mk = (s: SideOdds) => {
@@ -347,7 +320,6 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   return (
     <>
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        {/* ✅ sticky matchup cell contains time + BOTH teams + logos + home/away labels */}
         <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 align-middle border-r border-[#2a2a2a]" rowSpan={2}>
           <div className="text-[11px] text-[#cfcfcf] mb-2">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
           <div className="space-y-2">
@@ -374,7 +346,7 @@ function EventTwoRows({ ev, market }: { ev: EventOdds; market: Market }) {
   );
 }
 
-/** --- main screen --- */
+/** --------------------- main screen --------------------- */
 export function OddsScreen() {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
@@ -482,48 +454,54 @@ export function OddsScreen() {
 
   const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
 
-  const body = useMemo(() => {
-    if (loading) return <div className="p-4 text-xs text-[#808080]">Loading odds_wide_latest…</div>;
-    if (error) return <div className="p-4 text-xs text-red-400">Supabase error: {error}</div>;
-    if (!events.length) return <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>;
+  /** ✅ SCROLL FIX:
+   * We make the "card" a fixed-height flex column.
+   * Header controls stay at top, table gets its own scroll container.
+   */
+  const scrollCard = (
+    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden flex flex-col min-h-[420px] h-[calc(100vh-270px)]">
+      {/* table header stays visible while table body scrolls */}
+      <div className="overflow-auto">
+        {loading ? (
+          <div className="p-4 text-xs text-[#808080]">Loading odds_wide_latest…</div>
+        ) : error ? (
+          <div className="p-4 text-xs text-red-400">Supabase error: {error}</div>
+        ) : !events.length ? (
+          <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>
+        ) : (
+          <table className="w-full text-xs table-fixed">
+            <colgroup>
+              <col style={{ width: 340 }} />
+              <col style={{ width: 112 }} />
+              <col style={{ width: 112 }} />
+              <col style={{ width: 112 }} />
+              <col style={{ width: 112 }} />
+              <col style={{ width: 112 }} />
+            </colgroup>
 
-    return (
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs table-fixed">
-          {/* ✅ uniform column widths */}
-          <colgroup>
-            <col style={{ width: 340 }} />
-            <col style={{ width: 112 }} />
-            <col style={{ width: 112 }} />
-            <col style={{ width: 112 }} />
-            <col style={{ width: 112 }} />
-            <col style={{ width: 112 }} />
-          </colgroup>
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-[#E7E3D6] border-b border-black/10">
+                <th className="text-left px-3 py-3 text-[#1a1a1a] sticky left-0 bg-[#E7E3D6] z-30">
+                  Matchup
+                </th>
+                <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
+                <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
+                <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
+                <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" fallbackLabel="PIN" />
+                <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" fallbackLabel="BOL" />
+              </tr>
+            </thead>
 
-          <thead>
-            {/* ✅ lighter header so black book logos/text are visible */}
-            <tr className="bg-[#E7E3D6] border-b border-black/10">
-              <th className="text-left px-3 py-3 text-[#1a1a1a] sticky left-0 bg-[#E7E3D6] z-10">
-                Matchup
-              </th>
-
-              <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
-              <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
-              <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
-              <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" fallbackLabel="PIN" />
-              <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" fallbackLabel="BOL" />
-            </tr>
-          </thead>
-
-          <tbody>
-            {events.map((ev) => (
-              <EventTwoRows key={ev.eventId} ev={ev} market={market} />
-            ))}
-          </tbody>
-        </table>
+            <tbody>
+              {events.map((ev) => (
+                <EventTwoRows key={ev.eventId} ev={ev} market={market} />
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
-    );
-  }, [events, loading, error, market, selectedDate]);
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -564,12 +542,19 @@ export function OddsScreen() {
 
       {/* market toggle */}
       <div className="flex items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
+          Moneyline
+        </MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
+          Spread
+        </MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
+          Total
+        </MarketButton>
       </div>
 
-      <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">{body}</div>
+      {/* ✅ scrollable table card */}
+      {scrollCard}
     </div>
   );
 }
