@@ -14,7 +14,7 @@ type TeamRating = {
 };
 
 type EventRow = {
-  id: string; // or event_id
+  event_id: string; // or event_id
   commence_time: string;
   home_team: string;
   away_team: string;
@@ -148,7 +148,7 @@ async function loadUpcomingEvents(): Promise<EventRow[]> {
 
   const { data, error } = await supabase
     .from("events")
-    .select("id, commence_time, home_team, away_team, matchup")
+    .select("event_id, commence_time, home_team, away_team, matchup")
     .gte("commence_time", now.toISOString())
     .lt("commence_time", max.toISOString())
     .order("commence_time", { ascending: true });
