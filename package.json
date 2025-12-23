@@ -4,6 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "dev": "vite",
     "build": "vite build",
     "odds:load": "tsx scripts/oddsLoader.ts",
     "ratings:build": "tsx scripts/ratingsBuilder.ts"
