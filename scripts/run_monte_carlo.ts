@@ -1,284 +1,395 @@
-// scripts/run_monte_carlo.ts
+/**
+ * run_monte_carlo.ts
+ *
+ * Monte Carlo Results Runner (Supabase-only)
+ * - Reads upcoming events from public.events (event_id, canon_home_team, canon_away_team, etc.)
+ * - Reads team metrics from public.team_ratings
+ * - Produces Monte Carlo projections (margin/total + sigmas + win prob)
+ * - Upserts results into public.monte_carlo_results (keyed by event_id)
+ *
+ * NO connections to OddsScreen or odds_snapshot/history tables.
+ */
+
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 
-type TeamRating = {
-  canonical: string;
-  engine_power: number;
-  true_hca: number;
-  pf_points: number;
-  pa_points: number;
-  avg_total_points: number;
-  sigma_margin_100: number;
-  sigma_total_100: number;
-};
+// ===================== CONFIG =====================
 
-type EventRow = {
-  event_id: string; // or event_id
-  commence_time: string;
-  home_team: string;
-  away_team: string;
-  matchup?: string | null;
-};
+const SPORT_KEY = process.env.SPORT_KEY ?? "basketball_ncaab";
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+// How far ahead to compute (days)
+const LOOKAHEAD_DAYS = Number(process.env.MC_LOOKAHEAD_DAYS ?? 3);
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env var.");
-}
+// Sims
+const SIMS = Number(process.env.MC_SIMS ?? 10000);
+
+// Total projection blend:
+// total_from_pfpa = homeExpPts + awayExpPts (see formula below)
+// avg_total_points blend = average of the two teams' avg_total_points (if present)
+const TOTAL_BLEND_W_PFPA = clamp01(Number(process.env.MC_TOTAL_BLEND_W_PFPA ?? 0.75));
+const TOTAL_BLEND_W_AVG  = clamp01(1 - TOTAL_BLEND_W_PFPA);
+
+// Table names
+const EVENTS_TABLE = process.env.EVENTS_TABLE ?? "events";
+const TEAM_RATINGS_TABLE = process.env.TEAM_RATINGS_TABLE ?? "team_ratings";
+const OUTPUT_TABLE = process.env.MC_OUTPUT_TABLE ?? "monte_carlo_results";
+
+// Supabase
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY; // recommended for server/GH action
+
+if (!SUPABASE_URL) throw new Error("Missing SUPABASE_URL in env.");
+if (!SUPABASE_SERVICE_ROLE_KEY) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY in env.");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-const MC_CONFIG = {
-  SPORT_KEY: "basketball_ncaab",
-  SIMS: 10000,
+// ===================== TYPES =====================
 
-  // Simple v1: no possessions, so treat sigma_*_100 as game-scale directly (with floors)
-  SIGMA_MARGIN_FLOOR: 8.0,
-  SIGMA_TOTAL_FLOOR: 13.5,
-
-  // Optional: use PF/PA to nudge margin/total a bit (keep small)
-  USE_PFPA_NUDGE: true,
-  PFPA_MARGIN_W: 0.20, // 0..0.35 recommended
-  PFPA_TOTAL_W: 0.15,  // 0..0.35 recommended
-
-  // Time window for upcoming slate
-  HOURS_AHEAD: 36,
+type EventRow = {
+  event_id: string;
+  sport_key: string;
+  commence_time: string; // ISO-ish string
+  canon_home_team: string | null;
+  canon_away_team: string | null;
+  matchup: string | null;
 };
 
-function clamp(x: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, x));
-}
+type TeamRatingRow = {
+  canonical: string;
 
-function randnBM() {
-  let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-}
+  engine_power: number | null;
+  true_hca: number | null;
 
-function safeNum(x: any, fb: number) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : fb;
-}
+  pf_points: number | null;
+  pa_points: number | null;
+  avg_total_points: number | null;
 
-// --- Optional canonicalization using team_map ---
-// We’ll load team_map once into a dictionary of: normalized(alias)->canonical
-function normalizeKey(s: string) {
-  return String(s)
-    .toLowerCase()
-    .replace(/[\u2019']/g, "'")
-    .replace(/\./g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+  sigma_margin_100: number | null;
+  sigma_total_100: number | null;
+};
 
-async function loadTeamMap(): Promise<Record<string, string>> {
-  const { data, error } = await supabase
-    .from("team_map")
-    .select('canonical,"The Odds API", "ESPN_Long", "SR_School", "SR_School_Short", "KenPom", "Elo", "TR"');
+type MCOutputRow = {
+  event_id: string;
+  sport_key: string;
+  commence_time: string;
+  matchup: string;
 
-  if (error) throw error;
+  home_team: string;
+  away_team: string;
 
-  const map: Record<string, string> = {};
-  for (const row of data || []) {
-    const canonical = row.canonical;
-    if (!canonical) continue;
+  projected_margin_home: number;
+  sigma_margin: number;
 
-    const add = (val: any) => {
-      if (!val) return;
-      const k = normalizeKey(String(val));
-      if (!map[k]) map[k] = canonical;
-    };
+  projected_total: number;
+  sigma_total: number;
 
-    add(canonical);
-    add((row as any)["The Odds API"]);
-    add((row as any)["ESPN_Long"]);
-    add((row as any)["SR_School"]);
-    add((row as any)["SR_School_Short"]);
-    add((row as any)["KenPom"]);
-    add((row as any)["Elo"]);
-    add((row as any)["TR"]);
-  }
-  return map;
-}
+  p_home_win: number;
 
-function toCanonical(raw: string, teamMap: Record<string, string>) {
-  if (!raw) return null;
-  return teamMap[normalizeKey(raw)] || null;
-}
+  sims: number;
+  updated_at: string; // ISO
+};
 
-// --- Pull team_ratings into map ---
-async function loadTeamRatings(): Promise<Record<string, TeamRating>> {
-  const { data, error } = await supabase
-    .from("team_ratings")
-    .select(
-      "canonical, engine_power, true_hca, pf_points, pa_points, avg_total_points, sigma_margin_100, sigma_total_100"
-    );
-
-  if (error) throw error;
-
-  const map: Record<string, TeamRating> = {};
-  for (const r of data || []) {
-    const canonical = (r as any).canonical;
-    if (!canonical) continue;
-
-    map[canonical] = {
-      canonical,
-      engine_power: safeNum((r as any).engine_power, 0),
-      true_hca: safeNum((r as any).true_hca, 0),
-      pf_points: safeNum((r as any).pf_points, 0),
-      pa_points: safeNum((r as any).pa_points, 0),
-      avg_total_points: safeNum((r as any).avg_total_points, 0),
-      sigma_margin_100: safeNum((r as any).sigma_margin_100, MC_CONFIG.SIGMA_MARGIN_FLOOR),
-      sigma_total_100: safeNum((r as any).sigma_total_100, MC_CONFIG.SIGMA_TOTAL_FLOOR),
-    };
-  }
-  return map;
-}
-
-// --- Pull upcoming events ---
-// Adjust column names here if yours differ.
-async function loadUpcomingEvents(): Promise<EventRow[]> {
-  const now = new Date();
-  const max = new Date(now.getTime() + MC_CONFIG.HOURS_AHEAD * 3600 * 1000);
-
-  const { data, error } = await supabase
-    .from("events")
-    .select("event_id, commence_time, home_team, away_team, matchup")
-    .gte("commence_time", now.toISOString())
-    .lt("commence_time", max.toISOString())
-    .order("commence_time", { ascending: true });
-
-  if (error) throw error;
-  return (data || []) as any;
-}
-
-function simulateGameV1(home: TeamRating, away: TeamRating) {
-  // Base margin from power + HCA
-  let marginMean = (home.engine_power - away.engine_power) + (home.true_hca || 0);
-
-  // Base total from the “avg_total_points” (team-level) — simplest v1:
-  // take midpoint of both teams' avg_total_points
-  let totalMean = (home.avg_total_points + away.avg_total_points) / 2;
-
-  // Optional PF/PA nudge (small)
-  const trace: any = {
-    marginMean_base: marginMean,
-    totalMean_base: totalMean,
-  };
-
-  if (MC_CONFIG.USE_PFPA_NUDGE) {
-    // Margin nudge based on net points (PF-PA)
-    const homeNet = home.pf_points - home.pa_points;
-    const awayNet = away.pf_points - away.pa_points;
-    const netDiff = homeNet - awayNet;
-
-    const wM = clamp(MC_CONFIG.PFPA_MARGIN_W, 0, 0.35);
-    marginMean = (1 - wM) * marginMean + wM * netDiff;
-
-    // Total nudge based on combined PF (simple heuristic)
-    const totalPf = home.pf_points + away.pf_points;
-    const wT = clamp(MC_CONFIG.PFPA_TOTAL_W, 0, 0.35);
-    totalMean = (1 - wT) * totalMean + wT * totalPf;
-
-    trace.homeNet = homeNet;
-    trace.awayNet = awayNet;
-    trace.netDiff = netDiff;
-    trace.wM = wM;
-    trace.wT = wT;
-    trace.marginMean_after_pfpa = marginMean;
-    trace.totalMean_after_pfpa = totalMean;
-  }
-
-  // Sigmas treated as game-scale (since we’re not using possessions right now)
-  let sigmaMarginGame = (home.sigma_margin_100 + away.sigma_margin_100) / 2;
-  let sigmaTotalGame = (home.sigma_total_100 + away.sigma_total_100) / 2;
-
-  sigmaMarginGame = Math.max(sigmaMarginGame, MC_CONFIG.SIGMA_MARGIN_FLOOR);
-  sigmaTotalGame = Math.max(sigmaTotalGame, MC_CONFIG.SIGMA_TOTAL_FLOOR);
-
-  let sumM = 0;
-  let sumT = 0;
-
-  for (let i = 0; i < MC_CONFIG.SIMS; i++) {
-    const m = marginMean + randnBM() * sigmaMarginGame;
-    const t = Math.max(0, totalMean + randnBM() * sigmaTotalGame);
-    sumM += m;
-    sumT += t;
-  }
-
-  const projectedMarginHome = sumM / MC_CONFIG.SIMS;
-  const projectedTotal = sumT / MC_CONFIG.SIMS;
-
-  trace.sigmaMarginGame = sigmaMarginGame;
-  trace.sigmaTotalGame = sigmaTotalGame;
-
-  return { projectedMarginHome, projectedTotal, sigmaMarginGame, sigmaTotalGame, trace };
-}
+// ===================== MAIN =====================
 
 async function main() {
-  const teamMap = await loadTeamMap();
-  const ratings = await loadTeamRatings();
-  const events = await loadUpcomingEvents();
+  const now = new Date();
+  const startIso = now.toISOString();
 
-  // Create run row
-  const { data: runRow, error: runErr } = await supabase
-    .from("monte_carlo_runs")
-    .insert({
-      sport_key: MC_CONFIG.SPORT_KEY,
-      config: MC_CONFIG,
-    })
-    .select("id")
-    .single();
+  const end = new Date(now.getTime() + LOOKAHEAD_DAYS * 864e5);
+  const endIso = end.toISOString();
 
-  if (runErr) throw runErr;
-  const runId = runRow.id as string;
+  console.log(`[MC] SPORT_KEY=${SPORT_KEY} lookaheadDays=${LOOKAHEAD_DAYS} sims=${SIMS}`);
+  console.log(`[MC] Fetch events between ${startIso} and ${endIso}`);
 
-  const results: any[] = [];
+  // 1) Load upcoming events
+  const events = await fetchUpcomingEvents(startIso, endIso);
 
-  for (const ev of events) {
-    // events table might already store canonical — but we canonicalize safely anyway
-    const homeCanon = toCanonical(ev.home_team, teamMap) || ev.home_team;
-    const awayCanon = toCanonical(ev.away_team, teamMap) || ev.away_team;
+  if (!events.length) {
+    console.log("[MC] No upcoming events found in window. Exiting.");
+    return;
+  }
 
-    const home = ratings[homeCanon];
-    const away = ratings[awayCanon];
+  // Only those with canonical teams present
+  const usableEvents = events.filter((e) => e.canon_home_team && e.canon_away_team);
 
-    if (!home || !away) {
-      // skip if missing ratings
+  if (!usableEvents.length) {
+    console.log("[MC] Events found, but none have canon_home_team/canon_away_team. Exiting.");
+    return;
+  }
+
+  // 2) Load team ratings for all teams involved
+  const teams = uniqueStrings(
+    usableEvents.flatMap((e) => [e.canon_home_team as string, e.canon_away_team as string])
+  );
+
+  const ratingsMap = await fetchTeamRatingsMap(teams);
+
+  // 3) Compute MC rows
+  const out: MCOutputRow[] = [];
+
+  for (const e of usableEvents) {
+    const home = e.canon_home_team as string;
+    const away = e.canon_away_team as string;
+
+    const hr = ratingsMap.get(home);
+    const ar = ratingsMap.get(away);
+
+    if (!hr || !ar) {
+      console.warn(
+        `[MC] Missing team_ratings for event_id=${e.event_id} home=${home} away=${away} (skip)`
+      );
       continue;
     }
 
-    const matchup = ev.matchup || `${awayCanon} @ ${homeCanon}`;
-    const sim = simulateGameV1(home, away);
-
-    results.push({
-      run_id: runId,
-      event_id: ev.id,
-      commence_time: ev.commence_time,
-      matchup,
-      home_team: homeCanon,
-      away_team: awayCanon,
-      projected_margin_home: sim.projectedMarginHome,
-      sigma_margin_game: sim.sigmaMarginGame,
-      projected_total: sim.projectedTotal,
-      sigma_total_game: sim.sigmaTotalGame,
-      trace: sim.trace,
+    const mc = runMonteCarloForEvent({
+      eventId: e.event_id,
+      sportKey: e.sport_key,
+      commenceTime: e.commence_time,
+      matchup: e.matchup ?? `${away} @ ${home}`,
+      homeTeam: home,
+      awayTeam: away,
+      home: hr,
+      away: ar,
+      sims: SIMS,
     });
+
+    out.push(mc);
   }
 
-  if (results.length) {
-    // bulk insert results
-    const { error: insErr } = await supabase.from("monte_carlo_results").insert(results);
-    if (insErr) throw insErr;
+  if (!out.length) {
+    console.log("[MC] No outputs produced (likely missing team_ratings). Exiting.");
+    return;
   }
 
-  console.log(`Monte Carlo run complete. run_id=${runId}, events=${results.length}`);
+  // 4) Upsert results keyed by event_id
+  await upsertMonteCarloResults(out);
+
+  // 5) Console summary
+  console.log(`[MC] Upserted ${out.length} rows into ${OUTPUT_TABLE}. Sample:`);
+  console.log(
+    out.slice(0, 8).map((r) => ({
+      event_id: r.event_id,
+      matchup: r.matchup,
+      margin_home: r.projected_margin_home,
+      total: r.projected_total,
+      p_home_win: r.p_home_win,
+    }))
+  );
 }
+
+// ===================== FETCHERS =====================
+
+async function fetchUpcomingEvents(startIso: string, endIso: string): Promise<EventRow[]> {
+  const { data, error } = await supabase
+    .from(EVENTS_TABLE)
+    .select(
+      "event_id,sport_key,commence_time,canon_home_team,canon_away_team,matchup"
+    )
+    .eq("sport_key", SPORT_KEY)
+    .gte("commence_time", startIso)
+    .lt("commence_time", endIso)
+    .order("commence_time", { ascending: true });
+
+  if (error) throw new Error(`[MC] Failed to fetch events: ${error.message}`);
+  return (data ?? []) as EventRow[];
+}
+
+async function fetchTeamRatingsMap(teams: string[]): Promise<Map<string, TeamRatingRow>> {
+  // Supabase "in" has practical limits; chunk to be safe
+  const CHUNK = 200;
+  const map = new Map<string, TeamRatingRow>();
+
+  for (let i = 0; i < teams.length; i += CHUNK) {
+    const chunk = teams.slice(i, i + CHUNK);
+
+    const { data, error } = await supabase
+      .from(TEAM_RATINGS_TABLE)
+      .select(
+        [
+          "canonical",
+          "engine_power",
+          "true_hca",
+          "pf_points",
+          "pa_points",
+          "avg_total_points",
+          "sigma_margin_100",
+          "sigma_total_100",
+        ].join(",")
+      )
+      .in("canonical", chunk);
+
+    if (error) throw new Error(`[MC] Failed to fetch team_ratings: ${error.message}`);
+
+    for (const row of (data ?? []) as TeamRatingRow[]) {
+      map.set(row.canonical, row);
+    }
+  }
+
+  return map;
+}
+
+async function upsertMonteCarloResults(rows: MCOutputRow[]) {
+  const { error } = await supabase
+    .from(OUTPUT_TABLE)
+    .upsert(rows, { onConflict: "event_id" });
+
+  if (error) throw new Error(`[MC] Failed to upsert ${OUTPUT_TABLE}: ${error.message}`);
+}
+
+// ===================== MONTE CARLO CORE =====================
+
+function runMonteCarloForEvent(args: {
+  eventId: string;
+  sportKey: string;
+  commenceTime: string;
+  matchup: string;
+  homeTeam: string;
+  awayTeam: string;
+  home: TeamRatingRow;
+  away: TeamRatingRow;
+  sims: number;
+}): MCOutputRow {
+  const {
+    eventId,
+    sportKey,
+    commenceTime,
+    matchup,
+    homeTeam,
+    awayTeam,
+    home,
+    away,
+    sims,
+  } = args;
+
+  // ---- Projected Margin (HOME) ----
+  // You specified: canonical, engine_power, true_hca for home team
+  const homePower = num(home.engine_power, 0);
+  const awayPower = num(away.engine_power, 0);
+  const hca = num(home.true_hca, 0);
+
+  // Positive => home favored
+  const projMarginHome = homePower + hca - awayPower;
+
+  // ---- Projected Total ----
+  // PF vs Opp PA expected points:
+  // homeExp = avg(home.pf_points, away.pa_points)
+  // awayExp = avg(away.pf_points, home.pa_points)
+  const homePF = num(home.pf_points, NaN);
+  const homePA = num(home.pa_points, NaN);
+  const awayPF = num(away.pf_points, NaN);
+  const awayPA = num(away.pa_points, NaN);
+
+  const homeExp = avgIfFinite(homePF, awayPA);
+  const awayExp = avgIfFinite(awayPF, homePA);
+
+  const totalFromPfpa = finiteOrFallback(homeExp, 0) + finiteOrFallback(awayExp, 0);
+
+  // Optional blend toward avg_total_points (team-level)
+  const hAvgTot = num(home.avg_total_points, NaN);
+  const aAvgTot = num(away.avg_total_points, NaN);
+  const avgTotalPoints = avgIfFinite(hAvgTot, aAvgTot); // average of the two teams
+
+  const totalMean =
+    (TOTAL_BLEND_W_PFPA * totalFromPfpa) +
+    (TOTAL_BLEND_W_AVG * finiteOrFallback(avgTotalPoints, totalFromPfpa));
+
+  // ---- Sigmas ----
+  // Use sigma_margin_100 and sigma_total_100 as game-level sigmas for now (no possessions scaling)
+  const sigmaMargin = clampMin(avgIfFinite(num(home.sigma_margin_100, NaN), num(away.sigma_margin_100, NaN)), 8.0);
+  const sigmaTotal = clampMin(avgIfFinite(num(home.sigma_total_100, NaN), num(away.sigma_total_100, NaN)), 13.5);
+
+  // ---- Sims (Normal) ----
+  let homeWins = 0;
+
+  for (let i = 0; i < sims; i++) {
+    const m = projMarginHome + randn() * sigmaMargin;
+    // total can't be negative; clamp at 0
+    const t = Math.max(0, totalMean + randn() * sigmaTotal);
+
+    // Win based on margin
+    if (m > 0) homeWins++;
+
+    // (We’re not storing simulated totals distribution yet; you can later if needed)
+    void t;
+  }
+
+  const pHomeWin = homeWins / sims;
+
+  const updatedAt = new Date().toISOString();
+
+  return {
+    event_id: eventId,
+    sport_key: sportKey,
+    commence_time: commenceTime,
+    matchup,
+
+    home_team: homeTeam,
+    away_team: awayTeam,
+
+    projected_margin_home: round1(projMarginHome),
+    sigma_margin: round1(sigmaMargin),
+
+    projected_total: round1(totalMean),
+    sigma_total: round1(sigmaTotal),
+
+    p_home_win: round4(pHomeWin),
+
+    sims,
+    updated_at: updatedAt,
+  };
+}
+
+// ===================== UTILS =====================
+
+function uniqueStrings(arr: string[]): string[] {
+  return Array.from(new Set(arr.filter(Boolean)));
+}
+
+function num(v: unknown, fallback: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function avgIfFinite(a: number, b: number): number {
+  const fa = Number.isFinite(a);
+  const fb = Number.isFinite(b);
+  if (fa && fb) return (a + b) / 2;
+  if (fa) return a;
+  if (fb) return b;
+  return NaN;
+}
+
+function finiteOrFallback(v: number, fb: number): number {
+  return Number.isFinite(v) ? v : fb;
+}
+
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x));
+}
+
+function clampMin(x: number, min: number): number {
+  return Number.isFinite(x) ? Math.max(x, min) : min;
+}
+
+function round1(x: number): number {
+  return Math.round(x * 10) / 10;
+}
+
+function round4(x: number): number {
+  return Math.round(x * 10000) / 10000;
+}
+
+// Box–Muller
+function randn(): number {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+// ===================== RUN =====================
 
 main().catch((e) => {
   console.error(e);
