@@ -32,7 +32,7 @@ const BOOK_LOGOS = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
   mgm: "/books/mgm.png",
-  pin: "/books/pin.webp", // or "/books/pin.png"
+  pin: "/books/pin.png", // or "/books/pin.png"
   bol: "/books/bol.png",
 } as const;
 
