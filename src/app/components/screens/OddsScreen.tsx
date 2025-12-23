@@ -419,7 +419,7 @@ function TeamCell({ team, logoUrl, side }: { team: string; logoUrl: string | nul
           <img
             src={logoUrl}
             alt={`${team} logo`}
-            className="w-8 h-8 rounded-sm object-contain bg-[#0a0a0a] border border-[#2a2a2a]"
+            className="w-8 h-8 rounded-sm object-contain bg-white border border-[#e5e5e5] shadow-sm"
             loading="lazy"
           />
         ) : (
