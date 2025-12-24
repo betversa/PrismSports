@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 type EventRow = {
   event_id: string;
   sport_key: string;
-  commence_time: string;
+  commence_time: string; // timestamptz ISO
   matchup: string | null;
   api_home_team: string | null;
   api_away_team: string | null;
@@ -17,9 +17,11 @@ type TeamRatingRow = {
   canonical: string;
   engine_power: number | null;
   true_hca: number | null;
+
   pf_points: number | null;
   pa_points: number | null;
   avg_total_points: number | null;
+
   sigma_margin_100: number | null;
   sigma_total_100: number | null;
 };
@@ -84,8 +86,11 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 }
 
 const SPORT_KEY = process.env.SPORT_KEY || "basketball_ncaab";
-const LOOKAHEAD_DAYS = Number(process.env.LOOKAHEAD_DAYS ?? "3");
 const SIMS = Number(process.env.MC_SIMS ?? "10000");
+
+// grace window: treat games as "not started" if commence_time is within last X minutes
+// helps avoid clock skew + edge cases
+const START_GRACE_MINUTES = Number(process.env.MC_START_GRACE_MINUTES ?? "0");
 
 const SIGMA_MARGIN_FLOOR = Number(process.env.SIGMA_MARGIN_FLOOR ?? "8");
 const SIGMA_TOTAL_FLOOR = Number(process.env.SIGMA_TOTAL_FLOOR ?? "13.5");
@@ -96,8 +101,7 @@ const TOTAL_FALLBACK_MODE = (process.env.TOTAL_FALLBACK_MODE || "avg_total_point
 
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
 
-// 👇 IMPORTANT: your sign convention
-// true = negative margin means home won by that many
+// true = store projected_margin_home as negative when home is stronger/wins
 const MARGIN_HOME_WIN_NEGATIVE =
   (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
 
@@ -114,20 +118,25 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 // -------------------- MAIN --------------------
 async function main() {
   console.log(
-    `[MC] SPORT_KEY=${SPORT_KEY} lookaheadDays=${LOOKAHEAD_DAYS} sims=${SIMS} ` +
-      `marginHomeWinNegative=${MARGIN_HOME_WIN_NEGATIVE} lineBook=${LINE_BOOK}`
+    `[MC] SPORT_KEY=${SPORT_KEY} sims=${SIMS} marginHomeWinNegative=${MARGIN_HOME_WIN_NEGATIVE} ` +
+      `lineBook=${LINE_BOOK} startGraceMin=${START_GRACE_MINUTES}`
   );
 
   const now = new Date();
-  const end = new Date(now.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+  const graceMs = START_GRACE_MINUTES * 60 * 1000;
+  const startCutoff = new Date(now.getTime() - graceMs);
 
-  const events = await fetchEvents(now, end);
+  const events = await fetchFutureEvents(startCutoff);
   if (!events.length) {
-    console.log("[MC] No events found in window. Done.");
+    console.log("[MC] No future (not-started) events found. Done.");
     return;
   }
 
   const eventIds = events.map((e) => e.event_id);
+
+  // Clear results for these event_ids so UI doesn't show multiple versions
+  // (monte_carlo_results is treated as a "snapshot" table)
+  await clearMonteCarloResultsForEvents(eventIds);
 
   // Pull latest spread/total lines for these events from chosen book
   const lineMap = await fetchLatestLines(eventIds, LINE_BOOK);
@@ -147,13 +156,13 @@ async function main() {
     sport_key: SPORT_KEY,
     config: {
       sims: SIMS,
-      lookahead_days: LOOKAHEAD_DAYS,
       sigma_margin_floor: SIGMA_MARGIN_FLOOR,
       sigma_total_floor: SIGMA_TOTAL_FLOOR,
       total_fallback_mode: TOTAL_FALLBACK_MODE,
       margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
       line_book: LINE_BOOK,
       push_eps: EPS,
+      start_grace_minutes: START_GRACE_MINUTES,
       generated_at: new Date().toISOString(),
     },
   });
@@ -188,16 +197,15 @@ async function main() {
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
 
     const sim = simulateGameWithProbs(SIMS, input, {
-      marginHomeWinNegative: MARGIN_HOME_WIN_NEGATIVE,
+      marginHomeWinNegativeStore: MARGIN_HOME_WIN_NEGATIVE,
       spreadLineHome,
       totalLine,
       eps: EPS,
     });
 
-    // turn mean margin/total into points
-    // NOTE: This assumes projectedMarginHome is "home - away" (positive = home better).
-    // If your ratings imply the opposite, you can flip here.
-    const homePts = (sim.projectedTotal / 2) + (sim.projectedMarginHome / 2);
+    // Convert mean margin/total into points using the MODEL-NATIVE margin (home-away).
+    // We use sim.projectedMarginHome_model for points, then store margin with desired sign convention.
+    const homePts = (sim.projectedTotal / 2) + (sim.projectedMarginHome_model / 2);
     const awayPts = sim.projectedTotal - homePts;
 
     const trace = WRITE_TRACE
@@ -216,12 +224,12 @@ async function main() {
           away_pa_points: input.awayPa,
           away_avg_total_points: input.awayAvgTotal,
 
-          margin_mean: input.marginMean,
+          margin_mean_model_home_minus_away: input.marginMean,
           total_mean: input.totalMean,
           sigma_margin_game: input.sigmaMarginGame,
           sigma_total_game: input.sigmaTotalGame,
 
-          margin_sign: MARGIN_HOME_WIN_NEGATIVE ? "home_win_negative" : "home_win_positive",
+          stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
 
           spread_line_home: spreadLineHome,
           total_line: totalLine,
@@ -244,7 +252,7 @@ async function main() {
       home_team: home,
       away_team: away,
 
-      projected_margin_home: sim.projectedMarginHome,
+      projected_margin_home: sim.projectedMarginHome_stored,
       sigma_margin_game: input.sigmaMarginGame,
       projected_total: sim.projectedTotal,
       sigma_total_game: input.sigmaTotalGame,
@@ -285,13 +293,14 @@ async function main() {
 }
 
 // -------------------- DATA FETCH --------------------
-async function fetchEvents(start: Date, end: Date): Promise<EventRow[]> {
+async function fetchFutureEvents(startCutoff: Date): Promise<EventRow[]> {
   const { data, error } = await supabase
     .from("events")
-    .select("event_id,sport_key,commence_time,api_home_team,api_away_team,canon_home_team,canon_away_team,matchup")
+    .select(
+      "event_id,sport_key,commence_time,api_home_team,api_away_team,canon_home_team,canon_away_team,matchup"
+    )
     .eq("sport_key", SPORT_KEY)
-    .gte("commence_time", start.toISOString())
-    .lte("commence_time", end.toISOString())
+    .gte("commence_time", startCutoff.toISOString())
     .order("commence_time", { ascending: true });
 
   if (error) throw new Error(`[MC] Failed to fetch events: ${error.message}`);
@@ -309,6 +318,7 @@ async function fetchEvents(start: Date, end: Date): Promise<EventRow[]> {
 
 async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> {
   if (!canonicals.length) return [];
+
   const chunkSize = 400;
   const out: TeamRatingRow[] = [];
 
@@ -317,7 +327,9 @@ async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> 
 
     const { data, error } = await supabase
       .from("team_ratings")
-      .select("canonical,engine_power,true_hca,pf_points,pa_points,avg_total_points,sigma_margin_100,sigma_total_100")
+      .select(
+        "canonical,engine_power,true_hca,pf_points,pa_points,avg_total_points,sigma_margin_100,sigma_total_100"
+      )
       .in("canonical", chunk);
 
     if (error) throw new Error(`[MC] Failed to fetch team_ratings: ${error.message}`);
@@ -327,13 +339,23 @@ async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> 
   return out;
 }
 
+async function clearMonteCarloResultsForEvents(eventIds: string[]) {
+  if (!eventIds.length) return;
+
+  const chunkSize = 500;
+  for (let i = 0; i < eventIds.length; i += chunkSize) {
+    const chunk = eventIds.slice(i, i + chunkSize);
+
+    const { error } = await supabase.from("monte_carlo_results").delete().in("event_id", chunk);
+    if (error) throw new Error(`[MC] Failed to clear monte_carlo_results rows: ${error.message}`);
+  }
+}
+
 // Pull latest spread/total lines from odds_snapshot_latest (view)
 async function fetchLatestLines(eventIds: string[], book: string): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (!eventIds.length) return out;
 
-  // We only need spreads/home and totals/over
-  // Key format: `${event_id}|${market}|${side}`
   const { data, error } = await supabase
     .from("odds_snapshot_latest")
     .select("event_id,bookmaker,market,side,line,ts")
@@ -343,7 +365,7 @@ async function fetchLatestLines(eventIds: string[], book: string): Promise<Map<s
     .in("side", ["home", "over"]);
 
   if (error) {
-    console.warn(`[MC] Could not fetch odds_snapshot_latest lines (${error.message}). Probs vs lines will be null.`);
+    console.warn(`[MC] Could not fetch odds_snapshot_latest lines (${error.message}). Line-based probs will be null.`);
     return out;
   }
 
@@ -358,14 +380,23 @@ async function fetchLatestLines(eventIds: string[], book: string): Promise<Map<s
 
 // -------------------- RUN + UPSERT --------------------
 async function createMonteCarloRun(payload: MonteCarloRunInsert): Promise<string> {
-  const { data, error } = await supabase.from("monte_carlo_runs").insert(payload).select("id").single();
+  const { data, error } = await supabase
+    .from("monte_carlo_runs")
+    .insert(payload)
+    .select("id")
+    .single();
+
   if (error) throw new Error(`[MC] Failed to insert monte_carlo_runs: ${error.message}`);
   if (!data?.id) throw new Error("[MC] Failed to create monte_carlo_runs row (no id returned).");
+
   return data.id as string;
 }
 
 async function upsertMonteCarloResults(rows: MonteCarloResultUpsert[]) {
-  const { error } = await supabase.from("monte_carlo_results").upsert(rows, { onConflict: "run_id,event_id" });
+  const { error } = await supabase
+    .from("monte_carlo_results")
+    .upsert(rows, { onConflict: "run_id,event_id" });
+
   if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results: ${error.message}`);
 }
 
@@ -375,8 +406,7 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
   const awayPower = num(away.engine_power, 0);
   const homeHca = num(home.true_hca, 0);
 
-  // margin mean = power diff + home HCA
-  // NOTE: This defines "positive marginMean = home better" (home - away).
+  // MODEL-NATIVE: marginMean is (home - away) (positive = home better)
   const marginMean = (homePower - awayPower) + homeHca;
 
   const homeAvgTotal = toNullNum(home.avg_total_points);
@@ -420,14 +450,12 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
     homePower,
     awayPower,
     homeHca,
-
     homePf,
     homePa,
     homeAvgTotal,
     awayPf,
     awayPa,
     awayAvgTotal,
-
     marginMean,
     totalMean,
     sigmaMarginGame,
@@ -439,7 +467,7 @@ function simulateGameWithProbs(
   sims: number,
   input: ReturnType<typeof buildInputs>,
   opts: {
-    marginHomeWinNegative: boolean;
+    marginHomeWinNegativeStore: boolean;
     spreadLineHome: number | null;
     totalLine: number | null;
     eps: number;
@@ -457,77 +485,57 @@ function simulateGameWithProbs(
   let overs = 0;
   let totalPushes = 0;
 
-  const { marginHomeWinNegative, spreadLineHome, totalLine, eps } = opts;
+  const { spreadLineHome, totalLine, eps } = opts;
 
   for (let i = 0; i < sims; i++) {
-    // This m is "home - away" (positive = home better) because marginMean is defined that way.
+    // MODEL-NATIVE m: home - away (positive = home better)
     const m = input.marginMean + randn() * input.sigmaMarginGame;
     const t = Math.max(0, input.totalMean + randn() * input.sigmaTotalGame);
 
     sumM += m;
     sumT += t;
 
-    // WIN PROB (respect convention)
-    // If user convention is "negative = home win", then interpret that as:
-    // home wins when (-m) < 0  <=> m > 0 ? No.
-    //
-    // IMPORTANT: Your *model* currently defines m as (homePower-awayPower)+HCA, i.e. "home - away".
-    // That means "home win" is naturally m > 0.
-    //
-    // If you want your stored margin to be "negative = home win", you should flip at OUTPUT time,
-    // not flip the win logic here (or you'll invert the model).
-    //
-    // So: win logic stays m > 0 (home better).
     if (m > 0) homeWins++;
     else if (m < 0) awayWins++;
 
-    // SPREAD PROB
+    // Spread: home covers if (home - away + line_home) > 0
     if (spreadLineHome != null) {
-      // Use diff_home (home - away) = m
-      // Home covers when (m + line_home) > 0
       const v = m + spreadLineHome;
       if (v > eps) homeCovers++;
       else if (Math.abs(v) <= eps) coverPushes++;
-      // else away covers
     }
 
-    // TOTAL PROB
+    // Total: over if (total - line) > 0
     if (totalLine != null) {
       const dv = t - totalLine;
       if (dv > eps) overs++;
       else if (Math.abs(dv) <= eps) totalPushes++;
-      // else under
     }
   }
 
-  const projectedMarginHome_model = sumM / sims; // model-native (home - away)
+  const projectedMarginHome_model = sumM / sims; // home - away
   const projectedTotal = sumT / sims;
 
-  // Convert to your preferred stored convention if you want:
-  // If "negative = home win", then store margin as -(home-away)
-  const projectedMarginHome_stored = marginHomeWinNegative
+  // Stored margin convention (what you display/store)
+  const projectedMarginHome_stored = opts.marginHomeWinNegativeStore
     ? -projectedMarginHome_model
     : projectedMarginHome_model;
 
   const homeWinProb = homeWins / sims;
   const awayWinProb = awayWins / sims;
 
-  const homeCoverProb =
-    spreadLineHome == null ? null : homeCovers / sims;
-  const coverPushProb =
-    spreadLineHome == null ? null : coverPushes / sims;
+  const homeCoverProb = spreadLineHome == null ? null : homeCovers / sims;
+  const coverPushProb = spreadLineHome == null ? null : coverPushes / sims;
   const awayCoverProb =
-    spreadLineHome == null
-      ? null
-      : 1 - (homeCoverProb ?? 0) - (coverPushProb ?? 0);
+    spreadLineHome == null ? null : 1 - (homeCoverProb ?? 0) - (coverPushProb ?? 0);
 
   const overProb = totalLine == null ? null : overs / sims;
   const totalPushProb = totalLine == null ? null : totalPushes / sims;
-  const underProb =
-    totalLine == null ? null : 1 - (overProb ?? 0) - (totalPushProb ?? 0);
+  const underProb = totalLine == null ? null : 1 - (overProb ?? 0) - (totalPushProb ?? 0);
 
   return {
-    projectedMarginHome: round2(projectedMarginHome_stored),
+    projectedMarginHome_model: round2(projectedMarginHome_model),
+    projectedMarginHome_stored: round2(projectedMarginHome_stored),
     projectedTotal: round2(projectedTotal),
 
     homeWinProb,
