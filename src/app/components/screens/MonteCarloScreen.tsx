@@ -19,9 +19,22 @@ type MonteCarloResultRow = {
   projected_margin_home: number | null;
   projected_total: number | null;
 
-  // optional in DB (we prefer them if present)
   projected_home_points?: number | null;
   projected_away_points?: number | null;
+
+  // probs + lines
+  home_win_prob: number | null;
+  away_win_prob: number | null;
+
+  spread_line_home: number | null;
+  home_cover_prob: number | null;
+  away_cover_prob: number | null;
+  cover_push_prob: number | null;
+
+  total_line: number | null;
+  over_prob: number | null;
+  under_prob: number | null;
+  total_push_prob: number | null;
 };
 
 type TeamMapLogoRow = {
@@ -44,7 +57,15 @@ type TeamRow = {
 
   projectedPoints: number;
   projectedMargin: number; // team-view margin (HOME=+margin_home, AWAY=-margin_home)
-  projectedTotal: number; // game-level total (same both rows)
+
+  spreadLineTeam: number | null;
+  winProbTeam: number | null;
+  coverProbTeam: number | null;
+
+  // game-level
+  totalLine: number | null;
+  overProb: number | null;
+  underProb: number | null;
 };
 
 export function MonteCarloScreen() {
@@ -55,7 +76,7 @@ export function MonteCarloScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 0) Load team logos (team_map."Logo URL") once
+  // 0) Load team logos from team_map."Logo URL"
   useEffect(() => {
     let alive = true;
 
@@ -67,8 +88,7 @@ export function MonteCarloScreen() {
       if (!alive) return;
 
       if (error) {
-        // Non-fatal: table can still render without logos
-        console.warn("[MC Screen] Failed to load team_map logos:", error.message);
+        console.warn("[MonteCarloScreen] Failed to load team_map logos:", error.message);
         setLogoMap(new Map());
         return;
       }
@@ -112,8 +132,7 @@ export function MonteCarloScreen() {
         return;
       }
 
-      const latest = (data?.[0] ?? null) as MonteCarloRun | null;
-      setRun(latest);
+      setRun((data?.[0] ?? null) as MonteCarloRun | null);
       setLoading(false);
     }
 
@@ -131,8 +150,6 @@ export function MonteCarloScreen() {
       setLoading(true);
       setError(null);
 
-      // Keep this list limited to what we actually render.
-      // NOTE: if projected_*_points columns do not exist in your table, remove them from selectCols.
       const selectCols = [
         "run_id",
         "event_id",
@@ -144,6 +161,16 @@ export function MonteCarloScreen() {
         "projected_total",
         "projected_home_points",
         "projected_away_points",
+        "home_win_prob",
+        "away_win_prob",
+        "spread_line_home",
+        "home_cover_prob",
+        "away_cover_prob",
+        "cover_push_prob",
+        "total_line",
+        "over_prob",
+        "under_prob",
+        "total_push_prob",
       ].join(",");
 
       const { data, error } = await supabase
@@ -166,13 +193,12 @@ export function MonteCarloScreen() {
     }
 
     if (run?.id) loadResults(run.id);
-
     return () => {
       alive = false;
     };
   }, [run?.id]);
 
-  // Build 2 rows per game (AWAY first, HOME second)
+  // 3) Build 2 rows per event (Away then Home)
   const teamRows: TeamRow[] = useMemo(() => {
     const out: TeamRow[] = [];
 
@@ -183,23 +209,28 @@ export function MonteCarloScreen() {
 
       const matchupStr = (r.matchup && r.matchup.trim()) || `${away} @ ${home}`;
 
-      // DB margin is stored using your convention (negative can mean home better).
-      // For display/team-view we follow what you already had:
-      // - HOME row margin = +marginHome
-      // - AWAY row margin = -marginHome
       const marginHome = numOr(r.projected_margin_home, 0);
-      const total = numOr(r.projected_total, 0);
+      const totalProj = numOr(r.projected_total, 0);
 
-      // Prefer stored projected points if present, else derive from total/margin
-      // If marginHome is "home - away" (model-native), then:
-      // homePts = (total + marginHome)/2, awayPts = (total - marginHome)/2
-      // If your stored margin flips sign convention, your DB points already handle it.
       const homePtsStored = numOrNullable(r.projected_home_points);
       const awayPtsStored = numOrNullable(r.projected_away_points);
 
-      const homePts = homePtsStored ?? safeRound1((total + marginHome) / 2);
-      const awayPts = awayPtsStored ?? safeRound1((total - marginHome) / 2);
+      const homePts = homePtsStored ?? safeRound1((totalProj + marginHome) / 2);
+      const awayPts = awayPtsStored ?? safeRound1((totalProj - marginHome) / 2);
 
+      const spreadHome = numOrNullable(r.spread_line_home);
+      const totalLine = numOrNullable(r.total_line);
+
+      const pHomeWin = numOrNullable(r.home_win_prob);
+      const pAwayWin = numOrNullable(r.away_win_prob);
+
+      const pHomeCover = numOrNullable(r.home_cover_prob);
+      const pAwayCover = numOrNullable(r.away_cover_prob);
+
+      const pOver = numOrNullable(r.over_prob);
+      const pUnder = numOrNullable(r.under_prob);
+
+      // AWAY row first
       out.push({
         key: `${r.event_id}-AWAY`,
         eventId: r.event_id,
@@ -209,11 +240,20 @@ export function MonteCarloScreen() {
         teamName: away,
         opponentName: home,
         logoUrl: logoMap.get(away) ?? null,
+
         projectedPoints: awayPts,
         projectedMargin: -marginHome,
-        projectedTotal: total,
+
+        spreadLineTeam: spreadHome == null ? null : -spreadHome,
+        winProbTeam: pAwayWin,
+        coverProbTeam: pAwayCover,
+
+        totalLine,
+        overProb: pOver,
+        underProb: pUnder,
       });
 
+      // HOME row
       out.push({
         key: `${r.event_id}-HOME`,
         eventId: r.event_id,
@@ -223,9 +263,17 @@ export function MonteCarloScreen() {
         teamName: home,
         opponentName: away,
         logoUrl: logoMap.get(home) ?? null,
+
         projectedPoints: homePts,
         projectedMargin: marginHome,
-        projectedTotal: total,
+
+        spreadLineTeam: spreadHome,
+        winProbTeam: pHomeWin,
+        coverProbTeam: pHomeCover,
+
+        totalLine,
+        overProb: pOver,
+        underProb: pUnder,
       });
     }
 
@@ -258,17 +306,26 @@ export function MonteCarloScreen() {
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-20">
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[420px]">
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[440px]">
                   Matchup
                 </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[110px]">
+                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">
                   Proj Pts
                 </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[130px]">
+                <th className="text-center p-3 text-[#d4af37] min-w-[105px]">
                   Proj Margin
                 </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[120px]">
-                  Proj Total
+                <th className="text-center p-3 text-[#d4af37] min-w-[105px]">
+                  Spread
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[80px]">
+                  Win %
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">
+                  Cover %
+                </th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[160px]">
+                  Total (O/U %)
                 </th>
               </tr>
             </thead>
@@ -278,7 +335,7 @@ export function MonteCarloScreen() {
                 <tr>
                   <td
                     className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10"
-                    colSpan={4}
+                    colSpan={7}
                   >
                     Loading Monte Carlo results…
                   </td>
@@ -287,28 +344,21 @@ export function MonteCarloScreen() {
                 <tr>
                   <td
                     className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10"
-                    colSpan={4}
+                    colSpan={7}
                   >
                     No Monte Carlo rows found for latest run.
                   </td>
                 </tr>
               ) : (
                 teamRows.map((row, idx) => {
-                  const isAwayRow = idx % 2 === 0; // AWAY first
-                  const showMatchupHeader = isAwayRow;
+                  const isAwayRow = idx % 2 === 0;
 
                   return (
-                    <tr
-                      key={row.key}
-                      className="hover:bg-[#0f0f0f]/50 transition-colors"
-                    >
-                      {/* Single left column that includes:
-                          - On AWAY row: start time + matchup title
-                          - On both rows: team line w/ logo + (AWAY/HOME) + opponent
-                        */}
+                    <tr key={row.key} className="hover:bg-[#0f0f0f]/50 transition-colors">
+                      {/* Matchup cell: contains start time + matchup (only on away row) + team block on both rows */}
                       <td className="p-3 text-white sticky left-0 bg-[#0f0f0f] z-10 align-top">
                         <div className="space-y-2">
-                          {showMatchupHeader ? (
+                          {isAwayRow ? (
                             <div className="space-y-1">
                               <div className="text-[11px] text-[#808080]">
                                 {row.commenceTime ? formatStartStamp(row.commenceTime) : "TBD"}
@@ -329,8 +379,7 @@ export function MonteCarloScreen() {
                                 alt={row.teamName}
                                 className="w-8 h-8 object-contain"
                                 style={{
-                                  filter:
-                                    "drop-shadow(0 0 6px rgba(212,175,55,0.25))",
+                                  filter: "drop-shadow(0 0 6px rgba(212,175,55,0.25))",
                                 }}
                               />
                             ) : (
@@ -357,15 +406,67 @@ export function MonteCarloScreen() {
                         {row.projectedPoints.toFixed(1)}
                       </td>
 
-                      {/* Proj Margin (team view) */}
+                      {/* Proj Margin */}
                       <td className="text-center p-3 text-white font-semibold">
                         {row.projectedMargin > 0 ? "+" : ""}
                         {row.projectedMargin.toFixed(1)}
                       </td>
 
-                      {/* Proj Total: game-level, show only on AWAY row to avoid duplication */}
+                      {/* Spread (team view) */}
                       <td className="text-center p-3 text-white font-semibold">
-                        {showMatchupHeader ? row.projectedTotal.toFixed(1) : <span className="text-[#3a3a3a]">—</span>}
+                        {row.spreadLineTeam == null ? (
+                          <span className="text-[#3a3a3a]">—</span>
+                        ) : (
+                          <>
+                            {row.spreadLineTeam > 0 ? "+" : ""}
+                            {row.spreadLineTeam.toFixed(1)}
+                          </>
+                        )}
+                      </td>
+
+                      {/* Win % */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.winProbTeam == null ? (
+                          <span className="text-[#3a3a3a]">—</span>
+                        ) : (
+                          `${(row.winProbTeam * 100).toFixed(0)}%`
+                        )}
+                      </td>
+
+                      {/* Cover % */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.coverProbTeam == null ? (
+                          <span className="text-[#3a3a3a]">—</span>
+                        ) : (
+                          `${(row.coverProbTeam * 100).toFixed(0)}%`
+                        )}
+                      </td>
+
+                      {/* Total: visually merged across the 2 rows (render only on away row) */}
+                      <td
+                        className={[
+                          "text-center p-3 text-white font-semibold",
+                          !isAwayRow ? "border-t-0" : "",
+                        ].join(" ")}
+                      >
+                        {isAwayRow ? (
+                          row.totalLine == null ? (
+                            <span className="text-[#3a3a3a]">—</span>
+                          ) : (
+                            <div className="leading-tight">
+                              <div>{row.totalLine.toFixed(1)}</div>
+                              <div className="text-[11px] text-[#808080] font-semibold">
+                                O{" "}
+                                {row.overProb == null ? "—" : `${(row.overProb * 100).toFixed(0)}%`}
+                                {" · "}
+                                U{" "}
+                                {row.underProb == null ? "—" : `${(row.underProb * 100).toFixed(0)}%`}
+                              </div>
+                            </div>
+                          )
+                        ) : (
+                          <span className="text-transparent select-none">—</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -379,9 +480,7 @@ export function MonteCarloScreen() {
   );
 }
 
-/* =========================
-   helpers
-========================= */
+/* helpers */
 
 function numOr(v: number | null | undefined, fb: number) {
   const n = Number(v);
@@ -404,7 +503,6 @@ function formatTs(ts: string) {
   return d.toLocaleString();
 }
 
-/** For the matchup cell: "Tue 7:30 PM" */
 function formatStartStamp(ts: string) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
@@ -414,4 +512,3 @@ function formatStartStamp(ts: string) {
     minute: "2-digit",
   });
 }
-
