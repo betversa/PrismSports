@@ -4,8 +4,8 @@ import { Menu, ChevronDown } from "lucide-react";
 
 type Screen =
   | "overview"
-  | "model" // Picks
-  | "monte-carlo" // Predictions
+  | "model"
+  | "monte-carlo"
   | "odds"
   | "results"
   | "calibration"
@@ -13,7 +13,8 @@ type Screen =
 
 type HeaderProps = {
   onOpenMenu?: () => void; // mobile sidebar toggle
-  onNavigate?: (screen: Screen) => void; // app navigation
+  onNavigate?: (screen: Screen) => void;
+  activeScreen?: Screen; // optional: lets us highlight active page
 };
 
 type SportKey = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
@@ -32,11 +33,43 @@ function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void)
   }, [ref, onClose]);
 }
 
-function Dropdown({
+function TopLink({
   label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "relative text-sm font-semibold tracking-wide transition-colors",
+        active ? "text-white" : "text-[#cfcfcf] hover:text-white",
+      ].join(" ")}
+    >
+      {label}
+      <span
+        className={[
+          "absolute left-0 -bottom-2 h-[2px] w-full rounded",
+          active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        ].join(" ")}
+        style={{ backgroundColor: GOLD }}
+      />
+    </button>
+  );
+}
+
+function DropdownLink({
+  label,
+  active,
   onPick,
 }: {
   label: "Odds" | "Predictions";
+  active?: boolean;
   onPick: (sport: SportKey) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -48,14 +81,29 @@ function Dropdown({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 px-3 py-2 rounded bg-[#141414] border border-[#2a2a2a] text-[#d0d0d0] hover:border-[#3a3a3a]"
+        className={[
+          "group flex items-center gap-1 text-sm font-semibold tracking-wide transition-colors",
+          active ? "text-white" : "text-[#cfcfcf] hover:text-white",
+        ].join(" ")}
       >
-        <span className="text-sm font-semibold">{label}</span>
-        <ChevronDown className="w-4 h-4 text-[#a0a0a0]" />
+        {label}
+        <ChevronDown className="w-4 h-4 opacity-80" />
+        {/* underline */}
+        <span
+          className={[
+            "absolute left-0 -bottom-2 h-[2px] w-full rounded",
+            active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+          ].join(" ")}
+          style={{ backgroundColor: GOLD }}
+        />
       </button>
 
       {open && (
-        <div className="absolute mt-2 w-56 rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] shadow-xl overflow-hidden z-50">
+        <div className="absolute mt-3 w-60 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50">
+          <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-[#7a7a7a] border-b border-[#1d1d1d]">
+            Choose Sport
+          </div>
+
           {SPORTS.map((sport) => {
             const enabled = sport === "NCAAB";
             return (
@@ -69,8 +117,10 @@ function Dropdown({
                   setOpen(false);
                 }}
                 className={[
-                  "w-full text-left px-3 py-2 flex items-center justify-between",
-                  enabled ? "text-white hover:bg-[#171717]" : "text-[#6f6f6f] cursor-not-allowed",
+                  "w-full text-left px-3 py-2.5 flex items-center justify-between",
+                  enabled
+                    ? "text-white hover:bg-[#141414]"
+                    : "text-[#6f6f6f] cursor-not-allowed",
                 ].join(" ")}
               >
                 <span className="font-semibold">{sport}</span>
@@ -88,82 +138,77 @@ function Dropdown({
   );
 }
 
-function NavButton({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-}) {
+export function Header({ onOpenMenu, onNavigate, activeScreen }: HeaderProps) {
+  const oddsActive = activeScreen === "odds";
+  const predsActive = activeScreen === "monte-carlo";
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-2 rounded border text-sm font-semibold transition-colors",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#141414] text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a] hover:text-white",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
+    <header className="h-16 bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50">
+      <div className="h-full px-3 md:px-6 flex items-center justify-between">
+        {/* Left: mobile menu + logo + desktop nav */}
+        <div className="flex items-center gap-4 min-w-0">
+          {/* Mobile sidebar toggle */}
+          <button
+            onClick={onOpenMenu}
+            className="md:hidden p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a]"
+            aria-label="Open menu"
+            type="button"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
 
-export function Header({ onOpenMenu, onNavigate }: HeaderProps) {
-  return (
-    <div className="h-16 bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 right-0 left-0 md:left-64 z-10 flex items-center justify-between px-3 md:px-6">
-      <div className="flex items-center gap-3 min-w-0">
-        {/* Mobile: keep sidebar toggle */}
-        <button
-          onClick={onOpenMenu}
-          className="md:hidden p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a]"
-          aria-label="Open menu"
-          type="button"
-        >
-          <Menu className="w-5 h-5" />
-        </button>
-
-        {/* Logo */}
-        <img
-          src="/logos/mainlogo.png"
-          alt="PrismSports"
-          className="h-8 w-auto object-contain select-none"
-          draggable={false}
-        />
-
-        {/* Desktop nav */}
-        <div className="hidden md:flex items-center gap-3 ml-2">
-          <Dropdown
-            label="Odds"
-            onPick={(sport) => {
-              if (sport === "NCAAB") onNavigate?.("odds");
-            }}
-          />
-          <Dropdown
-            label="Predictions"
-            onPick={(sport) => {
-              if (sport === "NCAAB") onNavigate?.("monte-carlo");
-            }}
+          {/* Bigger logo */}
+          <img
+            src="/logos/mainlogo.png"
+            alt="PrismSports"
+            className="h-10 md:h-11 w-auto object-contain select-none"
+            draggable={false}
           />
 
-          <div className="w-px h-7 bg-[#2a2a2a] mx-1" />
+          {/* Desktop nav (text only) */}
+          <nav className="hidden md:flex items-center gap-6 ml-2">
+            <DropdownLink
+              label="Odds"
+              active={oddsActive}
+              onPick={(sport) => {
+                if (sport === "NCAAB") onNavigate?.("odds");
+              }}
+            />
+            <DropdownLink
+              label="Predictions"
+              active={predsActive}
+              onPick={(sport) => {
+                if (sport === "NCAAB") onNavigate?.("monte-carlo");
+              }}
+            />
 
-          <NavButton label="Picks" onClick={() => onNavigate?.("model")} />
-          <NavButton label="Results" onClick={() => onNavigate?.("results")} />
-          <NavButton label="Settings" onClick={() => onNavigate?.("settings")} />
+            <div className="h-5 w-px bg-[#2a2a2a]" />
+
+            <TopLink
+              label="Picks"
+              active={activeScreen === "model"}
+              onClick={() => onNavigate?.("model")}
+            />
+            <TopLink
+              label="Results"
+              active={activeScreen === "results"}
+              onClick={() => onNavigate?.("results")}
+            />
+            <TopLink
+              label="Settings"
+              active={activeScreen === "settings"}
+              onClick={() => onNavigate?.("settings")}
+            />
+          </nav>
+        </div>
+
+        {/* Right: live indicator */}
+        <div className="hidden sm:flex items-center gap-3 text-xs text-[#808080]">
+          <div>Live</div>
+          <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
         </div>
       </div>
-
-      <div className="hidden sm:flex items-center gap-4 text-xs text-[#808080]">
-        <div>Live</div>
-        <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
-      </div>
-    </div>
+    </header>
   );
 }
-
 
