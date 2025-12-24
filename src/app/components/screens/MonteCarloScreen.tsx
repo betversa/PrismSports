@@ -22,7 +22,6 @@ type MonteCarloResultRow = {
   projected_home_points?: number | null;
   projected_away_points?: number | null;
 
-  // probs + lines
   home_win_prob: number | null;
   away_win_prob: number | null;
 
@@ -42,11 +41,36 @@ type TeamMapLogoRow = {
   "Logo URL": string | null;
 };
 
+/**
+ * Assumes normalized odds_snapshot schema:
+ *  - ts (timestamptz)
+ *  - event_id (text)
+ *  - market (text)  e.g. "spreads" | "totals" | "h2h"
+ *  - side (text)    e.g. "home"/"away" for spreads, "over"/"under" for totals
+ *  - line (numeric) spread/total line
+ *  - bookmaker (text)
+ *
+ * If your side values differ, update SIDE_ALIASES below.
+ */
+type OddsSnapshotRow = {
+  ts: string;
+  event_id: string;
+  market: string;
+  side: string | null;
+  line: number | null;
+  bookmaker: string | null;
+};
+
+type Consensus = {
+  spread_home: number | null;
+  total: number | null;
+  ts: string | null;
+};
+
 type TeamRow = {
   key: string;
   eventId: string;
 
-  matchup: string;
   commenceTime: string | null;
 
   side: "AWAY" | "HOME";
@@ -58,22 +82,46 @@ type TeamRow = {
   projectedPoints: number;
   projectedMargin: number; // team-view margin (HOME=+margin_home, AWAY=-margin_home)
 
-  spreadLineTeam: number | null;
+  mcSpreadLineTeam: number | null;
+  consensusSpreadLineTeam: number | null;
+
   winProbTeam: number | null;
   coverProbTeam: number | null;
 
-  // game-level
-  totalLine: number | null;
+  mcTotalLine: number | null;
+  consensusTotalLine: number | null;
+
   overProb: number | null;
   underProb: number | null;
 };
+
+const SIDE_ALIASES = {
+  home: new Set(["home", "h", "team1", "t1"]),
+  away: new Set(["away", "a", "team2", "t2"]),
+  over: new Set(["over", "o"]),
+  under: new Set(["under", "u"]),
+};
+
+function normalizeSide(raw: string | null): "home" | "away" | "over" | "under" | null {
+  const s = (raw ?? "").toString().trim().toLowerCase();
+  if (!s) return null;
+  if (SIDE_ALIASES.home.has(s)) return "home";
+  if (SIDE_ALIASES.away.has(s)) return "away";
+  if (SIDE_ALIASES.over.has(s)) return "over";
+  if (SIDE_ALIASES.under.has(s)) return "under";
+  return null;
+}
 
 export function MonteCarloScreen() {
   const [run, setRun] = useState<MonteCarloRun | null>(null);
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
 
-  const [loading, setLoading] = useState(true);
+  const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
+  const [loadingRun, setLoadingRun] = useState(true);
+  const [loadingResults, setLoadingResults] = useState(false);
+  const [loadingConsensus, setLoadingConsensus] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
 
   // 0) Load team logos from team_map."Logo URL"
@@ -81,10 +129,7 @@ export function MonteCarloScreen() {
     let alive = true;
 
     async function loadLogos() {
-      const { data, error } = await supabase
-        .from("team_map")
-        .select('canonical,"Logo URL"');
-
+      const { data, error } = await supabase.from("team_map").select('canonical,"Logo URL"');
       if (!alive) return;
 
       if (error) {
@@ -113,7 +158,7 @@ export function MonteCarloScreen() {
     let alive = true;
 
     async function loadLatestRun() {
-      setLoading(true);
+      setLoadingRun(true);
       setError(null);
 
       const { data, error } = await supabase
@@ -128,12 +173,13 @@ export function MonteCarloScreen() {
         setError(error.message);
         setRun(null);
         setResults([]);
-        setLoading(false);
+        setConsensusMap(new Map());
+        setLoadingRun(false);
         return;
       }
 
       setRun((data?.[0] ?? null) as MonteCarloRun | null);
-      setLoading(false);
+      setLoadingRun(false);
     }
 
     loadLatestRun();
@@ -147,7 +193,7 @@ export function MonteCarloScreen() {
     let alive = true;
 
     async function loadResults(runId: string) {
-      setLoading(true);
+      setLoadingResults(true);
       setError(null);
 
       const selectCols = [
@@ -184,12 +230,13 @@ export function MonteCarloScreen() {
       if (error) {
         setError(error.message);
         setResults([]);
-        setLoading(false);
+        setConsensusMap(new Map());
+        setLoadingResults(false);
         return;
       }
 
       setResults((data ?? []) as MonteCarloResultRow[]);
-      setLoading(false);
+      setLoadingResults(false);
     }
 
     if (run?.id) loadResults(run.id);
@@ -198,7 +245,104 @@ export function MonteCarloScreen() {
     };
   }, [run?.id]);
 
-  // 3) Build 2 rows per event (Away then Home)
+  // 3) Load consensus spread + total for the events in this run
+  useEffect(() => {
+    let alive = true;
+
+    async function loadConsensus(eventIds: string[]) {
+      if (!eventIds.length) {
+        setConsensusMap(new Map());
+        return;
+      }
+
+      setLoadingConsensus(true);
+
+      // Pull a bounded window of snapshot rows for these events
+      // (latest per event is computed client-side)
+      const { data, error } = await supabase
+        .from("odds_snapshot")
+        .select("ts,event_id,market,side,line,bookmaker")
+        .in("event_id", eventIds)
+        .in("market", ["spreads", "totals"])
+        .order("ts", { ascending: false })
+        .limit(5000);
+
+      if (!alive) return;
+
+      if (error) {
+        console.warn("[MonteCarloScreen] consensus fetch failed:", error.message);
+        setConsensusMap(new Map());
+        setLoadingConsensus(false);
+        return;
+      }
+
+      const rows = (data ?? []) as OddsSnapshotRow[];
+
+      // Build "latest snapshot per event+market+book+side" (dedupe)
+      // Then compute consensus line as median across books
+      type Key = string; // `${event}|${market}|${book}|${side}`
+      const seen = new Set<Key>();
+
+      const spreadLinesByEvent: Map<string, number[]> = new Map();
+      const totalLinesByEvent: Map<string, number[]> = new Map();
+      const bestTsByEvent: Map<string, string> = new Map();
+
+      for (const r of rows) {
+        const eventId = (r.event_id ?? "").trim();
+        const market = (r.market ?? "").trim().toLowerCase();
+        const book = (r.bookmaker ?? "").trim().toLowerCase() || "unknown";
+        const side = normalizeSide(r.side);
+        const line = numOrNullable(r.line);
+
+        if (!eventId || !market || side == null || line == null) continue;
+
+        // Track the freshest ts we encountered for the event (informational)
+        if (r.ts) {
+          const prev = bestTsByEvent.get(eventId);
+          if (!prev || new Date(r.ts).getTime() > new Date(prev).getTime()) bestTsByEvent.set(eventId, r.ts);
+        }
+
+        // We only need:
+        // - spreads: HOME side line
+        // - totals:  OVER side line (same as UNDER, line-wise)
+        if (market === "spreads" && side !== "home") continue;
+        if (market === "totals" && side !== "over") continue;
+
+        const k = `${eventId}|${market}|${book}|${side}`;
+        if (seen.has(k)) continue; // already took newest row for that (event,market,book,side)
+        seen.add(k);
+
+        if (market === "spreads") {
+          const arr = spreadLinesByEvent.get(eventId) ?? [];
+          arr.push(line);
+          spreadLinesByEvent.set(eventId, arr);
+        } else if (market === "totals") {
+          const arr = totalLinesByEvent.get(eventId) ?? [];
+          arr.push(line);
+          totalLinesByEvent.set(eventId, arr);
+        }
+      }
+
+      const m = new Map<string, Consensus>();
+      for (const eventId of eventIds) {
+        const spreadHome = medianOrNull(spreadLinesByEvent.get(eventId) ?? []);
+        const total = medianOrNull(totalLinesByEvent.get(eventId) ?? []);
+        m.set(eventId, { spread_home: spreadHome, total, ts: bestTsByEvent.get(eventId) ?? null });
+      }
+
+      setConsensusMap(m);
+      setLoadingConsensus(false);
+    }
+
+    const ids = Array.from(new Set(results.map((r) => r.event_id).filter(Boolean)));
+    if (ids.length) loadConsensus(ids);
+
+    return () => {
+      alive = false;
+    };
+  }, [results]);
+
+  // 4) Build 2 rows per event (Away then Home)
   const teamRows: TeamRow[] = useMemo(() => {
     const out: TeamRow[] = [];
 
@@ -206,8 +350,6 @@ export function MonteCarloScreen() {
       const home = (r.home_team ?? "").trim();
       const away = (r.away_team ?? "").trim();
       if (!home || !away) continue;
-
-      const matchupStr = (r.matchup && r.matchup.trim()) || `${away} @ ${home}`;
 
       const marginHome = numOr(r.projected_margin_home, 0);
       const totalProj = numOr(r.projected_total, 0);
@@ -218,8 +360,8 @@ export function MonteCarloScreen() {
       const homePts = homePtsStored ?? safeRound1((totalProj + marginHome) / 2);
       const awayPts = awayPtsStored ?? safeRound1((totalProj - marginHome) / 2);
 
-      const spreadHome = numOrNullable(r.spread_line_home);
-      const totalLine = numOrNullable(r.total_line);
+      const mcSpreadHome = numOrNullable(r.spread_line_home);
+      const mcTotalLine = numOrNullable(r.total_line);
 
       const pHomeWin = numOrNullable(r.home_win_prob);
       const pAwayWin = numOrNullable(r.away_win_prob);
@@ -230,11 +372,14 @@ export function MonteCarloScreen() {
       const pOver = numOrNullable(r.over_prob);
       const pUnder = numOrNullable(r.under_prob);
 
+      const c = consensusMap.get(r.event_id) ?? { spread_home: null, total: null, ts: null };
+      const consSpreadHome = numOrNullable(c.spread_home);
+      const consTotal = numOrNullable(c.total);
+
       // AWAY row first
       out.push({
         key: `${r.event_id}-AWAY`,
         eventId: r.event_id,
-        matchup: matchupStr,
         commenceTime: r.commence_time ?? null,
         side: "AWAY",
         teamName: away,
@@ -244,11 +389,15 @@ export function MonteCarloScreen() {
         projectedPoints: awayPts,
         projectedMargin: -marginHome,
 
-        spreadLineTeam: spreadHome == null ? null : -spreadHome,
+        mcSpreadLineTeam: mcSpreadHome == null ? null : -mcSpreadHome,
+        consensusSpreadLineTeam: consSpreadHome == null ? null : -consSpreadHome,
+
         winProbTeam: pAwayWin,
         coverProbTeam: pAwayCover,
 
-        totalLine,
+        mcTotalLine,
+        consensusTotalLine: consTotal,
+
         overProb: pOver,
         underProb: pUnder,
       });
@@ -257,7 +406,6 @@ export function MonteCarloScreen() {
       out.push({
         key: `${r.event_id}-HOME`,
         eventId: r.event_id,
-        matchup: matchupStr,
         commenceTime: r.commence_time ?? null,
         side: "HOME",
         teamName: home,
@@ -267,18 +415,24 @@ export function MonteCarloScreen() {
         projectedPoints: homePts,
         projectedMargin: marginHome,
 
-        spreadLineTeam: spreadHome,
+        mcSpreadLineTeam: mcSpreadHome,
+        consensusSpreadLineTeam: consSpreadHome,
+
         winProbTeam: pHomeWin,
         coverProbTeam: pHomeCover,
 
-        totalLine,
+        mcTotalLine,
+        consensusTotalLine: consTotal,
+
         overProb: pOver,
         underProb: pUnder,
       });
     }
 
     return out;
-  }, [results, logoMap]);
+  }, [results, logoMap, consensusMap]);
+
+  const loading = loadingRun || loadingResults;
 
   return (
     <div className="space-y-4">
@@ -287,9 +441,10 @@ export function MonteCarloScreen() {
         <p className="text-xs text-[#808080]">
           Latest simulation snapshot
           {run?.created_at ? (
-            <span className="ml-2 text-[#5a5a5a]">
-              · Latest run: {formatTs(run.created_at)}
-            </span>
+            <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span>
+          ) : null}
+          {loadingConsensus ? (
+            <span className="ml-2 text-[#5a5a5a]">· Loading consensus…</span>
           ) : null}
         </p>
       </div>
@@ -306,46 +461,35 @@ export function MonteCarloScreen() {
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-20">
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[440px]">
+                {/* tighter matchup column to make room for consensus */}
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">
                   Matchup
                 </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">
-                  Proj Pts
-                </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[105px]">
-                  Proj Margin
-                </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[105px]">
-                  Spread
-                </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[80px]">
-                  Win %
-                </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">
-                  Cover %
-                </th>
-                <th className="text-center p-3 text-[#d4af37] min-w-[160px]">
-                  Total (O/U %)
-                </th>
+
+                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">Proj Pts</th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[105px]">Proj Margin</th>
+
+                <th className="text-center p-3 text-[#d4af37] min-w-[105px]">Spread</th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[120px]">Consensus</th>
+
+                <th className="text-center p-3 text-[#d4af37] min-w-[80px]">Win %</th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[90px]">Cover %</th>
+
+                <th className="text-center p-3 text-[#d4af37] min-w-[120px]">Total</th>
+                <th className="text-center p-3 text-[#d4af37] min-w-[120px]">Consensus</th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-[#1a1a1a]">
               {loading ? (
                 <tr>
-                  <td
-                    className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10"
-                    colSpan={7}
-                  >
+                  <td className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10" colSpan={9}>
                     Loading Monte Carlo results…
                   </td>
                 </tr>
               ) : teamRows.length === 0 ? (
                 <tr>
-                  <td
-                    className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10"
-                    colSpan={7}
-                  >
+                  <td className="p-3 text-[#b0b0b0] sticky left-0 bg-[#0f0f0f] z-10" colSpan={9}>
                     No Monte Carlo rows found for latest run.
                   </td>
                 </tr>
@@ -355,17 +499,16 @@ export function MonteCarloScreen() {
 
                   return (
                     <tr key={row.key} className="hover:bg-[#0f0f0f]/50 transition-colors">
-                      {/* Matchup cell: contains start time + matchup (only on away row) + team block on both rows */}
+                      {/* Matchup cell:
+                          - NO "team1 @ team2" line
+                          - show time only on away row
+                          - show team block on both rows
+                      */}
                       <td className="p-3 text-white sticky left-0 bg-[#0f0f0f] z-10 align-top">
                         <div className="space-y-2">
                           {isAwayRow ? (
-                            <div className="space-y-1">
-                              <div className="text-[11px] text-[#808080]">
-                                {row.commenceTime ? formatStartStamp(row.commenceTime) : "TBD"}
-                              </div>
-                              <div className="text-sm font-semibold text-white">
-                                {row.matchup}
-                              </div>
+                            <div className="text-[11px] text-[#808080]">
+                              {row.commenceTime ? formatStartStamp(row.commenceTime) : "TBD"}
                             </div>
                           ) : null}
 
@@ -393,9 +536,7 @@ export function MonteCarloScreen() {
                                   ({row.side})
                                 </span>
                               </div>
-                              <div className="text-[11px] text-[#808080]">
-                                vs {row.opponentName}
-                              </div>
+                              <div className="text-[11px] text-[#808080]">vs {row.opponentName}</div>
                             </div>
                           </div>
                         </div>
@@ -412,60 +553,85 @@ export function MonteCarloScreen() {
                         {row.projectedMargin.toFixed(1)}
                       </td>
 
-                      {/* Spread (team view) */}
+                      {/* Spread (MC) */}
                       <td className="text-center p-3 text-white font-semibold">
-                        {row.spreadLineTeam == null ? (
+                        {row.mcSpreadLineTeam == null ? (
                           <span className="text-[#3a3a3a]">—</span>
                         ) : (
                           <>
-                            {row.spreadLineTeam > 0 ? "+" : ""}
-                            {row.spreadLineTeam.toFixed(1)}
+                            {row.mcSpreadLineTeam > 0 ? "+" : ""}
+                            {row.mcSpreadLineTeam.toFixed(1)}
+                          </>
+                        )}
+                      </td>
+
+                      {/* Spread (Consensus) */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.consensusSpreadLineTeam == null ? (
+                          <span className="text-[#3a3a3a]">—</span>
+                        ) : (
+                          <>
+                            {row.consensusSpreadLineTeam > 0 ? "+" : ""}
+                            {row.consensusSpreadLineTeam.toFixed(1)}
                           </>
                         )}
                       </td>
 
                       {/* Win % */}
                       <td className="text-center p-3 text-white font-semibold">
-                        {row.winProbTeam == null ? (
-                          <span className="text-[#3a3a3a]">—</span>
-                        ) : (
-                          `${(row.winProbTeam * 100).toFixed(0)}%`
-                        )}
+                        {row.winProbTeam == null ? <span className="text-[#3a3a3a]">—</span> : `${(row.winProbTeam * 100).toFixed(0)}%`}
                       </td>
 
                       {/* Cover % */}
                       <td className="text-center p-3 text-white font-semibold">
-                        {row.coverProbTeam == null ? (
+                        {row.coverProbTeam == null ? <span className="text-[#3a3a3a]">—</span> : `${(row.coverProbTeam * 100).toFixed(0)}%`}
+                      </td>
+
+                      {/* Total (MC): line on BOTH rows, over% on away row, under% on home row */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.mcTotalLine == null ? (
                           <span className="text-[#3a3a3a]">—</span>
                         ) : (
-                          `${(row.coverProbTeam * 100).toFixed(0)}%`
+                          <div className="leading-tight">
+                            <div>{row.mcTotalLine.toFixed(1)}</div>
+                            <div className="text-[11px] text-[#808080] font-semibold">
+                              {isAwayRow ? (
+                                <>
+                                  O{" "}
+                                  {row.overProb == null ? "—" : `${(row.overProb * 100).toFixed(0)}%`}
+                                </>
+                              ) : (
+                                <>
+                                  U{" "}
+                                  {row.underProb == null ? "—" : `${(row.underProb * 100).toFixed(0)}%`}
+                                </>
+                              )}
+                            </div>
+                          </div>
                         )}
                       </td>
 
-                      {/* Total: visually merged across the 2 rows (render only on away row) */}
-                      <td
-                        className={[
-                          "text-center p-3 text-white font-semibold",
-                          !isAwayRow ? "border-t-0" : "",
-                        ].join(" ")}
-                      >
-                        {isAwayRow ? (
-                          row.totalLine == null ? (
-                            <span className="text-[#3a3a3a]">—</span>
-                          ) : (
-                            <div className="leading-tight">
-                              <div>{row.totalLine.toFixed(1)}</div>
-                              <div className="text-[11px] text-[#808080] font-semibold">
-                                O{" "}
-                                {row.overProb == null ? "—" : `${(row.overProb * 100).toFixed(0)}%`}
-                                {" · "}
-                                U{" "}
-                                {row.underProb == null ? "—" : `${(row.underProb * 100).toFixed(0)}%`}
-                              </div>
-                            </div>
-                          )
+                      {/* Total (Consensus): line on BOTH rows, over/under % same as above */}
+                      <td className="text-center p-3 text-white font-semibold">
+                        {row.consensusTotalLine == null ? (
+                          <span className="text-[#3a3a3a]">—</span>
                         ) : (
-                          <span className="text-transparent select-none">—</span>
+                          <div className="leading-tight">
+                            <div>{row.consensusTotalLine.toFixed(1)}</div>
+                            <div className="text-[11px] text-[#808080] font-semibold">
+                              {isAwayRow ? (
+                                <>
+                                  O{" "}
+                                  {row.overProb == null ? "—" : `${(row.overProb * 100).toFixed(0)}%`}
+                                </>
+                              ) : (
+                                <>
+                                  U{" "}
+                                  {row.underProb == null ? "—" : `${(row.underProb * 100).toFixed(0)}%`}
+                                </>
+                              )}
+                            </div>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -511,4 +677,12 @@ function formatStartStamp(ts: string) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function medianOrNull(nums: number[]): number | null {
+  const arr = nums.filter((n) => Number.isFinite(n)).slice().sort((a, b) => a - b);
+  if (!arr.length) return null;
+  const mid = Math.floor(arr.length / 2);
+  if (arr.length % 2 === 1) return arr[mid];
+  return (arr[mid - 1] + arr[mid]) / 2;
 }
