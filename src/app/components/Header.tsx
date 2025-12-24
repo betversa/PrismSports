@@ -76,12 +76,30 @@ function HoverDropdown({
   const wrapRef = useRef<HTMLDivElement>(null);
   useOutsideClick(wrapRef, () => setOpen(false));
 
+  // ✅ Delay close slightly so you can move into the dropdown without racing
+  const closeTimer = useRef<number | null>(null);
+  const clearTimer = () => {
+    if (closeTimer.current) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const scheduleClose = () => {
+    clearTimer();
+    closeTimer.current = window.setTimeout(() => setOpen(false), 220);
+  };
+
   return (
     <div
       ref={wrapRef}
       className="relative"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseEnter={() => {
+        clearTimer();
+        setOpen(true);
+      }}
+      onMouseLeave={() => {
+        scheduleClose();
+      }}
     >
       <button
         type="button"
@@ -100,7 +118,17 @@ function HoverDropdown({
       </button>
 
       {open && (
-        <div className="absolute left-0 mt-3 w-[270px] rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50">
+        <div
+          className="absolute left-0 mt-3 w-[270px] rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50"
+          // ✅ If you hover the dropdown itself, keep it open
+          onMouseEnter={() => {
+            clearTimer();
+            setOpen(true);
+          }}
+          onMouseLeave={() => {
+            scheduleClose();
+          }}
+        >
           {/* subtle effects */}
           <div
             className="pointer-events-none absolute inset-0 opacity-70"
@@ -172,21 +200,17 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
   const oddsActive = activeScreen === "odds";
   const predsActive = activeScreen === "monte-carlo";
 
-  // same padding value used for left padding
-  const leftPad = "pl-3 md:pl-6";
-  const topPad = "pt-3 md:pt-6";
-
   return (
     <header
       ref={headerRef}
       className="bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50"
     >
       <div className="w-full flex items-start justify-between">
-        {/* Left stack with matching left + top padding */}
-        <div className={`flex items-start min-w-0 ${leftPad} ${topPad}`}>
+        {/* Left stack with comfortable left padding, but LESS top padding */}
+        <div className="flex items-start min-w-0 pl-3 md:pl-6 pt-2 md:pt-3">
           <button
             onClick={onOpenMenu}
-            className="md:hidden mt-1 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
+            className="md:hidden mt-2 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
             aria-label="Open menu"
             type="button"
           >
@@ -245,3 +269,4 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
     </header>
   );
 }
+
