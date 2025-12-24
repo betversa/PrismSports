@@ -357,7 +357,7 @@ async function fetchLatestLines(eventIds: string[], book: string): Promise<Map<s
   if (!eventIds.length) return out;
 
   const { data, error } = await supabase
-    .from("odds_snapshot_latest")
+    .from("odds_snapshot")
     .select("event_id,bookmaker,market,side,line,ts")
     .in("event_id", eventIds)
     .eq("bookmaker", book)
