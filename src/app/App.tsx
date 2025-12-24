@@ -2,6 +2,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
+
 import { OverviewScreen } from "./components/screens/OverviewScreen";
 import { ModelScreen } from "./components/screens/ModelScreen";
 import { MonteCarloScreen } from "./components/screens/MonteCarloScreen";
@@ -39,7 +40,12 @@ function ctYmd(d: Date) {
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("overview");
   const [selectedDate, setSelectedDate] = useState<string>(() => ctYmd(new Date()));
+
+  // Mobile drawer state
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // ✅ Dynamic top padding based on actual header height
+  const [headerH, setHeaderH] = useState(120);
 
   // Prevent body scroll when drawer is open (mobile)
   useEffect(() => {
@@ -88,15 +94,16 @@ export default function App() {
         </div>
       )}
 
-      {/* Header (desktop nav + mobile menu button) */}
+      {/* Header (full width, stacked logo + hover dropdowns) */}
       <Header
         onOpenMenu={() => setSidebarOpen(true)}
         onNavigate={(screen) => setActiveScreen(screen)}
         activeScreen={activeScreen}
+        onHeightChange={(px) => setHeaderH(Math.ceil(px))}
       />
 
-      {/* Main Content (no md:ml-64 because desktop sidebar is gone) */}
-      <div className="pt-24 md:pt-28 min-h-screen">
+      {/* Main Content (paddingTop matches real header height) */}
+      <div className="min-h-screen" style={{ paddingTop: headerH }}>
         <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
       </div>
     </div>
