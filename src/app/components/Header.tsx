@@ -20,6 +20,7 @@ type HeaderProps = {
 
 type SportKey = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
 const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
+
 const GOLD = "#d4af37";
 
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
@@ -47,7 +48,7 @@ function NavText({
       type="button"
       onClick={onClick}
       className={[
-        "relative text-sm font-semibold tracking-wide transition-colors",
+        "relative text-[15px] md:text-[16px] font-semibold tracking-wide transition-colors",
         active ? "text-white" : "text-[#cfcfcf] hover:text-white",
       ].join(" ")}
     >
@@ -63,10 +64,12 @@ function NavText({
 function HoverDropdown({
   label,
   active,
+  suffix, // "Odds" or "Predictions"
   onPick,
 }: {
   label: "Odds" | "Predictions";
   active?: boolean;
+  suffix: "Odds" | "Predictions";
   onPick: (sport: SportKey) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -83,7 +86,7 @@ function HoverDropdown({
       <button
         type="button"
         className={[
-          "relative flex items-center gap-1 text-sm font-semibold tracking-wide transition-colors",
+          "relative flex items-center gap-1 text-[15px] md:text-[16px] font-semibold tracking-wide transition-colors",
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
         onClick={() => setOpen((v) => !v)} // trackpads
@@ -97,37 +100,51 @@ function HoverDropdown({
       </button>
 
       {open && (
-        <div className="absolute left-0 mt-3 w-60 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50">
-          <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-[#7a7a7a] border-b border-[#1d1d1d]">
-            Choose Sport
-          </div>
+        <div className="absolute left-0 mt-3 w-[270px] rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50">
+          {/* subtle effects */}
+          <div
+            className="pointer-events-none absolute inset-0 opacity-70"
+            style={{
+              background:
+                "radial-gradient(600px 140px at 30% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(500px 120px at 90% 20%, rgba(255,255,255,0.06), transparent 55%)",
+            }}
+          />
+          <div className="relative">
+            {SPORTS.map((sport) => {
+              const enabled = sport === "NCAAB";
+              return (
+                <button
+                  key={sport}
+                  type="button"
+                  disabled={!enabled}
+                  onClick={() => {
+                    if (!enabled) return;
+                    onPick(sport);
+                    setOpen(false);
+                  }}
+                  className={[
+                    "w-full text-left px-3 py-3 flex items-center justify-between transition-colors",
+                    enabled
+                      ? "text-white hover:bg-[#141414]"
+                      : "text-[#6f6f6f] cursor-not-allowed",
+                  ].join(" ")}
+                >
+                  <div className="flex flex-col">
+                    <span className="font-semibold leading-tight">{sport}</span>
+                    <span className="text-[11px] text-[#8a8a8a] leading-tight">
+                      {sport} {suffix}
+                    </span>
+                  </div>
 
-          {SPORTS.map((sport) => {
-            const enabled = sport === "NCAAB";
-            return (
-              <button
-                key={sport}
-                type="button"
-                disabled={!enabled}
-                onClick={() => {
-                  if (!enabled) return;
-                  onPick(sport);
-                  setOpen(false);
-                }}
-                className={[
-                  "w-full text-left px-3 py-2.5 flex items-center justify-between",
-                  enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
-                ].join(" ")}
-              >
-                <span className="font-semibold">{sport}</span>
-                {!enabled && (
-                  <span className="font-extrabold text-[11px]" style={{ color: GOLD }}>
-                    COMING SOON!
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                  {!enabled && (
+                    <span className="font-extrabold text-[11px]" style={{ color: GOLD }}>
+                      COMING SOON!
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -155,17 +172,21 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
   const oddsActive = activeScreen === "odds";
   const predsActive = activeScreen === "monte-carlo";
 
+  // same padding value used for left padding
+  const leftPad = "pl-3 md:pl-6";
+  const topPad = "pt-3 md:pt-6";
+
   return (
     <header
       ref={headerRef}
       className="bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50"
     >
       <div className="w-full flex items-start justify-between">
-        {/* ✅ Left stack with a little padding */}
-        <div className="flex items-start min-w-0 pl-3 md:pl-6">
+        {/* Left stack with matching left + top padding */}
+        <div className={`flex items-start min-w-0 ${leftPad} ${topPad}`}>
           <button
             onClick={onOpenMenu}
-            className="md:hidden mt-3 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
+            className="md:hidden mt-1 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
             aria-label="Open menu"
             type="button"
           >
@@ -180,9 +201,10 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
               draggable={false}
             />
 
-            <nav className="hidden md:flex items-center gap-7 pb-3">
+            <nav className="hidden md:flex items-center gap-8 pb-3">
               <HoverDropdown
                 label="Odds"
+                suffix="Odds"
                 active={oddsActive}
                 onPick={(sport) => {
                   if (sport === "NCAAB") onNavigate?.("odds");
@@ -190,13 +212,14 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
               />
               <HoverDropdown
                 label="Predictions"
+                suffix="Predictions"
                 active={predsActive}
                 onPick={(sport) => {
                   if (sport === "NCAAB") onNavigate?.("monte-carlo");
                 }}
               />
 
-              <div className="h-4 w-px bg-[#2a2a2a]" />
+              <div className="h-5 w-px bg-[#2a2a2a]" />
 
               <NavText label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
               <NavText
