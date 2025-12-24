@@ -41,8 +41,6 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => ctYmd(new Date()));
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const showHeaderDates = activeScreen === "model" || activeScreen === "odds";
-
   // Prevent body scroll when drawer is open (mobile)
   useEffect(() => {
     if (sidebarOpen) document.body.style.overflow = "hidden";
@@ -67,18 +65,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0a0a]">
-      {/* Desktop sidebar */}
-      <div className="hidden md:block">
-        <Sidebar activeScreen={activeScreen} onNavigate={setActiveScreen} variant="desktop" />
-      </div>
-
-      {/* Mobile drawer */}
+      {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">
           <button
             className="absolute inset-0 bg-black/60"
             aria-label="Close sidebar backdrop"
             onClick={() => setSidebarOpen(false)}
+            type="button"
           />
           <div className="absolute left-0 top-0 bottom-0 w-72 max-w-[85vw]">
             <Sidebar
@@ -94,19 +88,16 @@ export default function App() {
         </div>
       )}
 
-      {/* Header */}
+      {/* Header (desktop nav + mobile menu button) */}
       <Header
-        selectedDate={selectedDate}
-        onChangeDate={setSelectedDate}
         onOpenMenu={() => setSidebarOpen(true)}
-        showDates={showHeaderDates}
+        onNavigate={(screen) => setActiveScreen(screen)}
       />
 
-      {/* Main Content */}
-      <div className="pt-16 min-h-screen md:ml-64">
+      {/* Main Content (no md:ml-64 because desktop sidebar is gone) */}
+      <div className="pt-16 min-h-screen">
         <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
       </div>
     </div>
   );
 }
-
