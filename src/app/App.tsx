@@ -92,6 +92,7 @@ export default function App() {
       <Header
         onOpenMenu={() => setSidebarOpen(true)}
         onNavigate={(screen) => setActiveScreen(screen)}
+        activeScreen={activeScreen}
       />
 
       {/* Main Content (no md:ml-64 because desktop sidebar is gone) */}
