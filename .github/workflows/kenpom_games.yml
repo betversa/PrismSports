@@ -1,0 +1,29 @@
+name: KenPom Games → Supabase
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 10 * * *" # daily at 10:15 UTC (adjust)
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: npm ci
+
+      - name: Run importer
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          KP_SEASON: "2025-26"
+          KP_URL: "https://kenpom.com/cbbga26.txt"
+        run: npx tsx scripts/pushKenPomGamesToSupabase.ts
