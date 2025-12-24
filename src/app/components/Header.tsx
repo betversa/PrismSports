@@ -1,5 +1,5 @@
 // components/Header.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
 
 type Screen =
@@ -15,11 +15,11 @@ type HeaderProps = {
   onOpenMenu?: () => void;
   onNavigate?: (screen: Screen) => void;
   activeScreen?: Screen;
+  onHeightChange?: (px: number) => void; // ✅ NEW
 };
 
 type SportKey = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
 const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
-
 const GOLD = "#d4af37";
 
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
@@ -54,20 +54,12 @@ function NavText({
       {label}
       <span
         className="absolute left-0 -bottom-2 h-[2px] w-full rounded"
-        style={{
-          backgroundColor: GOLD,
-          opacity: active ? 1 : 0,
-        }}
+        style={{ backgroundColor: GOLD, opacity: active ? 1 : 0 }}
       />
     </button>
   );
 }
 
-/**
- * Desktop hover dropdown:
- * - Opens on mouse enter
- * - Closes on mouse leave OR outside click (extra safe)
- */
 function HoverDropdown({
   label,
   active,
@@ -94,7 +86,6 @@ function HoverDropdown({
           "relative flex items-center gap-1 text-sm font-semibold tracking-wide transition-colors",
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
-        // click still works for trackpads / accessibility
         onClick={() => setOpen((v) => !v)}
       >
         {label}
@@ -125,9 +116,7 @@ function HoverDropdown({
                 }}
                 className={[
                   "w-full text-left px-3 py-2.5 flex items-center justify-between",
-                  enabled
-                    ? "text-white hover:bg-[#141414]"
-                    : "text-[#6f6f6f] cursor-not-allowed",
+                  enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
                 ].join(" ")}
               >
                 <span className="font-semibold">{sport}</span>
@@ -145,29 +134,51 @@ function HoverDropdown({
   );
 }
 
-export function Header({ onOpenMenu, onNavigate, activeScreen }: HeaderProps) {
+export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }: HeaderProps) {
+  const headerRef = useRef<HTMLElement>(null);
+
   const oddsActive = activeScreen === "odds";
   const predsActive = activeScreen === "monte-carlo";
 
+  // ✅ Report actual header height so App can pad correctly
+  useLayoutEffect(() => {
+    if (!headerRef.current || !onHeightChange) return;
+
+    const el = headerRef.current;
+    const report = () => onHeightChange(el.getBoundingClientRect().height);
+
+    report();
+
+    const ro = new ResizeObserver(() => report());
+    ro.observe(el);
+    window.addEventListener("resize", report);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", report);
+    };
+  }, [onHeightChange]);
+
   return (
-    // Taller header to fit logo + nav underneath
-    <header className="h-24 md:h-28 bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50">
-      <div className="h-full px-3 md:px-6 flex items-center justify-between">
+    <header
+      ref={headerRef}
+      className="bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50"
+    >
+      {/* IMPORTANT: no horizontal padding here so logo can be flush-left */}
+      <div className="w-full flex items-center justify-between">
         {/* LEFT: mobile menu + stacked logo/nav */}
         <div className="flex items-center gap-3 min-w-0">
-          {/* Mobile sidebar toggle */}
+          {/* Mobile toggle (adds padding just for mobile button) */}
           <button
             onClick={onOpenMenu}
-            className="md:hidden p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a]"
+            className="md:hidden ml-3 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a]"
             aria-label="Open menu"
             type="button"
           >
             <Menu className="w-5 h-5" />
           </button>
 
-          {/* Stack logo over nav */}
-          <div className="flex flex-col justify-left gap-2">
-            {/* Bigger logo */}
+          <div className="flex flex-col justify-center gap-2">
+            {/* Logo flush-left */}
             <img
               src="/logos/mainlogo.png"
               alt="PrismSports"
@@ -175,8 +186,8 @@ export function Header({ onOpenMenu, onNavigate, activeScreen }: HeaderProps) {
               draggable={false}
             />
 
-            {/* Desktop nav under logo */}
-            <nav className="hidden md:flex items-center gap-7">
+            {/* Nav row gets its own padding so it lines up nicely */}
+            <nav className="hidden md:flex items-center gap-7 px-6 pb-2">
               <HoverDropdown
                 label="Odds"
                 active={oddsActive}
@@ -194,11 +205,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen }: HeaderProps) {
 
               <div className="h-4 w-px bg-[#2a2a2a]" />
 
-              <NavText
-                label="Picks"
-                active={activeScreen === "model"}
-                onClick={() => onNavigate?.("model")}
-              />
+              <NavText label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
               <NavText
                 label="Results"
                 active={activeScreen === "results"}
@@ -211,6 +218,12 @@ export function Header({ onOpenMenu, onNavigate, activeScreen }: HeaderProps) {
               />
             </nav>
           </div>
+        </div>
+
+        {/* RIGHT: live indicator with padding */}
+        <div className="hidden sm:flex items-center gap-3 text-xs text-[#808080] pr-3 md:pr-6">
+          <div>Live</div>
+          <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
         </div>
       </div>
     </header>
