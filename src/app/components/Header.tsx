@@ -166,12 +166,12 @@ export function Header({ onOpenMenu, onNavigate, activeScreen }: HeaderProps) {
           </button>
 
           {/* Stack logo over nav */}
-          <div className="flex flex-col justify-center gap-2">
+          <div className="flex flex-col justify-left gap-2">
             {/* Bigger logo */}
             <img
               src="/logos/mainlogo.png"
               alt="PrismSports"
-              className="h-12 md:h-14 w-auto object-contain select-none"
+              className="h-25 md:h-27 w-auto object-contain select-none"
               draggable={false}
             />
 
