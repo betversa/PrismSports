@@ -20,7 +20,6 @@ type HeaderProps = {
 
 type SportKey = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
 const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
-
 const GOLD = "#d4af37";
 
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
@@ -87,7 +86,7 @@ function HoverDropdown({
           "relative flex items-center gap-1 text-sm font-semibold tracking-wide transition-colors",
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
-        onClick={() => setOpen((v) => !v)} // still works on trackpads
+        onClick={() => setOpen((v) => !v)} // trackpads
       >
         {label}
         <ChevronDown className="w-4 h-4 opacity-80" />
@@ -138,13 +137,10 @@ function HoverDropdown({
 export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }: HeaderProps) {
   const headerRef = useRef<HTMLElement>(null);
 
-  // ✅ Report actual header height so App can pad correctly
   useLayoutEffect(() => {
     if (!headerRef.current || !onHeightChange) return;
-
     const el = headerRef.current;
     const report = () => onHeightChange(Math.ceil(el.getBoundingClientRect().height));
-
     report();
 
     const ro = new ResizeObserver(() => report());
@@ -164,14 +160,12 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
       ref={headerRef}
       className="bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50"
     >
-      {/* FULL WIDTH. No padding here so logo can be truly flush-left */}
       <div className="w-full flex items-start justify-between">
-        {/* LEFT COLUMN (flush-left) */}
-        <div className="flex items-start min-w-0">
-          {/* Mobile menu (adds its own left padding so it isn't glued to edge) */}
+        {/* ✅ Left stack with a little padding */}
+        <div className="flex items-start min-w-0 pl-3 md:pl-6">
           <button
             onClick={onOpenMenu}
-            className="md:hidden ml-3 mt-3 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a]"
+            className="md:hidden mt-3 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
             aria-label="Open menu"
             type="button"
           >
@@ -179,7 +173,6 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </button>
 
           <div className="flex flex-col items-start gap-2">
-            {/* ✅ LOGO — flush-left */}
             <img
               src="/logos/mainlogo.png"
               alt="PrismSports"
@@ -187,8 +180,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
               draggable={false}
             />
 
-            {/* ✅ NAV UNDER LOGO — flush-left */}
-            <nav className="hidden md:flex items-center gap-7 pb-3 pl-0">
+            <nav className="hidden md:flex items-center gap-7 pb-3">
               <HoverDropdown
                 label="Odds"
                 active={oddsActive}
@@ -221,7 +213,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </div>
         </div>
 
-        {/* RIGHT SIDE (pad this, not the logo) */}
+        {/* Right side padding */}
         <div className="hidden sm:flex items-center gap-3 text-xs text-[#808080] pr-3 md:pr-6 pt-4">
           <div>Live</div>
           <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
@@ -230,4 +222,3 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
     </header>
   );
 }
-
