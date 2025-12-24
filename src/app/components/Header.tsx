@@ -22,6 +22,7 @@ type SportKey = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
 const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
 const GOLD = "#d4af37";
+const DROPDOWN_EVENT = "prism:header-dropdown-open";
 
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
   useEffect(() => {
@@ -48,7 +49,7 @@ function NavText({
       type="button"
       onClick={onClick}
       className={[
-        "relative text-[15px] md:text-[16px] font-semibold tracking-wide transition-colors",
+        "relative text-[16px] md:text-[17px] font-semibold tracking-wide transition-colors",
         active ? "text-white" : "text-[#cfcfcf] hover:text-white",
       ].join(" ")}
     >
@@ -76,7 +77,10 @@ function HoverDropdown({
   const wrapRef = useRef<HTMLDivElement>(null);
   useOutsideClick(wrapRef, () => setOpen(false));
 
-  // ✅ Delay close slightly so you can move into the dropdown without racing
+  // Unique id so other dropdowns know who opened
+  const idRef = useRef<string>(`${label}-${Math.random().toString(16).slice(2)}`);
+
+  // Close delay to prevent "falling off" gap; BUT close immediately when another opens.
   const closeTimer = useRef<number | null>(null);
   const clearTimer = () => {
     if (closeTimer.current) {
@@ -86,28 +90,48 @@ function HoverDropdown({
   };
   const scheduleClose = () => {
     clearTimer();
-    closeTimer.current = window.setTimeout(() => setOpen(false), 220);
+    closeTimer.current = window.setTimeout(() => setOpen(false), 160);
+  };
+
+  // Listen for other dropdowns opening; close instantly if not us
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<{ id: string }>;
+      const openedId = ev?.detail?.id;
+      if (!openedId) return;
+      if (openedId !== idRef.current) {
+        clearTimer();
+        setOpen(false);
+      }
+    };
+    window.addEventListener(DROPDOWN_EVENT, handler as EventListener);
+    return () => window.removeEventListener(DROPDOWN_EVENT, handler as EventListener);
+  }, []);
+
+  const openNow = () => {
+    clearTimer();
+    window.dispatchEvent(new CustomEvent(DROPDOWN_EVENT, { detail: { id: idRef.current } }));
+    setOpen(true);
   };
 
   return (
     <div
       ref={wrapRef}
       className="relative"
-      onMouseEnter={() => {
-        clearTimer();
-        setOpen(true);
-      }}
-      onMouseLeave={() => {
-        scheduleClose();
-      }}
+      onMouseEnter={openNow}
+      onMouseLeave={scheduleClose}
     >
       <button
         type="button"
         className={[
-          "relative flex items-center gap-1 text-[15px] md:text-[16px] font-semibold tracking-wide transition-colors",
+          "relative flex items-center gap-1 text-[16px] md:text-[17px] font-semibold tracking-wide transition-colors",
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
-        onClick={() => setOpen((v) => !v)} // trackpads
+        onMouseEnter={openNow}
+        onClick={() => {
+          if (!open) openNow();
+          else setOpen(false);
+        }}
       >
         {label}
         <ChevronDown className="w-4 h-4 opacity-80" />
@@ -119,27 +143,23 @@ function HoverDropdown({
 
       {open && (
         <div
-          className="absolute left-0 mt-3 w-[270px] rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50"
-          // ✅ If you hover the dropdown itself, keep it open
-          onMouseEnter={() => {
-            clearTimer();
-            setOpen(true);
-          }}
-          onMouseLeave={() => {
-            scheduleClose();
-          }}
+          className="absolute left-0 mt-3 w-[280px] rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50"
+          onMouseEnter={openNow}
+          onMouseLeave={scheduleClose}
         >
-          {/* subtle effects */}
+          {/* Effects */}
           <div
-            className="pointer-events-none absolute inset-0 opacity-70"
+            className="pointer-events-none absolute inset-0 opacity-80"
             style={{
               background:
-                "radial-gradient(600px 140px at 30% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(500px 120px at 90% 20%, rgba(255,255,255,0.06), transparent 55%)",
+                "radial-gradient(700px 160px at 25% 0%, rgba(212,175,55,0.16), transparent 60%), radial-gradient(520px 140px at 90% 20%, rgba(255,255,255,0.06), transparent 55%)",
             }}
           />
           <div className="relative">
             {SPORTS.map((sport) => {
               const enabled = sport === "NCAAB";
+              const title = `${sport} ${suffix}`; // ✅ single line: "NCAAB Odds", "NBA Predictions", etc.
+
               return (
                 <button
                   key={sport}
@@ -151,18 +171,14 @@ function HoverDropdown({
                     setOpen(false);
                   }}
                   className={[
-                    "w-full text-left px-3 py-3 flex items-center justify-between transition-colors",
+                    "w-full text-left px-4 py-3 flex items-center justify-between transition-colors",
+                    "border-b border-[#141414] last:border-b-0",
                     enabled
                       ? "text-white hover:bg-[#141414]"
                       : "text-[#6f6f6f] cursor-not-allowed",
                   ].join(" ")}
                 >
-                  <div className="flex flex-col">
-                    <span className="font-semibold leading-tight">{sport}</span>
-                    <span className="text-[11px] text-[#8a8a8a] leading-tight">
-                      {sport} {suffix}
-                    </span>
-                  </div>
+                  <span className="font-semibold leading-tight">{title}</span>
 
                   {!enabled && (
                     <span className="font-extrabold text-[11px]" style={{ color: GOLD }}>
@@ -182,9 +198,11 @@ function HoverDropdown({
 export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }: HeaderProps) {
   const headerRef = useRef<HTMLElement>(null);
 
+  // Report actual header height so App can pad correctly
   useLayoutEffect(() => {
     if (!headerRef.current || !onHeightChange) return;
     const el = headerRef.current;
+
     const report = () => onHeightChange(Math.ceil(el.getBoundingClientRect().height));
     report();
 
@@ -206,7 +224,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
       className="bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50"
     >
       <div className="w-full flex items-start justify-between">
-        {/* Left stack with comfortable left padding, but LESS top padding */}
+        {/* Left: logo + nav under it */}
         <div className="flex items-start min-w-0 pl-3 md:pl-6 pt-2 md:pt-3">
           <button
             onClick={onOpenMenu}
@@ -218,6 +236,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </button>
 
           <div className="flex flex-col items-start gap-2">
+            {/* You said you set these sizes already and like them */}
             <img
               src="/logos/mainlogo.png"
               alt="PrismSports"
@@ -245,7 +264,11 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
 
               <div className="h-5 w-px bg-[#2a2a2a]" />
 
-              <NavText label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
+              <NavText
+                label="Picks"
+                active={activeScreen === "model"}
+                onClick={() => onNavigate?.("model")}
+              />
               <NavText
                 label="Results"
                 active={activeScreen === "results"}
@@ -260,7 +283,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </div>
         </div>
 
-        {/* Right side padding */}
+        {/* Right: live */}
         <div className="hidden sm:flex items-center gap-3 text-xs text-[#808080] pr-3 md:pr-6 pt-4">
           <div>Live</div>
           <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
