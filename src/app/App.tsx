@@ -96,7 +96,7 @@ export default function App() {
       />
 
       {/* Main Content (no md:ml-64 because desktop sidebar is gone) */}
-      <div className="pt-16 min-h-screen">
+      <div className="pt-24 md:pt-28 min-h-screen">
         <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
       </div>
     </div>
