@@ -35,7 +35,7 @@ function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void)
   }, [ref, onClose]);
 }
 
-function NavText({
+function NavItem({
   label,
   active,
   onClick,
@@ -49,7 +49,9 @@ function NavText({
       type="button"
       onClick={onClick}
       className={[
-        "relative text-[16px] md:text-[17px] font-semibold tracking-wide transition-colors",
+        // less “cheesy”: slightly smaller, normal tracking, medium weight
+        "relative px-1 py-1 text-[14px] md:text-[15px] font-medium tracking-normal",
+        "transition-colors",
         active ? "text-white" : "text-[#cfcfcf] hover:text-white",
       ].join(" ")}
     >
@@ -77,10 +79,8 @@ function HoverDropdown({
   const wrapRef = useRef<HTMLDivElement>(null);
   useOutsideClick(wrapRef, () => setOpen(false));
 
-  // Unique id so other dropdowns know who opened
   const idRef = useRef<string>(`${label}-${Math.random().toString(16).slice(2)}`);
 
-  // Close delay to prevent "falling off" gap; BUT close immediately when another opens.
   const closeTimer = useRef<number | null>(null);
   const clearTimer = () => {
     if (closeTimer.current) {
@@ -90,10 +90,9 @@ function HoverDropdown({
   };
   const scheduleClose = () => {
     clearTimer();
-    closeTimer.current = window.setTimeout(() => setOpen(false), 160);
+    closeTimer.current = window.setTimeout(() => setOpen(false), 140);
   };
 
-  // Listen for other dropdowns opening; close instantly if not us
   useEffect(() => {
     const handler = (e: Event) => {
       const ev = e as CustomEvent<{ id: string }>;
@@ -124,17 +123,15 @@ function HoverDropdown({
       <button
         type="button"
         className={[
-          "relative flex items-center gap-1 text-[16px] md:text-[17px] font-semibold tracking-wide transition-colors",
+          "relative flex items-center gap-1 px-1 py-1",
+          "text-[14px] md:text-[15px] font-medium tracking-normal transition-colors",
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
         onMouseEnter={openNow}
-        onClick={() => {
-          if (!open) openNow();
-          else setOpen(false);
-        }}
+        onClick={() => setOpen((v) => !v)}
       >
         {label}
-        <ChevronDown className="w-4 h-4 opacity-80" />
+        <ChevronDown className="w-4 h-4 opacity-70" />
         <span
           className="absolute left-0 -bottom-2 h-[2px] w-full rounded"
           style={{ backgroundColor: GOLD, opacity: active ? 1 : 0 }}
@@ -147,18 +144,18 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          {/* Effects */}
+          {/* subtle premium glow */}
           <div
             className="pointer-events-none absolute inset-0 opacity-80"
             style={{
               background:
-                "radial-gradient(700px 160px at 25% 0%, rgba(212,175,55,0.16), transparent 60%), radial-gradient(520px 140px at 90% 20%, rgba(255,255,255,0.06), transparent 55%)",
+                "radial-gradient(700px 160px at 20% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 140px at 90% 20%, rgba(255,255,255,0.05), transparent 55%)",
             }}
           />
           <div className="relative">
             {SPORTS.map((sport) => {
               const enabled = sport === "NCAAB";
-              const title = `${sport} ${suffix}`; // ✅ single line: "NCAAB Odds", "NBA Predictions", etc.
+              const title = `${sport} ${suffix}`;
 
               return (
                 <button
@@ -171,18 +168,16 @@ function HoverDropdown({
                     setOpen(false);
                   }}
                   className={[
-                    "w-full text-left px-4 py-3 flex items-center justify-between transition-colors",
-                    "border-b border-[#141414] last:border-b-0",
-                    enabled
-                      ? "text-white hover:bg-[#141414]"
-                      : "text-[#6f6f6f] cursor-not-allowed",
+                    "w-full text-left px-4 py-3 flex items-center justify-between",
+                    "transition-colors border-b border-[#141414] last:border-b-0",
+                    enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
                   ].join(" ")}
                 >
-                  <span className="font-semibold leading-tight">{title}</span>
+                  <span className="text-[14px] font-medium leading-tight">{title}</span>
 
                   {!enabled && (
-                    <span className="font-extrabold text-[11px]" style={{ color: GOLD }}>
-                      COMING SOON!
+                    <span className="font-semibold text-[11px]" style={{ color: GOLD }}>
+                      COMING SOON
                     </span>
                   )}
                 </button>
@@ -198,7 +193,6 @@ function HoverDropdown({
 export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }: HeaderProps) {
   const headerRef = useRef<HTMLElement>(null);
 
-  // Report actual header height so App can pad correctly
   useLayoutEffect(() => {
     if (!headerRef.current || !onHeightChange) return;
     const el = headerRef.current;
@@ -221,10 +215,25 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
   return (
     <header
       ref={headerRef}
-      className="bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 left-0 right-0 z-50"
+      className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]"
     >
-      <div className="w-full flex items-start justify-between">
-        {/* Left: logo + nav under it */}
+      {/* upgraded header feel: subtle top sheen + gold accent line */}
+      <div className="pointer-events-none absolute inset-0">
+        <div
+          className="absolute inset-0 opacity-80"
+          style={{
+            background:
+              "radial-gradient(900px 220px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(700px 200px at 82% 10%, rgba(255,255,255,0.05), transparent 60%)",
+          }}
+        />
+        <div
+          className="absolute left-0 right-0 top-0 h-[1px]"
+          style={{ background: "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.55), rgba(212,175,55,0.0))" }}
+        />
+      </div>
+
+      <div className="relative w-full flex items-center justify-between">
+        {/* Left: menu + logo */}
         <div className="flex items-start min-w-0 pl-3 md:pl-6 pt-2 md:pt-3">
           <button
             onClick={onOpenMenu}
@@ -236,7 +245,6 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </button>
 
           <div className="flex flex-col items-start gap-2">
-            {/* You said you set these sizes already and like them */}
             <img
               src="/logos/mainlogo.png"
               alt="PrismSports"
@@ -244,7 +252,8 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
               draggable={false}
             />
 
-            <nav className="hidden md:flex items-center gap-8 pb-3">
+            {/* cleaner nav row (less loud typography) */}
+            <nav className="hidden md:flex items-center gap-7 pb-3">
               <HoverDropdown
                 label="Odds"
                 suffix="Odds"
@@ -253,6 +262,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                   if (sport === "NCAAB") onNavigate?.("odds");
                 }}
               />
+
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
@@ -264,17 +274,13 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
 
               <div className="h-5 w-px bg-[#2a2a2a]" />
 
-              <NavText
-                label="Picks"
-                active={activeScreen === "model"}
-                onClick={() => onNavigate?.("model")}
-              />
-              <NavText
+              <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
+              <NavItem
                 label="Results"
                 active={activeScreen === "results"}
                 onClick={() => onNavigate?.("results")}
               />
-              <NavText
+              <NavItem
                 label="Settings"
                 active={activeScreen === "settings"}
                 onClick={() => onNavigate?.("settings")}
@@ -283,10 +289,18 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </div>
         </div>
 
-        {/* Right: live */}
-        <div className="hidden sm:flex items-center gap-3 text-xs text-[#808080] pr-3 md:pr-6 pt-4">
-          <div>Live</div>
-          <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
+        {/* Right: live pill */}
+        <div className="hidden sm:flex items-center pr-3 md:pr-6 pt-4">
+          <div
+            className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
+            style={{
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+            }}
+          >
+            <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
+            <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
+          </div>
         </div>
       </div>
     </header>
