@@ -1,57 +1,123 @@
 // components/Header.tsx
-import { useMemo } from "react";
-import { Menu } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Menu, ChevronDown } from "lucide-react";
+
+type Screen =
+  | "overview"
+  | "model" // Picks
+  | "monte-carlo" // Predictions
+  | "odds"
+  | "results"
+  | "calibration"
+  | "settings";
 
 type HeaderProps = {
-  selectedDate: string;
-  onChangeDate: (date: string) => void;
-  onOpenMenu?: () => void;
-  showDates?: boolean;
+  onOpenMenu?: () => void; // mobile sidebar toggle
+  onNavigate?: (screen: Screen) => void; // app navigation
 };
 
-const CT_TZ = "America/Chicago";
+type SportKey = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
+const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
-function ctYmd(d: Date) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(d);
+const GOLD = "#d4af37";
 
-  const y = parts.find((p) => p.type === "year")?.value ?? "1970";
-  const m = parts.find((p) => p.type === "month")?.value ?? "01";
-  const day = parts.find((p) => p.type === "day")?.value ?? "01";
-  return `${y}-${m}-${day}`;
+function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [ref, onClose]);
 }
 
-// Safe display label
-function dateFromYmdMidday(ymd: string) {
-  return new Date(`${ymd}T12:00:00`);
-}
-
-export function Header({
-  selectedDate,
-  onChangeDate,
-  onOpenMenu,
-  showDates = true,
-}: HeaderProps) {
-  const dates = useMemo(() => {
-    const now = new Date();
-    const list: string[] = [];
-    for (let i = 0; i <= 2; i++) {
-      const d = new Date(now);
-      d.setDate(now.getDate() + i);
-      list.push(ctYmd(d));
-    }
-    return list;
-  }, []);
-
-  const safeSelected = dates.includes(selectedDate) ? selectedDate : dates[0];
+function Dropdown({
+  label,
+  onPick,
+}: {
+  label: "Odds" | "Predictions";
+  onPick: (sport: SportKey) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useOutsideClick(wrapRef, () => setOpen(false));
 
   return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 px-3 py-2 rounded bg-[#141414] border border-[#2a2a2a] text-[#d0d0d0] hover:border-[#3a3a3a]"
+      >
+        <span className="text-sm font-semibold">{label}</span>
+        <ChevronDown className="w-4 h-4 text-[#a0a0a0]" />
+      </button>
+
+      {open && (
+        <div className="absolute mt-2 w-56 rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] shadow-xl overflow-hidden z-50">
+          {SPORTS.map((sport) => {
+            const enabled = sport === "NCAAB";
+            return (
+              <button
+                key={sport}
+                type="button"
+                disabled={!enabled}
+                onClick={() => {
+                  if (!enabled) return;
+                  onPick(sport);
+                  setOpen(false);
+                }}
+                className={[
+                  "w-full text-left px-3 py-2 flex items-center justify-between",
+                  enabled ? "text-white hover:bg-[#171717]" : "text-[#6f6f6f] cursor-not-allowed",
+                ].join(" ")}
+              >
+                <span className="font-semibold">{sport}</span>
+                {!enabled && (
+                  <span className="font-extrabold text-[11px]" style={{ color: GOLD }}>
+                    COMING SOON!
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NavButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-2 rounded border text-sm font-semibold transition-colors",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#141414] text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a] hover:text-white",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+export function Header({ onOpenMenu, onNavigate }: HeaderProps) {
+  return (
     <div className="h-16 bg-[#0f0f0f] border-b border-[#2a2a2a] fixed top-0 right-0 left-0 md:left-64 z-10 flex items-center justify-between px-3 md:px-6">
-      <div className="flex items-center gap-3 md:gap-4 min-w-0">
+      <div className="flex items-center gap-3 min-w-0">
+        {/* Mobile: keep sidebar toggle */}
         <button
           onClick={onOpenMenu}
           className="md:hidden p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a]"
@@ -61,7 +127,7 @@ export function Header({
           <Menu className="w-5 h-5" />
         </button>
 
-        {/* ✅ Main logo (public/logos/mainlogo.png) */}
+        {/* Logo */}
         <img
           src="/logos/mainlogo.png"
           alt="PrismSports"
@@ -69,30 +135,27 @@ export function Header({
           draggable={false}
         />
 
-        {/* ✅ Dates ONLY when showDates is true */}
-        {showDates ? (
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar min-w-0">
-            {dates.map((date) => (
-              <button
-                key={date}
-                onClick={() => onChangeDate(date)}
-                className={`px-3 py-1.5 text-xs rounded transition-colors whitespace-nowrap ${
-                  safeSelected === date
-                    ? "bg-[#d4af37] text-black"
-                    : "bg-[#1a1a1a] text-[#b0b0b0] hover:bg-[#2a2a2a] hover:text-white"
-                }`}
-                type="button"
-              >
-                {dateFromYmdMidday(date).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                })}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="h-[34px]" /> // keeps header height consistent without showing dates
-        )}
+        {/* Desktop nav */}
+        <div className="hidden md:flex items-center gap-3 ml-2">
+          <Dropdown
+            label="Odds"
+            onPick={(sport) => {
+              if (sport === "NCAAB") onNavigate?.("odds");
+            }}
+          />
+          <Dropdown
+            label="Predictions"
+            onPick={(sport) => {
+              if (sport === "NCAAB") onNavigate?.("monte-carlo");
+            }}
+          />
+
+          <div className="w-px h-7 bg-[#2a2a2a] mx-1" />
+
+          <NavButton label="Picks" onClick={() => onNavigate?.("model")} />
+          <NavButton label="Results" onClick={() => onNavigate?.("results")} />
+          <NavButton label="Settings" onClick={() => onNavigate?.("settings")} />
+        </div>
       </div>
 
       <div className="hidden sm:flex items-center gap-4 text-xs text-[#808080]">
@@ -102,6 +165,5 @@ export function Header({
     </div>
   );
 }
-
 
 
