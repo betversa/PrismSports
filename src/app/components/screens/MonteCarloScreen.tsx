@@ -21,14 +21,9 @@ type MonteCarloResultRow = {
   projected_home_points?: number | null;
   projected_away_points?: number | null;
 
-  home_win_prob: number | null;
-  away_win_prob: number | null;
-
-  spread_line_home: number | null;
   home_cover_prob: number | null;
   away_cover_prob: number | null;
 
-  total_line: number | null;
   over_prob: number | null;
   under_prob: number | null;
 };
@@ -38,25 +33,22 @@ type TeamMapLogoRow = {
   "Logo URL": string | null;
 };
 
-// Odds snapshot (assumes you have odds + line per side)
 type OddsSnapshotRow = {
   ts: string;
   event_id: string;
-  market: string; // "spreads" | "totals" | ...
-  side: string | null; // "home"/"away" or "over"/"under"
-  line: number | null; // spread or total line
+  market: string; // "spreads" | "totals"
+  side: string | null; // "home"/"away" | "over"/"under"
+  line: number | null;
   odds: number | null; // american odds
   bookmaker: string | null;
 };
 
 type Consensus = {
-  // spreads
-  spread_home_line: number | null; // e.g. -5.5
-  spread_home_odds: number | null; // e.g. -110
-  spread_away_odds: number | null; // e.g. -110
+  spread_home_line: number | null;
+  spread_home_odds: number | null;
+  spread_away_odds: number | null;
 
-  // totals
-  total_line: number | null; // e.g. 151.5
+  total_line: number | null;
   total_over_odds: number | null;
   total_under_odds: number | null;
 
@@ -66,35 +58,28 @@ type Consensus = {
 type TeamRow = {
   key: string;
   eventId: string;
-
   commenceTime: string | null;
 
   side: "AWAY" | "HOME";
   teamName: string;
-  opponentName: string;
 
   logoUrl: string | null;
 
   projPoints: number;
-  // team-view margin
-  projMargin: number;
+  projMargin: number; // team-view
   coverProbTeam: number | null;
 
-  // game-view total
-  projTotal: number;
+  projTotal: number; // game-view
   overProb: number | null;
   underProb: number | null;
 
-  // consensus (team-view)
   consSpreadLineTeam: number | null;
   consSpreadOddsTeam: number | null;
 
-  // consensus total (game-view)
   consTotalLine: number | null;
   consTotalOverOdds: number | null;
   consTotalUnderOdds: number | null;
 
-  // for winner highlighting
   isProjectedWinner: boolean;
 };
 
@@ -124,7 +109,6 @@ export function MonteCarloScreen() {
   const [loadingRun, setLoadingRun] = useState(true);
   const [loadingResults, setLoadingResults] = useState(false);
   const [loadingConsensus, setLoadingConsensus] = useState(false);
-
   const [error, setError] = useState<string | null>(null);
 
   // 0) logos
@@ -188,7 +172,7 @@ export function MonteCarloScreen() {
     };
   }, []);
 
-  // 2) run results
+  // 2) results
   useEffect(() => {
     let alive = true;
 
@@ -206,12 +190,8 @@ export function MonteCarloScreen() {
         "projected_total",
         "projected_home_points",
         "projected_away_points",
-        "home_win_prob",
-        "away_win_prob",
-        "spread_line_home",
         "home_cover_prob",
         "away_cover_prob",
-        "total_line",
         "over_prob",
         "under_prob",
       ].join(",");
@@ -243,7 +223,7 @@ export function MonteCarloScreen() {
     };
   }, [run?.id]);
 
-  // 3) consensus from odds_snapshot (spreads/totals)
+  // 3) consensus from odds_snapshot
   useEffect(() => {
     let alive = true;
 
@@ -274,8 +254,8 @@ export function MonteCarloScreen() {
 
       const rows = (data ?? []) as OddsSnapshotRow[];
 
-      // take latest per (event, market, bookmaker, side)
       const seen = new Set<string>();
+
       const spreadHomeLines: Map<string, number[]> = new Map();
       const spreadHomeOdds: Map<string, number[]> = new Map();
       const spreadAwayOdds: Map<string, number[]> = new Map();
@@ -306,7 +286,6 @@ export function MonteCarloScreen() {
         seen.add(k);
 
         if (market === "spreads") {
-          // store HOME line + HOME odds + AWAY odds
           if (side === "home") {
             if (line != null) pushMap(spreadHomeLines, eventId, line);
             if (odds != null) pushMap(spreadHomeOdds, eventId, odds);
@@ -315,7 +294,6 @@ export function MonteCarloScreen() {
             if (odds != null) pushMap(spreadAwayOdds, eventId, odds);
           }
         } else if (market === "totals") {
-          // store total line from OVER side (line is same for under)
           if (side === "over") {
             if (line != null) pushMap(totalLines, eventId, line);
             if (odds != null) pushMap(totalOverOdds, eventId, odds);
@@ -353,7 +331,7 @@ export function MonteCarloScreen() {
     };
   }, [results]);
 
-  // 4) build 2 rows per event (away then home)
+  // 4) rows (away then home)
   const teamRows: TeamRow[] = useMemo(() => {
     const out: TeamRow[] = [];
 
@@ -384,14 +362,12 @@ export function MonteCarloScreen() {
       const awayIsWinner = awayPts > homePts;
       const homeIsWinner = homePts > awayPts;
 
-      // AWAY row
       out.push({
         key: `${r.event_id}-AWAY`,
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
         side: "AWAY",
         teamName: away,
-        opponentName: home,
         logoUrl: logoMap.get(away) ?? null,
 
         projPoints: awayPts,
@@ -412,14 +388,12 @@ export function MonteCarloScreen() {
         isProjectedWinner: awayIsWinner,
       });
 
-      // HOME row
       out.push({
         key: `${r.event_id}-HOME`,
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
         side: "HOME",
         teamName: home,
-        opponentName: away,
         logoUrl: logoMap.get(home) ?? null,
 
         projPoints: homePts,
@@ -468,7 +442,7 @@ export function MonteCarloScreen() {
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-20">
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">
                   Matchup
                 </th>
 
@@ -476,19 +450,19 @@ export function MonteCarloScreen() {
                   Proj Score
                 </th>
 
-                <th className="text-center p-3 text-[#d4af37] min-w-[150px]">
+                <th className="text-center p-3 text-[#d4af37] min-w-[160px]">
                   Proj Margin (Cover %)
                 </th>
 
                 <th className="text-center p-3 text-[#d4af37] min-w-[170px]">
-                  Proj Total (O/U %)
+                  Proj Total
                 </th>
 
-                <th className="text-center p-3 text-[#d4af37] min-w-[180px]">
+                <th className="text-center p-3 text-[#d4af37] min-w-[190px]">
                   Consensus Margin (Odds)
                 </th>
 
-                <th className="text-center p-3 text-[#d4af37] min-w-[200px]">
+                <th className="text-center p-3 text-[#d4af37] min-w-[190px]">
                   Consensus Total (Odds)
                 </th>
               </tr>
@@ -513,7 +487,7 @@ export function MonteCarloScreen() {
 
                   return (
                     <tr key={row.key} className="hover:bg-[#0f0f0f]/50 transition-colors">
-                      {/* Matchup cell: time only on away row, teams per-row */}
+                      {/* Matchup: no "vs ..." line */}
                       <td className="p-3 text-white sticky left-0 bg-[#0f0f0f] z-10 align-top">
                         <div className="space-y-2">
                           {isAwayRow ? (
@@ -540,7 +514,6 @@ export function MonteCarloScreen() {
                                 {row.teamName}
                                 <span className="ml-2 text-[11px] font-semibold text-[#808080]">({row.side})</span>
                               </div>
-                              <div className="text-[11px] text-[#808080]">vs {row.opponentName}</div>
                             </div>
                           </div>
                         </div>
@@ -562,24 +535,28 @@ export function MonteCarloScreen() {
                             <span className="text-[#808080] font-semibold">
                               {" "}
                               (
-                              {row.coverProbTeam == null ? "—" : `${(row.coverProbTeam * 100).toFixed(0)}%`}
+                              {row.coverProbTeam == null ? "—" : formatPct(row.coverProbTeam)}
                               )
                             </span>
                           </div>
                         </div>
                       </td>
 
-                      {/* Proj Total (O% / U%) */}
+                      {/* Proj Total: o145.4 (34.5%) on row1, u145.4 (65.5%) on row2 */}
                       <td className="text-center p-3 text-white font-semibold">
                         <div className="leading-tight">
                           <div>
-                            {row.projTotal.toFixed(1)}
+                            {isAwayRow ? "o" : "u"}
+                            {row.projTotal.toFixed(1)}{" "}
                             <span className="text-[#808080] font-semibold">
-                              {" "}
                               (
-                              O {row.overProb == null ? "—" : `${(row.overProb * 100).toFixed(0)}%`}
-                              {" · "}
-                              U {row.underProb == null ? "—" : `${(row.underProb * 100).toFixed(0)}%`}
+                              {isAwayRow
+                                ? row.overProb == null
+                                  ? "—"
+                                  : formatPct(row.overProb)
+                                : row.underProb == null
+                                  ? "—"
+                                  : formatPct(row.underProb)}
                               )
                             </span>
                           </div>
@@ -593,30 +570,31 @@ export function MonteCarloScreen() {
                         ) : (
                           <>
                             {row.consSpreadLineTeam > 0 ? "+" : ""}
-                            {row.consSpreadLineTeam.toFixed(1)}
+                            {row.consSpreadLineTeam.toFixed(1)}{" "}
                             <span className="text-[#808080] font-semibold">
-                              {" "}
-                              (
-                              {row.consSpreadOddsTeam == null ? "—" : formatAmerican(row.consSpreadOddsTeam)}
-                              )
+                              ({row.consSpreadOddsTeam == null ? "—" : formatAmerican(row.consSpreadOddsTeam)})
                             </span>
                           </>
                         )}
                       </td>
 
-                      {/* Consensus Total (Odds) */}
+                      {/* Consensus Total: o145.4 (-110) row1, u145.4 (-110) row2 */}
                       <td className="text-center p-3 text-white font-semibold">
                         {row.consTotalLine == null ? (
                           <span className="text-[#3a3a3a]">—</span>
                         ) : (
                           <>
-                            {row.consTotalLine.toFixed(1)}
+                            {isAwayRow ? "o" : "u"}
+                            {row.consTotalLine.toFixed(1)}{" "}
                             <span className="text-[#808080] font-semibold">
-                              {" "}
                               (
-                              O {row.consTotalOverOdds == null ? "—" : formatAmerican(row.consTotalOverOdds)}
-                              {" · "}
-                              U {row.consTotalUnderOdds == null ? "—" : formatAmerican(row.consTotalUnderOdds)}
+                              {isAwayRow
+                                ? row.consTotalOverOdds == null
+                                  ? "—"
+                                  : formatAmerican(row.consTotalOverOdds)
+                                : row.consTotalUnderOdds == null
+                                  ? "—"
+                                  : formatAmerican(row.consTotalUnderOdds)}
                               )
                             </span>
                           </>
@@ -669,6 +647,13 @@ function formatStartStamp(ts: string) {
   return d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
 
+// expects prob as 0..1, formats as "55.5%"
+function formatPct(prob01: number) {
+  const p = Number(prob01);
+  if (!Number.isFinite(p)) return "—";
+  return `${(p * 100).toFixed(1)}%`;
+}
+
 function medianOrNull(nums: number[]): number | null {
   const arr = nums.filter((n) => Number.isFinite(n)).slice().sort((a, b) => a - b);
   if (!arr.length) return null;
@@ -678,8 +663,9 @@ function medianOrNull(nums: number[]): number | null {
 }
 
 function formatAmerican(odds: number) {
-  const n = Math.round(odds);
+  const n = Math.round(Number(odds));
   if (!Number.isFinite(n) || n === 0) return "—";
   return n > 0 ? `+${n}` : `${n}`;
 }
+
 
