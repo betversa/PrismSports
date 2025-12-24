@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 type EventRow = {
   event_id: string;
   sport_key: string;
-  commence_time: string; // timestamptz ISO
+  commence_time: string;
   matchup: string | null;
   api_home_team: string | null;
   api_away_team: string | null;
@@ -15,16 +15,22 @@ type EventRow = {
 
 type TeamRatingRow = {
   canonical: string;
-
   engine_power: number | null;
   true_hca: number | null;
-
   pf_points: number | null;
   pa_points: number | null;
   avg_total_points: number | null;
-
   sigma_margin_100: number | null;
   sigma_total_100: number | null;
+};
+
+type OddsLatestRow = {
+  event_id: string;
+  bookmaker: string;
+  market: string;
+  side: string;
+  line: number | null;
+  ts: string;
 };
 
 type MonteCarloRunInsert = {
@@ -48,6 +54,20 @@ type MonteCarloResultUpsert = {
   projected_home_points: number;
   projected_away_points: number;
 
+  // probs
+  home_win_prob: number;
+  away_win_prob: number;
+
+  spread_line_home: number | null;
+  home_cover_prob: number | null;
+  cover_push_prob: number | null;
+  away_cover_prob: number | null;
+
+  total_line: number | null;
+  over_prob: number | null;
+  total_push_prob: number | null;
+  under_prob: number | null;
+
   trace: Record<string, any> | null;
 };
 
@@ -60,26 +80,32 @@ const SUPABASE_KEY =
   process.env.SUPABASE_KEY!;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  throw new Error(
-    "[MC] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (preferred)."
-  );
+  throw new Error("[MC] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (preferred).");
 }
 
 const SPORT_KEY = process.env.SPORT_KEY || "basketball_ncaab";
 const LOOKAHEAD_DAYS = Number(process.env.LOOKAHEAD_DAYS ?? "3");
 const SIMS = Number(process.env.MC_SIMS ?? "10000");
 
-// Floors (keep things sane if a team is missing sigma)
 const SIGMA_MARGIN_FLOOR = Number(process.env.SIGMA_MARGIN_FLOOR ?? "8");
 const SIGMA_TOTAL_FLOOR = Number(process.env.SIGMA_TOTAL_FLOOR ?? "13.5");
 
-// If avg_total_points is null, fallback to (home.pf + away.pf)/2 etc.
 const TOTAL_FALLBACK_MODE = (process.env.TOTAL_FALLBACK_MODE || "avg_total_points") as
   | "avg_total_points"
   | "pf_pa_blend";
 
-// Toggle trace payload
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
+
+// 👇 IMPORTANT: your sign convention
+// true = negative margin means home won by that many
+const MARGIN_HOME_WIN_NEGATIVE =
+  (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
+
+// which book to grade lines from (must match odds_snapshot_latest.bookmaker)
+const LINE_BOOK = (process.env.LINE_BOOK ?? "draftkings").toLowerCase();
+
+// float equality tolerance (for push detection)
+const EPS = Number(process.env.MC_PUSH_EPS ?? "1e-9");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
@@ -87,12 +113,13 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 // -------------------- MAIN --------------------
 async function main() {
-  console.log(`[MC] SPORT_KEY=${SPORT_KEY} lookaheadDays=${LOOKAHEAD_DAYS} sims=${SIMS}`);
+  console.log(
+    `[MC] SPORT_KEY=${SPORT_KEY} lookaheadDays=${LOOKAHEAD_DAYS} sims=${SIMS} ` +
+      `marginHomeWinNegative=${MARGIN_HOME_WIN_NEGATIVE} lineBook=${LINE_BOOK}`
+  );
 
   const now = new Date();
   const end = new Date(now.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
-
-  console.log(`[MC] Fetch events between ${now.toISOString()} and ${end.toISOString()}`);
 
   const events = await fetchEvents(now, end);
   if (!events.length) {
@@ -100,19 +127,22 @@ async function main() {
     return;
   }
 
+  const eventIds = events.map((e) => e.event_id);
+
+  // Pull latest spread/total lines for these events from chosen book
+  const lineMap = await fetchLatestLines(eventIds, LINE_BOOK);
+
   // collect canon teams
   const teamSet = new Set<string>();
   for (const e of events) {
     if (e.canon_home_team) teamSet.add(e.canon_home_team);
     if (e.canon_away_team) teamSet.add(e.canon_away_team);
   }
-  const teamList = [...teamSet];
 
-  const ratings = await fetchTeamRatings(teamList);
+  const ratings = await fetchTeamRatings([...teamSet]);
   const ratingMap = new Map<string, TeamRatingRow>();
   for (const r of ratings) ratingMap.set(r.canonical, r);
 
-  // create run
   const runId = await createMonteCarloRun({
     sport_key: SPORT_KEY,
     config: {
@@ -121,6 +151,9 @@ async function main() {
       sigma_margin_floor: SIGMA_MARGIN_FLOOR,
       sigma_total_floor: SIGMA_TOTAL_FLOOR,
       total_fallback_mode: TOTAL_FALLBACK_MODE,
+      margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
+      line_book: LINE_BOOK,
+      push_eps: EPS,
       generated_at: new Date().toISOString(),
     },
   });
@@ -149,15 +182,26 @@ async function main() {
     }
 
     const input = buildInputs(homeR, awayR);
-    const sim = simulateGame(SIMS, input);
+
+    // lines (nullable)
+    const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
+    const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
+
+    const sim = simulateGameWithProbs(SIMS, input, {
+      marginHomeWinNegative: MARGIN_HOME_WIN_NEGATIVE,
+      spreadLineHome,
+      totalLine,
+      eps: EPS,
+    });
 
     // turn mean margin/total into points
+    // NOTE: This assumes projectedMarginHome is "home - away" (positive = home better).
+    // If your ratings imply the opposite, you can flip here.
     const homePts = (sim.projectedTotal / 2) + (sim.projectedMarginHome / 2);
     const awayPts = sim.projectedTotal - homePts;
 
     const trace = WRITE_TRACE
       ? {
-          // inputs
           home,
           away,
           home_engine_power: input.homePower,
@@ -172,14 +216,22 @@ async function main() {
           away_pa_points: input.awayPa,
           away_avg_total_points: input.awayAvgTotal,
 
-          // modeled means/sigmas
           margin_mean: input.marginMean,
           total_mean: input.totalMean,
           sigma_margin_game: input.sigmaMarginGame,
           sigma_total_game: input.sigmaTotalGame,
 
-          // sim stats
-          p_home_win: sim.pHomeWin,
+          margin_sign: MARGIN_HOME_WIN_NEGATIVE ? "home_win_negative" : "home_win_positive",
+
+          spread_line_home: spreadLineHome,
+          total_line: totalLine,
+
+          p_home_win: sim.homeWinProb,
+          p_home_cover: sim.homeCoverProb,
+          p_cover_push: sim.coverPushProb,
+          p_over: sim.overProb,
+          p_total_push: sim.totalPushProb,
+
           sims: SIMS,
         }
       : null;
@@ -200,6 +252,19 @@ async function main() {
       projected_home_points: round2(homePts),
       projected_away_points: round2(awayPts),
 
+      home_win_prob: sim.homeWinProb,
+      away_win_prob: sim.awayWinProb,
+
+      spread_line_home: spreadLineHome,
+      home_cover_prob: sim.homeCoverProb,
+      cover_push_prob: sim.coverPushProb,
+      away_cover_prob: sim.awayCoverProb,
+
+      total_line: totalLine,
+      over_prob: sim.overProb,
+      total_push_prob: sim.totalPushProb,
+      under_prob: sim.underProb,
+
       trace,
     });
   }
@@ -216,7 +281,6 @@ async function main() {
   }
 
   await upsertMonteCarloResults(results);
-
   console.log(`[MC] Upserted ${results.length} rows into monte_carlo_results (run_id=${runId}).`);
 }
 
@@ -224,9 +288,7 @@ async function main() {
 async function fetchEvents(start: Date, end: Date): Promise<EventRow[]> {
   const { data, error } = await supabase
     .from("events")
-    .select(
-      "event_id,sport_key,commence_time,api_home_team,api_away_team,canon_home_team,canon_away_team,matchup"
-    )
+    .select("event_id,sport_key,commence_time,api_home_team,api_away_team,canon_home_team,canon_away_team,matchup")
     .eq("sport_key", SPORT_KEY)
     .gte("commence_time", start.toISOString())
     .lte("commence_time", end.toISOString())
@@ -234,7 +296,6 @@ async function fetchEvents(start: Date, end: Date): Promise<EventRow[]> {
 
   if (error) throw new Error(`[MC] Failed to fetch events: ${error.message}`);
 
-  // enforce event_id existence + dedupe
   const seen = new Set<string>();
   const out: EventRow[] = [];
   for (const row of data ?? []) {
@@ -248,8 +309,6 @@ async function fetchEvents(start: Date, end: Date): Promise<EventRow[]> {
 
 async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> {
   if (!canonicals.length) return [];
-
-  // Supabase has limits; chunk to be safe
   const chunkSize = 400;
   const out: TeamRatingRow[] = [];
 
@@ -258,9 +317,7 @@ async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> 
 
     const { data, error } = await supabase
       .from("team_ratings")
-      .select(
-        "canonical,engine_power,true_hca,pf_points,pa_points,avg_total_points,sigma_margin_100,sigma_total_100"
-      )
+      .select("canonical,engine_power,true_hca,pf_points,pa_points,avg_total_points,sigma_margin_100,sigma_total_100")
       .in("canonical", chunk);
 
     if (error) throw new Error(`[MC] Failed to fetch team_ratings: ${error.message}`);
@@ -270,29 +327,46 @@ async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> 
   return out;
 }
 
+// Pull latest spread/total lines from odds_snapshot_latest (view)
+async function fetchLatestLines(eventIds: string[], book: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!eventIds.length) return out;
+
+  // We only need spreads/home and totals/over
+  // Key format: `${event_id}|${market}|${side}`
+  const { data, error } = await supabase
+    .from("odds_snapshot_latest")
+    .select("event_id,bookmaker,market,side,line,ts")
+    .in("event_id", eventIds)
+    .eq("bookmaker", book)
+    .in("market", ["spreads", "totals"])
+    .in("side", ["home", "over"]);
+
+  if (error) {
+    console.warn(`[MC] Could not fetch odds_snapshot_latest lines (${error.message}). Probs vs lines will be null.`);
+    return out;
+  }
+
+  for (const r of (data ?? []) as OddsLatestRow[]) {
+    const line = Number(r.line);
+    if (!Number.isFinite(line)) continue;
+    out.set(`${r.event_id}|${r.market}|${r.side}`, line);
+  }
+
+  return out;
+}
+
 // -------------------- RUN + UPSERT --------------------
 async function createMonteCarloRun(payload: MonteCarloRunInsert): Promise<string> {
-  const { data, error } = await supabase
-    .from("monte_carlo_runs")
-    .insert(payload)
-    .select("id")
-    .single();
-
+  const { data, error } = await supabase.from("monte_carlo_runs").insert(payload).select("id").single();
   if (error) throw new Error(`[MC] Failed to insert monte_carlo_runs: ${error.message}`);
   if (!data?.id) throw new Error("[MC] Failed to create monte_carlo_runs row (no id returned).");
-
   return data.id as string;
 }
 
 async function upsertMonteCarloResults(rows: MonteCarloResultUpsert[]) {
-  const { error } = await supabase
-    .from("monte_carlo_results")
-    .upsert(rows, { onConflict: "run_id,event_id" });
-
-  if (error) {
-    // This is where schema-cache errors show up (missing column, etc.)
-    throw new Error(`[MC] Failed to upsert monte_carlo_results: ${error.message}`);
-  }
+  const { error } = await supabase.from("monte_carlo_results").upsert(rows, { onConflict: "run_id,event_id" });
+  if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results: ${error.message}`);
 }
 
 // -------------------- MODEL --------------------
@@ -302,6 +376,7 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
   const homeHca = num(home.true_hca, 0);
 
   // margin mean = power diff + home HCA
+  // NOTE: This defines "positive marginMean = home better" (home - away).
   const marginMean = (homePower - awayPower) + homeHca;
 
   const homeAvgTotal = toNullNum(home.avg_total_points);
@@ -315,32 +390,22 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
   let totalMean: number;
 
   if (TOTAL_FALLBACK_MODE === "avg_total_points") {
-    // preferred: avg of team-level avg_total_points if available
-    if (homeAvgTotal != null && awayAvgTotal != null) {
-      totalMean = (homeAvgTotal + awayAvgTotal) / 2;
-    } else if (homeAvgTotal != null) {
-      totalMean = homeAvgTotal;
-    } else if (awayAvgTotal != null) {
-      totalMean = awayAvgTotal;
-    } else {
-      // last resort
-      totalMean = 140;
-    }
+    if (homeAvgTotal != null && awayAvgTotal != null) totalMean = (homeAvgTotal + awayAvgTotal) / 2;
+    else if (homeAvgTotal != null) totalMean = homeAvgTotal;
+    else if (awayAvgTotal != null) totalMean = awayAvgTotal;
+    else totalMean = 140;
   } else {
-    // pf/pa blend fallback (simple, symmetric)
-    // estimate each side points: (team PF + opp PA)/2, then sum
     if (homePf != null && awayPa != null && awayPf != null && homePa != null) {
       const homePts = (homePf + awayPa) / 2;
       const awayPts = (awayPf + homePa) / 2;
       totalMean = homePts + awayPts;
     } else if (homeAvgTotal != null || awayAvgTotal != null) {
-      totalMean = ((homeAvgTotal ?? 0) + (awayAvgTotal ?? 0)) / (homeAvgTotal != null && awayAvgTotal != null ? 2 : 1);
-    } else {
-      totalMean = 140;
-    }
+      totalMean =
+        ((homeAvgTotal ?? 0) + (awayAvgTotal ?? 0)) /
+        (homeAvgTotal != null && awayAvgTotal != null ? 2 : 1);
+    } else totalMean = 140;
   }
 
-  // sigma game = avg sigmas, floored
   const sigmaMarginGame = Math.max(
     avg(num(home.sigma_margin_100, SIGMA_MARGIN_FLOOR), num(away.sigma_margin_100, SIGMA_MARGIN_FLOOR)),
     SIGMA_MARGIN_FLOOR
@@ -370,27 +435,111 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
   };
 }
 
-function simulateGame(sims: number, input: ReturnType<typeof buildInputs>) {
+function simulateGameWithProbs(
+  sims: number,
+  input: ReturnType<typeof buildInputs>,
+  opts: {
+    marginHomeWinNegative: boolean;
+    spreadLineHome: number | null;
+    totalLine: number | null;
+    eps: number;
+  }
+) {
   let sumM = 0;
   let sumT = 0;
+
   let homeWins = 0;
+  let awayWins = 0;
+
+  let homeCovers = 0;
+  let coverPushes = 0;
+
+  let overs = 0;
+  let totalPushes = 0;
+
+  const { marginHomeWinNegative, spreadLineHome, totalLine, eps } = opts;
 
   for (let i = 0; i < sims; i++) {
+    // This m is "home - away" (positive = home better) because marginMean is defined that way.
     const m = input.marginMean + randn() * input.sigmaMarginGame;
     const t = Math.max(0, input.totalMean + randn() * input.sigmaTotalGame);
 
     sumM += m;
     sumT += t;
+
+    // WIN PROB (respect convention)
+    // If user convention is "negative = home win", then interpret that as:
+    // home wins when (-m) < 0  <=> m > 0 ? No.
+    //
+    // IMPORTANT: Your *model* currently defines m as (homePower-awayPower)+HCA, i.e. "home - away".
+    // That means "home win" is naturally m > 0.
+    //
+    // If you want your stored margin to be "negative = home win", you should flip at OUTPUT time,
+    // not flip the win logic here (or you'll invert the model).
+    //
+    // So: win logic stays m > 0 (home better).
     if (m > 0) homeWins++;
+    else if (m < 0) awayWins++;
+
+    // SPREAD PROB
+    if (spreadLineHome != null) {
+      // Use diff_home (home - away) = m
+      // Home covers when (m + line_home) > 0
+      const v = m + spreadLineHome;
+      if (v > eps) homeCovers++;
+      else if (Math.abs(v) <= eps) coverPushes++;
+      // else away covers
+    }
+
+    // TOTAL PROB
+    if (totalLine != null) {
+      const dv = t - totalLine;
+      if (dv > eps) overs++;
+      else if (Math.abs(dv) <= eps) totalPushes++;
+      // else under
+    }
   }
 
-  const projectedMarginHome = sumM / sims;
+  const projectedMarginHome_model = sumM / sims; // model-native (home - away)
   const projectedTotal = sumT / sims;
 
+  // Convert to your preferred stored convention if you want:
+  // If "negative = home win", then store margin as -(home-away)
+  const projectedMarginHome_stored = marginHomeWinNegative
+    ? -projectedMarginHome_model
+    : projectedMarginHome_model;
+
+  const homeWinProb = homeWins / sims;
+  const awayWinProb = awayWins / sims;
+
+  const homeCoverProb =
+    spreadLineHome == null ? null : homeCovers / sims;
+  const coverPushProb =
+    spreadLineHome == null ? null : coverPushes / sims;
+  const awayCoverProb =
+    spreadLineHome == null
+      ? null
+      : 1 - (homeCoverProb ?? 0) - (coverPushProb ?? 0);
+
+  const overProb = totalLine == null ? null : overs / sims;
+  const totalPushProb = totalLine == null ? null : totalPushes / sims;
+  const underProb =
+    totalLine == null ? null : 1 - (overProb ?? 0) - (totalPushProb ?? 0);
+
   return {
-    projectedMarginHome: round2(projectedMarginHome),
+    projectedMarginHome: round2(projectedMarginHome_stored),
     projectedTotal: round2(projectedTotal),
-    pHomeWin: homeWins / sims,
+
+    homeWinProb,
+    awayWinProb,
+
+    homeCoverProb,
+    coverPushProb,
+    awayCoverProb,
+
+    overProb,
+    totalPushProb,
+    underProb,
   };
 }
 
@@ -399,23 +548,19 @@ function num(v: any, fallback: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
-
 function toNullNum(v: any): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
-
 function avg(a: number, b: number) {
   return (a + b) / 2;
 }
-
 function round2(x: number) {
   return Math.round(x * 100) / 100;
 }
-
-// Box–Muller standard normal
 function randn() {
-  let u = 0, v = 0;
+  let u = 0,
+    v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
@@ -426,4 +571,5 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
 
