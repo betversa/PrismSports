@@ -1,18 +1,17 @@
 /**
- * Odds Loader — The Odds API -> Supabase (events + odds_snapshot)
+ * Odds Loader — The Odds API → Supabase
  *
- * CHANGES IN THIS VERSION:
- * - FULL RESET each run:
- *   • Deletes ALL rows in public.odds_snapshot where sport_key = SPORT_KEY
- *   • Then writes the fresh snapshot rows
- * - Adds history:
- *   • Inserts same rows into public.odds_snapshot_history
- *   • Prunes history to last 10 per (sport_key,event_id,bookmaker,market,side)
+ * SNAPSHOT MODE (HARD GUARANTEES):
+ * - events table:
+ *   • ONLY events returned by the Odds API for this sport remain
+ *   • all stale events are deleted each run
  *
- * DOES NOT:
- * - rename existing tables
- * - change events schema
- * - change odds_snapshot row shape or keys
+ * - odds_snapshot:
+ *   • FULL RESET each run (per sport)
+ *
+ * - odds_snapshot_history:
+ *   • append-only
+ *   • pruned to last 10 per (sport,event,book,market,side)
  */
 
 import "dotenv/config";
@@ -80,7 +79,7 @@ function normalizeTeamKey(s: string) {
   return String(s || "")
     .toLowerCase()
     .trim()
-    .replace(/\u00A0/g, " ")
+    .replace(/\u00a0/g, " ")
     .replace(/[’‘]/g, "'")
     .replace(/[^a-z0-9\s&'.-]/g, "")
     .replace(/\s+/g, " ");
@@ -106,10 +105,6 @@ function findOutcome(outcomes: any[], name: string) {
   return (outcomes || []).find((o) => o?.name === name) || null;
 }
 
-/**
- * Determine which outcome corresponds to home vs away even if the API returns
- * outcomes in a different order or uses slightly different team strings.
- */
 function splitHomeAwayOutcomes(
   eventHome: string,
   eventAway: string,
@@ -125,12 +120,10 @@ function splitHomeAwayOutcomes(
   const homeKey = normalizeTeamKey(eventHome);
   const awayKey = normalizeTeamKey(eventAway);
 
-  const homeObj =
-    o1Key === homeKey ? o1 : o1Key === awayKey ? o2 : o1;
-  const awayObj =
-    o1Key === homeKey ? o2 : o1Key === awayKey ? o1 : o2;
-
-  return { homeObj, awayObj };
+  return {
+    homeObj: o1Key === homeKey ? o1 : o2,
+    awayObj: o1Key === homeKey ? o2 : o1,
+  };
 }
 
 /* ===========================
@@ -146,58 +139,23 @@ async function buildAliasMap(supabase: ReturnType<typeof createClient>) {
 
   if (error) throw error;
 
-  const aliasMap = new Map<string, string>();
-  const rows = (data || []) as TeamMapRow[];
+  const map = new Map<string, string>();
+  for (const r of (data || []) as TeamMapRow[]) {
+    if (!r.canonical) continue;
+    map.set(normalizeTeamKey(r.canonical), r.canonical);
 
-  for (const r of rows) {
-    const canon = r.canonical;
-    if (!canon) continue;
-
-    aliasMap.set(normalizeTeamKey(canon), canon);
-
-    if (r["The Odds API"])
-      aliasMap.set(normalizeTeamKey(r["The Odds API"]), canon);
-    if (r.ESPN_Long) aliasMap.set(normalizeTeamKey(r.ESPN_Long), canon);
-    if (r.SR_School) aliasMap.set(normalizeTeamKey(r.SR_School), canon);
-    if (r.SR_School_Short)
-      aliasMap.set(normalizeTeamKey(r.SR_School_Short), canon);
-    if (r.KenPom) aliasMap.set(normalizeTeamKey(r.KenPom), canon);
-    if (r.Elo) aliasMap.set(normalizeTeamKey(r.Elo), canon);
+    Object.values(r).forEach((v) => {
+      if (typeof v === "string") {
+        map.set(normalizeTeamKey(v), r.canonical);
+      }
+    });
   }
-
-  return aliasMap;
+  return map;
 }
 
-async function upsertMissingTeams(
-  supabase: ReturnType<typeof createClient>,
-  missingTeams: Set<string>
-) {
-  for (const team of missingTeams) {
-    const { data: existing, error: readErr } = await supabase
-      .from("team_missing_log")
-      .select("team_name, seen_count")
-      .eq("team_name", team)
-      .maybeSingle();
-
-    if (readErr) throw readErr;
-
-    if (!existing) {
-      const { error } = await supabase
-        .from("team_missing_log")
-        .insert({ team_name: team });
-      if (error) throw error;
-    } else {
-      const { error } = await supabase
-        .from("team_missing_log")
-        .update({
-          last_seen: new Date().toISOString(),
-          seen_count: (existing.seen_count || 1) + 1,
-        })
-        .eq("team_name", team);
-      if (error) throw error;
-    }
-  }
-}
+/* ===========================
+   Odds API
+=========================== */
 
 async function fetchOddsApi(
   sportKey: string,
@@ -208,16 +166,13 @@ async function fetchOddsApi(
   const url =
     `https://api.the-odds-api.com/v4/sports/${sportKey}/odds` +
     `?apiKey=${apiKey}` +
-    `&bookmakers=${encodeURIComponent(bookmakers)}` +
     `&markets=${encodeURIComponent(markets)}` +
+    `&bookmakers=${encodeURIComponent(bookmakers)}` +
     `&oddsFormat=american&dateFormat=iso`;
 
   const res = await fetch(url);
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Odds API error ${res.status}: ${txt}`);
-  }
-  return (await res.json()) as OddsApiEvent[];
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 /* ===========================
@@ -225,178 +180,143 @@ async function fetchOddsApi(
 =========================== */
 
 async function main() {
-  const SUPABASE_URL = process.env.SUPABASE_URL!;
-  const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  const ODDS_API_KEY = process.env.ODDS_API_KEY!;
+  const {
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
+    ODDS_API_KEY,
+    SPORT_KEY = DEFAULT_SPORT_KEY,
+    MARKETS = DEFAULT_MARKETS,
+    BOOKMAKERS = DEFAULT_BOOKMAKERS,
+  } = process.env;
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !ODDS_API_KEY) {
-    throw new Error(
-      "Missing env vars: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / ODDS_API_KEY"
-    );
+    throw new Error("Missing required env vars.");
   }
-
-  const sportKey = process.env.SPORT_KEY || DEFAULT_SPORT_KEY;
-  const markets = process.env.MARKETS || DEFAULT_MARKETS;
-  const bookmakers = process.env.BOOKMAKERS || DEFAULT_BOOKMAKERS;
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  // ---- 1) Build canonicalization map from team_map
+  /* ---- 1) Canonical team map */
   const aliasMap = await buildAliasMap(supabase);
-
   const missingTeams = new Set<string>();
-  const canonicalize = (name: string) => {
-    const raw = String(name || "").trim();
-    const key = normalizeTeamKey(raw);
-    const canon = aliasMap.get(key);
-    if (canon) return canon;
 
-    if (raw) missingTeams.add(raw);
-    return raw;
+  const canonicalize = (name: string) => {
+    const canon = aliasMap.get(normalizeTeamKey(name));
+    if (!canon) missingTeams.add(name);
+    return canon ?? name;
   };
 
-  // ---- 2) Fetch odds
-  const events = await fetchOddsApi(sportKey, markets, bookmakers, ODDS_API_KEY);
+  /* ---- 2) Fetch Odds API events */
+  const apiEvents = await fetchOddsApi(
+    SPORT_KEY,
+    MARKETS,
+    BOOKMAKERS,
+    ODDS_API_KEY
+  );
 
-  // ---- 3) Upsert events (unchanged)
-  const eventUpserts = events.map((e) => {
-    const canonHome = canonicalize(e.home_team);
-    const canonAway = canonicalize(e.away_team);
+  const seenEventIds = apiEvents.map((e) => e.id);
 
-    return {
-      event_id: e.id,
-      sport_key: sportKey,
-      commence_time: e.commence_time,
-      api_home_team: e.home_team,
-      api_away_team: e.away_team,
-      canon_home_team: canonHome,
-      canon_away_team: canonAway,
-      matchup: matchup(canonAway, canonHome),
-      updated_at: new Date().toISOString(),
-    };
-  });
-
-  for (const batch of chunk(eventUpserts, 500)) {
-    const { error } = await supabase.from("events").upsert(batch, {
-      onConflict: "event_id",
+  /* ---- 3) SNAPSHOT PRUNE: events table */
+  if (seenEventIds.length === 0) {
+    await supabase.rpc("clear_events_for_sport", { p_sport_key: SPORT_KEY });
+  } else {
+    await supabase.rpc("prune_events_not_in_ids", {
+      p_sport_key: SPORT_KEY,
+      p_event_ids: seenEventIds,
     });
+  }
+
+  /* ---- 4) Upsert current events */
+  const eventRows = apiEvents.map((e) => ({
+    event_id: e.id,
+    sport_key: SPORT_KEY,
+    commence_time: e.commence_time,
+    api_home_team: e.home_team,
+    api_away_team: e.away_team,
+    canon_home_team: canonicalize(e.home_team),
+    canon_away_team: canonicalize(e.away_team),
+    matchup: matchup(
+      canonicalize(e.away_team),
+      canonicalize(e.home_team)
+    ),
+    updated_at: new Date().toISOString(),
+  }));
+
+  for (const batch of chunk(eventRows, 500)) {
+    const { error } = await supabase
+      .from("events")
+      .upsert(batch, { onConflict: "event_id" });
     if (error) throw error;
   }
 
-  // ---- 4) Log missing teams (unchanged)
-  await upsertMissingTeams(supabase, missingTeams);
+  /* ---- 5) Build odds_snapshot rows */
+  const ts = new Date().toISOString();
+  const snapshot: SnapshotRow[] = [];
 
-  // ---- 5) Build snapshot rows
-  const nowTs = new Date().toISOString();
-  const snapshotRows: SnapshotRow[] = [];
-
-  for (const e of events) {
+  for (const e of apiEvents) {
     for (const bk of e.bookmakers || []) {
-      const bookmakerKey = bk.key;
-      const lastUpdate = isoOrNull(bk.last_update);
-
       for (const mk of bk.markets || []) {
-        const market = mk.key;
         const outs = mk.outcomes || [];
 
-        if (market === "totals") {
+        if (mk.key === "totals") {
           const over = findOutcome(outs, "Over");
           const under = findOutcome(outs, "Under");
-          const totalLine =
-            typeof over?.point === "number"
-              ? over.point
-              : typeof under?.point === "number"
-              ? under.point
-              : null;
+          const line = over?.point ?? under?.point ?? null;
 
-          snapshotRows.push(
+          snapshot.push(
             {
-              ts: nowTs,
-              sport_key: sportKey,
+              ts,
+              sport_key: SPORT_KEY,
               event_id: e.id,
-              bookmaker: bookmakerKey,
-              market,
+              bookmaker: bk.key,
+              market: "totals",
               side: "over",
-              line: totalLine,
-              odds: typeof over?.price === "number" ? over.price : null,
-              last_update: lastUpdate,
+              line,
+              odds: over?.price ?? null,
+              last_update: isoOrNull(bk.last_update),
             },
             {
-              ts: nowTs,
-              sport_key: sportKey,
+              ts,
+              sport_key: SPORT_KEY,
               event_id: e.id,
-              bookmaker: bookmakerKey,
-              market,
+              bookmaker: bk.key,
+              market: "totals",
               side: "under",
-              line: totalLine,
-              odds: typeof under?.price === "number" ? under.price : null,
-              last_update: lastUpdate,
+              line,
+              odds: under?.price ?? null,
+              last_update: isoOrNull(bk.last_update),
             }
           );
         }
 
-        if (market === "h2h") {
+        if (mk.key === "h2h" || mk.key === "spreads") {
           const { homeObj, awayObj } = splitHomeAwayOutcomes(
             e.home_team,
             e.away_team,
             outs
           );
 
-          snapshotRows.push(
+          snapshot.push(
             {
-              ts: nowTs,
-              sport_key: sportKey,
+              ts,
+              sport_key: SPORT_KEY,
               event_id: e.id,
-              bookmaker: bookmakerKey,
-              market,
+              bookmaker: bk.key,
+              market: mk.key,
               side: "home",
-              line: null,
-              odds: typeof homeObj?.price === "number" ? homeObj.price : null,
-              last_update: lastUpdate,
+              line: homeObj?.point ?? null,
+              odds: homeObj?.price ?? null,
+              last_update: isoOrNull(bk.last_update),
             },
             {
-              ts: nowTs,
-              sport_key: sportKey,
+              ts,
+              sport_key: SPORT_KEY,
               event_id: e.id,
-              bookmaker: bookmakerKey,
-              market,
+              bookmaker: bk.key,
+              market: mk.key,
               side: "away",
-              line: null,
-              odds: typeof awayObj?.price === "number" ? awayObj.price : null,
-              last_update: lastUpdate,
-            }
-          );
-        }
-
-        if (market === "spreads") {
-          const { homeObj, awayObj } = splitHomeAwayOutcomes(
-            e.home_team,
-            e.away_team,
-            outs
-          );
-
-          snapshotRows.push(
-            {
-              ts: nowTs,
-              sport_key: sportKey,
-              event_id: e.id,
-              bookmaker: bookmakerKey,
-              market,
-              side: "home",
-              line: typeof homeObj?.point === "number" ? homeObj.point : null,
-              odds: typeof homeObj?.price === "number" ? homeObj.price : null,
-              last_update: lastUpdate,
-            },
-            {
-              ts: nowTs,
-              sport_key: sportKey,
-              event_id: e.id,
-              bookmaker: bookmakerKey,
-              market,
-              side: "away",
-              line: typeof awayObj?.point === "number" ? awayObj.point : null,
-              odds: typeof awayObj?.price === "number" ? awayObj.price : null,
-              last_update: lastUpdate,
+              line: awayObj?.point ?? null,
+              odds: awayObj?.price ?? null,
+              last_update: isoOrNull(bk.last_update),
             }
           );
         }
@@ -404,43 +324,38 @@ async function main() {
     }
   }
 
-  // ---- 6) FULL RESET: delete ALL previous odds_snapshot rows for this sportKey
-  // Uses server-side SQL function to avoid PostgREST delete limits.
-  const { error: clearErr } = await supabase.rpc("clear_odds_snapshot_for_sport", {
-    p_sport_key: sportKey,
+  /* ---- 6) Reset odds_snapshot */
+  await supabase.rpc("clear_odds_snapshot_for_sport", {
+    p_sport_key: SPORT_KEY,
   });
-  if (clearErr) throw clearErr;
 
-  // ---- 7) Write fresh odds_snapshot rows (same behavior / same table name)
-  for (const batch of chunk(snapshotRows, 1000)) {
+  for (const batch of chunk(snapshot, 1000)) {
     const { error } = await supabase
       .from("odds_snapshot")
-      .upsert(batch, { onConflict: "ts,event_id,bookmaker,market,side" });
+      .upsert(batch, {
+        onConflict: "ts,event_id,bookmaker,market,side",
+      });
     if (error) throw error;
   }
 
-  // ---- 8) History append (new table; no effect on existing dependencies)
-  for (const batch of chunk(snapshotRows, 1000)) {
-    const { error } = await supabase.from("odds_snapshot_history").insert(batch);
+  /* ---- 7) Append + prune history */
+  for (const batch of chunk(snapshot, 1000)) {
+    const { error } = await supabase
+      .from("odds_snapshot_history")
+      .insert(batch);
     if (error) throw error;
   }
 
-  // ---- 9) Prune history (keep last 10 per thing)
-  const { error: pruneErr } = await supabase.rpc("prune_odds_snapshot_history", {
-    keep_n: 10,
-  });
-  if (pruneErr) throw pruneErr;
+  await supabase.rpc("prune_odds_snapshot_history", { keep_n: 10 });
 
   console.log(
     JSON.stringify(
       {
         ok: true,
-        sportKey,
-        markets,
-        bookmakers,
-        events: events.length,
-        snapshots_written: snapshotRows.length,
-        missingTeams: missingTeams.size,
+        sport: SPORT_KEY,
+        events: apiEvents.length,
+        snapshots: snapshot.length,
+        missingTeams: [...missingTeams],
       },
       null,
       2
@@ -452,3 +367,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
