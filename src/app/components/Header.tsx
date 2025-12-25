@@ -23,12 +23,10 @@ const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
 const GOLD = "#d4af37";
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
-
-/** Close grace:
- * - long enough to move mouse into menu without it vanishing
- * - short enough to feel snappy
- */
 const DROPDOWN_CLOSE_DELAY_MS = 240;
+
+// ✅ Simple descriptor (distinct from dratings wording)
+const TAGLINE = "Sports Models · Projections · Analysis";
 
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
   useEffect(() => {
@@ -72,7 +70,7 @@ function NavItem({
 function HoverDropdown({
   label,
   active,
-  suffix, // "Odds" or "Predictions"
+  suffix,
   onPick,
 }: {
   label: "Odds" | "Predictions";
@@ -104,15 +102,12 @@ function HoverDropdown({
     closeTimer.current = window.setTimeout(() => setOpen(false), DROPDOWN_CLOSE_DELAY_MS);
   };
 
-  // When another dropdown opens, close immediately (removes the "lag" when switching)
   useEffect(() => {
     const handler = (e: Event) => {
       const ev = e as CustomEvent<{ id: string }>;
       const openedId = ev?.detail?.id;
       if (!openedId) return;
-      if (openedId !== idRef.current) {
-        closeNow();
-      }
+      if (openedId !== idRef.current) closeNow();
     };
     window.addEventListener(DROPDOWN_EVENT, handler as EventListener);
     return () => window.removeEventListener(DROPDOWN_EVENT, handler as EventListener);
@@ -141,7 +136,6 @@ function HoverDropdown({
         ].join(" ")}
         onMouseEnter={openNow}
         onClick={() => {
-          // Click toggles, but also broadcasts so the other dropdown closes instantly
           window.dispatchEvent(new CustomEvent(DROPDOWN_EVENT, { detail: { id: idRef.current } }));
           setOpen((v) => !v);
         }}
@@ -160,7 +154,6 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          {/* subtle premium glow */}
           <div
             className="pointer-events-none absolute inset-0 opacity-80"
             style={{
@@ -251,9 +244,8 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
         />
       </div>
 
-      {/* padding: slight left + matching top feel (not huge) */}
       <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-3">
-        {/* Left: menu + logo + nav */}
+        {/* Left: menu + brand + nav */}
         <div className="flex items-start min-w-0">
           <button
             onClick={onOpenMenu}
@@ -265,13 +257,24 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </button>
 
           <div className="flex flex-col items-start gap-2 min-w-0">
-            <img
-              src="/logos/mainlogo.png"
-              alt="PrismSports"
-              className="h-14 sm:h-16 md:h-20 w-auto object-contain select-none"
-              draggable={false}
-            />
+            {/* Brand row: Logo + Tagline */}
+            <div className="flex items-center gap-3 min-w-0">
+              <img
+                src="/logos/mainlogo.png"
+                alt="PrismSports"
+                className="h-14 sm:h-16 md:h-20 w-auto object-contain select-none"
+                draggable={false}
+              />
 
+              {/* ✅ Tagline next to logo (simple descriptor, not sales-y) */}
+              <div className="hidden sm:block min-w-0">
+                <div className="text-[11px] md:text-[12px] text-[#9a9a9a] font-medium tracking-wide truncate max-w-[240px] md:max-w-[360px]">
+                  {TAGLINE}
+                </div>
+              </div>
+            </div>
+
+            {/* Top nav */}
             <nav className="hidden md:flex items-center gap-7 pb-3">
               <HoverDropdown
                 label="Odds"
@@ -305,8 +308,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           <div
             className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
             style={{
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+              background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
             }}
           >
             <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
