@@ -276,7 +276,7 @@ export function ModelScreen() {
                     <img
                       src="/logos/Quantum.png"
                       alt="Quantum"
-                      className="h-4 opacity-90"
+                      className="h-5 md:h-7 w-auto opacity-90"
                       draggable={false}
                     />
                   </div>
@@ -289,7 +289,7 @@ export function ModelScreen() {
                     <img
                       src="/logos/SpectrumEV.png"
                       alt="SpectrumEV"
-                      className="h-4 opacity-90"
+                      className="h-5 md:h-7 w-auto opacity-90"
                       draggable={false}
                     />
                   </div>
