@@ -121,12 +121,7 @@ function HoverDropdown({
   };
 
   return (
-    <div
-      ref={wrapRef}
-      className="relative"
-      onMouseEnter={openNow}
-      onMouseLeave={scheduleClose}
-    >
+    <div ref={wrapRef} className="relative" onMouseEnter={openNow} onMouseLeave={scheduleClose}>
       <button
         type="button"
         className={[
@@ -222,10 +217,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
   const predsActive = activeScreen === "monte-carlo";
 
   return (
-    <header
-      ref={headerRef}
-      className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]"
-    >
+    <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
       {/* subtle top sheen + gold accent line */}
       <div className="pointer-events-none absolute inset-0">
         <div
@@ -244,7 +236,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
         />
       </div>
 
-      <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-3">
+      <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-3 pb-2">
         {/* Left: menu + brand + nav */}
         <div className="flex items-start min-w-0">
           <button
@@ -256,8 +248,8 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
             <Menu className="w-5 h-5" />
           </button>
 
-          <div className="flex flex-col items-start gap-2 min-w-0">
-            {/* Brand row: Logo + Tagline */}
+          <div className="flex flex-col items-start gap-1.5 min-w-0">
+            {/* Brand row */}
             <div className="flex items-center gap-3 min-w-0">
               <img
                 src="/logos/mainlogo.png"
@@ -266,7 +258,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                 draggable={false}
               />
 
-              {/* ✅ Tagline next to logo (simple descriptor, not sales-y) */}
+              {/* ✅ Desktop+ tag (kept) */}
               <div className="hidden sm:block min-w-0">
                 <div className="text-[11px] md:text-[12px] text-[#9a9a9a] font-medium tracking-wide truncate max-w-[240px] md:max-w-[360px]">
                   {TAGLINE}
@@ -274,8 +266,13 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
               </div>
             </div>
 
-            {/* Top nav */}
-            <nav className="hidden md:flex items-center gap-7 pb-3">
+            {/* ✅ Mobile tagline (shows under the logo row) */}
+            <div className="sm:hidden text-[11px] text-[#9a9a9a] font-medium tracking-wide leading-tight">
+              {TAGLINE}
+            </div>
+
+            {/* Desktop nav */}
+            <nav className="hidden md:flex items-center gap-7 pb-2 pt-1">
               <HoverDropdown
                 label="Odds"
                 suffix="Odds"
@@ -284,7 +281,6 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                   if (sport === "NCAAB") onNavigate?.("odds");
                 }}
               />
-
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
@@ -319,4 +315,3 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
     </header>
   );
 }
-
