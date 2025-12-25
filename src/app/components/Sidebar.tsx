@@ -1,5 +1,5 @@
 // components/Sidebar.tsx
-import { ChartBar, Calculator, TrendingUp, DollarSign, Target, Settings, House, X } from "lucide-react";
+import { ChartBar, Calculator, TrendingUp, Target, Settings, House, X } from "lucide-react";
 import type { Screen } from "../App";
 
 interface SidebarProps {
@@ -11,11 +11,10 @@ interface SidebarProps {
 
 const menuItems: { id: Screen; label: string; icon: any }[] = [
   { id: "overview", label: "Overview", icon: House },
-  { id: "model", label: "Model", icon: Target },
-  { id: "monte-carlo", label: "Monte Carlo", icon: Calculator },
+  { id: "model", label: "Picks", icon: Target },
+  { id: "monte-carlo", label: "Predictions", icon: Calculator },
   { id: "odds", label: "Odds", icon: ChartBar },
   { id: "results", label: "Results", icon: TrendingUp },
-  { id: "calibration", label: "Calibration", icon: DollarSign },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
