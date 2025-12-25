@@ -1,12 +1,10 @@
-// screens/OddsScreen.tsx — FULL REWRITE (mobile books formatting + history modal wide charts)
-// ✅ Mobile Books: ALWAYS 2-line format (Line on top, Odds below) so wrapping never makes rows inconsistent
-// ✅ Mobile Books headers (Away/Home or Over/Under) are perfectly centered above their columns
-// ✅ Totals no longer show "O"/"U" prefixes because headers already indicate Over/Under
-// ✅ History modal charts are NOT skinny on mobile (no axis-side labels stealing width)
-// ✅ History chart "axis labels" moved to TOP (left/right) and never overlay tick labels
-// ✅ Market width + sharp moves ALWAYS ON (no toggles)
-// ✅ Spread/Total history can toggle Line ↔ Odds (Moneyline stays odds-only)
-// ✅ Sharp move shown as a RED badge in tooltip when detected
+// screens/OddsScreen.tsx — FULL REWRITE (History charts = ODDS only; LINE shown in tooltip)
+// ✅ Spread/Total history charts now plot ODDS only (no line-vs-odds toggle)
+// ✅ Tooltip shows BOTH: odds + line for each bookmaker (so you still “see the number”)
+// ✅ Market width always based on ODDS dispersion (implied probability width), which is the most consistent
+// ✅ Sharp-move badge stays (RED) + sharp reference lines stay
+// ✅ Axis labels moved to TOP (left/right), never overlap tick labels, and chart is not skinny on mobile
+// ✅ Mobile Books table formatting stays consistent (2-line per cell), labels centered, totals no O/U prefix
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -54,7 +52,7 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos (FULL-COLOR assets) */
+/** Public folder book logos */
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -170,10 +168,7 @@ function fmtSpread(cell: SpreadCell) {
   return `${cell.line} (${cell.odds})`;
 }
 
-/**
- * Totals: do NOT prefix with O/U since headers indicate Over/Under.
- * Always return "line (odds)" when odds exists.
- */
+/** Totals: do NOT prefix with O/U since headers indicate Over/Under. */
 function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
   if (!cell || cell.line == null) return "—";
   const v = which === "over" ? cell.over : cell.under;
@@ -266,7 +261,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     return `${mLine} (${mOdds})`;
   }
 
-  // totals: side is AWAY => Over cell, HOME => Under cell (matches your UI)
+  // totals: side is AWAY => Over cell, HOME => Under cell
   const lines: number[] = [];
   const overOdds: number[] = [];
   const underOdds: number[] = [];
@@ -483,7 +478,7 @@ function MiniTeamRow({
 }
 
 /** =========================
- * HISTORY / CHARTS
+ * HISTORY / CHARTS (ODDS ONLY)
  * ========================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
@@ -544,45 +539,30 @@ function floorToMinuteIso(iso: string) {
   return d.toISOString();
 }
 
-function medianOfKeys(point: any, keys: string[], valueMode: "line" | "odds") {
-  const vals: number[] = [];
-  for (const k of keys) {
-    const v = point?.[k];
-    if (typeof v === "number" && Number.isFinite(v)) {
-      if (valueMode === "odds") {
-        const p = impliedProbFromAmerican(v);
-        if (Number.isFinite(p)) vals.push(p);
-      } else {
-        vals.push(v);
-      }
-    }
-  }
-  return median(vals);
-}
-
 type ChartPoint = {
-  ts: string;
-  t: string;
-  mw: number | null;
-  sharp: boolean;
-  pin?: number;
-  [book: string]: any;
+  ts: string; // bucket iso
+  t: string; // formatted label
+  mw: number | null; // implied-prob width
+  sharp: boolean; // sharp-move flag
+  pinOdds?: number; // pinnacle odds (if present)
+  pinLine?: number | null; // pinnacle line (if present)
+
+  // per book:
+  // [bookmaker]: odds
+  // [bookmaker + "__line"]: line
+  [k: string]: any;
 };
 
-/**
- * valueMode:
- * - "line": width = max(line)-min(line)
- * - "odds": width = max(impliedProb)-min(impliedProb)
- */
-function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line" | "odds", books: string[]) {
+function buildChartSeriesOddsOnly(rows: HistoryRow[], books: string[]) {
+  // bucket -> book -> latest row
   const binMap = new Map<string, Map<string, HistoryRow>>();
 
   for (const r of rows) {
     const bin = floorToMinuteIso(r.ts);
     const byBook = binMap.get(bin) ?? new Map<string, HistoryRow>();
-    const prev = byBook.get(String(r.bookmaker).toLowerCase());
-
     const key = String(r.bookmaker || "").toLowerCase();
+    const prev = byBook.get(key);
+
     if (!prev) byBook.set(key, r);
     else {
       const pt = new Date(normalizeIso(prev.ts) ?? prev.ts).getTime();
@@ -597,76 +577,79 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
-    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
+
+    const p: ChartPoint = {
+      ts: bin,
+      t: fmtCTShortLabel(bin),
+      mw: null,
+      sharp: false,
+    };
 
     for (const b of books) {
       const row = byBook.get(String(b).toLowerCase());
       if (!row) continue;
 
-      if (valueMode === "line") {
-        if (typeof row.line === "number" && Number.isFinite(row.line)) p[b] = row.line;
-      } else {
-        if (typeof row.odds === "number" && Number.isFinite(row.odds)) p[b] = row.odds;
+      // plot ODDS
+      if (typeof row.odds === "number" && Number.isFinite(row.odds)) {
+        p[b] = row.odds;
+      }
+
+      // store LINE for tooltip
+      if (typeof row.line === "number" && Number.isFinite(row.line)) {
+        p[`${b}__line`] = row.line;
       }
     }
 
-    if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
+    // pin helpers
+    if (typeof p["pinnacle"] === "number") p.pinOdds = p["pinnacle"];
+    const pl = p["pinnacle__line"];
+    if (typeof pl === "number" && Number.isFinite(pl)) p.pinLine = pl;
 
-    if (valueMode === "line") {
-      const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
-      if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
-    } else {
-      const probs = books
-        .map((b) => p[b])
-        .filter((v) => typeof v === "number" && Number.isFinite(v))
-        .map((odds: number) => impliedProbFromAmerican(odds))
-        .filter((q) => Number.isFinite(q));
-      if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
-    }
+    // market width: max(prob) - min(prob)
+    const probs = books
+      .map((b) => p[b])
+      .filter((v) => typeof v === "number" && Number.isFinite(v))
+      .map((odds: number) => impliedProbFromAmerican(odds))
+      .filter((q) => Number.isFinite(q));
+
+    if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
 
     return p;
   });
 
-  // sharp moves always on
-  const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
+  // sharp move detection (ODDS only): prob jump threshold
   const PROB_MOVE = 0.02;
 
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
     const cur = points[i];
 
-    const widthOk =
-      cur.mw != null &&
-      (valueMode === "line"
-        ? uiMarket === "spread"
-          ? cur.mw <= 0.5
-          : uiMarket === "total"
-          ? cur.mw <= 1.0
-          : true
-        : cur.mw <= 0.02);
-
     let sharp = false;
 
-    if (typeof prev.pin === "number" && typeof cur.pin === "number") {
-      if (valueMode === "line") {
-        if (Math.abs(cur.pin - prev.pin) >= LINE_MOVE) sharp = true;
-      } else {
-        const pp = impliedProbFromAmerican(prev.pin);
-        const cp = impliedProbFromAmerican(cur.pin);
-        if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharp = true;
-      }
+    // check pinnacle prob jump first
+    if (typeof prev.pinOdds === "number" && typeof cur.pinOdds === "number") {
+      const pp = impliedProbFromAmerican(prev.pinOdds);
+      const cp = impliedProbFromAmerican(cur.pinOdds);
+      if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharp = true;
     }
 
-    if (!sharp && widthOk) {
-      const consPrev = medianOfKeys(prev, books, valueMode);
-      const consCur = medianOfKeys(cur, books, valueMode);
-      if (consPrev != null && consCur != null) {
-        if (valueMode === "line") {
-          if (Math.abs(consCur - consPrev) >= LINE_MOVE) sharp = true;
-        } else {
-          if (Math.abs(consCur - consPrev) >= PROB_MOVE) sharp = true;
-        }
-      }
+    // else check consensus(prob median) jump
+    if (!sharp) {
+      const prevProbs = books
+        .map((b) => prev[b])
+        .filter((v) => typeof v === "number" && Number.isFinite(v))
+        .map((odds: number) => impliedProbFromAmerican(odds))
+        .filter((q) => Number.isFinite(q));
+      const curProbs = books
+        .map((b) => cur[b])
+        .filter((v) => typeof v === "number" && Number.isFinite(v))
+        .map((odds: number) => impliedProbFromAmerican(odds))
+        .filter((q) => Number.isFinite(q));
+
+      const mPrev = median(prevProbs);
+      const mCur = median(curProbs);
+
+      if (mPrev != null && mCur != null && Math.abs(mCur - mPrev) >= PROB_MOVE) sharp = true;
     }
 
     cur.sharp = sharp;
@@ -739,53 +722,37 @@ function ModalShell({
 }
 
 /** =========================
- * HISTORY CHART PANEL (TOP labels, not skinny)
+ * HISTORY CHART PANEL (ODDS ONLY + TOP labels)
  * ========================= */
 
-function HistoryChartPair({
+function HistoryChartPairOddsOnly({
   title,
   uiMarket,
-  valueMode,
-  onValueModeChange,
   books,
   seriesA,
   seriesB,
   panelTitleA,
   panelTitleB,
-  canToggleMode,
 }: {
   title: string;
   uiMarket: Market;
-  valueMode: "line" | "odds";
-  onValueModeChange?: (m: "line" | "odds") => void;
   books: string[];
   seriesA: ChartPoint[];
   seriesB: ChartPoint[];
   panelTitleA: string;
   panelTitleB: string;
-  canToggleMode: boolean;
 }) {
   const isMobile = useIsMobile();
-
   const chartHeight = isMobile ? 420 : 520;
 
   const leftTopLabel =
-    valueMode === "line"
-      ? uiMarket === "spread"
-        ? "Spread Line"
-        : uiMarket === "total"
-        ? "Total Line"
-        : "Line"
-      : uiMarket === "ml"
-      ? "Moneyline Odds"
-      : uiMarket === "spread"
-      ? "Spread Odds"
-      : "Total Odds";
+    uiMarket === "ml" ? "Moneyline Odds" : uiMarket === "spread" ? "Spread Odds" : "Total Odds";
+  const rightTopLabel = "Market Width (Prob)";
 
-  const rightTopLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
-
-  // no side axis labels => we can reclaim width (this fixes "skinny chart")
-  const margin = isMobile ? { top: 10, right: 16, left: 32, bottom: 14 } : { top: 10, right: 18, left: 34, bottom: 16 };
+  // keep chart wide: no side-axis labels, modest axis widths
+  const margin = isMobile
+    ? { top: 10, right: 16, left: 32, bottom: 14 }
+    : { top: 10, right: 18, left: 34, bottom: 16 };
 
   const legendWrapperStyle = {
     fontSize: isMobile ? 10 : 11,
@@ -802,17 +769,6 @@ function HistoryChartPair({
     <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-white font-extrabold text-sm">{title}</div>
-
-        {canToggleMode && onValueModeChange && (
-          <div className="flex items-center gap-2">
-            <PillButton active={valueMode === "line"} onClick={() => onValueModeChange("line")}>
-              Line
-            </PillButton>
-            <PillButton active={valueMode === "odds"} onClick={() => onValueModeChange("odds")}>
-              Odds
-            </PillButton>
-          </div>
-        )}
       </div>
 
       {empty ? (
@@ -827,7 +783,7 @@ function HistoryChartPair({
               <div className="flex items-center justify-between gap-3 mb-2">
                 <div className="text-white font-bold text-xs">{panel.title}</div>
 
-                {/* ✅ "axis labels" at TOP, left/right, never collide with ticks */}
+                {/* ✅ "axis labels" at TOP (no tick overlap) */}
                 <div className="flex items-center justify-end gap-3 min-w-0">
                   <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{leftTopLabel}</div>
                   <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{rightTopLabel}</div>
@@ -840,33 +796,34 @@ function HistoryChartPair({
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="t" tick={{ fontSize: xTickSize }} interval="preserveStartEnd" />
 
-                    <YAxis
-                      yAxisId="main"
-                      tick={{ fontSize: yTickSize }}
-                      tickMargin={8}
-                      width={isMobile ? 32 : 36}
-                    />
-
-                    <YAxis
-                      yAxisId="mw"
-                      orientation="right"
-                      tick={{ fontSize: yTickSize }}
-                      tickMargin={8}
-                      width={isMobile ? 36 : 40}
-                    />
+                    <YAxis yAxisId="main" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 32 : 36} />
+                    <YAxis yAxisId="mw" orientation="right" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 36 : 40} />
 
                     <Tooltip
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
+
                         const row: any = payload[0]?.payload;
 
-                        const lines = (payload ?? [])
+                        // payload entries correspond to plotted lines (odds + mw)
+                        const series = (payload ?? [])
                           .filter((p) => p?.dataKey && typeof p.value === "number")
-                          .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
-                          .filter((x) => x.k !== "mw");
+                          .map((p) => ({ key: String(p.dataKey), val: p.value as number }))
+                          .filter((x) => x.key !== "mw");
+
+                        // show bookmaker odds + (line) if available
+                        const pretty = series.map((s) => {
+                          const lineKey = `${s.key}__line`;
+                          const ln = row?.[lineKey];
+                          return {
+                            book: s.key,
+                            odds: s.val,
+                            line: typeof ln === "number" ? ln : null,
+                          };
+                        });
 
                         return (
-                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[300px]">
+                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[320px]">
                             <div className="font-extrabold text-white mb-1">{label}</div>
 
                             {row?.mw != null && (
@@ -876,10 +833,13 @@ function HistoryChartPair({
                             )}
 
                             <div className="space-y-0.5">
-                              {lines.slice(0, 12).map((x) => (
-                                <div key={x.k} className="flex items-center justify-between gap-2">
-                                  <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
-                                  <span className="text-white font-extrabold tabular-nums">{x.v}</span>
+                              {pretty.slice(0, 12).map((x) => (
+                                <div key={x.book} className="flex items-center justify-between gap-2">
+                                  <span className="text-[#9a9a9a] font-semibold">{x.book}</span>
+                                  <span className="text-white font-extrabold tabular-nums">
+                                    {x.odds}
+                                    {x.line != null ? <span className="text-white/80"> · {x.line}</span> : null}
+                                  </span>
                                 </div>
                               ))}
                             </div>
@@ -928,6 +888,7 @@ function HistoryChartPair({
                       strokeDasharray="6 6"
                     />
 
+                    {/* Sharp move vertical markers */}
                     {panel.data
                       .filter((p) => p.sharp)
                       .map((p) => (
@@ -951,7 +912,7 @@ function HistoryChartPair({
 }
 
 /** =========================
- * LINE MOVEMENT MODAL
+ * LINE MOVEMENT MODAL (ODDS ONLY)
  * ========================= */
 
 function LineMovementModal({
@@ -969,25 +930,18 @@ function LineMovementModal({
   const [activeMarket, setActiveMarket] = useState<Market>(uiMarket);
   useEffect(() => setActiveMarket(uiMarket), [uiMarket]);
 
-  const [spreadMode, setSpreadMode] = useState<"line" | "odds">("line");
-  const [totalMode, setTotalMode] = useState<"line" | "odds">("line");
-
   const hoursBack = 24;
 
   const [books, setBooks] = useState<string[]>([]);
 
-  const [mlAwayOdds, setMlAwayOdds] = useState<ChartPoint[]>([]);
-  const [mlHomeOdds, setMlHomeOdds] = useState<ChartPoint[]>([]);
+  const [mlAway, setMlAway] = useState<ChartPoint[]>([]);
+  const [mlHome, setMlHome] = useState<ChartPoint[]>([]);
 
-  const [spAwayLine, setSpAwayLine] = useState<ChartPoint[]>([]);
-  const [spHomeLine, setSpHomeLine] = useState<ChartPoint[]>([]);
-  const [spAwayOdds, setSpAwayOdds] = useState<ChartPoint[]>([]);
-  const [spHomeOdds, setSpHomeOdds] = useState<ChartPoint[]>([]);
+  const [spAway, setSpAway] = useState<ChartPoint[]>([]);
+  const [spHome, setSpHome] = useState<ChartPoint[]>([]);
 
-  const [toOverLine, setToOverLine] = useState<ChartPoint[]>([]);
-  const [toUnderLine, setToUnderLine] = useState<ChartPoint[]>([]);
-  const [toOverOdds, setToOverOdds] = useState<ChartPoint[]>([]);
-  const [toUnderOdds, setToUnderOdds] = useState<ChartPoint[]>([]);
+  const [toOver, setToOver] = useState<ChartPoint[]>([]);
+  const [toUnder, setToUnder] = useState<ChartPoint[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -1010,16 +964,12 @@ function LineMovementModal({
       if (error) {
         setErr(error.message);
         setBooks([]);
-        setMlAwayOdds([]);
-        setMlHomeOdds([]);
-        setSpAwayLine([]);
-        setSpHomeLine([]);
-        setSpAwayOdds([]);
-        setSpHomeOdds([]);
-        setToOverLine([]);
-        setToUnderLine([]);
-        setToOverOdds([]);
-        setToUnderOdds([]);
+        setMlAway([]);
+        setMlHome([]);
+        setSpAway([]);
+        setSpHome([]);
+        setToOver([]);
+        setToUnder([]);
         setLoading(false);
         return;
       }
@@ -1034,22 +984,14 @@ function LineMovementModal({
       const pick = (m: HistMarket, s: HistSide) =>
         rows.filter((r) => String(r.market).toLowerCase() === m && String(r.side).toLowerCase() === s);
 
-      setMlAwayOdds(buildChartSeries(pick("h2h", "away"), "ml", "odds", bookList));
-      setMlHomeOdds(buildChartSeries(pick("h2h", "home"), "ml", "odds", bookList));
+      setMlAway(buildChartSeriesOddsOnly(pick("h2h", "away"), bookList));
+      setMlHome(buildChartSeriesOddsOnly(pick("h2h", "home"), bookList));
 
-      const spA = pick("spreads", "away");
-      const spH = pick("spreads", "home");
-      setSpAwayLine(buildChartSeries(spA, "spread", "line", bookList));
-      setSpHomeLine(buildChartSeries(spH, "spread", "line", bookList));
-      setSpAwayOdds(buildChartSeries(spA, "spread", "odds", bookList));
-      setSpHomeOdds(buildChartSeries(spH, "spread", "odds", bookList));
+      setSpAway(buildChartSeriesOddsOnly(pick("spreads", "away"), bookList));
+      setSpHome(buildChartSeriesOddsOnly(pick("spreads", "home"), bookList));
 
-      const toO = pick("totals", "over");
-      const toU = pick("totals", "under");
-      setToOverLine(buildChartSeries(toO, "total", "line", bookList));
-      setToUnderLine(buildChartSeries(toU, "total", "line", bookList));
-      setToOverOdds(buildChartSeries(toO, "total", "odds", bookList));
-      setToUnderOdds(buildChartSeries(toU, "total", "odds", bookList));
+      setToOver(buildChartSeriesOddsOnly(pick("totals", "over"), bookList));
+      setToUnder(buildChartSeriesOddsOnly(pick("totals", "under"), bookList));
 
       setLoading(false);
     }
@@ -1064,6 +1006,7 @@ function LineMovementModal({
     ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
     `Window: last ${hoursBack}h`,
     "Bucket: 1-min",
+    "Chart: odds only (line in tooltip)",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1089,46 +1032,38 @@ function LineMovementModal({
       ) : (
         <div className="space-y-4">
           {activeMarket === "ml" && (
-            <HistoryChartPair
+            <HistoryChartPairOddsOnly
               title="Moneyline"
               uiMarket="ml"
-              valueMode="odds"
               books={books}
-              seriesA={mlAwayOdds}
-              seriesB={mlHomeOdds}
+              seriesA={mlAway}
+              seriesB={mlHome}
               panelTitleA="AWAY"
               panelTitleB="HOME"
-              canToggleMode={false}
             />
           )}
 
           {activeMarket === "spread" && (
-            <HistoryChartPair
-              title="Spread"
+            <HistoryChartPairOddsOnly
+              title="Spread (Odds)"
               uiMarket="spread"
-              valueMode={spreadMode}
-              onValueModeChange={setSpreadMode}
               books={books}
-              seriesA={spreadMode === "line" ? spAwayLine : spAwayOdds}
-              seriesB={spreadMode === "line" ? spHomeLine : spHomeOdds}
+              seriesA={spAway}
+              seriesB={spHome}
               panelTitleA="AWAY"
               panelTitleB="HOME"
-              canToggleMode
             />
           )}
 
           {activeMarket === "total" && (
-            <HistoryChartPair
-              title="Total"
+            <HistoryChartPairOddsOnly
+              title="Total (Odds)"
               uiMarket="total"
-              valueMode={totalMode}
-              onValueModeChange={setTotalMode}
               books={books}
-              seriesA={totalMode === "line" ? toOverLine : toOverOdds}
-              seriesB={totalMode === "line" ? toUnderLine : toUnderOdds}
+              seriesA={toOver}
+              seriesB={toUnder}
               panelTitleA="OVER"
               panelTitleB="UNDER"
-              canToggleMode
             />
           )}
         </div>
@@ -1191,7 +1126,6 @@ function BookRowMobile2Col({
           <BookLogoPill src={BOOK_LOGOS[book]} alt={meta.alt} fallbackLabel={meta.fb} />
         </div>
 
-        {/* ✅ same 2-col grid as header labels */}
         <div className="grid grid-cols-2 gap-3 w-full">
           <MobileBookCell value={leftValue} />
           <MobileBookCell value={rightValue} />
@@ -1324,7 +1258,6 @@ function EventCardMobile({
             <div className="px-4 py-2 border-b border-[#141414]">
               <div className="text-[12px] text-white font-extrabold">Books</div>
 
-              {/* ✅ labels centered over value columns (no weird width hacks) */}
               <div className="mt-1 grid grid-cols-[96px_1fr] items-center">
                 <div />
                 <div className="w-full">
@@ -1341,7 +1274,7 @@ function EventCardMobile({
               <BookRowMobile2Col book="fd" leftValue={awayCells.fd} rightValue={homeCells.fd} />
               <BookRowMobile2Col book="mgm" leftValue={awayCells.mgm} rightValue={homeCells.mgm} />
               <BookRowMobile2Col book="pin" leftValue={awayCells.pin} rightValue={homeCells.pin} />
-              <BookRowMobile2Col book="bol" />
+              <BookRowMobile2Col book="bol" leftValue={awayCells.bol} rightValue={homeCells.bol} />
             </div>
           </div>
         )}
@@ -1731,3 +1664,4 @@ export function OddsScreen() {
     </div>
   );
 }
+
