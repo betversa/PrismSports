@@ -1,10 +1,12 @@
-// screens/OddsScreen.tsx  — FULL REWRITE (History modal fixed)
-// ✅ History graphs are BIG again (taller + full-width panels)
-// ✅ Spread + Total history can toggle Line ↔ Odds (Moneyline stays Odds-only)
+// screens/OddsScreen.tsx  — FULL REWRITE (History modal FIXED v3)
+// ✅ History graphs are BIG + WIDE again (true full-width panels, better breakpoints)
+// ✅ Spread + Total can view BOTH line and odds (toggle still exists, BUT tooltip always shows both)
+// ✅ Moneyline stays odds-only
 // ✅ Market Width + Sharp Moves are ALWAYS ON (no top badges, no toggles)
-// ✅ Axis labels are NOT clipped on mobile (margins + smaller label font + offsets)
-// ✅ Legend/book labels slightly smaller
-// ✅ Books section: Away/Home (or Over/Under) label shown once at top (not repeated)
+// ✅ Axis labels NOT clipped on mobile (chart margins + smaller label font + offsets)
+// ✅ Legend/book labels smaller + cleaner
+// ✅ Spread/Total issue fixed: we now bin ONCE and store BOTH line+odds per book per timestamp,
+//    so switching modes never “loses” the other value and hover always shows both.
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -475,7 +477,7 @@ function MiniTeamRow({
 }
 
 /** =========================
- * HISTORY / CHARTS (FIXED)
+ * HISTORY / CHARTS (FIXED v3)
  * ========================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
@@ -536,53 +538,70 @@ function floorToMinuteIso(iso: string) {
   return d.toISOString();
 }
 
-function medianOfKeys(point: any, keys: string[], valueMode: "line" | "odds") {
+type ChartPoint = {
+  ts: string;
+  t: string;
+
+  // always present when possible
+  mw_line: number | null;
+  mw_prob: number | null;
+
+  // per-mode sharp flags (we choose which to show based on current toggle)
+  sharp_line: boolean;
+  sharp_odds: boolean;
+
+  // convenience
+  pin_line?: number;
+  pin_odds?: number;
+
+  // dynamic keys:
+  // `${book}_line` : number
+  // `${book}_odds` : number
+  [k: string]: any;
+};
+
+function medianOfValues(point: any, keys: string[]) {
   const vals: number[] = [];
   for (const k of keys) {
     const v = point?.[k];
-    if (typeof v === "number" && Number.isFinite(v)) {
-      if (valueMode === "odds") {
-        const p = impliedProbFromAmerican(v);
-        if (Number.isFinite(p)) vals.push(p);
-      } else {
-        vals.push(v);
-      }
-    }
+    if (typeof v === "number" && Number.isFinite(v)) vals.push(v);
   }
   return median(vals);
 }
 
-type ChartPoint = {
-  ts: string;
-  t: string;
-  mw: number | null;
-  sharp: boolean;
-  pin?: number;
-  [book: string]: any;
-};
+function medianOfProbsFromOdds(point: any, oddsKeys: string[]) {
+  const probs: number[] = [];
+  for (const k of oddsKeys) {
+    const v = point?.[k];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      const p = impliedProbFromAmerican(v);
+      if (Number.isFinite(p)) probs.push(p);
+    }
+  }
+  return median(probs);
+}
 
 /**
- * IMPORTANT: valueMode determines which field is plotted:
- * - "line" => uses row.line
- * - "odds" => uses row.odds
- *
- * Width:
- * - "line" => max(line)-min(line)
- * - "odds" => max(impliedProb)-min(impliedProb)
+ * Build ONE binned series that stores BOTH line+odds per book per minute.
+ * - charts can render either mode instantly by selecting keys `${book}_line` or `${book}_odds`
+ * - tooltip can always show both (fixes "can't look at line and odds anymore")
+ * - market width computed for both modes
+ * - sharp flags computed for both modes
  */
-function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line" | "odds", books: string[]) {
+function buildUnifiedChartPoints(rows: HistoryRow[], uiMarket: Market, books: string[]) {
+  // bin -> bookmaker -> latest row
   const binMap = new Map<string, Map<string, HistoryRow>>();
 
   for (const r of rows) {
     const bin = floorToMinuteIso(r.ts);
     const byBook = binMap.get(bin) ?? new Map<string, HistoryRow>();
-    const prev = byBook.get(r.bookmaker);
+    const prev = byBook.get(String(r.bookmaker || "").toLowerCase());
 
-    if (!prev) byBook.set(r.bookmaker, r);
+    if (!prev) byBook.set(String(r.bookmaker || "").toLowerCase(), r);
     else {
       const pt = new Date(normalizeIso(prev.ts) ?? prev.ts).getTime();
       const rt = new Date(normalizeIso(r.ts) ?? r.ts).getTime();
-      if (rt >= pt) byBook.set(r.bookmaker, r);
+      if (rt >= pt) byBook.set(String(r.bookmaker || "").toLowerCase(), r);
     }
 
     binMap.set(bin, byBook);
@@ -592,80 +611,88 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
-    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
 
+    const p: ChartPoint = {
+      ts: bin,
+      t: fmtCTShortLabel(bin),
+      mw_line: null,
+      mw_prob: null,
+      sharp_line: false,
+      sharp_odds: false,
+    };
+
+    // stash both line + odds for each book
     for (const b of books) {
-      const row = byBook.get(b);
+      const row = byBook.get(String(b).toLowerCase());
       if (!row) continue;
 
-      if (valueMode === "line") {
-        if (typeof row.line === "number" && Number.isFinite(row.line)) p[b] = row.line;
-      } else {
-        if (typeof row.odds === "number" && Number.isFinite(row.odds)) p[b] = row.odds;
-      }
+      if (typeof row.line === "number" && Number.isFinite(row.line)) p[`${b}_line`] = row.line;
+      if (typeof row.odds === "number" && Number.isFinite(row.odds)) p[`${b}_odds`] = row.odds;
     }
 
-    if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
+    // pin convenience
+    if (typeof p["pinnacle_line"] === "number") p.pin_line = p["pinnacle_line"];
+    if (typeof p["pinnacle_odds"] === "number") p.pin_odds = p["pinnacle_odds"];
 
-    // width always on
-    if (valueMode === "line") {
-      const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
-      if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
-    } else {
-      const probs = books
-        .map((b) => p[b])
-        .filter((v) => typeof v === "number" && Number.isFinite(v))
-        .map((odds: number) => impliedProbFromAmerican(odds))
-        .filter((q) => Number.isFinite(q));
-      if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
-    }
+    // widths (always on)
+    const lineKeys = books.map((b) => `${b}_line`);
+    const oddsKeys = books.map((b) => `${b}_odds`);
+
+    const lineVals = lineKeys.map((k) => p[k]).filter((v) => typeof v === "number" && Number.isFinite(v)) as number[];
+    if (lineVals.length >= 2) p.mw_line = +(Math.max(...lineVals) - Math.min(...lineVals)).toFixed(2);
+
+    const probVals = oddsKeys
+      .map((k) => p[k])
+      .filter((v) => typeof v === "number" && Number.isFinite(v))
+      .map((odds: number) => impliedProbFromAmerican(odds))
+      .filter((q) => Number.isFinite(q)) as number[];
+    if (probVals.length >= 2) p.mw_prob = +(Math.max(...probVals) - Math.min(...probVals)).toFixed(4);
 
     return p;
   });
 
-  // sharp moves always on
+  // sharp thresholds
   const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
   const PROB_MOVE = 0.02;
+
+  // width thresholds used when pin not available
+  const widthOkLine = (mw: number | null) =>
+    mw != null &&
+    (uiMarket === "spread" ? mw <= 0.5 : uiMarket === "total" ? mw <= 1.0 : true);
+
+  const widthOkProb = (mw: number | null) => mw != null && mw <= 0.02;
+
+  const lineKeys = books.map((b) => `${b}_line`);
+  const oddsKeys = books.map((b) => `${b}_odds`);
 
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
     const cur = points[i];
 
-    const widthOk =
-      cur.mw != null &&
-      (valueMode === "line"
-        ? uiMarket === "spread"
-          ? cur.mw <= 0.5
-          : uiMarket === "total"
-          ? cur.mw <= 1.0
-          : true
-        : cur.mw <= 0.02);
-
-    let sharp = false;
-
-    if (typeof prev.pin === "number" && typeof cur.pin === "number") {
-      if (valueMode === "line") {
-        if (Math.abs(cur.pin - prev.pin) >= LINE_MOVE) sharp = true;
-      } else {
-        const pp = impliedProbFromAmerican(prev.pin);
-        const cp = impliedProbFromAmerican(cur.pin);
-        if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharp = true;
-      }
+    // LINE sharp
+    let sharpLine = false;
+    if (typeof prev.pin_line === "number" && typeof cur.pin_line === "number") {
+      if (Math.abs(cur.pin_line - prev.pin_line) >= LINE_MOVE) sharpLine = true;
+    } else if (widthOkLine(cur.mw_line)) {
+      const consPrev = medianOfValues(prev, lineKeys);
+      const consCur = medianOfValues(cur, lineKeys);
+      if (consPrev != null && consCur != null && Math.abs(consCur - consPrev) >= LINE_MOVE) sharpLine = true;
     }
 
-    if (!sharp && widthOk) {
-      const consPrev = medianOfKeys(prev, books, valueMode);
-      const consCur = medianOfKeys(cur, books, valueMode);
-      if (consPrev != null && consCur != null) {
-        if (valueMode === "line") {
-          if (Math.abs(consCur - consPrev) >= LINE_MOVE) sharp = true;
-        } else {
-          if (Math.abs(consCur - consPrev) >= PROB_MOVE) sharp = true;
-        }
-      }
+    // ODDS sharp (use implied prob)
+    let sharpOdds = false;
+    if (typeof prev.pin_odds === "number" && typeof cur.pin_odds === "number") {
+      const pp = impliedProbFromAmerican(prev.pin_odds);
+      const cp = impliedProbFromAmerican(cur.pin_odds);
+      if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharpOdds = true;
+    } else if (widthOkProb(cur.mw_prob)) {
+      const consPrev = medianOfProbsFromOdds(prev, oddsKeys);
+      const consCur = medianOfProbsFromOdds(cur, oddsKeys);
+      if (consPrev != null && consCur != null && Math.abs(consCur - consPrev) >= PROB_MOVE) sharpOdds = true;
     }
 
-    cur.sharp = sharp;
+    cur.sharp_line = sharpLine;
+    cur.sharp_odds = sharpOdds;
   }
 
   return points;
@@ -713,8 +740,8 @@ function ModalShell({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      {/* wider than before */}
-      <div className="w-full max-w-7xl rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col">
+      {/* wider + less constraining so charts can be wide */}
+      <div className="w-full max-w-[92rem] rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col">
         <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
@@ -736,7 +763,7 @@ function ModalShell({
 }
 
 /** =========================
- * HISTORY CHART PANEL (big + supports Line/Odds)
+ * HISTORY CHART PANEL (BIG + tooltip always shows line+odds)
  * ========================= */
 
 function HistoryChartPair({
@@ -764,8 +791,8 @@ function HistoryChartPair({
 }) {
   const isMobile = useIsMobile();
 
-  // BIG graphs again
-  const chartHeight = isMobile ? 420 : 520;
+  // bigger again (and truly fills width)
+  const chartHeight = isMobile ? 440 : 560;
 
   const yLabel =
     valueMode === "line"
@@ -782,10 +809,9 @@ function HistoryChartPair({
 
   const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
 
-  // margin tuned so right-axis label never clips on mobile
-  const margin = isMobile ? { top: 12, right: 80, left: 44, bottom: 12 } : { top: 12, right: 72, left: 42, bottom: 14 };
+  // margins tuned so right label never clips on mobile, without crushing plot area
+  const margin = isMobile ? { top: 10, right: 76, left: 44, bottom: 18 } : { top: 10, right: 72, left: 44, bottom: 18 };
 
-  // smaller axis label to fit better, while giving chart more area
   const axisLabelStyle = {
     fill: "#cfcfcf",
     fontSize: isMobile ? 10 : 11,
@@ -803,10 +829,15 @@ function HistoryChartPair({
   const xTickSize = isMobile ? 10 : 11;
   const yTickSize = isMobile ? 10 : 11;
 
-  const mainOffset = isMobile ? 18 : 14;
-  const mwOffset = isMobile ? 30 : 24;
+  const mainOffset = isMobile ? 16 : 14;
+  const mwOffset = isMobile ? 26 : 22;
 
   const empty = !seriesA.length && !seriesB.length;
+
+  // dataKey builder for current mode
+  const keyFor = (b: string) => (valueMode === "line" ? `${b}_line` : `${b}_odds`);
+  const mwKey = valueMode === "line" ? "mw_line" : "mw_prob";
+  const sharpKey = valueMode === "line" ? "sharp_line" : "sharp_odds";
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
@@ -828,7 +859,8 @@ function HistoryChartPair({
       {empty ? (
         <div className="p-4 text-xs text-[#808080]">No history rows found in this window for this market.</div>
       ) : (
-        <div className="p-3 sm:p-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+        // Breakpoint change: side-by-side from lg, not xl (gives you “wide” sooner)
+        <div className="p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
           {[
             { title: panelTitleA, data: seriesA } as const,
             { title: panelTitleB, data: seriesB } as const,
@@ -874,32 +906,55 @@ function HistoryChartPair({
                         if (!active || !payload?.length) return null;
                         const row: any = payload[0]?.payload;
 
-                        const lines = (payload ?? [])
-                          .filter((p) => p?.dataKey && typeof p.value === "number")
-                          .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
-                          .filter((x) => x.k !== "mw");
+                        // show BOTH line + odds for each book (when available)
+                        const items = books
+                          .map((b) => {
+                            const line = row?.[`${b}_line`];
+                            const odds = row?.[`${b}_odds`];
+                            const hasLine = typeof line === "number" && Number.isFinite(line);
+                            const hasOdds = typeof odds === "number" && Number.isFinite(odds);
+                            if (!hasLine && !hasOdds) return null;
+                            return { b, line: hasLine ? line : null, odds: hasOdds ? odds : null };
+                          })
+                          .filter(Boolean) as { b: string; line: number | null; odds: number | null }[];
 
                         return (
-                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[280px]">
+                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[320px]">
                             <div className="font-extrabold text-white mb-1">{label}</div>
 
-                            {row?.mw != null && (
+                            {row?.[mwKey] != null && (
                               <div className="mb-1">
-                                <span className="font-bold">Width:</span> {row.mw}
+                                <span className="font-bold">Width:</span> {row[mwKey]}
                               </div>
                             )}
 
                             <div className="space-y-0.5">
-                              {lines.slice(0, 12).map((x) => (
-                                <div key={x.k} className="flex items-center justify-between gap-2">
-                                  <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
-                                  <span className="text-white font-extrabold tabular-nums">{x.v}</span>
+                              {items.slice(0, 12).map((x) => (
+                                <div key={x.b} className="flex items-center justify-between gap-3">
+                                  <span className="text-[#9a9a9a] font-semibold">{x.b}</span>
+                                  <span className="text-white font-extrabold tabular-nums">
+                                    {valueMode === "line" ? (
+                                      <>
+                                        {x.line ?? "—"}{" "}
+                                        <span className="text-[#9a9a9a] font-semibold">
+                                          ({x.odds ?? "—"})
+                                        </span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        {x.odds ?? "—"}{" "}
+                                        <span className="text-[#9a9a9a] font-semibold">
+                                          ({x.line ?? "—"})
+                                        </span>
+                                      </>
+                                    )}
+                                  </span>
                                 </div>
                               ))}
                             </div>
 
                             <div className="mt-2">
-                              {row?.sharp ? (
+                              {row?.[sharpKey] ? (
                                 <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
                                   Sharp
                                 </span>
@@ -921,7 +976,7 @@ function HistoryChartPair({
                         key={b}
                         yAxisId="main"
                         type="monotone"
-                        dataKey={b}
+                        dataKey={keyFor(b)}
                         name={b}
                         dot={false}
                         strokeWidth={2}
@@ -933,7 +988,7 @@ function HistoryChartPair({
                     <Line
                       yAxisId="mw"
                       type="monotone"
-                      dataKey="mw"
+                      dataKey={mwKey}
                       name="Market Width"
                       dot={false}
                       strokeWidth={2}
@@ -943,7 +998,7 @@ function HistoryChartPair({
                     />
 
                     {panel.data
-                      .filter((p) => p.sharp)
+                      .filter((p) => p?.[sharpKey])
                       .map((p) => (
                         <ReferenceLine
                           key={`sharp-${panel.title}-${p.ts}`}
@@ -965,7 +1020,7 @@ function HistoryChartPair({
 }
 
 /** =========================
- * LINE MOVEMENT MODAL (preloads all markets; spread/total toggle line/odds)
+ * LINE MOVEMENT MODAL (preloads all markets; spread/total line↔odds)
  * ========================= */
 
 function LineMovementModal({
@@ -991,21 +1046,15 @@ function LineMovementModal({
 
   const [books, setBooks] = useState<string[]>([]);
 
-  // ML (odds)
-  const [mlAwayOdds, setMlAwayOdds] = useState<ChartPoint[]>([]);
-  const [mlHomeOdds, setMlHomeOdds] = useState<ChartPoint[]>([]);
+  // Unified points per panel (store both line+odds always)
+  const [mlAway, setMlAway] = useState<ChartPoint[]>([]);
+  const [mlHome, setMlHome] = useState<ChartPoint[]>([]);
 
-  // Spread (line + odds)
-  const [spAwayLine, setSpAwayLine] = useState<ChartPoint[]>([]);
-  const [spHomeLine, setSpHomeLine] = useState<ChartPoint[]>([]);
-  const [spAwayOdds, setSpAwayOdds] = useState<ChartPoint[]>([]);
-  const [spHomeOdds, setSpHomeOdds] = useState<ChartPoint[]>([]);
+  const [spAway, setSpAway] = useState<ChartPoint[]>([]);
+  const [spHome, setSpHome] = useState<ChartPoint[]>([]);
 
-  // Total (line + odds)
-  const [toOverLine, setToOverLine] = useState<ChartPoint[]>([]);
-  const [toUnderLine, setToUnderLine] = useState<ChartPoint[]>([]);
-  const [toOverOdds, setToOverOdds] = useState<ChartPoint[]>([]);
-  const [toUnderOdds, setToUnderOdds] = useState<ChartPoint[]>([]);
+  const [toOver, setToOver] = useState<ChartPoint[]>([]);
+  const [toUnder, setToUnder] = useState<ChartPoint[]>([]);
 
   useEffect(() => {
     let alive = true;
@@ -1028,9 +1077,9 @@ function LineMovementModal({
       if (error) {
         setErr(error.message);
         setBooks([]);
-        setMlAwayOdds([]); setMlHomeOdds([]);
-        setSpAwayLine([]); setSpHomeLine([]); setSpAwayOdds([]); setSpHomeOdds([]);
-        setToOverLine([]); setToUnderLine([]); setToOverOdds([]); setToUnderOdds([]);
+        setMlAway([]); setMlHome([]);
+        setSpAway([]); setSpHome([]);
+        setToOver([]); setToUnder([]);
         setLoading(false);
         return;
       }
@@ -1045,25 +1094,15 @@ function LineMovementModal({
       const pick = (m: HistMarket, s: HistSide) =>
         rows.filter((r) => String(r.market).toLowerCase() === m && String(r.side).toLowerCase() === s);
 
-      // ML odds
-      setMlAwayOdds(buildChartSeries(pick("h2h", "away"), "ml", "odds", bookList));
-      setMlHomeOdds(buildChartSeries(pick("h2h", "home"), "ml", "odds", bookList));
+      // Build unified points (ONE pass per panel)
+      setMlAway(buildUnifiedChartPoints(pick("h2h", "away"), "ml", bookList));
+      setMlHome(buildUnifiedChartPoints(pick("h2h", "home"), "ml", bookList));
 
-      // Spread line + odds (THIS is what was broken before if odds series wasn't built)
-      const spA = pick("spreads", "away");
-      const spH = pick("spreads", "home");
-      setSpAwayLine(buildChartSeries(spA, "spread", "line", bookList));
-      setSpHomeLine(buildChartSeries(spH, "spread", "line", bookList));
-      setSpAwayOdds(buildChartSeries(spA, "spread", "odds", bookList));
-      setSpHomeOdds(buildChartSeries(spH, "spread", "odds", bookList));
+      setSpAway(buildUnifiedChartPoints(pick("spreads", "away"), "spread", bookList));
+      setSpHome(buildUnifiedChartPoints(pick("spreads", "home"), "spread", bookList));
 
-      // Total line + odds
-      const toO = pick("totals", "over");
-      const toU = pick("totals", "under");
-      setToOverLine(buildChartSeries(toO, "total", "line", bookList));
-      setToUnderLine(buildChartSeries(toU, "total", "line", bookList));
-      setToOverOdds(buildChartSeries(toO, "total", "odds", bookList));
-      setToUnderOdds(buildChartSeries(toU, "total", "odds", bookList));
+      setToOver(buildUnifiedChartPoints(pick("totals", "over"), "total", bookList));
+      setToUnder(buildUnifiedChartPoints(pick("totals", "under"), "total", bookList));
 
       setLoading(false);
     }
@@ -1109,8 +1148,8 @@ function LineMovementModal({
               uiMarket="ml"
               valueMode="odds"
               books={books}
-              seriesA={mlAwayOdds}
-              seriesB={mlHomeOdds}
+              seriesA={mlAway}
+              seriesB={mlHome}
               panelTitleA="AWAY"
               panelTitleB="HOME"
               canToggleMode={false}
@@ -1124,8 +1163,8 @@ function LineMovementModal({
               valueMode={spreadMode}
               onValueModeChange={setSpreadMode}
               books={books}
-              seriesA={spreadMode === "line" ? spAwayLine : spAwayOdds}
-              seriesB={spreadMode === "line" ? spHomeLine : spHomeOdds}
+              seriesA={spAway}
+              seriesB={spHome}
               panelTitleA="AWAY"
               panelTitleB="HOME"
               canToggleMode
@@ -1139,8 +1178,8 @@ function LineMovementModal({
               valueMode={totalMode}
               onValueModeChange={setTotalMode}
               books={books}
-              seriesA={totalMode === "line" ? toOverLine : toOverOdds}
-              seriesB={totalMode === "line" ? toUnderLine : toUnderOdds}
+              seriesA={toOver}
+              seriesB={toUnder}
               panelTitleA="OVER"
               panelTitleB="UNDER"
               canToggleMode
@@ -1265,7 +1304,7 @@ function EventCardMobile({
         </div>
       </div>
 
-      <div className="px-4 py-3 space-y-3">
+      <div className="px-4 py-3 remember: space-y-3">
         <MiniTeamRow team={away?.team ?? "Away"} logoUrl={away?.logoUrl ?? null} side="AWAY" />
         <MiniTeamRow team={home?.team ?? "Home"} logoUrl={home?.logoUrl ?? null} side="HOME" />
       </div>
@@ -1696,4 +1735,3 @@ export function OddsScreen() {
     </div>
   );
 }
-
