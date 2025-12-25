@@ -158,8 +158,8 @@ const SOFT_BOOKS = (process.env.EV_SOFT_BOOKS || "draftkings,fanduel,betmgm")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-const QUANTUM_SHARP_WEIGHT = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.6");
-const QUANTUM_MC_WEIGHT = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.4");
+const QUANTUM_SHARP_WEIGHT = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.5");
+const QUANTUM_MC_WEIGHT = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.5");
 const KELLY_MULTIPLIER = Number(process.env.KELLY_MULTIPLIER ?? "0.25");
 
 // Strict line alignment (recommended)
