@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   ResponsiveContainer,
@@ -26,9 +26,13 @@ import {
  * - Table starts "clean": Matchup + Consensus only
  * - Toggle "Show Books" reveals the 5 book columns
  *
- * ✅ History modal:
- * - Mobile-friendly sizing: max height, scrollable content area
- * - Backdrop click + Esc close preserved
+ * ✅ History modal (FULL FIX):
+ * - Soft shading REMOVED entirely
+ * - Sharp Moves ALWAYS ON
+ * - Market Width ALWAYS ON
+ * - No toggle buttons for those features
+ * - Axis label fixed (MW label no longer clipped on mobile)
+ * - Loads ALL 3 markets (ML + Spread + Total) in one modal for quick-look
  */
 
 type Market = "ml" | "spread" | "total";
@@ -442,11 +446,12 @@ function MiniTeamRow({
 }
 
 /** =========================================
- * HISTORY MODAL (mobile-friendly sizing)
+ * HISTORY MODAL (fixed + all markets)
  * ========================================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
 type HistSide = "home" | "away" | "over" | "under";
+
 type HistoryRow = {
   id: number;
   ts: string;
@@ -461,12 +466,6 @@ type HistoryRow = {
 };
 
 const HISTORY_TABLE = "odds_snapshot_history";
-
-const UI_TO_HIST_MARKET: Record<Market, HistMarket> = {
-  ml: "h2h",
-  spread: "spreads",
-  total: "totals",
-};
 
 const BOOK_SERIES_COLOR: Record<string, string> = {
   draftkings: "#34d399",
@@ -529,7 +528,6 @@ type ChartPoint = {
   t: string;
   mw: number | null;
   sharp: boolean;
-  shade: boolean;
   pin?: number;
   [book: string]: any;
 };
@@ -538,11 +536,9 @@ function buildChartSeries(
   rows: HistoryRow[],
   uiMarket: Market,
   valueMode: "line" | "odds",
-  books: string[],
-  enableWidth: boolean,
-  enableShading: boolean,
-  enableSharp: boolean
+  books: string[]
 ): ChartPoint[] {
+  // bucket to 1-min; keep most recent row per minute+book
   const binMap = new Map<string, Map<string, HistoryRow>>();
 
   for (const r of rows) {
@@ -564,11 +560,12 @@ function buildChartSeries(
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
-    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false, shade: false };
+    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
 
     for (const b of books) {
       const row = byBook.get(b);
       if (!row) continue;
+
       if (valueMode === "line") {
         if (typeof row.line === "number" && Number.isFinite(row.line)) p[b] = row.line;
       } else {
@@ -578,95 +575,65 @@ function buildChartSeries(
 
     if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
 
-    if (enableWidth) {
-      if (valueMode === "line") {
-        const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
-        if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
-      } else {
-        const probs = books
-          .map((b) => p[b])
-          .filter((v) => typeof v === "number" && Number.isFinite(v))
-          .map((odds: number) => impliedProbFromAmerican(odds))
-          .filter((q) => Number.isFinite(q));
-        if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
-      }
+    // Market width ALWAYS ON
+    if (valueMode === "line") {
+      const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
+      if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
+    } else {
+      const probs = books
+        .map((b) => p[b])
+        .filter((v) => typeof v === "number" && Number.isFinite(v))
+        .map((odds: number) => impliedProbFromAmerican(odds))
+        .filter((q) => Number.isFinite(q));
+      if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
     }
 
     return p;
   });
 
-  const SHADE_DP = 0.02;
-
-  if (enableShading) {
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const cur = points[i];
-
-      let shaded = false;
-      for (const b of books) {
-        const pv = prev[b];
-        const cv = cur[b];
-        if (typeof pv !== "number" || typeof cv !== "number") continue;
-
-        if (valueMode === "odds") {
-          const pp = impliedProbFromAmerican(pv);
-          const cp = impliedProbFromAmerican(cv);
-          if (!Number.isFinite(pp) || !Number.isFinite(cp)) continue;
-          if (Math.abs(cp - pp) >= SHADE_DP) {
-            shaded = true;
-            break;
-          }
-        }
-      }
-
-      cur.shade = shaded;
-    }
-  }
-
+  // Sharp moves ALWAYS ON
   const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
   const PROB_MOVE = 0.02;
 
-  if (enableSharp) {
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1];
-      const cur = points[i];
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const cur = points[i];
 
-      const widthOk =
-        cur.mw != null &&
-        (valueMode === "line"
-          ? uiMarket === "spread"
-            ? cur.mw <= 0.5
-            : uiMarket === "total"
-            ? cur.mw <= 1.0
-            : true
-          : cur.mw <= 0.02);
+    const widthOk =
+      cur.mw != null &&
+      (valueMode === "line"
+        ? uiMarket === "spread"
+          ? cur.mw <= 0.5
+          : uiMarket === "total"
+          ? cur.mw <= 1.0
+          : true
+        : cur.mw <= 0.02);
 
-      let sharp = false;
+    let sharp = false;
 
-      if (typeof prev.pin === "number" && typeof cur.pin === "number") {
-        if (valueMode === "line") {
-          if (Math.abs(cur.pin - prev.pin) >= LINE_MOVE) sharp = true;
-        } else {
-          const pp = impliedProbFromAmerican(prev.pin);
-          const cp = impliedProbFromAmerican(cur.pin);
-          if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharp = true;
-        }
+    if (typeof prev.pin === "number" && typeof cur.pin === "number") {
+      if (valueMode === "line") {
+        if (Math.abs(cur.pin - prev.pin) >= LINE_MOVE) sharp = true;
+      } else {
+        const pp = impliedProbFromAmerican(prev.pin);
+        const cp = impliedProbFromAmerican(cur.pin);
+        if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharp = true;
       }
-
-      if (!sharp && widthOk) {
-        const consPrev = medianOfKeys(prev, books, valueMode);
-        const consCur = medianOfKeys(cur, books, valueMode);
-        if (consPrev != null && consCur != null) {
-          if (valueMode === "line") {
-            if (Math.abs(consCur - consPrev) >= LINE_MOVE) sharp = true;
-          } else {
-            if (Math.abs(consCur - consPrev) >= PROB_MOVE) sharp = true;
-          }
-        }
-      }
-
-      cur.sharp = sharp;
     }
+
+    if (!sharp && widthOk) {
+      const consPrev = medianOfKeys(prev, books, valueMode);
+      const consCur = medianOfKeys(cur, books, valueMode);
+      if (consPrev != null && consCur != null) {
+        if (valueMode === "line") {
+          if (Math.abs(consCur - consPrev) >= LINE_MOVE) sharp = true;
+        } else {
+          if (Math.abs(consCur - consPrev) >= PROB_MOVE) sharp = true;
+        }
+      }
+    }
+
+    cur.sharp = sharp;
   }
 
   return points;
@@ -680,31 +647,6 @@ function Badge({ label, kind }: { label: string; kind: "gold" | "red" | "gray" }
       ? "bg-red-500 text-white"
       : "bg-[#2a2a2a] text-[#cfcfcf]";
   return <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold ${cls}`}>{label}</span>;
-}
-
-function TogglePill({
-  on,
-  onClick,
-  label,
-}: {
-  on: boolean;
-  onClick: () => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-2.5 py-1 rounded-md text-[11px] font-extrabold border",
-        on
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
 }
 
 function ModalShell({
@@ -755,101 +697,38 @@ function ModalShell({
   );
 }
 
-function LineMovementModal({
-  ev,
+function useIsMobile(bp = 640) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const on = () => setIsMobile(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, [bp]);
+  return isMobile;
+}
+
+function HistoryMarketSection({
+  title,
   uiMarket,
-  onClose,
+  valueMode,
+  books,
+  seriesA,
+  seriesB,
+  panelTitleA,
+  panelTitleB,
 }: {
-  ev: EventOdds;
+  title: string;
   uiMarket: Market;
-  onClose: () => void;
+  valueMode: "line" | "odds";
+  books: string[];
+  seriesA: ChartPoint[];
+  seriesB: ChartPoint[];
+  panelTitleA: string;
+  panelTitleB: string;
 }) {
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-
-  const [hoursBack] = useState(24);
-  const [showWidth, setShowWidth] = useState(true);
-  const [showShading, setShowShading] = useState(true);
-  const [showSharp, setShowSharp] = useState(true);
-
-  const [valueMode, setValueMode] = useState<"line" | "odds">(
-    uiMarket === "ml" ? "odds" : uiMarket === "total" ? "odds" : "line"
-  );
-
-  useEffect(() => {
-    setValueMode(uiMarket === "ml" ? "odds" : uiMarket === "total" ? "odds" : "line");
-  }, [uiMarket]);
-
-  const [books, setBooks] = useState<string[]>([]);
-  const [seriesA, setSeriesA] = useState<ChartPoint[]>([]);
-  const [seriesB, setSeriesB] = useState<ChartPoint[]>([]);
-
-  const panelA: HistSide = uiMarket === "total" ? "over" : "away";
-  const panelB: HistSide = uiMarket === "total" ? "under" : "home";
-
-  useEffect(() => {
-    let alive = true;
-
-    async function run() {
-      setLoading(true);
-      setErr("");
-
-      const histMarket = UI_TO_HIST_MARKET[uiMarket];
-      const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
-
-      const { data, error } = await supabase
-        .from(HISTORY_TABLE)
-        .select("id,ts,event_id,bookmaker,market,side,line,odds,last_update,inserted_at")
-        .eq("event_id", ev.eventId)
-        .eq("market", histMarket)
-        .gte("ts", since)
-        .order("ts", { ascending: true });
-
-      if (!alive) return;
-
-      if (error) {
-        setErr(error.message);
-        setBooks([]);
-        setSeriesA([]);
-        setSeriesB([]);
-        setLoading(false);
-        return;
-      }
-
-      const rows = (data ?? []) as HistoryRow[];
-
-      const set = new Set<string>();
-      for (const r of rows) set.add(String(r.bookmaker || "").toLowerCase());
-      const bookList = Array.from(set).sort((a, b) => a.localeCompare(b));
-      setBooks(bookList);
-
-      const aRows = rows.filter((r) => String(r.side).toLowerCase() === panelA);
-      const bRows = rows.filter((r) => String(r.side).toLowerCase() === panelB);
-
-      const A = buildChartSeries(aRows, uiMarket, valueMode, bookList, showWidth, showShading, showSharp);
-      const B = buildChartSeries(bRows, uiMarket, valueMode, bookList, showWidth, showShading, showSharp);
-
-      setSeriesA(A);
-      setSeriesB(B);
-
-      setLoading(false);
-    }
-
-    run();
-    return () => {
-      alive = false;
-    };
-  }, [ev.eventId, uiMarket, hoursBack, valueMode, showWidth, showShading, showSharp]);
-
-  const subtitle = [
-    ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
-    `Market: ${uiMarket.toUpperCase()} (${UI_TO_HIST_MARKET[uiMarket]})`,
-    `Mode: ${valueMode === "line" ? "Line" : "Odds"}`,
-    `Window: last ${hoursBack}h`,
-    "Bucket: 1-min",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const isMobile = useIsMobile();
 
   const yLabel =
     valueMode === "line"
@@ -863,160 +742,294 @@ function LineMovementModal({
       : "Odds";
 
   const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
-  const panelTitleA = uiMarket === "total" ? "OVER" : "AWAY";
-  const panelTitleB = uiMarket === "total" ? "UNDER" : "HOME";
 
   const anySharpA = seriesA.some((p) => p.sharp);
-  const anyShadeA = seriesA.some((p) => p.shade);
   const anySharpB = seriesB.some((p) => p.sharp);
-  const anyShadeB = seriesB.some((p) => p.shade);
+
+  // ✅ FIX: make room for right-side label so it doesn't clip on mobile
+  const chartMargin = useMemo(
+    () => (isMobile ? { top: 10, right: 60, left: 10, bottom: 10 } : { top: 10, right: 52, left: 10, bottom: 10 }),
+    [isMobile]
+  );
+
+  if (!seriesA.length && !seriesB.length) {
+    return (
+      <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-white font-extrabold text-sm">{title}</div>
+          <Badge label="No Data" kind="gray" />
+        </div>
+        <div className="text-xs text-[#808080]">No history rows found in this window for this market.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="text-white font-extrabold text-sm">{title}</div>
+        {(anySharpA || anySharpB) ? <Badge label="Sharp Move Detected" kind="red" /> : <Badge label="No Sharp Moves" kind="gray" />}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {[
+          { title: panelTitleA, data: seriesA, anySharp: anySharpA } as const,
+          { title: panelTitleB, data: seriesB, anySharp: anySharpB } as const,
+        ].map((panel) => (
+          <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-white font-bold text-xs">{panel.title}</div>
+              {panel.anySharp ? <Badge label="Sharp" kind="red" /> : <Badge label="—" kind="gray" />}
+            </div>
+
+            <div className={isMobile ? "h-[260px]" : "h-[340px]"}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={panel.data} margin={chartMargin}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="t" tick={{ fontSize: isMobile ? 10 : 11 }} interval="preserveStartEnd" />
+
+                  <YAxis
+                    yAxisId="main"
+                    tick={{ fontSize: isMobile ? 10 : 11 }}
+                    tickMargin={6}
+                    label={{
+                      value: yLabel,
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: isMobile ? 10 : 12,
+                    }}
+                  />
+
+                  <YAxis
+                    yAxisId="mw"
+                    orientation="right"
+                    tick={{ fontSize: isMobile ? 10 : 11 }}
+                    tickMargin={10}
+                    label={{
+                      value: mwLabel,
+                      angle: 90,
+                      position: "insideRight",
+                      offset: isMobile ? 24 : 18,
+                    }}
+                  />
+
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row: any = payload[0]?.payload;
+
+                      const lines = (payload ?? [])
+                        .filter((p) => p?.dataKey && typeof p.value === "number")
+                        .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
+                        .filter((x) => x.k !== "mw");
+
+                      return (
+                        <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[260px]">
+                          <div className="font-extrabold text-white mb-1">{label}</div>
+
+                          {row?.mw != null && (
+                            <div className="mb-1">
+                              <span className="font-bold">Width:</span> {row.mw}
+                            </div>
+                          )}
+
+                          <div className="space-y-0.5">
+                            {lines.slice(0, 8).map((x) => (
+                              <div key={x.k} className="flex items-center justify-between gap-2">
+                                <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
+                                <span className="text-white font-extrabold tabular-nums">{x.v}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="flex gap-2 mt-2">
+                            {row?.sharp ? <Badge label="Sharp" kind="red" /> : <Badge label="—" kind="gray" />}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+
+                  <Legend />
+
+                  {books.map((b) => (
+                    <Line
+                      key={b}
+                      yAxisId="main"
+                      type="monotone"
+                      dataKey={b}
+                      name={b}
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      stroke={seriesColor(b)}
+                    />
+                  ))}
+
+                  <Line
+                    yAxisId="mw"
+                    type="monotone"
+                    dataKey="mw"
+                    name="Market Width"
+                    dot={false}
+                    strokeWidth={2}
+                    connectNulls
+                    stroke="#e5e7eb"
+                    strokeDasharray="6 6"
+                  />
+
+                  {panel.data
+                    .filter((p) => p.sharp)
+                    .map((p) => (
+                      <ReferenceLine
+                        key={`sharp-${panel.title}-${p.ts}`}
+                        x={p.t}
+                        stroke="rgba(239,68,68,0.55)"
+                        strokeDasharray="3 3"
+                        yAxisId="main"
+                      />
+                    ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LineMovementModal({
+  ev,
+  onClose,
+}: {
+  ev: EventOdds;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  const hoursBack = 24;
+
+  const [books, setBooks] = useState<string[]>([]);
+
+  const [mlAway, setMlAway] = useState<ChartPoint[]>([]);
+  const [mlHome, setMlHome] = useState<ChartPoint[]>([]);
+  const [spAway, setSpAway] = useState<ChartPoint[]>([]);
+  const [spHome, setSpHome] = useState<ChartPoint[]>([]);
+  const [toOver, setToOver] = useState<ChartPoint[]>([]);
+  const [toUnder, setToUnder] = useState<ChartPoint[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function run() {
+      setLoading(true);
+      setErr("");
+
+      const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+
+      // Pull ALL markets for this event, then split client-side.
+      const { data, error } = await supabase
+        .from(HISTORY_TABLE)
+        .select("id,ts,event_id,bookmaker,market,side,line,odds,last_update,inserted_at")
+        .eq("event_id", ev.eventId)
+        .gte("ts", since)
+        .order("ts", { ascending: true });
+
+      if (!alive) return;
+
+      if (error) {
+        setErr(error.message);
+        setBooks([]);
+        setMlAway([]); setMlHome([]);
+        setSpAway([]); setSpHome([]);
+        setToOver([]); setToUnder([]);
+        setLoading(false);
+        return;
+      }
+
+      const rows = (data ?? []) as HistoryRow[];
+
+      const set = new Set<string>();
+      for (const r of rows) set.add(String(r.bookmaker || "").toLowerCase());
+      const bookList = Array.from(set).sort((a, b) => a.localeCompare(b));
+      setBooks(bookList);
+
+      const pick = (m: HistMarket, s: HistSide) =>
+        rows.filter((r) => String(r.market).toLowerCase() === m && String(r.side).toLowerCase() === s);
+
+      // ML: odds mode
+      setMlAway(buildChartSeries(pick("h2h", "away"), "ml", "odds", bookList));
+      setMlHome(buildChartSeries(pick("h2h", "home"), "ml", "odds", bookList));
+
+      // Spread: line mode
+      setSpAway(buildChartSeries(pick("spreads", "away"), "spread", "line", bookList));
+      setSpHome(buildChartSeries(pick("spreads", "home"), "spread", "line", bookList));
+
+      // Totals: line mode (Over/Under)
+      setToOver(buildChartSeries(pick("totals", "over"), "total", "line", bookList));
+      setToUnder(buildChartSeries(pick("totals", "under"), "total", "line", bookList));
+
+      setLoading(false);
+    }
+
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [ev.eventId, hoursBack]);
+
+  const subtitle = [
+    ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
+    `Window: last ${hoursBack}h`,
+    "Bucket: 1-min",
+    "Market Width: ON",
+    "Sharp Moves: ON",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {uiMarket !== "ml" && (
-            <>
-              <TogglePill on={valueMode === "line"} onClick={() => setValueMode("line")} label="Line" />
-              <TogglePill on={valueMode === "odds"} onClick={() => setValueMode("odds")} label="Odds" />
-            </>
-          )}
-          <TogglePill on={showWidth} onClick={() => setShowWidth((v) => !v)} label="Market Width" />
-          <TogglePill on={showShading} onClick={() => setShowShading((v) => !v)} label="Soft Shading" />
-          <TogglePill on={showSharp} onClick={() => setShowSharp((v) => !v)} label="Sharp Moves" />
-        </div>
-
-        <div className="flex items-center gap-2">
-          {(showSharp && (anySharpA || anySharpB)) && <Badge label="Sharp Move Detected" kind="red" />}
-          {(showShading && (anyShadeA || anyShadeB)) && <Badge label="Soft Shading" kind="gold" />}
-          {!anySharpA && !anySharpB && !anyShadeA && !anyShadeB && <Badge label="No Alerts" kind="gray" />}
-        </div>
-      </div>
-
       {loading ? (
         <div className="text-xs text-[#808080]">Loading snapshots…</div>
       ) : err ? (
         <div className="text-xs text-red-400">Supabase error: {err}</div>
-      ) : !seriesA.length && !seriesB.length ? (
-        <div className="text-xs text-[#808080]">No history rows found for this event/market in the selected window.</div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {[
-            { title: panelTitleA, data: seriesA, anySharp: anySharpA, anyShade: anyShadeA } as const,
-            { title: panelTitleB, data: seriesB, anySharp: anySharpB, anyShade: anyShadeB } as const,
-          ].map((panel) => (
-            <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-white font-bold text-xs">{panel.title}</div>
-                <div className="flex items-center gap-2">
-                  {showSharp && panel.anySharp && <Badge label="Sharp" kind="red" />}
-                  {showShading && panel.anyShade && <Badge label="Shading" kind="gold" />}
-                </div>
-              </div>
+        <div className="space-y-4">
+          <HistoryMarketSection
+            title="Moneyline"
+            uiMarket="ml"
+            valueMode="odds"
+            books={books}
+            seriesA={mlAway}
+            seriesB={mlHome}
+            panelTitleA="AWAY"
+            panelTitleB="HOME"
+          />
 
-              <div className="h-[320px] sm:h-[360px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={panel.data}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="t" tick={{ fontSize: 11 }} />
-                    <YAxis
-                      yAxisId="main"
-                      tick={{ fontSize: 11 }}
-                      label={{ value: yLabel, angle: -90, position: "insideLeft" }}
-                    />
-                    {showWidth && (
-                      <YAxis
-                        yAxisId="mw"
-                        orientation="right"
-                        tick={{ fontSize: 11 }}
-                        label={{ value: mwLabel, angle: 90, position: "insideRight" }}
-                      />
-                    )}
+          <HistoryMarketSection
+            title="Spread"
+            uiMarket="spread"
+            valueMode="line"
+            books={books}
+            seriesA={spAway}
+            seriesB={spHome}
+            panelTitleA="AWAY"
+            panelTitleB="HOME"
+          />
 
-                    <Tooltip
-                      content={({ active, payload, label }) => {
-                        if (!active || !payload?.length) return null;
-                        const row: any = payload[0]?.payload;
-                        const lines = (payload ?? [])
-                          .filter((p) => p?.dataKey && typeof p.value === "number")
-                          .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
-                          .filter((x) => x.k !== "mw");
-
-                        return (
-                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[260px]">
-                            <div className="font-extrabold text-white mb-1">{label}</div>
-
-                            {showWidth && row?.mw != null && (
-                              <div className="mb-1">
-                                <span className="font-bold">Width:</span> {row.mw}
-                              </div>
-                            )}
-
-                            <div className="space-y-0.5">
-                              {lines.slice(0, 8).map((x) => (
-                                <div key={x.k} className="flex items-center justify-between gap-2">
-                                  <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
-                                  <span className="text-white font-extrabold tabular-nums">{x.v}</span>
-                                </div>
-                              ))}
-                            </div>
-
-                            <div className="flex gap-2 mt-2">
-                              {showSharp && row?.sharp && <Badge label="Sharp" kind="red" />}
-                              {showShading && row?.shade && <Badge label="Shading" kind="gold" />}
-                            </div>
-                          </div>
-                        );
-                      }}
-                    />
-
-                    <Legend />
-
-                    {books.map((b) => (
-                      <Line
-                        key={b}
-                        yAxisId="main"
-                        type="monotone"
-                        dataKey={b}
-                        name={b}
-                        dot={false}
-                        strokeWidth={2}
-                        connectNulls
-                        stroke={seriesColor(b)}
-                      />
-                    ))}
-
-                    {showWidth && (
-                      <Line
-                        yAxisId="mw"
-                        type="monotone"
-                        dataKey="mw"
-                        name="Market Width"
-                        dot={false}
-                        strokeWidth={2}
-                        connectNulls
-                        stroke="#e5e7eb"
-                        strokeDasharray="6 6"
-                      />
-                    )}
-
-                    {showSharp &&
-                      panel.data
-                        .filter((p) => p.sharp)
-                        .map((p) => (
-                          <ReferenceLine
-                            key={`sharp-${panel.title}-${p.ts}`}
-                            x={p.t}
-                            stroke="rgba(239,68,68,0.55)"
-                            strokeDasharray="3 3"
-                            yAxisId="main"
-                          />
-                        ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          ))}
+          <HistoryMarketSection
+            title="Total"
+            uiMarket="total"
+            valueMode="line"
+            books={books}
+            seriesA={toOver}
+            seriesB={toUnder}
+            panelTitleA="OVER"
+            panelTitleB="UNDER"
+          />
         </div>
       )}
     </ModalShell>
@@ -1569,8 +1582,9 @@ export function OddsScreen() {
         </div>
       </div>
 
+      {/* ✅ Modal now ignores current market and loads ML+Spread+Total always */}
       {historyOpen && historyEvent?.eventId && (
-        <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
+        <LineMovementModal ev={historyEvent} onClose={closeHistory} />
       )}
     </div>
   );
