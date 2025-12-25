@@ -1,10 +1,15 @@
-// screens/OddsScreen.tsx — FULL REWRITE (History charts = ODDS only; LINE shown in tooltip)
-// ✅ Spread/Total history charts now plot ODDS only (no line-vs-odds toggle)
-// ✅ Tooltip shows BOTH: odds + line for each bookmaker (so you still “see the number”)
-// ✅ Market width always based on ODDS dispersion (implied probability width), which is the most consistent
-// ✅ Sharp-move badge stays (RED) + sharp reference lines stay
-// ✅ Axis labels moved to TOP (left/right), never overlap tick labels, and chart is not skinny on mobile
-// ✅ Mobile Books table formatting stays consistent (2-line per cell), labels centered, totals no O/U prefix
+// screens/OddsScreen.tsx — FULL REWRITE (History modal + mobile books + consistent formatting)
+//
+// ✅ History modal: ODDS ONLY for all markets (no Line/Odds toggle anywhere)
+// ✅ Tooltip shows: ODDS + LINE (line stored per book point)
+// ✅ Charts: big + FULL-WIDTH on mobile (no skinny plot area)
+// ✅ Axis “labels”: moved to TOP (left + right) so they never collide with tick labels
+// ✅ Sharp moves: ALWAYS ON + red badge “Sharp Move” in tooltip + vertical red markers
+// ✅ Market width: ALWAYS ON (computed on implied probability width across books)
+// ✅ Books section: values centered even when "—"
+// ✅ Away/Home/Over/Under headers centered above their columns
+// ✅ Totals: no more “O” / “U” prefix in cells (header already says Over/Under)
+// ✅ Spread/Total cell formatting always consistent: LINE on top, ODDS below
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -52,7 +57,7 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos */
+/** Public folder book logos (FULL-COLOR assets) */
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -155,28 +160,6 @@ function maxIso(a: string | null, b: string | null) {
 }
 
 /** =========================
- * FORMATTING HELPERS
- * ========================= */
-
-function fmtML(v: number | null) {
-  return v == null ? "—" : `${v}`;
-}
-
-function fmtSpread(cell: SpreadCell) {
-  if (!cell || cell.line == null) return "—";
-  if (cell.odds == null) return `${cell.line}`;
-  return `${cell.line} (${cell.odds})`;
-}
-
-/** Totals: do NOT prefix with O/U since headers indicate Over/Under. */
-function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
-  if (!cell || cell.line == null) return "—";
-  const v = which === "over" ? cell.over : cell.under;
-  if (v == null) return `${cell.line}`;
-  return `${cell.line} (${v})`;
-}
-
-/** =========================
  * MAPPING HELPERS
  * ========================= */
 
@@ -221,7 +204,7 @@ function mapWideRowToSideOdds(row: any): SideOdds {
 }
 
 /** =========================
- * CONSENSUS HELPERS
+ * CONSENSUS HELPERS (returns structured cell)
  * ========================= */
 
 function median(nums: number[]) {
@@ -231,16 +214,32 @@ function median(nums: number[]) {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
-function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME") {
-  const a = ev.away;
-  const h = ev.home;
-  const src = side === "AWAY" ? a : h;
+type CellParts = { top: string; bottom?: string };
+
+function cellMl(odds: number | null): CellParts {
+  return { top: odds == null ? "—" : String(odds) };
+}
+function cellLineOdds(line: number | null, odds: number | null): CellParts {
+  if (line == null) return { top: "—" };
+  return { top: String(line), bottom: odds == null ? "—" : `(${odds})` };
+}
+function renderCellParts(parts: CellParts) {
+  return (
+    <div className="flex flex-col items-center justify-center leading-tight">
+      <div className="tabular-nums">{parts.top}</div>
+      {parts.bottom != null ? <div className="tabular-nums">{parts.bottom}</div> : null}
+    </div>
+  );
+}
+
+function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME"): CellParts {
+  const src = side === "AWAY" ? ev.away : ev.home;
 
   if (market === "ml") {
     const odds: number[] = [];
     if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
-    const m = median(odds);
-    return m == null ? "—" : `${m}`;
+    const mOdds = median(odds);
+    return cellMl(mOdds == null ? null : mOdds);
   }
 
   if (market === "spread") {
@@ -248,35 +247,33 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     const odds: number[] = [];
     if (src) {
       for (const b of BOOKS) {
-        const line = src.spread[b]?.line;
+        const l = src.spread[b]?.line;
         const o = src.spread[b]?.odds;
-        if (typeof line === "number") lines.push(line);
+        if (typeof l === "number") lines.push(l);
         if (typeof o === "number") odds.push(o);
       }
     }
     const mLine = median(lines);
     const mOdds = median(odds);
-    if (mLine == null) return "—";
-    if (mOdds == null) return `${mLine}`;
-    return `${mLine} (${mOdds})`;
+    return cellLineOdds(mLine == null ? null : mLine, mOdds == null ? null : mOdds);
   }
 
-  // totals: side is AWAY => Over cell, HOME => Under cell
+  // total: AWAY treated as Over column, HOME treated as Under column
   const lines: number[] = [];
   const overOdds: number[] = [];
   const underOdds: number[] = [];
 
-  if (a) {
+  if (ev.away) {
     for (const b of BOOKS) {
-      const line = a.total[b]?.line;
-      const o = a.total[b]?.over;
-      if (typeof line === "number") lines.push(line);
+      const l = ev.away.total[b]?.line;
+      const o = ev.away.total[b]?.over;
+      if (typeof l === "number") lines.push(l);
       if (typeof o === "number") overOdds.push(o);
     }
   }
-  if (h) {
+  if (ev.home) {
     for (const b of BOOKS) {
-      const u = h.total[b]?.under;
+      const u = ev.home.total[b]?.under;
       if (typeof u === "number") underOdds.push(u);
     }
   }
@@ -285,13 +282,12 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   const mOver = median(overOdds);
   const mUnder = median(underOdds);
 
-  if (mLine == null) return "—";
-  if (side === "AWAY") return mOver == null ? `${mLine}` : `${mLine} (${mOver})`;
-  return mUnder == null ? `${mLine}` : `${mLine} (${mUnder})`;
+  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
+  return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
 }
 
 /** =========================
- * HEADER FALLBACK (logos)
+ * HEADER FALLBACK
  * ========================= */
 
 function headerFallbackPillDataUri(label: string) {
@@ -423,7 +419,13 @@ function BookHeader({
   );
 }
 
-function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
+function BookValue({
+  parts,
+  borderLeft,
+}: {
+  parts: CellParts;
+  borderLeft?: boolean;
+}) {
   return (
     <td
       className={[
@@ -431,15 +433,15 @@ function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean 
         borderLeft ? `border-l ${HDR_BORDER}` : "",
       ].join(" ")}
     >
-      {value}
+      {renderCellParts(parts)}
     </td>
   );
 }
 
-function ConsensusValue({ value }: { value: string }) {
+function ConsensusValue({ parts }: { parts: CellParts }) {
   return (
     <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px]", `border-r ${HDR_BORDER}`].join(" ")}>
-      {value}
+      {renderCellParts(parts)}
     </td>
   );
 }
@@ -478,7 +480,28 @@ function MiniTeamRow({
 }
 
 /** =========================
- * HISTORY / CHARTS (ODDS ONLY)
+ * CELL GETTERS (ALWAYS CONSISTENT LINE/TWO-LINE FORMAT)
+ * ========================= */
+
+function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
+  const src = side === "AWAY" ? ev.away : ev.home;
+  if (!src) return { top: "—" };
+
+  if (market === "ml") return cellMl(src.ml[book] ?? null);
+
+  if (market === "spread") {
+    const c = src.spread[book];
+    return cellLineOdds(c?.line ?? null, c?.odds ?? null);
+  }
+
+  // total: AWAY is Over, HOME is Under (header defines it)
+  const t = src.total[book];
+  const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
+  return cellLineOdds(t?.line ?? null, odds);
+}
+
+/** =========================
+ * HISTORY / CHARTS (ODDS ONLY + LINE IN TOOLTIP)
  * ========================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
@@ -539,35 +562,47 @@ function floorToMinuteIso(iso: string) {
   return d.toISOString();
 }
 
-type ChartPoint = {
-  ts: string; // bucket iso
-  t: string; // formatted label
-  mw: number | null; // implied-prob width
-  sharp: boolean; // sharp-move flag
-  pinOdds?: number; // pinnacle odds (if present)
-  pinLine?: number | null; // pinnacle line (if present)
+function medianProbOfKeys(point: any, keys: string[]) {
+  const probs: number[] = [];
+  for (const k of keys) {
+    const odds = point?.[k];
+    if (typeof odds === "number" && Number.isFinite(odds)) {
+      const p = impliedProbFromAmerican(odds);
+      if (Number.isFinite(p)) probs.push(p);
+    }
+  }
+  return median(probs);
+}
 
-  // per book:
-  // [bookmaker]: odds
-  // [bookmaker + "__line"]: line
-  [k: string]: any;
+type ChartPoint = {
+  ts: string;
+  t: string;
+  mw: number | null;      // market width (prob)
+  sharp: boolean;         // sharp move flag
+  pinProb?: number | null;
+  [k: string]: any;       // bookmaker odds + per-book line as `${book}__line`
 };
 
-function buildChartSeriesOddsOnly(rows: HistoryRow[], books: string[]) {
-  // bucket -> book -> latest row
+/**
+ * ODDS-ONLY chart series:
+ * - main series values = odds (American)
+ * - tooltip additionally shows line using `${book}__line`
+ * - market width = max(prob) - min(prob) across books (when >= 2)
+ * - sharp moves: based on Pinnacle prob jump OR consensus prob jump when width is "tight"
+ */
+function buildChartSeriesOddsOnly(rows: HistoryRow[], uiMarket: Market, books: string[]) {
   const binMap = new Map<string, Map<string, HistoryRow>>();
 
   for (const r of rows) {
     const bin = floorToMinuteIso(r.ts);
     const byBook = binMap.get(bin) ?? new Map<string, HistoryRow>();
-    const key = String(r.bookmaker || "").toLowerCase();
-    const prev = byBook.get(key);
+    const prev = byBook.get(r.bookmaker);
 
-    if (!prev) byBook.set(key, r);
+    if (!prev) byBook.set(r.bookmaker, r);
     else {
       const pt = new Date(normalizeIso(prev.ts) ?? prev.ts).getTime();
       const rt = new Date(normalizeIso(r.ts) ?? r.ts).getTime();
-      if (rt >= pt) byBook.set(key, r);
+      if (rt >= pt) byBook.set(r.bookmaker, r);
     }
 
     binMap.set(bin, byBook);
@@ -577,35 +612,17 @@ function buildChartSeriesOddsOnly(rows: HistoryRow[], books: string[]) {
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
-
-    const p: ChartPoint = {
-      ts: bin,
-      t: fmtCTShortLabel(bin),
-      mw: null,
-      sharp: false,
-    };
+    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
 
     for (const b of books) {
-      const row = byBook.get(String(b).toLowerCase());
+      const row = byBook.get(b);
       if (!row) continue;
 
-      // plot ODDS
-      if (typeof row.odds === "number" && Number.isFinite(row.odds)) {
-        p[b] = row.odds;
-      }
-
-      // store LINE for tooltip
-      if (typeof row.line === "number" && Number.isFinite(row.line)) {
-        p[`${b}__line`] = row.line;
-      }
+      if (typeof row.odds === "number" && Number.isFinite(row.odds)) p[b] = row.odds;
+      if (typeof row.line === "number" && Number.isFinite(row.line)) p[`${b}__line`] = row.line;
     }
 
-    // pin helpers
-    if (typeof p["pinnacle"] === "number") p.pinOdds = p["pinnacle"];
-    const pl = p["pinnacle__line"];
-    if (typeof pl === "number" && Number.isFinite(pl)) p.pinLine = pl;
-
-    // market width: max(prob) - min(prob)
+    // market width in probability space
     const probs = books
       .map((b) => p[b])
       .filter((v) => typeof v === "number" && Number.isFinite(v))
@@ -614,42 +631,45 @@ function buildChartSeriesOddsOnly(rows: HistoryRow[], books: string[]) {
 
     if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
 
+    // pin prob (if available)
+    const pinOdds = p["pinnacle"];
+    if (typeof pinOdds === "number" && Number.isFinite(pinOdds)) {
+      const pp = impliedProbFromAmerican(pinOdds);
+      p.pinProb = Number.isFinite(pp) ? pp : null;
+    } else {
+      p.pinProb = null;
+    }
+
     return p;
   });
 
-  // sharp move detection (ODDS only): prob jump threshold
+  // sharp moves always on
   const PROB_MOVE = 0.02;
+
+  // width threshold by market
+  const widthTight =
+    uiMarket === "ml" ? 0.03 : uiMarket === "spread" ? 0.02 : 0.02;
 
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
     const cur = points[i];
 
+    const widthOk = cur.mw != null ? cur.mw <= widthTight : false;
+
     let sharp = false;
 
-    // check pinnacle prob jump first
-    if (typeof prev.pinOdds === "number" && typeof cur.pinOdds === "number") {
-      const pp = impliedProbFromAmerican(prev.pinOdds);
-      const cp = impliedProbFromAmerican(cur.pinOdds);
-      if (Number.isFinite(pp) && Number.isFinite(cp) && Math.abs(cp - pp) >= PROB_MOVE) sharp = true;
+    // Pinnacle move (prob)
+    if (prev.pinProb != null && cur.pinProb != null) {
+      if (Math.abs(cur.pinProb - prev.pinProb) >= PROB_MOVE) sharp = true;
     }
 
-    // else check consensus(prob median) jump
-    if (!sharp) {
-      const prevProbs = books
-        .map((b) => prev[b])
-        .filter((v) => typeof v === "number" && Number.isFinite(v))
-        .map((odds: number) => impliedProbFromAmerican(odds))
-        .filter((q) => Number.isFinite(q));
-      const curProbs = books
-        .map((b) => cur[b])
-        .filter((v) => typeof v === "number" && Number.isFinite(v))
-        .map((odds: number) => impliedProbFromAmerican(odds))
-        .filter((q) => Number.isFinite(q));
-
-      const mPrev = median(prevProbs);
-      const mCur = median(curProbs);
-
-      if (mPrev != null && mCur != null && Math.abs(mCur - mPrev) >= PROB_MOVE) sharp = true;
+    // If not pin-based, consider consensus move when width is tight
+    if (!sharp && widthOk) {
+      const consPrev = medianProbOfKeys(prev, books);
+      const consCur = medianProbOfKeys(cur, books);
+      if (consPrev != null && consCur != null) {
+        if (Math.abs(consCur - consPrev) >= PROB_MOVE) sharp = true;
+      }
     }
 
     cur.sharp = sharp;
@@ -722,7 +742,7 @@ function ModalShell({
 }
 
 /** =========================
- * HISTORY CHART PANEL (ODDS ONLY + TOP labels)
+ * HISTORY CHART PAIR (ODDS ONLY, TOP LABELS)
  * ========================= */
 
 function HistoryChartPairOddsOnly({
@@ -749,10 +769,10 @@ function HistoryChartPairOddsOnly({
     uiMarket === "ml" ? "Moneyline Odds" : uiMarket === "spread" ? "Spread Odds" : "Total Odds";
   const rightTopLabel = "Market Width (Prob)";
 
-  // keep chart wide: no side-axis labels, modest axis widths
+  // keep plot WIDE on mobile; no axis labels inside chart
   const margin = isMobile
-    ? { top: 10, right: 16, left: 32, bottom: 14 }
-    : { top: 10, right: 18, left: 34, bottom: 16 };
+    ? { top: 8, right: 14, left: 36, bottom: 14 }
+    : { top: 8, right: 16, left: 38, bottom: 16 };
 
   const legendWrapperStyle = {
     fontSize: isMobile ? 10 : 11,
@@ -780,13 +800,12 @@ function HistoryChartPairOddsOnly({
             { title: panelTitleB, data: seriesB } as const,
           ].map((panel) => (
             <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+              {/* TOP labels so nothing overlays ticks */}
               <div className="flex items-center justify-between gap-3 mb-2">
                 <div className="text-white font-bold text-xs">{panel.title}</div>
-
-                {/* ✅ "axis labels" at TOP (no tick overlap) */}
-                <div className="flex items-center justify-end gap-3 min-w-0">
-                  <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{leftTopLabel}</div>
-                  <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{rightTopLabel}</div>
+                <div className="flex items-center gap-3">
+                  <div className="text-[10px] text-[#cfcfcf] font-extrabold">{leftTopLabel}</div>
+                  <div className="text-[10px] text-[#cfcfcf] font-extrabold">{rightTopLabel}</div>
                 </div>
               </div>
 
@@ -796,8 +815,20 @@ function HistoryChartPairOddsOnly({
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="t" tick={{ fontSize: xTickSize }} interval="preserveStartEnd" />
 
-                    <YAxis yAxisId="main" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 32 : 36} />
-                    <YAxis yAxisId="mw" orientation="right" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 36 : 40} />
+                    <YAxis
+                      yAxisId="main"
+                      tick={{ fontSize: yTickSize }}
+                      tickMargin={8}
+                      width={isMobile ? 36 : 40}
+                    />
+
+                    <YAxis
+                      yAxisId="mw"
+                      orientation="right"
+                      tick={{ fontSize: yTickSize }}
+                      tickMargin={8}
+                      width={isMobile ? 42 : 46}
+                    />
 
                     <Tooltip
                       content={({ active, payload, label }) => {
@@ -805,16 +836,13 @@ function HistoryChartPairOddsOnly({
 
                         const row: any = payload[0]?.payload;
 
-                        // payload entries correspond to plotted lines (odds + mw)
                         const series = (payload ?? [])
                           .filter((p) => p?.dataKey && typeof p.value === "number")
                           .map((p) => ({ key: String(p.dataKey), val: p.value as number }))
                           .filter((x) => x.key !== "mw");
 
-                        // show bookmaker odds + (line) if available
                         const pretty = series.map((s) => {
-                          const lineKey = `${s.key}__line`;
-                          const ln = row?.[lineKey];
+                          const ln = row?.[`${s.key}__line`];
                           return {
                             book: s.key,
                             odds: s.val,
@@ -823,7 +851,7 @@ function HistoryChartPairOddsOnly({
                         });
 
                         return (
-                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[320px]">
+                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[340px]">
                             <div className="font-extrabold text-white mb-1">{label}</div>
 
                             {row?.mw != null && (
@@ -888,7 +916,6 @@ function HistoryChartPairOddsOnly({
                       strokeDasharray="6 6"
                     />
 
-                    {/* Sharp move vertical markers */}
                     {panel.data
                       .filter((p) => p.sharp)
                       .map((p) => (
@@ -931,15 +958,13 @@ function LineMovementModal({
   useEffect(() => setActiveMarket(uiMarket), [uiMarket]);
 
   const hoursBack = 24;
-
   const [books, setBooks] = useState<string[]>([]);
 
+  // odds-only chart points (line embedded for tooltip)
   const [mlAway, setMlAway] = useState<ChartPoint[]>([]);
   const [mlHome, setMlHome] = useState<ChartPoint[]>([]);
-
   const [spAway, setSpAway] = useState<ChartPoint[]>([]);
   const [spHome, setSpHome] = useState<ChartPoint[]>([]);
-
   const [toOver, setToOver] = useState<ChartPoint[]>([]);
   const [toUnder, setToUnder] = useState<ChartPoint[]>([]);
 
@@ -964,12 +989,9 @@ function LineMovementModal({
       if (error) {
         setErr(error.message);
         setBooks([]);
-        setMlAway([]);
-        setMlHome([]);
-        setSpAway([]);
-        setSpHome([]);
-        setToOver([]);
-        setToUnder([]);
+        setMlAway([]); setMlHome([]);
+        setSpAway([]); setSpHome([]);
+        setToOver([]); setToUnder([]);
         setLoading(false);
         return;
       }
@@ -984,45 +1006,35 @@ function LineMovementModal({
       const pick = (m: HistMarket, s: HistSide) =>
         rows.filter((r) => String(r.market).toLowerCase() === m && String(r.side).toLowerCase() === s);
 
-      setMlAway(buildChartSeriesOddsOnly(pick("h2h", "away"), bookList));
-      setMlHome(buildChartSeriesOddsOnly(pick("h2h", "home"), bookList));
+      setMlAway(buildChartSeriesOddsOnly(pick("h2h", "away"), "ml", bookList));
+      setMlHome(buildChartSeriesOddsOnly(pick("h2h", "home"), "ml", bookList));
 
-      setSpAway(buildChartSeriesOddsOnly(pick("spreads", "away"), bookList));
-      setSpHome(buildChartSeriesOddsOnly(pick("spreads", "home"), bookList));
+      setSpAway(buildChartSeriesOddsOnly(pick("spreads", "away"), "spread", bookList));
+      setSpHome(buildChartSeriesOddsOnly(pick("spreads", "home"), "spread", bookList));
 
-      setToOver(buildChartSeriesOddsOnly(pick("totals", "over"), bookList));
-      setToUnder(buildChartSeriesOddsOnly(pick("totals", "under"), bookList));
+      setToOver(buildChartSeriesOddsOnly(pick("totals", "over"), "total", bookList));
+      setToUnder(buildChartSeriesOddsOnly(pick("totals", "under"), "total", bookList));
 
       setLoading(false);
     }
 
     run();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [ev.eventId]);
 
   const subtitle = [
     ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
     `Window: last ${hoursBack}h`,
     "Bucket: 1-min",
-    "Chart: odds only (line in tooltip)",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+    "Chart: odds (line in hover)",
+  ].filter(Boolean).join(" · ");
 
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <PillButton active={activeMarket === "ml"} onClick={() => setActiveMarket("ml")}>
-          Moneyline
-        </PillButton>
-        <PillButton active={activeMarket === "spread"} onClick={() => setActiveMarket("spread")}>
-          Spread
-        </PillButton>
-        <PillButton active={activeMarket === "total"} onClick={() => setActiveMarket("total")}>
-          Total
-        </PillButton>
+        <PillButton active={activeMarket === "ml"} onClick={() => setActiveMarket("ml")}>Moneyline</PillButton>
+        <PillButton active={activeMarket === "spread"} onClick={() => setActiveMarket("spread")}>Spread</PillButton>
+        <PillButton active={activeMarket === "total"} onClick={() => setActiveMarket("total")}>Total</PillButton>
       </div>
 
       {loading ? (
@@ -1033,7 +1045,7 @@ function LineMovementModal({
         <div className="space-y-4">
           {activeMarket === "ml" && (
             <HistoryChartPairOddsOnly
-              title="Moneyline"
+              title="Moneyline (Odds)"
               uiMarket="ml"
               books={books}
               seriesA={mlAway}
@@ -1073,40 +1085,17 @@ function LineMovementModal({
 }
 
 /** =========================
- * MOBILE BOOKS (CONSISTENT 2-LINE CELLS)
+ * MOBILE BOOK ROW (labels centered above cols; values always centered)
  * ========================= */
-
-function splitLineOdds(value: string) {
-  const v = (value ?? "").trim();
-  if (!v || v === "—" || v === "-") return { line: "—", odds: "" };
-
-  // "164.5 (-110)" => { line: "164.5", odds: "(-110)" }
-  const m = v.match(/^(.+?)\s*\(\s*([^)]+)\s*\)\s*$/);
-  if (m) return { line: m[1].trim(), odds: `(${m[2].trim()})` };
-
-  // line-only
-  return { line: v, odds: "" };
-}
-
-function MobileBookCell({ value }: { value: string }) {
-  const { line, odds } = splitLineOdds(value);
-
-  return (
-    <div className="flex flex-col items-center justify-center text-center leading-tight min-w-0">
-      <div className="text-[13px] text-white font-extrabold tabular-nums">{line}</div>
-      {odds ? <div className="text-[12px] text-white/90 font-extrabold tabular-nums">{odds}</div> : <div className="h-[16px]" />}
-    </div>
-  );
-}
 
 function BookRowMobile2Col({
   book,
-  leftValue,
-  rightValue,
+  leftParts,
+  rightParts,
 }: {
   book: BookKey;
-  leftValue: string;
-  rightValue: string;
+  leftParts: CellParts;
+  rightParts: CellParts;
 }) {
   const meta =
     book === "dk"
@@ -1121,14 +1110,17 @@ function BookRowMobile2Col({
 
   return (
     <div className="py-2 border-b border-[#141414] last:border-b-0">
-      <div className="grid grid-cols-[96px_1fr] items-center gap-3">
-        <div className="flex items-center justify-start">
+      <div className="grid grid-cols-[110px_1fr_1fr] items-center gap-3">
+        <div className="flex justify-start">
           <BookLogoPill src={BOOK_LOGOS[book]} alt={meta.alt} fallbackLabel={meta.fb} />
         </div>
 
-        <div className="grid grid-cols-2 gap-3 w-full">
-          <MobileBookCell value={leftValue} />
-          <MobileBookCell value={rightValue} />
+        <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
+          {renderCellParts(leftParts)}
+        </div>
+
+        <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
+          {renderCellParts(rightParts)}
         </div>
       </div>
     </div>
@@ -1152,50 +1144,14 @@ function EventCardMobile({
   onToggleBooks: () => void;
   onOpenHistory: (ev: EventOdds) => void;
 }) {
-  const away = ev.away;
-  const home = ev.home;
-
-  const mkRow = (s: SideOdds | undefined) => {
-    if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
-
-    if (market === "ml") {
-      return {
-        dk: fmtML(s.ml.dk),
-        fd: fmtML(s.ml.fd),
-        mgm: fmtML(s.ml.mgm),
-        pin: fmtML(s.ml.pin),
-        bol: fmtML(s.ml.bol),
-      };
-    }
-
-    if (market === "spread") {
-      return {
-        dk: fmtSpread(s.spread.dk),
-        fd: fmtSpread(s.spread.fd),
-        mgm: fmtSpread(s.spread.mgm),
-        pin: fmtSpread(s.spread.pin),
-        bol: fmtSpread(s.spread.bol),
-      };
-    }
-
-    // total: away row is OVER, home row is UNDER
-    return {
-      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
-      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
-      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
-      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
-      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
-    };
-  };
-
-  const awayCells = mkRow(away);
-  const homeCells = mkRow(home);
-
-  const awayCons = consensusValueForRow(ev, market, "AWAY");
-  const homeCons = consensusValueForRow(ev, market, "HOME");
-
   const leftLabel = market === "total" ? "Over" : "Away";
   const rightLabel = market === "total" ? "Under" : "Home";
+
+  const awayCons = consensusPartsForRow(ev, market, "AWAY");
+  const homeCons = consensusPartsForRow(ev, market, "HOME");
+
+  const leftPartsByBook = (b: BookKey) => partsForBookSide(ev, market, "AWAY", b);
+  const rightPartsByBook = (b: BookKey) => partsForBookSide(ev, market, "HOME", b);
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
@@ -1222,8 +1178,8 @@ function EventCardMobile({
       </div>
 
       <div className="px-4 py-3 space-y-3">
-        <MiniTeamRow team={away?.team ?? "Away"} logoUrl={away?.logoUrl ?? null} side="AWAY" />
-        <MiniTeamRow team={home?.team ?? "Home"} logoUrl={home?.logoUrl ?? null} side="HOME" />
+        <MiniTeamRow team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} side="AWAY" />
+        <MiniTeamRow team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} side="HOME" />
       </div>
 
       <div className="px-4 pb-4">
@@ -1244,11 +1200,15 @@ function EventCardMobile({
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{awayCons}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(awayCons)}
+              </div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{homeCons}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(homeCons)}
+              </div>
             </div>
           </div>
         </div>
@@ -1258,23 +1218,20 @@ function EventCardMobile({
             <div className="px-4 py-2 border-b border-[#141414]">
               <div className="text-[12px] text-white font-extrabold">Books</div>
 
-              <div className="mt-1 grid grid-cols-[96px_1fr] items-center">
+              {/* column headers centered above their columns */}
+              <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
                 <div />
-                <div className="w-full">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
-                    <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
-                  </div>
-                </div>
+                <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
+                <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
               </div>
             </div>
 
             <div className="px-4">
-              <BookRowMobile2Col book="dk" leftValue={awayCells.dk} rightValue={homeCells.dk} />
-              <BookRowMobile2Col book="fd" leftValue={awayCells.fd} rightValue={homeCells.fd} />
-              <BookRowMobile2Col book="mgm" leftValue={awayCells.mgm} rightValue={homeCells.mgm} />
-              <BookRowMobile2Col book="pin" leftValue={awayCells.pin} rightValue={homeCells.pin} />
-              <BookRowMobile2Col book="bol" leftValue={awayCells.bol} rightValue={homeCells.bol} />
+              <BookRowMobile2Col book="dk" leftParts={leftPartsByBook("dk")} rightParts={rightPartsByBook("dk")} />
+              <BookRowMobile2Col book="fd" leftParts={leftPartsByBook("fd")} rightParts={rightPartsByBook("fd")} />
+              <BookRowMobile2Col book="mgm" leftParts={leftPartsByBook("mgm")} rightParts={rightPartsByBook("mgm")} />
+              <BookRowMobile2Col book="pin" leftParts={leftPartsByBook("pin")} rightParts={rightPartsByBook("pin")} />
+              <BookRowMobile2Col book="bol" leftParts={leftPartsByBook("bol")} rightParts={rightPartsByBook("bol")} />
             </div>
           </div>
         )}
@@ -1298,37 +1255,8 @@ function EventTwoRows({
   showBooks: boolean;
   onOpenHistory: (ev: EventOdds) => void;
 }) {
-  const away = ev.away;
-  const home = ev.home;
-
-  const mk = (s: SideOdds | undefined) => {
-    if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
-    if (market === "ml") {
-      return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
-    }
-    if (market === "spread") {
-      return {
-        dk: fmtSpread(s.spread.dk),
-        fd: fmtSpread(s.spread.fd),
-        mgm: fmtSpread(s.spread.mgm),
-        pin: fmtSpread(s.spread.pin),
-        bol: fmtSpread(s.spread.bol),
-      };
-    }
-    return {
-      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
-      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
-      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
-      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
-      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
-    };
-  };
-
-  const awayCells = mk(away);
-  const homeCells = mk(home);
-
-  const awayConsensus = consensusValueForRow(ev, market, "AWAY");
-  const homeConsensus = consensusValueForRow(ev, market, "HOME");
+  const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
+  const homeConsensus = consensusPartsForRow(ev, market, "HOME");
 
   return (
     <>
@@ -1347,34 +1275,34 @@ function EventTwoRows({
           </div>
 
           <div className="space-y-3">
-            <MiniTeamRow team={away?.team ?? "Away"} logoUrl={away?.logoUrl ?? null} side="AWAY" />
-            <MiniTeamRow team={home?.team ?? "Home"} logoUrl={home?.logoUrl ?? null} side="HOME" />
+            <MiniTeamRow team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} side="AWAY" />
+            <MiniTeamRow team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} side="HOME" />
           </div>
         </td>
 
-        <ConsensusValue value={awayConsensus} />
+        <ConsensusValue parts={awayConsensus} />
 
         {showBooks && (
           <>
-            <BookValue value={awayCells.dk} borderLeft />
-            <BookValue value={awayCells.fd} />
-            <BookValue value={awayCells.mgm} />
-            <BookValue value={awayCells.pin} />
-            <BookValue value={awayCells.bol} />
+            <BookValue parts={partsForBookSide(ev, market, "AWAY", "dk")} borderLeft />
+            <BookValue parts={partsForBookSide(ev, market, "AWAY", "fd")} />
+            <BookValue parts={partsForBookSide(ev, market, "AWAY", "mgm")} />
+            <BookValue parts={partsForBookSide(ev, market, "AWAY", "pin")} />
+            <BookValue parts={partsForBookSide(ev, market, "AWAY", "bol")} />
           </>
         )}
       </tr>
 
       <tr className={["hover:bg-[#0f0f0f]/50 transition-colors", `border-t border-[#1a1a1a]/60 border-b-2 ${HDR_BORDER}`].join(" ")}>
-        <ConsensusValue value={homeConsensus} />
+        <ConsensusValue parts={homeConsensus} />
 
         {showBooks && (
           <>
-            <BookValue value={homeCells.dk} borderLeft />
-            <BookValue value={homeCells.fd} />
-            <BookValue value={homeCells.mgm} />
-            <BookValue value={homeCells.pin} />
-            <BookValue value={homeCells.bol} />
+            <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
+            <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
+            <BookValue parts={partsForBookSide(ev, market, "HOME", "mgm")} />
+            <BookValue parts={partsForBookSide(ev, market, "HOME", "pin")} />
+            <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
           </>
         )}
       </tr>
@@ -1553,15 +1481,9 @@ export function OddsScreen() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
-          Moneyline
-        </MarketButton>
-        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>
-          Spread
-        </MarketButton>
-        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
-          Total
-        </MarketButton>
+        <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>Moneyline</MarketButton>
+        <MarketButton active={market === "spread"} onClick={() => setMarket("spread")}>Spread</MarketButton>
+        <MarketButton active={market === "total"} onClick={() => setMarket("total")}>Total</MarketButton>
 
         <div className="hidden md:flex items-center ml-2">
           <button
@@ -1660,7 +1582,9 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {historyOpen && historyEvent?.eventId && <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />}
+      {historyOpen && historyEvent?.eventId && (
+        <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
+      )}
     </div>
   );
 }
