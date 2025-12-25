@@ -27,6 +27,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           SPORT_KEY: basketball_ncaab
-          BOOKMAKERS: draftkings,fanduel,betmgm,betrivers,hardrockbet,betonlineag,pinnacle
+          BOOKMAKERS: draftkings,fanduel,betmgm,betonlineag,pinnacle
           MARKETS: h2h,spreads,totals
         run: npm run odds:load
