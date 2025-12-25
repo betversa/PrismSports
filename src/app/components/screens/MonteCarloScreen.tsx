@@ -2,20 +2,25 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MONTE CARLO SCREEN — FULL REWRITE (SUMMARY LAYOUT v3)
+ * MONTE CARLO SCREEN — FULL REWRITE (SUMMARY LAYOUT v3.2 — card mini headers)
  *
- * Summary layout (matches request):
+ * Summary layout:
  * - Team name NEVER green
  * - AWAY/HOME label under the team name
  * - Proj score on the far right
  * - Win% next to proj score (no "Win:" prefix)
  * - Only ONE thing green: winner's SCORE (win% stays neutral)
  *
+ * Mobile Cards upgrade:
+ * - Add a mini header row inside each card:
+ *   [ Matchup (time) ] [ Proj Score ] [ Win% ]
+ *   - This is a label row (not data), shown above the team rows
+ *
  * Details:
  * - "Show Details" dropdown reveals proj margin/total and consensus lines (spread/total)
  *
  * Responsive:
- * - Mobile: card list w/ dropdown details
+ * - Mobile: card list w/ mini header + dropdown details
  * - Desktop: table with sticky matchup cell containing the summary + dropdown details
  */
 
@@ -186,7 +191,10 @@ function safeRound1(x: number) {
 }
 
 function medianOrNull(nums: number[]): number | null {
-  const arr = nums.filter((n) => Number.isFinite(n)).slice().sort((a, b) => a - b);
+  const arr = nums
+    .filter((n) => Number.isFinite(n))
+    .slice()
+    .sort((a, b) => a - b);
   if (!arr.length) return null;
   const mid = Math.floor(arr.length / 2);
   if (arr.length % 2 === 1) return arr[mid];
@@ -214,9 +222,11 @@ function LogoBox({ team, url, size = 48 }: { team: string; url: string | null; s
 
 /**
  * Summary row layout:
- * [logo] [team name + (AWAY/HOME label under)] ................ [score] [win%]
+ * [logo] [team name + (AWAY/HOME label under)] ............ [score] [win%]
  * - team name never green
  * - only score is green for winner
+ *
+ * "compact" is used for mobile cards and makes ALL text smaller.
  */
 function SummaryLine({
   team,
@@ -235,23 +245,46 @@ function SummaryLine({
   isWinner: boolean;
   compact?: boolean;
 }) {
-  const logoSize = compact ? 44 : 48;
+  const logoSize = compact ? 40 : 48;
+
+  const teamText = compact ? "text-[13px]" : "text-[16px]";
+  const sideText = compact ? "text-[10px]" : "text-[11px]";
+  const scoreText = compact ? "text-[14px]" : "text-[17px]";
+  const winText = compact ? "text-[11px]" : "text-[13px]";
 
   return (
     <div className="flex items-center gap-3">
       <LogoBox team={team} url={logoUrl} size={logoSize} />
 
       <div className="min-w-0 leading-tight">
-        <div className="text-white font-extrabold text-[16px] truncate">{team}</div>
-        <div className="text-[11px] text-[#7a7a7a] font-semibold">{sideLabel}</div>
+        <div className={["text-white font-extrabold truncate", teamText].join(" ")}>{team}</div>
+        <div className={["text-[#7a7a7a] font-semibold", sideText].join(" ")}>{sideLabel}</div>
       </div>
 
       <div className="ml-auto flex items-baseline gap-2 tabular-nums">
-        <div className={["font-extrabold", compact ? "text-[16px]" : "text-[17px]", isWinner ? "text-green-400" : "text-white"].join(" ")}>
+        <div className={["font-extrabold", scoreText, isWinner ? "text-green-400" : "text-white"].join(" ")}>
           {score.toFixed(1)}
         </div>
-        <div className={["font-bold", compact ? "text-[12px]" : "text-[13px]", "text-[#bdbdbd]"].join(" ")}>
+        <div className={["font-bold text-[#bdbdbd]", winText].join(" ")}>
           {formatPct(winProb)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ---------- Card mini header row ---------- */
+function CardMiniHeader({ compact }: { compact?: boolean }) {
+  const label = compact ? "text-[10px]" : "text-[11px]";
+  return (
+    <div className="flex items-center">
+      <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a]", label].join(" ")}>Matchup</div>
+      <div className="ml-auto flex items-center gap-6">
+        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] tabular-nums", label].join(" ")}>
+          Proj Score
+        </div>
+        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] tabular-nums", label].join(" ")}>
+          Win%
         </div>
       </div>
     </div>
@@ -266,12 +299,16 @@ function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   const consSpreadAway =
     away.consSpreadLineTeam == null
       ? "—"
-      : `${away.consSpreadLineTeam > 0 ? "+" : ""}${away.consSpreadLineTeam.toFixed(1)} (${away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)})`;
+      : `${away.consSpreadLineTeam > 0 ? "+" : ""}${away.consSpreadLineTeam.toFixed(1)} (${
+          away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)
+        })`;
 
   const consSpreadHome =
     home.consSpreadLineTeam == null
       ? "—"
-      : `${home.consSpreadLineTeam > 0 ? "+" : ""}${home.consSpreadLineTeam.toFixed(1)} (${home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)})`;
+      : `${home.consSpreadLineTeam > 0 ? "+" : ""}${home.consSpreadLineTeam.toFixed(1)} (${
+          home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)
+        })`;
 
   const consTotalOver =
     away.consTotalLine == null
@@ -285,152 +322,40 @@ function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 
   const row = (label: string, a: React.ReactNode, h: React.ReactNode) => (
     <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414] last:border-b-0">
-      <div className="text-[11px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
-      <div className="text-[12px] text-white font-bold tabular-nums text-right">{a}</div>
-      <div className="text-[12px] text-white font-bold tabular-nums text-right">{h}</div>
+      <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
+      <div className="text-[11px] text-white font-bold tabular-nums text-right">{a}</div>
+      <div className="text-[11px] text-white font-bold tabular-nums text-right">{h}</div>
     </div>
   );
 
   return (
     <div className="rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
-      <div className="px-4 py-2 border-b border-[#141414] text-[12px] text-white font-extrabold">Details</div>
+      <div className="px-4 py-2 border-b border-[#141414] text-[11px] text-white font-extrabold">Details</div>
       <div className="px-4">
         {row(
           "Proj Margin",
           <>
-            {projMarginAway} <span className="text-[#808080] font-semibold">({formatPct(away.coverProbTeam)})</span>
+            {projMarginAway}{" "}
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(away.coverProbTeam)})</span>
           </>,
           <>
-            {projMarginHome} <span className="text-[#808080] font-semibold">({formatPct(home.coverProbTeam)})</span>
+            {projMarginHome}{" "}
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(home.coverProbTeam)})</span>
           </>
         )}
         {row(
           "Proj Total",
           <>
-            o{away.projTotal.toFixed(1)} <span className="text-[#808080] font-semibold">({formatPct(away.overProb)})</span>
+            o{away.projTotal.toFixed(1)}{" "}
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(away.overProb)})</span>
           </>,
           <>
-            u{home.projTotal.toFixed(1)} <span className="text-[#808080] font-semibold">({formatPct(home.underProb)})</span>
+            u{home.projTotal.toFixed(1)}{" "}
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(home.underProb)})</span>
           </>
         )}
         {row("Cons Spread", consSpreadAway, consSpreadHome)}
         {row("Cons Total", consTotalOver, consTotalUnder)}
-      </div>
-    </div>
-  );
-}
-
-/** ---------- Desktop two-row renderer ---------- */
-function EventTwoRows({
-  ev,
-  open,
-  onToggle,
-}: {
-  ev: EventBundle;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const away = ev.away;
-  const home = ev.home;
-
-  return (
-    <>
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-top", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
-          <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3 flex items-center justify-between gap-3">
-            <span>{away.commenceTime ? formatStartStamp(away.commenceTime) : "TBD"}</span>
-            <button
-              type="button"
-              onClick={onToggle}
-              className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
-            >
-              {open ? "Hide Details" : "Show Details"}
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            <SummaryLine
-              team={away.teamName}
-              sideLabel="AWAY"
-              logoUrl={away.logoUrl}
-              score={away.projPoints}
-              winProb={away.winProbTeam}
-              isWinner={away.isProjectedWinner}
-            />
-
-            <SummaryLine
-              team={home.teamName}
-              sideLabel="HOME"
-              logoUrl={home.logoUrl}
-              score={home.projPoints}
-              winProb={home.winProbTeam}
-              isWinner={home.isProjectedWinner}
-            />
-
-            {open && <div className="pt-2"><DetailsBlock away={away} home={home} /></div>}
-          </div>
-        </td>
-
-        {/* empty companion column for layout consistency */}
-        <td className="p-0" />
-      </tr>
-
-      <tr className={["border-b-2", HDR_BORDER].join(" ")}>
-        <td className="p-0" />
-      </tr>
-    </>
-  );
-}
-
-/** ---------- Mobile card renderer ---------- */
-function EventCardMobile({
-  ev,
-  open,
-  onToggle,
-}: {
-  ev: EventBundle;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const away = ev.away;
-  const home = ev.home;
-  const timeLabel = away.commenceTime ? formatStartStamp(away.commenceTime) : "TBD";
-
-  return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
-      <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between">
-        <div className="text-[11px] text-[#cfcfcf] font-extrabold">{timeLabel}</div>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
-        >
-          {open ? "Hide Details" : "Show Details"}
-        </button>
-      </div>
-
-      <div className="p-3 space-y-3">
-        <SummaryLine
-          team={away.teamName}
-          sideLabel="AWAY"
-          logoUrl={away.logoUrl}
-          score={away.projPoints}
-          winProb={away.winProbTeam}
-          isWinner={away.isProjectedWinner}
-          compact
-        />
-
-        <SummaryLine
-          team={home.teamName}
-          sideLabel="HOME"
-          logoUrl={home.logoUrl}
-          score={home.projPoints}
-          winProb={home.winProbTeam}
-          isWinner={home.isProjectedWinner}
-          compact
-        />
-
-        {open && <DetailsBlock away={away} home={home} />}
       </div>
     </div>
   );
@@ -697,7 +622,6 @@ export function MonteCarloScreen() {
       const pHomeWin = numOrNullable((r as any).home_win_prob);
       const pAwayWin = numOrNullable((r as any).away_win_prob);
 
-      // if only one exists, derive the other; else nulls show as —
       const finalHomeWin = pHomeWin ?? (pAwayWin != null ? 1 - pAwayWin : null);
       const finalAwayWin = pAwayWin ?? (finalHomeWin != null ? 1 - finalHomeWin : null);
 
@@ -817,20 +741,26 @@ export function MonteCarloScreen() {
           ) : (
             events.map((ev) => (
               <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
+                {/* Top bar: time + toggle */}
                 <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between">
-                  <div className="text-[11px] text-[#cfcfcf] font-extrabold">
+                  <div className="text-[10px] text-[#cfcfcf] font-extrabold">
                     {ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD"}
                   </div>
                   <button
                     type="button"
                     onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                    className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+                    className="text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
                   >
                     {openMap[ev.eventId] ? "Hide Details" : "Show Details"}
                   </button>
                 </div>
 
                 <div className="p-3 space-y-3">
+                  {/* Mini header row inside card */}
+                  <div className="pb-1 border-b border-[#141414]">
+                    <CardMiniHeader compact />
+                  </div>
+
                   <SummaryLine
                     team={ev.away.teamName}
                     sideLabel="AWAY"
@@ -941,5 +871,6 @@ export function MonteCarloScreen() {
     </div>
   );
 }
+
 
 
