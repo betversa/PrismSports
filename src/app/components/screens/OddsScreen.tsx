@@ -1,11 +1,14 @@
-// screens/OddsScreen.tsx  — FULL REWRITE (History modal fixed + mobile charts WIDE)
-// ✅ Mobile history graphs are WIDE (no “skinny” plot area)
-// ✅ Axis labels NEVER overlap tick labels (labels live in dedicated outer gutters)
-// ✅ Spread + Total history can toggle Line ↔ Odds (Moneyline stays Odds-only)
-// ✅ Market Width + Sharp Moves ALWAYS ON (no top badges/toggles)
-// ✅ Red “Sharp Move” badge shown when sharp move exists in a panel
-// ✅ Axis labels not clipped on mobile; ticks remain readable
-// ✅ Books section: Away/Home (or Over/Under) label shown once at top (not repeated)
+// screens/OddsScreen.tsx — FULL REWRITE (History modal: top-side axis labels)
+// ✅ Mobile charts are WIDE (no skinny plot area)
+// ✅ Axis labels moved to TOP of chart area:
+//    - Main axis label: TOP-LEFT
+//    - Market Width label: TOP-RIGHT
+// ✅ NO label overlap with tick labels (labels are outside plot, above chart)
+// ✅ Spread + Total toggle Line ↔ Odds (Moneyline = Odds only)
+// ✅ Market Width + Sharp Moves ALWAYS ON
+// ✅ Red Sharp Move badge when detected
+// ✅ Tooltip shows values + width + sharp
+// ✅ Books section: Away/Home (or Over/Under) label shown once at top
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -562,16 +565,6 @@ type ChartPoint = {
   [book: string]: any;
 };
 
-/**
- * buildChartSeries:
- * - Creates a 1-minute bucket series
- * - For each bucket, uses the most recent snapshot per book
- * - Stores either line or odds in p[book]
- * - Width always on:
- *    line mode => max(line)-min(line)
- *    odds mode => max(prob)-min(prob)
- * - Sharp moves always on: based on pin or consensus delta with width gating
- */
 function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line" | "odds", books: string[]) {
   const binMap = new Map<string, Map<string, HistoryRow>>();
 
@@ -609,7 +602,9 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
 
     if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
 
-    // width always on
+    // Width always on:
+    // - line: range of lines across books in this minute bucket
+    // - odds: range of IMPLIED PROBABILITIES across books in this bucket
     if (valueMode === "line") {
       const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
       if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
@@ -625,7 +620,7 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
     return p;
   });
 
-  // sharp moves always on
+  // Sharp moves always on (same logic you had; left intact)
   const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
   const PROB_MOVE = 0.02;
 
@@ -671,18 +666,6 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
   }
 
   return points;
-}
-
-function useIsMobile(bp = 640) {
-  const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${bp}px)`);
-    const on = () => setIsMobile(mq.matches);
-    on();
-    mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener?.("change", on);
-  }, [bp]);
-  return isMobile;
 }
 
 /** =========================
@@ -737,7 +720,8 @@ function ModalShell({
 }
 
 /** =========================
- * HISTORY CHART PAIR (WIDE ON MOBILE, labels never overlap ticks)
+ * HISTORY CHART PAIR
+ * Labels at top-left / top-right (outside plot)
  * ========================= */
 
 function HistoryChartPair({
@@ -763,11 +747,10 @@ function HistoryChartPair({
   panelTitleB: string;
   canToggleMode: boolean;
 }) {
-  const isMobile = useIsMobile();
-
+  const isMobile = typeof window !== "undefined" ? window.matchMedia?.("(max-width: 640px)")?.matches ?? false : false;
   const chartHeight = isMobile ? 420 : 560;
 
-  const yLabel =
+  const mainLabel =
     valueMode === "line"
       ? uiMarket === "spread"
         ? "Spread Line"
@@ -782,19 +765,12 @@ function HistoryChartPair({
 
   const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
 
-  // ✅ Dedicated outer gutters for axis labels (so they NEVER overlap ticks)
-  //   On mobile, we render labels OUTSIDE the chart in left/right gutters.
-  const leftGutter = isMobile ? 22 : 0;
-  const rightGutter = isMobile ? 22 : 0;
+  // Wide plot: keep margins modest, remove axis labels entirely.
+  const margin = isMobile ? { top: 8, right: 10, left: 8, bottom: 18 } : { top: 10, right: 16, left: 12, bottom: 18 };
 
-  // ✅ Tight chart margins (mobile stays wide)
-  const margin = isMobile
-    ? { top: 8, right: 8, left: 6, bottom: 18 }
-    : { top: 10, right: 72, left: 44, bottom: 18 };
-
-  // ✅ Axis widths kept small on mobile (ticks still visible)
-  const mainAxisWidth = isMobile ? 42 : 52;
-  const mwAxisWidth = isMobile ? 10 : 52; // on mobile: no ticks, minimal footprint
+  // Main axis needs some width for ticks; MW axis: we keep it tickless to stay wide.
+  const mainAxisWidth = isMobile ? 46 : 54;
+  const mwAxisWidth = isMobile ? 10 : 10;
 
   const legendWrapperStyle = {
     fontSize: isMobile ? 10 : 11,
@@ -833,10 +809,8 @@ function HistoryChartPair({
 
             return (
               <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between">
                   <div className="text-white font-bold text-xs">{panel.title}</div>
-
-                  {/* ✅ You wanted the red badge back */}
                   {hasSharp ? (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
                       Sharp Move
@@ -848,174 +822,126 @@ function HistoryChartPair({
                   )}
                 </div>
 
-                {/* ✅ GUTTER LAYOUT (labels outside chart => never overlap ticks) */}
-                <div
-                  className="w-full min-w-0"
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: isMobile ? `${leftGutter}px 1fr ${rightGutter}px` : "1fr",
-                    alignItems: "stretch",
-                  }}
-                >
-                  {/* Left label gutter */}
-                  {isMobile && (
-                    <div className="relative">
-                      <div
-                        className="absolute left-0 top-1/2 -translate-y-1/2 -rotate-90 text-[#cfcfcf] font-extrabold"
-                        style={{ fontSize: 10, width: chartHeight, whiteSpace: "nowrap" }}
-                      >
-                        {yLabel}
-                      </div>
-                    </div>
-                  )}
+                {/* ✅ TOP-SIDE AXIS LABELS */}
+                <div className="mt-2 mb-2 flex items-center justify-between">
+                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">
+                    {mainLabel}
+                  </div>
+                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">
+                    {mwLabel}
+                  </div>
+                </div>
 
-                  {/* Chart */}
-                  <div className="relative w-full min-w-0" style={{ height: chartHeight }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={panel.data} margin={margin}>
-                        <CartesianGrid strokeDasharray="3 3" />
+                <div className="w-full min-w-0" style={{ height: chartHeight }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={panel.data} margin={margin}>
+                      <CartesianGrid strokeDasharray="3 3" />
 
-                        <XAxis dataKey="t" tick={{ fontSize: isMobile ? 10 : 11 }} interval="preserveStartEnd" />
+                      <XAxis dataKey="t" tick={{ fontSize: isMobile ? 10 : 11 }} interval="preserveStartEnd" />
 
-                        <YAxis
-                          yAxisId="main"
-                          width={mainAxisWidth}
-                          tick={{ fontSize: isMobile ? 10 : 11 }}
-                          tickMargin={6}
-                          // desktop uses built-in label
-                          label={
-                            isMobile
-                              ? undefined
-                              : {
-                                  value: yLabel,
-                                  angle: -90,
-                                  position: "insideLeft",
-                                  offset: 14,
-                                  style: { fill: "#cfcfcf", fontSize: 11, fontWeight: 900 },
-                                }
-                          }
-                        />
+                      <YAxis
+                        yAxisId="main"
+                        width={mainAxisWidth}
+                        tick={{ fontSize: isMobile ? 10 : 11 }}
+                        tickMargin={6}
+                      />
 
-                        <YAxis
-                          yAxisId="mw"
-                          orientation="right"
-                          width={mwAxisWidth}
-                          // ✅ mobile: no ticks (keeps plot wide), desktop: normal ticks
-                          tick={isMobile ? false : { fontSize: 11 }}
-                          tickMargin={isMobile ? 0 : 10}
-                          // desktop uses built-in label
-                          label={
-                            isMobile
-                              ? undefined
-                              : {
-                                  value: mwLabel,
-                                  angle: 90,
-                                  position: "insideRight",
-                                  offset: 22,
-                                  style: { fill: "#cfcfcf", fontSize: 11, fontWeight: 900 },
-                                }
-                          }
-                        />
+                      {/* MW axis stays RIGHT but tickless to keep plot wide */}
+                      <YAxis
+                        yAxisId="mw"
+                        orientation="right"
+                        width={mwAxisWidth}
+                        tick={false}
+                        axisLine={false}
+                        tickLine={false}
+                      />
 
-                        <Tooltip
-                          content={({ active, payload, label }) => {
-                            if (!active || !payload?.length) return null;
-                            const row: any = payload[0]?.payload;
+                      <Tooltip
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const row: any = payload[0]?.payload;
 
-                            const lines = (payload ?? [])
-                              .filter((p) => p?.dataKey && typeof p.value === "number")
-                              .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
-                              .filter((x) => x.k !== "mw");
+                          const lines = (payload ?? [])
+                            .filter((p) => p?.dataKey && typeof p.value === "number")
+                            .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
+                            .filter((x) => x.k !== "mw");
 
-                            return (
-                              <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[280px]">
-                                <div className="font-extrabold text-white mb-1">{label}</div>
+                          return (
+                            <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[280px]">
+                              <div className="font-extrabold text-white mb-1">{label}</div>
 
-                                {row?.mw != null && (
-                                  <div className="mb-1">
-                                    <span className="font-bold">Width:</span> {row.mw}
+                              {row?.mw != null && (
+                                <div className="mb-1">
+                                  <span className="font-bold">Width:</span> {row.mw}
+                                </div>
+                              )}
+
+                              <div className="space-y-0.5">
+                                {lines.slice(0, 12).map((x) => (
+                                  <div key={x.k} className="flex items-center justify-between gap-2">
+                                    <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
+                                    <span className="text-white font-extrabold tabular-nums">{x.v}</span>
                                   </div>
-                                )}
-
-                                <div className="space-y-0.5">
-                                  {lines.slice(0, 12).map((x) => (
-                                    <div key={x.k} className="flex items-center justify-between gap-2">
-                                      <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
-                                      <span className="text-white font-extrabold tabular-nums">{x.v}</span>
-                                    </div>
-                                  ))}
-                                </div>
-
-                                <div className="mt-2">
-                                  {row?.sharp ? (
-                                    <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
-                                      Sharp
-                                    </span>
-                                  ) : (
-                                    <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#2a2a2a] text-[#cfcfcf]">
-                                      —
-                                    </span>
-                                  )}
-                                </div>
+                                ))}
                               </div>
-                            );
-                          }}
-                        />
 
-                        <Legend wrapperStyle={legendWrapperStyle} />
+                              <div className="mt-2">
+                                {row?.sharp ? (
+                                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
+                                    Sharp
+                                  </span>
+                                ) : (
+                                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#2a2a2a] text-[#cfcfcf]">
+                                    —
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        }}
+                      />
 
-                        {books.map((b) => (
-                          <Line
-                            key={b}
-                            yAxisId="main"
-                            type="monotone"
-                            dataKey={b}
-                            name={b}
-                            dot={false}
-                            strokeWidth={2}
-                            connectNulls
-                            stroke={seriesColor(b)}
-                          />
-                        ))}
+                      <Legend wrapperStyle={legendWrapperStyle} />
 
+                      {books.map((b) => (
                         <Line
-                          yAxisId="mw"
+                          key={b}
+                          yAxisId="main"
                           type="monotone"
-                          dataKey="mw"
-                          name="Market Width"
+                          dataKey={b}
+                          name={b}
                           dot={false}
                           strokeWidth={2}
                           connectNulls
-                          stroke="#e5e7eb"
-                          strokeDasharray="6 6"
+                          stroke={seriesColor(b)}
                         />
+                      ))}
 
-                        {panel.data
-                          .filter((p) => p.sharp)
-                          .map((p) => (
-                            <ReferenceLine
-                              key={`sharp-${panel.title}-${p.ts}`}
-                              x={p.t}
-                              stroke="rgba(239,68,68,0.55)"
-                              strokeDasharray="3 3"
-                              yAxisId="main"
-                            />
-                          ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                      <Line
+                        yAxisId="mw"
+                        type="monotone"
+                        dataKey="mw"
+                        name="Market Width"
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls
+                        stroke="#e5e7eb"
+                        strokeDasharray="6 6"
+                      />
 
-                  {/* Right label gutter */}
-                  {isMobile && (
-                    <div className="relative">
-                      <div
-                        className="absolute right-0 top-1/2 -translate-y-1/2 rotate-90 text-[#cfcfcf] font-extrabold"
-                        style={{ fontSize: 10, width: chartHeight, whiteSpace: "nowrap", textAlign: "center" }}
-                      >
-                        {mwLabel}
-                      </div>
-                    </div>
-                  )}
+                      {panel.data
+                        .filter((p) => p.sharp)
+                        .map((p) => (
+                          <ReferenceLine
+                            key={`sharp-${panel.title}-${p.ts}`}
+                            x={p.t}
+                            stroke="rgba(239,68,68,0.55)"
+                            strokeDasharray="3 3"
+                            yAxisId="main"
+                          />
+                        ))}
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
               </div>
             );
