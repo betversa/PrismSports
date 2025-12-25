@@ -31,12 +31,16 @@ type TeamRatingRow = {
   sigma_total_100: number | null;
 };
 
+type MarketKey = "h2h" | "spreads" | "totals";
+type SideKey = "home" | "away" | "over" | "under";
+
 type OddsSnapshotRow = {
   event_id: string;
   bookmaker: string;
-  market: "spreads" | "totals";
-  side: "home" | "away" | "over" | "under";
+  market: MarketKey;
+  side: SideKey;
   line: number | string | null;
+  odds: number | null; // ✅ assumed column exists
   ts: string;
 };
 
@@ -78,6 +82,36 @@ type MonteCarloResultUpsert = {
   trace: Record<string, any> | null;
 };
 
+type EvPlayInsert = {
+  run_id: string;
+  event_id: string;
+  commence_time: string | null;
+  matchup: string | null;
+
+  team: string | null;
+
+  market: MarketKey;
+  side: SideKey;
+  line: number | null;
+
+  bookmaker: string; // soft book
+  book_odds: number; // American odds (soft)
+
+  quantum_prob: number;
+  quantum_odds: number;
+  ev_pct: number;
+
+  confidence_score: number;
+  confidence_tier: string;
+
+  kelly_fraction: number;
+  bet_fraction: number;
+
+  // optional debug fields (safe to omit if your table doesn't have them)
+  // sharp_prob?: number;
+  // mc_prob?: number;
+};
+
 /* =========================================================
    ENV / CONFIG
 ========================================================= */
@@ -111,12 +145,22 @@ const TOTAL_FALLBACK_MODE = (process.env.TOTAL_FALLBACK_MODE || "avg_total_point
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
 
 // If true, store projected_margin_home as negative when home is stronger / would win by that many
-// (Your display convention)
 const MARGIN_HOME_WIN_NEGATIVE =
   (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
 
 // float equality tolerance (push detection)
 const EPS = Number(process.env.MC_PUSH_EPS ?? "1e-9");
+
+// EV / Quantum config
+const SHARP_BOOKS = (process.env.EV_SHARP_BOOKS || "pinnacle,betonline").split(",").map(s => s.trim().toLowerCase());
+const SOFT_BOOKS = (process.env.EV_SOFT_BOOKS || "draftkings,fanduel,betmgm").split(",").map(s => s.trim().toLowerCase());
+
+const QUANTUM_SHARP_WEIGHT = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.6");
+const QUANTUM_MC_WEIGHT = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.4");
+const KELLY_MULTIPLIER = Number(process.env.KELLY_MULTIPLIER ?? "0.25");
+
+const LINE_TOL = Number(process.env.LINE_TOL ?? "1e-6"); // line match tolerance
+const MIN_EV_PCT = Number(process.env.MIN_EV_PCT ?? "0"); // only insert > 0 by default
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
@@ -128,10 +172,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 async function main() {
   console.log(
-    `[MC] SPORT_KEY=${SPORT_KEY} sims=${SIMS} marginHomeWinNegative=${MARGIN_HOME_WIN_NEGATIVE} startGraceMin=${START_GRACE_MINUTES}`
+    `[MC+EV] SPORT_KEY=${SPORT_KEY} sims=${SIMS} marginHomeWinNegative=${MARGIN_HOME_WIN_NEGATIVE} startGraceMin=${START_GRACE_MINUTES}`
   );
 
-  // ✅ No lookahead: just all games that haven't started yet (with optional grace)
   const now = new Date();
   const graceMs = START_GRACE_MINUTES * 60 * 1000;
   const startCutoff = new Date(now.getTime() - graceMs);
@@ -144,10 +187,10 @@ async function main() {
 
   const eventIds = events.map((e) => e.event_id);
 
-  // ✅ Treat monte_carlo_results like a snapshot table: clear old rows for these events
+  // Treat monte_carlo_results like snapshot for these events
   await clearMonteCarloResultsForEvents(eventIds);
 
-  // ✅ CONSENSUS lines from odds_snapshot (latest per-book, then average)
+  // Consensus lines used for MC line-based probs
   const lineMap = await fetchConsensusLinesFromOddsSnapshot(eventIds);
 
   // collect canon teams
@@ -174,6 +217,11 @@ async function main() {
       start_grace_minutes: START_GRACE_MINUTES,
       line_source: "consensus(avg latest-per-book from odds_snapshot)",
       generated_at: new Date().toISOString(),
+      quantum_sharp_weight: QUANTUM_SHARP_WEIGHT,
+      quantum_mc_weight: QUANTUM_MC_WEIGHT,
+      kelly_multiplier: KELLY_MULTIPLIER,
+      ev_soft_books: SOFT_BOOKS,
+      ev_sharp_books: SHARP_BOOKS,
     },
   });
 
@@ -219,11 +267,9 @@ async function main() {
 
     const trace = WRITE_TRACE
       ? {
-          // teams
           home,
           away,
 
-          // inputs
           home_engine_power: num(homeR.engine_power, 0),
           away_engine_power: num(awayR.engine_power, 0),
           home_true_hca: num(homeR.true_hca, 0),
@@ -236,22 +282,18 @@ async function main() {
           away_pa_points: toNullNum(awayR.pa_points),
           away_avg_total_points: toNullNum(awayR.avg_total_points),
 
-          // modeled means/sigmas
           margin_mean_model_home_minus_away: input.marginMean,
           total_mean: input.totalMean,
           sigma_margin_game: input.sigmaMarginGame,
           sigma_total_game: input.sigmaTotalGame,
 
-          // convention
           stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE
             ? "negative_means_home_better"
             : "positive_means_home_better",
 
-          // lines used (consensus)
           spread_line_home_consensus: spreadLineHome,
           total_line_consensus: totalLine,
 
-          // probs
           p_home_win: sim.homeWinProb,
           p_home_cover: sim.homeCoverProb,
           p_cover_push: sim.coverPushProb,
@@ -308,6 +350,307 @@ async function main() {
 
   await upsertMonteCarloResults(results);
   console.log(`[MC] Upserted ${results.length} rows into monte_carlo_results (run_id=${runId}).`);
+
+  // ✅ Build EV snapshot after MC results are stored
+  await rebuildEvPlays(runId, results, eventIds);
+}
+
+/* =========================================================
+   EV PIPELINE
+========================================================= */
+
+async function rebuildEvPlays(runId: string, mcRows: MonteCarloResultUpsert[], eventIds: string[]) {
+  console.log(`[EV] Rebuilding ev_plays (run_id=${runId})...`);
+
+  // Snapshot behavior
+  await clearEvPlaysAll();
+
+  // Pull all odds needed (sharp+soft) for these events
+  const oddsRows = await fetchOddsSnapshotForEvents(eventIds);
+
+  // Latest per (event,market,side,book)
+  const latest = indexLatestOddsPerBook(oddsRows);
+
+  const inserts: EvPlayInsert[] = [];
+
+  for (const mc of mcRows) {
+    const eid = mc.event_id;
+
+    // Build maps to resolve team label
+    const homeTeam = mc.home_team ?? null;
+    const awayTeam = mc.away_team ?? null;
+
+    // Markets supported by MC: h2h (win prob), spreads (cover prob), totals (over prob)
+    const markets: MarketKey[] = ["h2h", "spreads", "totals"];
+
+    for (const market of markets) {
+      const sides: SideKey[] =
+        market === "h2h" ? ["home", "away"] :
+        market === "spreads" ? ["home", "away"] :
+        ["over", "under"];
+
+      // For spreads/totals we require a reference line to enforce alignment.
+      // Use MC consensus line fields (already derived from odds_snapshot consensus).
+      const refLine =
+        market === "spreads" ? mc.spread_line_home :
+        market === "totals" ? mc.total_line :
+        null; // h2h doesn't use line
+
+      for (const side of sides) {
+        const mcProb = getMcProbForMarket(mc, market, side);
+        if (mcProb == null) continue;
+
+        // Sharp no-vig for this market/side (must have both sides present per sharp book)
+        const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
+        if (!sharp) continue;
+
+        const quantumProb = clamp01(
+          QUANTUM_SHARP_WEIGHT * sharp.prob + QUANTUM_MC_WEIGHT * mcProb
+        );
+
+        const quantumOdds = probToAmericanOdds(quantumProb);
+
+        // Compare against each soft book offer
+        for (const book of SOFT_BOOKS) {
+          const offer = getOffer(latest, eid, market, side, book);
+
+          if (!offer) continue;
+
+          // Enforce line alignment for spreads/totals
+          if (market === "spreads" || market === "totals") {
+            if (refLine == null) continue;
+            const offerLine = toNullNum(offer.line);
+            if (offerLine == null) continue;
+
+            // For spreads, refLine is HOME line. If side=away, reference is -refLine.
+            const expected =
+              market === "spreads"
+                ? (side === "home" ? refLine : -refLine)
+                : refLine;
+
+            if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
+          }
+
+          const bookOdds = toNullNum(offer.odds);
+          if (bookOdds == null) continue;
+
+          const ev = evPct(quantumProb, bookOdds);
+          if (!(ev > MIN_EV_PCT)) continue;
+
+          const rawKelly = kellyFraction(quantumProb, bookOdds);
+          const betFraction = rawKelly * KELLY_MULTIPLIER;
+
+          const confidenceScore = computeConfidenceScore(ev, quantumProb, sharp.prob, mcProb);
+          const tier = confidenceTier(confidenceScore);
+
+          const team =
+            market === "totals"
+              ? (homeTeam && awayTeam ? `${awayTeam} vs ${homeTeam}` : mc.matchup ?? null)
+              : (side === "home" ? homeTeam : awayTeam);
+
+          inserts.push({
+            run_id: runId,
+            event_id: eid,
+            commence_time: mc.commence_time,
+            matchup: mc.matchup,
+
+            team,
+
+            market,
+            side,
+            line: market === "h2h" ? null : toNullNum(offer.line),
+
+            bookmaker: book,
+            book_odds: bookOdds,
+
+            quantum_prob: quantumProb,
+            quantum_odds: quantumOdds,
+            ev_pct: ev,
+
+            confidence_score: Math.round(confidenceScore),
+            confidence_tier: tier,
+
+            kelly_fraction: rawKelly,
+            bet_fraction: betFraction,
+          });
+        }
+      }
+    }
+  }
+
+  if (!inserts.length) {
+    console.log("[EV] No positive EV plays found.");
+    return;
+  }
+
+  // Chunk inserts to avoid payload limits
+  const chunkSize = 1000;
+  for (let i = 0; i < inserts.length; i += chunkSize) {
+    const chunk = inserts.slice(i, i + chunkSize);
+    const { error } = await supabase.from("ev_plays").insert(chunk);
+    if (error) throw new Error(`[EV] Failed to insert ev_plays: ${error.message}`);
+  }
+
+  console.log(`[EV] Inserted ${inserts.length} +EV plays into ev_plays.`);
+}
+
+function getMcProbForMarket(mc: MonteCarloResultUpsert, market: MarketKey, side: SideKey): number | null {
+  if (market === "h2h") {
+    if (side === "home") return mc.home_win_prob ?? null;
+    if (side === "away") return mc.away_win_prob ?? null;
+    return null;
+  }
+
+  if (market === "spreads") {
+    if (side === "home") return mc.home_cover_prob ?? null;
+    if (side === "away") return mc.away_cover_prob ?? null;
+    return null;
+  }
+
+  if (market === "totals") {
+    if (side === "over") return mc.over_prob ?? null;
+    if (side === "under") return mc.under_prob ?? null;
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Build sharp no-vig prob for (event, market, side) from SHARP_BOOKS.
+ * Uses latest odds for each sharp book and requires the opposing side exists for no-vig.
+ * Enforces line consistency for spreads/totals.
+ */
+function getSharpNoVigProb(
+  latest: Map<string, OddsSnapshotRow>,
+  eventId: string,
+  market: MarketKey,
+  side: SideKey,
+  refLine: number | null
+): { prob: number } | null {
+  const opp = oppositeSide(market, side);
+  if (!opp) return null;
+
+  const probs: number[] = [];
+
+  for (const book of SHARP_BOOKS) {
+    const a = getOffer(latest, eventId, market, side, book);
+    const b = getOffer(latest, eventId, market, opp, book);
+    if (!a || !b) continue;
+
+    const ao = toNullNum(a.odds);
+    const bo = toNullNum(b.odds);
+    if (ao == null || bo == null) continue;
+
+    // For spreads/totals, enforce line matching & pairing
+    if (market === "spreads" || market === "totals") {
+      if (refLine == null) continue;
+
+      const aLine = toNullNum(a.line);
+      const bLine = toNullNum(b.line);
+      if (aLine == null || bLine == null) continue;
+
+      if (market === "spreads") {
+        // Expect home line = refLine, away line = -refLine (and paired within book)
+        const expA = side === "home" ? refLine : -refLine;
+        const expB = opp === "home" ? refLine : -refLine;
+
+        if (!nearlyEqual(aLine, expA, LINE_TOL)) continue;
+        if (!nearlyEqual(bLine, expB, LINE_TOL)) continue;
+
+        // Additionally ensure book pairing is consistent (home + away ≈ 0)
+        if (!nearlyEqual(aLine + bLine, 0, 1e-4)) continue;
+      } else {
+        // totals: over/under share same line
+        if (!nearlyEqual(aLine, refLine, LINE_TOL)) continue;
+        if (!nearlyEqual(bLine, refLine, LINE_TOL)) continue;
+      }
+    }
+
+    const p1 = americanOddsToProb(ao);
+    const p2 = americanOddsToProb(bo);
+    const [nv1] = noVigPair(p1, p2);
+    probs.push(nv1);
+  }
+
+  if (!probs.length) return null;
+  return { prob: mean(probs) };
+}
+
+function getOffer(
+  latest: Map<string, OddsSnapshotRow>,
+  eventId: string,
+  market: MarketKey,
+  side: SideKey,
+  bookmaker: string
+): OddsSnapshotRow | null {
+  const k = `${eventId}|${market}|${side}|${bookmaker.toLowerCase()}`;
+  return latest.get(k) ?? null;
+}
+
+function oppositeSide(market: MarketKey, side: SideKey): SideKey | null {
+  if (market === "h2h" || market === "spreads") {
+    if (side === "home") return "away";
+    if (side === "away") return "home";
+    return null;
+  }
+  if (market === "totals") {
+    if (side === "over") return "under";
+    if (side === "under") return "over";
+    return null;
+  }
+  return null;
+}
+
+/* ---------- Confidence + Kelly ---------- */
+
+function computeConfidenceScore(evPctVal: number, qProb: number, sharpProb: number, mcProb: number) {
+  const evScore = clamp(evPctVal * 5, 0, 100);
+  const probScore = clamp(Math.abs(qProb - 0.5) * 200, 0, 100);
+  const agreementScore = 100 - clamp(Math.abs(sharpProb - mcProb) * 300, 0, 100);
+
+  return 0.45 * evScore + 0.35 * probScore + 0.20 * agreementScore;
+}
+
+function confidenceTier(score: number): string {
+  if (score >= 85) return "A+";
+  if (score >= 75) return "A";
+  if (score >= 65) return "B";
+  if (score >= 55) return "C";
+  return "D";
+}
+
+/* ---------- Odds math ---------- */
+
+function americanOddsToProb(odds: number): number {
+  return odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
+}
+
+function probToAmericanOdds(p: number): number {
+  const pp = clamp01(p);
+  if (pp <= 0 || pp >= 1) return 0;
+  return pp >= 0.5
+    ? Math.round(-100 * pp / (1 - pp))
+    : Math.round(100 * (1 - pp) / pp);
+}
+
+function noVigPair(p1: number, p2: number): [number, number] {
+  const s = p1 + p2;
+  if (s <= 0) return [p1, p2];
+  return [p1 / s, p2 / s];
+}
+
+function evPct(trueProb: number, bookOdds: number): number {
+  const p = clamp01(trueProb);
+  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
+  return (p * b - (1 - p)) * 100;
+}
+
+function kellyFraction(trueProb: number, bookOdds: number): number {
+  const p = clamp01(trueProb);
+  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
+  const k = (p * b - (1 - p)) / b;
+  return Math.max(0, k);
 }
 
 /* =========================================================
@@ -326,7 +669,6 @@ async function fetchFutureEvents(startCutoff: Date): Promise<EventRow[]> {
 
   if (error) throw new Error(`[MC] Failed to fetch events: ${error.message}`);
 
-  // enforce event_id existence + dedupe
   const seen = new Set<string>();
   const out: EventRow[] = [];
   for (const row of data ?? []) {
@@ -341,7 +683,6 @@ async function fetchFutureEvents(startCutoff: Date): Promise<EventRow[]> {
 async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> {
   if (!canonicals.length) return [];
 
-  // Supabase has limits; chunk to be safe
   const chunkSize = 400;
   const out: TeamRatingRow[] = [];
 
@@ -360,6 +701,39 @@ async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> 
   }
 
   return out;
+}
+
+async function fetchOddsSnapshotForEvents(eventIds: string[]): Promise<OddsSnapshotRow[]> {
+  if (!eventIds.length) return [];
+
+  const { data, error } = await supabase
+    .from("odds_snapshot")
+    .select("event_id,bookmaker,market,side,line,odds,ts")
+    .in("event_id", eventIds)
+    .in("market", ["h2h", "spreads", "totals"])
+    .in("side", ["home", "away", "over", "under"])
+    .order("ts", { ascending: false });
+
+  if (error) throw new Error(`[EV] Failed to fetch odds_snapshot: ${error.message}`);
+  return (data ?? []) as OddsSnapshotRow[];
+}
+
+/**
+ * Latest per (event,market,side,bookmaker).
+ * We already ordered ts desc, so first-seen wins.
+ */
+function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapshotRow> {
+  const m = new Map<string, OddsSnapshotRow>();
+  for (const r of rows) {
+    const eid = r.event_id;
+    const market = r.market;
+    const side = r.side;
+    const book = String(r.bookmaker || "").toLowerCase();
+    const k = `${eid}|${market}|${side}|${book}`;
+    if (m.has(k)) continue;
+    m.set(k, r);
+  }
+  return m;
 }
 
 /**
@@ -388,8 +762,6 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     return out;
   }
 
-  // 1) Latest non-null line per (event,market,side,bookmaker)
-  // ordered ts desc, so first we see wins
   const latestPerBook = new Map<string, number>(); // eid|mkt|side|book -> line
 
   for (const r of (data ?? []) as OddsSnapshotRow[]) {
@@ -406,7 +778,6 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     latestPerBook.set(k, lineNum);
   }
 
-  // 2) Bucket by (event,market,side) => array(lines)
   const buckets = new Map<string, number[]>();
   for (const [k, line] of latestPerBook.entries()) {
     const [eid, mkt, side] = k.split("|");
@@ -416,15 +787,11 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     buckets.set(k2, arr);
   }
 
-  const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
-
-  // 3) Store consensus (average). (If you want median later, easy swap.)
   for (const [k2, arr] of buckets.entries()) {
     if (!arr.length) continue;
     out.set(k2, mean(arr));
   }
 
-  // 4) Repair missing home/over if only away/under exist
   for (const id of eventIds) {
     const homeKey = `${id}|spreads|home`;
     const awayKey = `${id}|spreads|away`;
@@ -439,14 +806,15 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     }
   }
 
-  // Optional: log missing counts
   let missingSpread = 0;
   let missingTotal = 0;
   for (const id of eventIds) {
     if (!out.has(`${id}|spreads|home`)) missingSpread++;
     if (!out.has(`${id}|totals|over`)) missingTotal++;
   }
-  console.log(`[MC] Consensus lines: missing spreads=${missingSpread}/${eventIds.length}, missing totals=${missingTotal}/${eventIds.length}`);
+  console.log(
+    `[MC] Consensus lines: missing spreads=${missingSpread}/${eventIds.length}, missing totals=${missingTotal}/${eventIds.length}`
+  );
 
   return out;
 }
@@ -471,7 +839,6 @@ async function createMonteCarloRun(payload: MonteCarloRunInsert): Promise<string
 async function clearMonteCarloResultsForEvents(eventIds: string[]) {
   if (!eventIds.length) return;
 
-  // chunk deletes to avoid PostgREST limits
   const chunkSize = 500;
   for (let i = 0; i < eventIds.length; i += chunkSize) {
     const chunk = eventIds.slice(i, i + chunkSize);
@@ -481,7 +848,6 @@ async function clearMonteCarloResultsForEvents(eventIds: string[]) {
 }
 
 async function upsertMonteCarloResults(rows: MonteCarloResultUpsert[]) {
-  // chunk upserts to avoid payload limits
   const chunkSize = 500;
   for (let i = 0; i < rows.length; i += chunkSize) {
     const chunk = rows.slice(i, i + chunkSize);
@@ -491,6 +857,12 @@ async function upsertMonteCarloResults(rows: MonteCarloResultUpsert[]) {
 
     if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results: ${error.message}`);
   }
+}
+
+async function clearEvPlaysAll() {
+  // Snapshot: clear whole table each run (you requested this behavior)
+  const { error } = await supabase.from("ev_plays").delete().neq("id", "");
+  if (error) throw new Error(`[EV] Failed to clear ev_plays: ${error.message}`);
 }
 
 /* =========================================================
@@ -521,7 +893,6 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
     else if (awayAvgTotal != null) totalMean = awayAvgTotal;
     else totalMean = 140;
   } else {
-    // pf/pa blend (symmetric)
     if (homePf != null && awayPa != null && awayPf != null && homePa != null) {
       const homePts = (homePf + awayPa) / 2;
       const awayPts = (awayPf + homePa) / 2;
@@ -533,7 +904,6 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
     } else totalMean = 140;
   }
 
-  // sigma game = avg sigmas, floored
   const sigmaMarginGame = Math.max(
     avg(num(home.sigma_margin_100, SIGMA_MARGIN_FLOOR), num(away.sigma_margin_100, SIGMA_MARGIN_FLOOR)),
     SIGMA_MARGIN_FLOOR
@@ -605,7 +975,6 @@ function simulateGameWithProbs(
   const projectedMarginHome_model = sumM / sims; // home - away
   const projectedTotal = sumT / sims;
 
-  // Stored margin convention (display/store)
   const projectedMarginHome_stored = opts.marginHomeWinNegativeStore
     ? -projectedMarginHome_model
     : projectedMarginHome_model;
@@ -658,14 +1027,29 @@ function avg(a: number, b: number) {
   return (a + b) / 2;
 }
 
+function mean(arr: number[]) {
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+
 function round2(x: number) {
   return Math.round(x * 100) / 100;
 }
 
+function clamp(x: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, x));
+}
+
+function clamp01(x: number) {
+  return clamp(x, 0, 1);
+}
+
+function nearlyEqual(a: number, b: number, tol: number) {
+  return Math.abs(a - b) <= tol;
+}
+
 // Box–Muller standard normal
 function randn() {
-  let u = 0,
-    v = 0;
+  let u = 0, v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
