@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MONTE CARLO SCREEN — FULL REWRITE (SUMMARY LAYOUT v3.2 — card mini headers)
+ * MONTE CARLO SCREEN — FULL REWRITE (SUMMARY LAYOUT v3.3)
+ *
+ * Changes in this version:
+ * ✅ Card mini header text smaller + aligned with score/win% columns
+ *    - Uses the SAME right-side layout widths as SummaryLine so headers center/line up
+ * ✅ Details section now has Away/Home column headers
  *
  * Summary layout:
  * - Team name NEVER green
@@ -10,14 +15,6 @@ import { supabase } from "../../lib/supabaseClient";
  * - Proj score on the far right
  * - Win% next to proj score (no "Win:" prefix)
  * - Only ONE thing green: winner's SCORE (win% stays neutral)
- *
- * Mobile Cards upgrade:
- * - Add a mini header row inside each card:
- *   [ Matchup (time) ] [ Proj Score ] [ Win% ]
- *   - This is a label row (not data), shown above the team rows
- *
- * Details:
- * - "Show Details" dropdown reveals proj margin/total and consensus lines (spread/total)
  *
  * Responsive:
  * - Mobile: card list w/ mini header + dropdown details
@@ -143,6 +140,11 @@ const HDR_TEXT = "text-[#cfcfcf]";
 const HDR_BORDER = "border-[#2a2a2a]";
 const COL_MATCHUP = 560;
 
+/** Right-side column alignment for score + win% (matches SummaryLine) */
+const SCORE_COL_W = 56; // px
+const WIN_COL_W = 58; // px
+const RIGHT_GAP_PX = 8; // gap between score and win columns
+
 /** ---------- Formatters ---------- */
 function formatTs(ts: string) {
   const d = new Date(ts);
@@ -245,12 +247,12 @@ function SummaryLine({
   isWinner: boolean;
   compact?: boolean;
 }) {
-  const logoSize = compact ? 40 : 48;
+  const logoSize = compact ? 38 : 48;
 
-  const teamText = compact ? "text-[13px]" : "text-[16px]";
-  const sideText = compact ? "text-[10px]" : "text-[11px]";
-  const scoreText = compact ? "text-[14px]" : "text-[17px]";
-  const winText = compact ? "text-[11px]" : "text-[13px]";
+  const teamText = compact ? "text-[12px]" : "text-[16px]";
+  const sideText = compact ? "text-[9px]" : "text-[11px]";
+  const scoreText = compact ? "text-[13px]" : "text-[17px]";
+  const winText = compact ? "text-[10px]" : "text-[13px]";
 
   return (
     <div className="flex items-center gap-3">
@@ -261,11 +263,14 @@ function SummaryLine({
         <div className={["text-[#7a7a7a] font-semibold", sideText].join(" ")}>{sideLabel}</div>
       </div>
 
-      <div className="ml-auto flex items-baseline gap-2 tabular-nums">
-        <div className={["font-extrabold", scoreText, isWinner ? "text-green-400" : "text-white"].join(" ")}>
+      <div className="ml-auto flex items-baseline tabular-nums" style={{ gap: RIGHT_GAP_PX }}>
+        <div
+          className={["font-extrabold text-right", scoreText, isWinner ? "text-green-400" : "text-white"].join(" ")}
+          style={{ width: SCORE_COL_W }}
+        >
           {score.toFixed(1)}
         </div>
-        <div className={["font-bold text-[#bdbdbd]", winText].join(" ")}>
+        <div className={["font-bold text-[#bdbdbd] text-right", winText].join(" ")} style={{ width: WIN_COL_W }}>
           {formatPct(winProb)}
         </div>
       </div>
@@ -273,17 +278,29 @@ function SummaryLine({
   );
 }
 
-/** ---------- Card mini header row ---------- */
-function CardMiniHeader({ compact }: { compact?: boolean }) {
-  const label = compact ? "text-[10px]" : "text-[11px]";
+/** ---------- Card mini header row (aligned to SummaryLine right columns) ---------- */
+function CardMiniHeader({ timeLabel }: { timeLabel: string }) {
+  // smaller text so it visually centers better with the tighter score/win columns
+  const labelText = "text-[9px]";
+
   return (
-    <div className="flex items-center">
-      <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a]", label].join(" ")}>Matchup</div>
-      <div className="ml-auto flex items-center gap-6">
-        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] tabular-nums", label].join(" ")}>
+    <div className="flex items-end">
+      <div className="min-w-0">
+        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a]", labelText].join(" ")}>Matchup</div>
+        <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{timeLabel}</div>
+      </div>
+
+      <div className="ml-auto flex items-end tabular-nums" style={{ gap: RIGHT_GAP_PX }}>
+        <div
+          className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right", labelText].join(" ")}
+          style={{ width: SCORE_COL_W }}
+        >
           Proj Score
         </div>
-        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] tabular-nums", label].join(" ")}>
+        <div
+          className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right", labelText].join(" ")}
+          style={{ width: WIN_COL_W }}
+        >
           Win%
         </div>
       </div>
@@ -291,7 +308,7 @@ function CardMiniHeader({ compact }: { compact?: boolean }) {
   );
 }
 
-/** ---------- Details block ---------- */
+/** ---------- Details block (now includes Away/Home column headers) ---------- */
 function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
   const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
@@ -320,6 +337,14 @@ function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
       ? "—"
       : `u${home.consTotalLine.toFixed(1)} (${home.consTotalUnderOdds == null ? "—" : formatAmerican(home.consTotalUnderOdds)})`;
 
+  const headerRow = (
+    <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414]">
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide"> </div>
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">Away</div>
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">Home</div>
+    </div>
+  );
+
   const row = (label: string, a: React.ReactNode, h: React.ReactNode) => (
     <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414] last:border-b-0">
       <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
@@ -332,6 +357,7 @@ function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
     <div className="rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
       <div className="px-4 py-2 border-b border-[#141414] text-[11px] text-white font-extrabold">Details</div>
       <div className="px-4">
+        {headerRow}
         {row(
           "Proj Margin",
           <>
@@ -739,51 +765,52 @@ export function MonteCarloScreen() {
           ) : !events.length ? (
             <div className="text-xs text-[#808080] py-3">No Monte Carlo rows found for latest run.</div>
           ) : (
-            events.map((ev) => (
-              <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
-                {/* Top bar: time + toggle */}
-                <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between">
-                  <div className="text-[10px] text-[#cfcfcf] font-extrabold">
-                    {ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD"}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                    className="text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
-                  >
-                    {openMap[ev.eventId] ? "Hide Details" : "Show Details"}
-                  </button>
-                </div>
+            events.map((ev) => {
+              const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
 
-                <div className="p-3 space-y-3">
-                  {/* Mini header row inside card */}
-                  <div className="pb-1 border-b border-[#141414]">
-                    <CardMiniHeader compact />
+              return (
+                <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
+                  {/* Top bar: toggle only (time is now in mini header) */}
+                  <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
+                      className="text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+                    >
+                      {openMap[ev.eventId] ? "Hide Details" : "Show Details"}
+                    </button>
                   </div>
 
-                  <SummaryLine
-                    team={ev.away.teamName}
-                    sideLabel="AWAY"
-                    logoUrl={ev.away.logoUrl}
-                    score={ev.away.projPoints}
-                    winProb={ev.away.winProbTeam}
-                    isWinner={ev.away.isProjectedWinner}
-                    compact
-                  />
-                  <SummaryLine
-                    team={ev.home.teamName}
-                    sideLabel="HOME"
-                    logoUrl={ev.home.logoUrl}
-                    score={ev.home.projPoints}
-                    winProb={ev.home.winProbTeam}
-                    isWinner={ev.home.isProjectedWinner}
-                    compact
-                  />
+                  <div className="p-3 space-y-3">
+                    {/* Mini header row inside card (aligned columns) */}
+                    <div className="pb-2 border-b border-[#141414]">
+                      <CardMiniHeader timeLabel={timeLabel} />
+                    </div>
 
-                  {openMap[ev.eventId] ? <DetailsBlock away={ev.away} home={ev.home} /> : null}
+                    <SummaryLine
+                      team={ev.away.teamName}
+                      sideLabel="AWAY"
+                      logoUrl={ev.away.logoUrl}
+                      score={ev.away.projPoints}
+                      winProb={ev.away.winProbTeam}
+                      isWinner={ev.away.isProjectedWinner}
+                      compact
+                    />
+                    <SummaryLine
+                      team={ev.home.teamName}
+                      sideLabel="HOME"
+                      logoUrl={ev.home.logoUrl}
+                      score={ev.home.projPoints}
+                      winProb={ev.home.winProbTeam}
+                      isWinner={ev.home.isProjectedWinner}
+                      compact
+                    />
+
+                    {openMap[ev.eventId] ? <DetailsBlock away={ev.away} home={ev.home} /> : null}
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -871,6 +898,7 @@ export function MonteCarloScreen() {
     </div>
   );
 }
+
 
 
 
