@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Settings as SettingsIcon, Bell, Database, Zap } from "lucide-react";
+import { Settings as SettingsIcon, Bell, Database, Zap, Wallet, Percent } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
 type ModelVersionRow = {
@@ -16,7 +16,13 @@ type ModelVersionRow = {
 
 type AppSettingsRow = {
   id: number;
+
+  // existing
   max_units_per_play: number | null;
+
+  // new (persisted)
+  bankroll: number | null; // dollars
+  kelly_factor: number | null; // e.g., 0.25 for 1/4 Kelly
 
   notify_high_value: boolean | null;
   notify_line_movement: boolean | null;
@@ -27,6 +33,24 @@ type AppSettingsRow = {
 };
 
 const GOLD = "#d4af37";
+
+// UI-only convenience options
+const KELLY_OPTIONS: { label: string; value: number }[] = [
+  { label: "Full Kelly (1.00)", value: 1.0 },
+  { label: "½ Kelly (0.50)", value: 0.5 },
+  { label: "¼ Kelly (0.25)", value: 0.25 },
+  { label: "⅛ Kelly (0.125)", value: 0.125 },
+  { label: "Custom…", value: -1 },
+];
+
+const BANKROLL_PRESETS: { label: string; value: number }[] = [
+  { label: "$250", value: 250 },
+  { label: "$500", value: 500 },
+  { label: "$1,000", value: 1000 },
+  { label: "$2,000", value: 2000 },
+  { label: "$5,000", value: 5000 },
+  { label: "Custom…", value: -1 },
+];
 
 export function SettingsScreen() {
   const [loading, setLoading] = useState(true);
@@ -55,20 +79,13 @@ export function SettingsScreen() {
       const appQ = supabase
         .from("app_settings")
         .select(
-          "id,max_units_per_play,notify_high_value,notify_line_movement,notify_model_updates,notify_results_summary,updated_at"
+          "id,max_units_per_play,bankroll,kelly_factor,notify_high_value,notify_line_movement,notify_model_updates,notify_results_summary,updated_at"
         )
         .eq("id", 1)
         .limit(1);
 
-      // Real sync signals:
-      // odds_snapshot -> latest ts
-      const oddsQ = supabase
-        .from("odds_snapshot")
-        .select("ts")
-        .order("ts", { ascending: false })
-        .limit(1);
+      const oddsQ = supabase.from("odds_snapshot").select("ts").order("ts", { ascending: false }).limit(1);
 
-      // monte_carlo_runs -> latest created_at
       const mcQ = supabase
         .from("monte_carlo_runs")
         .select("created_at")
@@ -85,11 +102,11 @@ export function SettingsScreen() {
       }
 
       if (appRes.error) {
-        // app_settings is optional — page still works read-only
         console.warn("[Settings] app_settings error:", appRes.error.message);
         setApp(null);
       } else {
-        setApp((appRes.data?.[0] ?? null) as AppSettingsRow | null);
+        const row = (appRes.data?.[0] ?? null) as AppSettingsRow | null;
+        setApp(row);
       }
 
       if (oddsRes.error) {
@@ -114,7 +131,7 @@ export function SettingsScreen() {
 
   useEffect(() => {
     loadAll();
-    // realtime: refresh on updates
+
     const channel = supabase
       .channel("settings-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, loadAll)
@@ -132,18 +149,12 @@ export function SettingsScreen() {
   const modelParams = useMemo(() => {
     const minEv = model?.min_ev_threshold;
     const minEvPct =
-      minEv == null
-        ? "—"
-        : minEv <= 1
-        ? `${(minEv * 100).toFixed(1)}%`
-        : `${Number(minEv).toFixed(1)}%`;
+      minEv == null ? "—" : minEv <= 1 ? `${(minEv * 100).toFixed(1)}%` : `${Number(minEv).toFixed(1)}%`;
 
     const anchorMin = model?.anchor_weight_min;
     const anchorMax = model?.anchor_weight_max;
     const anchorRange =
-      anchorMin != null && anchorMax != null
-        ? `${anchorMin.toFixed(2)} – ${anchorMax.toFixed(2)}`
-        : "—";
+      anchorMin != null && anchorMax != null ? `${anchorMin.toFixed(2)} – ${anchorMax.toFixed(2)}` : "—";
 
     return {
       minEv: minEvPct,
@@ -154,9 +165,18 @@ export function SettingsScreen() {
     };
   }, [model, app]);
 
+  const stakingParams = useMemo(() => {
+    const bankroll = app?.bankroll;
+    const kf = app?.kelly_factor;
+
+    return {
+      bankroll: bankroll != null && Number.isFinite(bankroll) ? `$${formatInt(Math.round(bankroll))}` : "—",
+      kelly: kf != null && Number.isFinite(kf) ? `${kf}` : "—",
+      kellyPct: kf != null && Number.isFinite(kf) ? `${(kf * 100).toFixed(1)}%` : "—",
+    };
+  }, [app]);
+
   const books = useMemo(() => {
-    // You can make this a real "books" table later.
-    // For now we base "active" on whether odds have synced recently.
     const oddsAgeMin = lastOddsSync ? minutesSince(lastOddsSync) : null;
     const active = oddsAgeMin != null && oddsAgeMin <= 5;
 
@@ -170,7 +190,6 @@ export function SettingsScreen() {
   }, [lastOddsSync]);
 
   const system = useMemo(() => {
-    // Real fields we can show today:
     const oddsAge = lastOddsSync ? minutesSince(lastOddsSync) : null;
     const mcAge = lastMcRun ? minutesSince(lastMcRun) : null;
 
@@ -197,12 +216,25 @@ export function SettingsScreen() {
 
     if (error) {
       setError(error.message);
-      // revert by reload
-      await loadAll();
+      await loadAll(); // revert
     }
 
     setSaving(false);
   }
+
+  const kellyPresetValue = useMemo(() => {
+    const k = Number(app?.kelly_factor);
+    if (!Number.isFinite(k)) return -1;
+    const match = KELLY_OPTIONS.find((o) => o.value !== -1 && Math.abs(o.value - k) < 1e-9);
+    return match ? match.value : -1; // custom
+  }, [app?.kelly_factor]);
+
+  const bankrollPresetValue = useMemo(() => {
+    const b = Number(app?.bankroll);
+    if (!Number.isFinite(b)) return -1;
+    const match = BANKROLL_PRESETS.find((o) => o.value !== -1 && Math.round(o.value) === Math.round(b));
+    return match ? match.value : -1;
+  }, [app?.bankroll]);
 
   return (
     <div className="space-y-6">
@@ -210,7 +242,8 @@ export function SettingsScreen() {
         <div>
           <h2 className="text-xl text-white mb-1">Settings</h2>
           <p className="text-xs text-[#808080]">
-            Live configuration & status {saving ? <span className="ml-2 text-[#606060]">· saving…</span> : null}
+            Live configuration & status
+            {saving ? <span className="ml-2 text-[#606060]">· saving…</span> : null}
           </p>
         </div>
 
@@ -224,6 +257,115 @@ export function SettingsScreen() {
           Supabase error: {error}
         </div>
       ) : null}
+
+      {/* Staking */}
+      <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <Wallet className="w-5 h-5 text-[#d4af37]" />
+          <h3 className="text-sm text-white">Staking</h3>
+        </div>
+
+        <div className="space-y-4">
+          {/* Bankroll */}
+          <div className="flex items-center justify-between py-2 border-b border-[#1a1a1a] last:border-0 gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-white mb-0.5">Bankroll</div>
+              <div className="text-[10px] text-[#606060]">
+                Used for stake sizing (bet_fraction × bankroll). Stored in <span className="text-white">app_settings.bankroll</span>.
+              </div>
+            </div>
+
+            {!app ? (
+              <div className="text-xs text-[#d4af37]">{loading ? "…" : stakingParams.bankroll}</div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <select
+                  value={bankrollPresetValue}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (v !== -1) updateSetting({ bankroll: clampNum(v, 0, 1_000_000) });
+                  }}
+                  className="px-2 py-1 bg-[#111] border border-[#2a2a2a] rounded text-[#d0d0d0] outline-none text-xs"
+                  title="Choose a bankroll preset"
+                >
+                  {BANKROLL_PRESETS.map((o) => (
+                    <option key={o.label} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+
+                <InlineMoney
+                  value={app?.bankroll}
+                  disabled={!app}
+                  onCommit={(n) => updateSetting({ bankroll: clampNum(n, 0, 1_000_000) })}
+                  hint={bankrollPresetValue !== -1 ? "Preset" : "Custom"}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Kelly factor */}
+          <div className="flex items-center justify-between py-2 border-b border-[#1a1a1a] last:border-0 gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-white mb-0.5">Kelly Factor</div>
+              <div className="text-[10px] text-[#606060]">
+                Multiplier applied to Kelly sizing. Stored in <span className="text-white">app_settings.kelly_factor</span>.
+              </div>
+            </div>
+
+            {!app ? (
+              <div className="text-xs text-[#d4af37]">{loading ? "…" : stakingParams.kelly}</div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <select
+                  value={kellyPresetValue}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (v !== -1) updateSetting({ kelly_factor: clampNum(v, 0, 1) });
+                  }}
+                  className="px-2 py-1 bg-[#111] border border-[#2a2a2a] rounded text-[#d0d0d0] outline-none text-xs"
+                  title="Choose a Kelly multiplier"
+                >
+                  {KELLY_OPTIONS.map((o) => (
+                    <option key={o.label} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+
+                <InlineDecimal
+                  value={app?.kelly_factor}
+                  disabled={!app}
+                  onCommit={(n) => updateSetting({ kelly_factor: clampNum(n, 0, 1) })}
+                  rightHint={kellyPresetValue !== -1 ? "Preset" : "Custom"}
+                />
+
+                <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080] text-xs">
+                  <span className="text-[#606060]">=</span>{" "}
+                  <span className="text-[#d4af37]">{stakingParams.kellyPct}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Max Units */}
+          <SettingRow
+            label="Max Units per Play"
+            value={loading ? "…" : modelParams.maxUnits}
+            description={app ? "Cap for unit sizing. Stored in app_settings." : "Enable by creating app_settings table"}
+            editable={!!app}
+            onEdit={(v) => updateSetting({ max_units_per_play: clampNum(v, 0, 5) })}
+          />
+        </div>
+
+        {!app ? (
+          <div className="pt-3 text-[11px] text-[#606060]">
+            To persist bankroll + Kelly, add columns to <span className="text-white">app_settings</span>:{" "}
+            <span className="text-white">bankroll</span> (numeric) and <span className="text-white">kelly_factor</span> (numeric).
+          </div>
+        ) : null}
+      </div>
 
       {/* Model Parameters */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
@@ -252,13 +394,6 @@ export function SettingsScreen() {
             label="Anchor Weight Range"
             value={loading ? "…" : modelParams.anchor}
             description="Dynamic weight given to sharp market lines"
-          />
-          <SettingRow
-            label="Max Units per Play"
-            value={loading ? "…" : modelParams.maxUnits}
-            description={app ? "Stored in app_settings" : "Enable by creating app_settings table"}
-            editable={!!app}
-            onEdit={(v) => updateSetting({ max_units_per_play: clampNum(v, 0, 5) })}
           />
         </div>
       </div>
@@ -341,8 +476,16 @@ export function SettingsScreen() {
         </div>
 
         <div className="grid grid-cols-4 gap-4 text-xs">
-          <SystemStat label="Last Odds Sync" value={system.lastFullSync} valueTone={system.oddsAgeMin != null && system.oddsAgeMin <= 5 ? "good" : "warn"} />
-          <SystemStat label="Last MC Run" value={system.lastMcRun} valueTone={system.mcAgeMin != null && system.mcAgeMin <= 30 ? "good" : "warn"} />
+          <SystemStat
+            label="Last Odds Sync"
+            value={system.lastFullSync}
+            valueTone={system.oddsAgeMin != null && system.oddsAgeMin <= 5 ? "good" : "warn"}
+          />
+          <SystemStat
+            label="Last MC Run"
+            value={system.lastMcRun}
+            valueTone={system.mcAgeMin != null && system.mcAgeMin <= 30 ? "good" : "warn"}
+          />
           <SystemStat label="Model Status" value={model?.status ?? "—"} valueTone={model?.status === "Production" ? "good" : "warn"} />
           <SystemStat label="Model Version" value={model?.version ?? "—"} valueTone={model?.version ? "good" : "warn"} />
         </div>
@@ -392,10 +535,7 @@ function SettingRow({
       {!editable ? (
         <div className="text-xs text-[#d4af37]">{value}</div>
       ) : (
-        <InlineNumber
-          value={value}
-          onCommit={(n) => onEdit?.(n)}
-        />
+        <InlineNumber value={value} onCommit={(n) => onEdit?.(n)} />
       )}
     </div>
   );
@@ -435,6 +575,118 @@ function InlineNumber({ value, onCommit }: { value: string; onCommit: (n: number
       title="Click to edit"
     >
       {value}
+    </button>
+  );
+}
+
+function InlineDecimal({
+  value,
+  disabled,
+  onCommit,
+  rightHint,
+}: {
+  value: number | null | undefined;
+  disabled?: boolean;
+  onCommit: (n: number) => void;
+  rightHint?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value == null ? "" : String(value));
+
+  useEffect(() => setDraft(value == null ? "" : String(value)), [value]);
+
+  if (disabled) {
+    return (
+      <div className="text-xs text-[#d4af37] tabular-nums">
+        {value == null ? "—" : String(value)}
+      </div>
+    );
+  }
+
+  return editing ? (
+    <div className="flex items-center gap-2">
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className="w-24 bg-[#0b0b0b] border border-[#2a2a2a] rounded px-2 py-1 text-xs text-white outline-none focus:border-[#3a3a3a]"
+        inputMode="decimal"
+        placeholder="0.25"
+      />
+      <button
+        type="button"
+        className="text-xs px-2 py-1 rounded border border-[#2a2a2a] hover:border-[#3a3a3a] text-[#cfcfcf] hover:text-white"
+        onClick={() => {
+          const n = Number(draft);
+          if (Number.isFinite(n)) onCommit(n);
+          setEditing(false);
+        }}
+      >
+        Save
+      </button>
+      {rightHint ? <div className="text-[10px] text-[#606060]">{rightHint}</div> : null}
+    </div>
+  ) : (
+    <button
+      type="button"
+      className="text-xs text-[#d4af37] hover:opacity-80 tabular-nums"
+      onClick={() => setEditing(true)}
+      title="Click to edit"
+    >
+      {value == null ? "—" : String(value)}
+    </button>
+  );
+}
+
+function InlineMoney({
+  value,
+  disabled,
+  onCommit,
+  hint,
+}: {
+  value: number | null | undefined;
+  disabled?: boolean;
+  onCommit: (n: number) => void;
+  hint?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value == null ? "" : String(Math.round(value)));
+
+  useEffect(() => setDraft(value == null ? "" : String(Math.round(value))), [value]);
+
+  if (disabled) {
+    return <div className="text-xs text-[#d4af37] tabular-nums">{value == null ? "—" : `$${formatInt(Math.round(value))}`}</div>;
+  }
+
+  return editing ? (
+    <div className="flex items-center gap-2">
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className="w-24 bg-[#0b0b0b] border border-[#2a2a2a] rounded px-2 py-1 text-xs text-white outline-none focus:border-[#3a3a3a]"
+        inputMode="numeric"
+        placeholder="1000"
+      />
+      <button
+        type="button"
+        className="text-xs px-2 py-1 rounded border border-[#2a2a2a] hover:border-[#3a3a3a] text-[#cfcfcf] hover:text-white"
+        onClick={() => {
+          const n = Number(draft);
+          if (Number.isFinite(n)) onCommit(n);
+          setEditing(false);
+        }}
+      >
+        Save
+      </button>
+      {hint ? <div className="text-[10px] text-[#606060]">{hint}</div> : null}
+    </div>
+  ) : (
+    <button
+      type="button"
+      className="text-xs text-[#d4af37] hover:opacity-80 tabular-nums"
+      onClick={() => setEditing(true)}
+      title="Click to edit"
+    >
+      {value == null ? "—" : `$${formatInt(Math.round(value))}`}
     </button>
   );
 }
