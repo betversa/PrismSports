@@ -49,8 +49,7 @@ export default function App() {
 
   // Prevent body scroll when drawer is open (mobile)
   useEffect(() => {
-    if (sidebarOpen) document.body.style.overflow = "hidden";
-    else document.body.style.overflow = "";
+    document.body.style.overflow = sidebarOpen ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
     };
@@ -70,7 +69,8 @@ export default function App() {
   );
 
   return (
-    <div className="h-screen bg-[#0a0a0a] overflow-hidden">
+    // ✅ Do NOT overflow-hidden the whole app. Let the main area scroll.
+    <div className="min-h-screen bg-[#0a0a0a]">
       {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">
@@ -105,9 +105,15 @@ export default function App() {
         onHeightChange={(px) => setHeaderH(Math.ceil(px))}
       />
 
-      {/* Main Content (locks viewport; screens manage their own scrolling) */}
-      <div className="h-screen overflow-hidden" style={{ paddingTop: headerH }}>
-        <div className="h-full p-3 md:p-6 pb-12 overflow-hidden">{screens[activeScreen]}</div>
+      {/* ✅ Main Content becomes the scroll container */}
+      <div
+        className="h-screen overflow-y-auto overflow-x-hidden"
+        style={{ paddingTop: headerH }}
+      >
+        {/* ✅ Remove overflow-hidden here so normal pages can scroll */}
+        <div className="p-3 md:p-6 pb-12">
+          {screens[activeScreen]}
+        </div>
       </div>
     </div>
   );
