@@ -3,16 +3,19 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MODEL PICKS (EV PLAYS) — FINAL REWRITE
+ * MODEL PICKS (EV PLAYS)
  *
  * ✅ Uses public.ev_plays (no mock data)
  * ✅ One row per +EV play
  * ✅ Filter: sportsbook (SOFT books only) — default = All
  * ✅ Book column uses square logos in /public/books/
  *    - dksquare.png, fdsquare.png, mgmsquare.png
- * ✅ No sharp logos shown
+ * ✅ Bet Amount uses Settings:
+ *    - app_settings.bankroll (dollars)
+ *    - app_settings.kelly_factor (multiplier)
+ *   Bet Amount = bankroll * (bet_fraction * kelly_factor)
  *
- * Columns: Matchup | Market | Pick | Line | Quantum | Book | SpectrumEV | Score | Stake %
+ * Columns: Matchup | Market | Pick | Line | Quantum | Book | SpectrumEV | Score | Bet $
  */
 
 type MarketKey = "h2h" | "spreads" | "totals";
@@ -44,6 +47,13 @@ type EvPlayRow = {
   bet_fraction: number;
 
   created_at?: string;
+};
+
+type AppSettingsRow = {
+  id: number;
+  bankroll: number | null;
+  kelly_factor: number | null;
+  max_units_per_play?: number | null; // optional if you want to cap by units later
 };
 
 type SoftBookKey = "all" | "draftkings" | "fanduel" | "betmgm";
@@ -100,10 +110,6 @@ function fmtLine(market: MarketKey, line: number | null) {
   return `${line}`;
 }
 
-function sumBetFraction(rows: EvPlayRow[]) {
-  return rows.reduce((a, r) => a + Math.max(0, Number(r.bet_fraction ?? 0)), 0);
-}
-
 function normalizeBookKey(bookmaker: string): SoftBookKey | "other" {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings") return "draftkings";
@@ -128,12 +134,32 @@ function bookFallbackLabel(bookmaker: string) {
   return (bookmaker || "BOOK").toUpperCase();
 }
 
+function safeNum(n: any, fallback = 0) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : fallback;
+}
+
+function formatMoney(n: number) {
+  if (!Number.isFinite(n)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
 export function ModelScreen() {
   const [bookFilter, setBookFilter] = useState<SoftBookKey>("all");
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<EvPlayRow[]>([]);
+  const [settings, setSettings] = useState<AppSettingsRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Load EV plays + settings (bankroll/kelly)
   useEffect(() => {
     let mounted = true;
 
@@ -143,37 +169,50 @@ export function ModelScreen() {
 
       const nowIso = new Date().toISOString();
 
-      const q = supabase
+      const evQ = supabase
         .from("ev_plays")
         .select(
           "run_id,event_id,commence_time,matchup,team,market,side,line,bookmaker,book_odds,quantum_prob,quantum_odds,ev_pct,confidence_score,confidence_tier,kelly_fraction,bet_fraction,created_at"
         )
         .gte("commence_time", nowIso)
-        // only soft books (and only those we have square logos for)
         .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      const { data, error: evErr } = await q;
+      const settingsQ = supabase
+        .from("app_settings")
+        .select("id,bankroll,kelly_factor,max_units_per_play,updated_at")
+        .eq("id", 1)
+        .limit(1);
+
+      const [evRes, sRes] = await Promise.all([evQ, settingsQ]);
 
       if (!mounted) return;
 
-      if (evErr) {
-        setError(evErr.message);
+      if (evRes.error) {
+        setError(evRes.error.message);
         setRows([]);
         setLoading(false);
         return;
       }
 
-      const evRows = (data ?? []) as EvPlayRow[];
+      const evRows = (evRes.data ?? []) as EvPlayRow[];
 
-      // Book filter (default = all soft books)
       const filtered =
         bookFilter === "all"
           ? evRows
           : evRows.filter((r) => normalizeBookKey(r.bookmaker) === bookFilter);
 
       setRows(filtered);
+
+      if (sRes.error) {
+        // still render, but bet amounts will be "—"
+        console.warn("[ModelScreen] app_settings error:", sRes.error.message);
+        setSettings(null);
+      } else {
+        setSettings((sRes.data?.[0] ?? null) as AppSettingsRow | null);
+      }
+
       setLoading(false);
     }
 
@@ -182,6 +221,29 @@ export function ModelScreen() {
       mounted = false;
     };
   }, [bookFilter]);
+
+  // Optional: also live-refresh if user changes settings
+  useEffect(() => {
+    const channel = supabase
+      .channel("model-screen-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "app_settings" }, () => {
+        // lightweight: just re-fetch settings
+        supabase
+          .from("app_settings")
+          .select("id,bankroll,kelly_factor,max_units_per_play,updated_at")
+          .eq("id", 1)
+          .limit(1)
+          .then(({ data, error }) => {
+            if (error) return;
+            setSettings((data?.[0] ?? null) as AppSettingsRow | null);
+          });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const updatedText = useMemo(() => {
     const latest = rows
@@ -199,7 +261,17 @@ export function ModelScreen() {
     return `Updated ${t} CT`;
   }, [rows]);
 
-  const totalStakePct = useMemo(() => sumBetFraction(rows) * 100, [rows]);
+  const bankroll = safeNum(settings?.bankroll, 0);
+  const kellyFactorRaw = safeNum(settings?.kelly_factor, 0);
+  const kellyFactor = clamp(kellyFactorRaw, 0, 1);
+
+  const totalBetDollars = useMemo(() => {
+    if (!bankroll || !kellyFactor) return 0;
+    return rows.reduce((sum, r) => {
+      const frac = Math.max(0, safeNum(r.bet_fraction, 0));
+      return sum + bankroll * frac * kellyFactor;
+    }, 0);
+  }, [rows, bankroll, kellyFactor]);
 
   return (
     <div className="space-y-4">
@@ -213,7 +285,6 @@ export function ModelScreen() {
         </div>
 
         <div className="flex items-center gap-2 text-xs">
-          {/* Book filter (soft books only) */}
           <select
             value={bookFilter}
             onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
@@ -228,8 +299,18 @@ export function ModelScreen() {
           </select>
 
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Total Stake:{" "}
-            <span className="text-[#d4af37]">{totalStakePct.toFixed(2)}%</span>
+            Bankroll:{" "}
+            <span className="text-[#d4af37]">{bankroll ? formatMoney(bankroll) : "—"}</span>
+          </div>
+
+          <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
+            Kelly:{" "}
+            <span className="text-[#d4af37]">{settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"}</span>
+          </div>
+
+          <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
+            Total Bet:{" "}
+            <span className="text-[#d4af37]">{totalBetDollars ? formatMoney(totalBetDollars) : "—"}</span>
           </div>
         </div>
       </div>
@@ -256,15 +337,9 @@ export function ModelScreen() {
                   Matchup
                 </th>
 
-                <th className="text-left p-3 text-[#808080] min-w-[110px]">
-                  Market
-                </th>
-                <th className="text-left p-3 text-[#808080] min-w-[190px]">
-                  Pick
-                </th>
-                <th className="text-center p-3 text-[#808080] min-w-[80px]">
-                  Line
-                </th>
+                <th className="text-left p-3 text-[#808080] min-w-[110px]">Market</th>
+                <th className="text-left p-3 text-[#808080] min-w-[190px]">Pick</th>
+                <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
@@ -277,9 +352,7 @@ export function ModelScreen() {
                   </div>
                 </th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[120px]">
-                  Book
-                </th>
+                <th className="text-center p-3 text-[#808080] min-w-[120px]">Book</th>
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
@@ -292,12 +365,8 @@ export function ModelScreen() {
                   </div>
                 </th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[90px]">
-                  Score
-                </th>
-                <th className="text-center p-3 text-[#808080] min-w-[100px]">
-                  Stake %
-                </th>
+                <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
+                <th className="text-center p-3 text-[#808080] min-w-[120px]">Bet $</th>
               </tr>
             </thead>
 
@@ -306,6 +375,9 @@ export function ModelScreen() {
                 <PlayRow
                   key={`${r.event_id}|${r.market}|${r.side}|${r.bookmaker}|${r.line ?? "x"}`}
                   row={r}
+                  bankroll={bankroll}
+                  kellyFactor={kellyFactor}
+                  settingsReady={!!(bankroll && kellyFactor)}
                 />
               ))}
 
@@ -327,24 +399,41 @@ export function ModelScreen() {
           <div className="w-3 h-3 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded" />
           <span>Positive EV (ev_plays)</span>
         </div>
+
         <div>
-          <span className="text-[#808080]">Stake %:</span> fractional Kelly (bet_fraction × 100)
+          <span className="text-[#808080]">Bet $:</span>{" "}
+          bankroll × bet_fraction × kelly_factor
         </div>
+
+        {!bankroll || !kellyFactor ? (
+          <div className="text-[#808080]">
+            Set <span className="text-white">Bankroll</span> and <span className="text-white">Kelly Factor</span> in Settings to enable bet amounts.
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function PlayRow({ row }: { row: EvPlayRow }) {
+function PlayRow({
+  row,
+  bankroll,
+  kellyFactor,
+  settingsReady,
+}: {
+  row: EvPlayRow;
+  bankroll: number;
+  kellyFactor: number;
+  settingsReady: boolean;
+}) {
   const isTotal = row.market === "totals";
 
-  const pickLabel = isTotal
-    ? row.matchup ?? row.team ?? "Total"
-    : row.team ?? "—";
-
+  const pickLabel = isTotal ? row.matchup ?? row.team ?? "Total" : row.team ?? "—";
   const sideTxt = sideLabelForDisplay(row.market, row.side);
-
   const logoSrc = bookLogoSrc(row.bookmaker);
+
+  const frac = Math.max(0, safeNum(row.bet_fraction, 0));
+  const betAmount = settingsReady ? bankroll * frac * kellyFactor : NaN;
 
   return (
     <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
@@ -418,9 +507,9 @@ function PlayRow({ row }: { row: EvPlayRow }) {
         <ScoreValue value={row.confidence_score} tier={row.confidence_tier} />
       </td>
 
-      {/* Stake % */}
+      {/* Bet $ */}
       <td className="p-3 text-center">
-        <StakeValue frac={row.bet_fraction} />
+        <BetAmountValue amount={betAmount} frac={frac} bankroll={bankroll} kellyFactor={kellyFactor} ready={settingsReady} />
       </td>
     </tr>
   );
@@ -440,13 +529,32 @@ function ScoreValue({ value, tier }: { value: number; tier?: string }) {
   );
 }
 
-function StakeValue({ frac }: { frac: number }) {
-  const pct = Math.max(0, Number(frac ?? 0)) * 100;
-  if (pct <= 0) return <div className="text-[#404040]">—</div>;
+function BetAmountValue({
+  amount,
+  frac,
+  bankroll,
+  kellyFactor,
+  ready,
+}: {
+  amount: number;
+  frac: number;
+  bankroll: number;
+  kellyFactor: number;
+  ready: boolean;
+}) {
+  if (!ready || !Number.isFinite(amount) || amount <= 0) {
+    return <div className="text-[#404040]">—</div>;
+  }
 
+  // Show dollars prominently; tiny breakdown below so users understand it’s configurable
   return (
-    <div className="inline-flex items-center justify-center px-2 py-0.5 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded text-[#d4af37] tabular-nums">
-      {pct.toFixed(2)}%
+    <div className="inline-flex flex-col items-center justify-center">
+      <div className="inline-flex items-center justify-center px-2 py-0.5 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded text-[#d4af37] tabular-nums">
+        {formatMoney(amount)}
+      </div>
+      <div className="text-[10px] text-[#606060] mt-1 tabular-nums">
+        {(frac * 100).toFixed(2)}% × {Math.round(kellyFactor * 100)}% × {formatMoney(bankroll)}
+      </div>
     </div>
   );
 }
