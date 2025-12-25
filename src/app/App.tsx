@@ -44,7 +44,7 @@ export default function App() {
   // Mobile drawer state
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // ✅ Dynamic top padding based on actual header height
+  // Dynamic top padding based on actual header height
   const [headerH, setHeaderH] = useState(120);
 
   // Prevent body scroll when drawer is open (mobile)
@@ -70,7 +70,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a]">
+    <div className="h-screen bg-[#0a0a0a] overflow-hidden">
       {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">
@@ -94,17 +94,20 @@ export default function App() {
         </div>
       )}
 
-      {/* Header (full width, stacked logo + hover dropdowns) */}
+      {/* Header */}
       <Header
         onOpenMenu={() => setSidebarOpen(true)}
-        onNavigate={(screen) => setActiveScreen(screen)}
+        onNavigate={(screen) => {
+          setActiveScreen(screen);
+          setSidebarOpen(false);
+        }}
         activeScreen={activeScreen}
         onHeightChange={(px) => setHeaderH(Math.ceil(px))}
       />
 
-      {/* Main Content (paddingTop matches real header height) */}
-      <div className="min-h-screen" style={{ paddingTop: headerH }}>
-        <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
+      {/* Main Content (locks viewport; screens manage their own scrolling) */}
+      <div className="h-screen overflow-hidden" style={{ paddingTop: headerH }}>
+        <div className="h-full p-3 md:p-6 pb-12 overflow-hidden">{screens[activeScreen]}</div>
       </div>
     </div>
   );
