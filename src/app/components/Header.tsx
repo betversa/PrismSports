@@ -218,7 +218,6 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
 
   return (
     <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
-      {/* subtle top sheen + gold accent line */}
       <div className="pointer-events-none absolute inset-0">
         <div
           className="absolute inset-0 opacity-80"
@@ -237,7 +236,6 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
       </div>
 
       <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-3 pb-2">
-        {/* Left: menu + brand + nav */}
         <div className="flex items-start min-w-0">
           <button
             onClick={onOpenMenu}
@@ -248,8 +246,8 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
             <Menu className="w-5 h-5" />
           </button>
 
-          <div className="flex flex-col items-start gap-1.5 min-w-0">
-            {/* Brand row */}
+          <div className="flex flex-col items-start gap-2 min-w-0">
+            {/* ✅ Brand row: tagline is ALWAYS next to logo (mobile + desktop) */}
             <div className="flex items-center gap-3 min-w-0">
               <img
                 src="/logos/mainlogo.png"
@@ -258,20 +256,14 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                 draggable={false}
               />
 
-              {/* ✅ Desktop+ tag (kept) */}
-              <div className="hidden sm:block min-w-0">
-                <div className="text-[11px] md:text-[12px] text-[#9a9a9a] font-medium tracking-wide truncate max-w-[240px] md:max-w-[360px]">
+              {/* Always visible, responsive sizing */}
+              <div className="min-w-0">
+                <div className="text-[11px] sm:text-[12px] md:text-[12px] text-[#9a9a9a] font-medium tracking-wide leading-tight truncate max-w-[190px] xs:max-w-[220px] sm:max-w-[260px] md:max-w-[360px]">
                   {TAGLINE}
                 </div>
               </div>
             </div>
 
-            {/* ✅ Mobile tagline (shows under the logo row) */}
-            <div className="sm:hidden text-[11px] text-[#9a9a9a] font-medium tracking-wide leading-tight">
-              {TAGLINE}
-            </div>
-
-            {/* Desktop nav */}
             <nav className="hidden md:flex items-center gap-7 pb-2 pt-1">
               <HoverDropdown
                 label="Odds"
@@ -281,6 +273,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                   if (sport === "NCAAB") onNavigate?.("odds");
                 }}
               />
+
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
@@ -299,7 +292,6 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </div>
         </div>
 
-        {/* Right: live pill */}
         <div className="hidden sm:flex items-center">
           <div
             className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
