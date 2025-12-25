@@ -25,7 +25,7 @@ const GOLD = "#d4af37";
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
 const DROPDOWN_CLOSE_DELAY_MS = 240;
 
-// ✅ Simple descriptor (distinct from dratings wording)
+// ✅ simple, distinct from dratings
 const TAGLINE = "Sports Models · Projections · Analysis";
 
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
@@ -247,23 +247,33 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
           </button>
 
           <div className="flex flex-col items-start gap-2 min-w-0">
-            {/* ✅ Brand row: tagline is ALWAYS next to logo (mobile + desktop) */}
-            <div className="flex items-center gap-3 min-w-0">
+            {/* Brand row: logo + tagline */}
+            <div className="flex items-center gap-3 min-w-0 w-full">
               <img
                 src="/logos/mainlogo.png"
                 alt="PrismSports"
-                className="h-14 sm:h-16 md:h-20 w-auto object-contain select-none"
+                className="h-14 sm:h-16 md:h-20 w-auto object-contain select-none flex-shrink-0"
                 draggable={false}
               />
 
-              {/* Always visible, responsive sizing */}
-              <div className="min-w-0">
-                <div className="text-[11px] sm:text-[12px] md:text-[12px] text-[#9a9a9a] font-medium tracking-wide leading-tight truncate max-w-[190px] xs:max-w-[220px] sm:max-w-[260px] md:max-w-[360px]">
+              {/* ✅ Key fix: flex-1 + 2-line wrap on mobile, 1-line truncate on sm+ */}
+              <div className="flex-1 min-w-0">
+                <div
+                  className={[
+                    "text-[#9a9a9a] font-medium tracking-wide leading-snug",
+                    "text-[11px] sm:text-[12px] md:text-[12px]",
+                    // Mobile: allow up to 2 lines (no truncation)
+                    "line-clamp-2",
+                    // sm+: force single line and truncate for cleanliness
+                    "sm:line-clamp-1 sm:truncate",
+                  ].join(" ")}
+                >
                   {TAGLINE}
                 </div>
               </div>
             </div>
 
+            {/* Desktop nav */}
             <nav className="hidden md:flex items-center gap-7 pb-2 pt-1">
               <HoverDropdown
                 label="Odds"
@@ -273,7 +283,6 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                   if (sport === "NCAAB") onNavigate?.("odds");
                 }}
               />
-
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
@@ -282,9 +291,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                   if (sport === "NCAAB") onNavigate?.("monte-carlo");
                 }}
               />
-
               <div className="h-5 w-px bg-[#2a2a2a]" />
-
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
               <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
               <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
