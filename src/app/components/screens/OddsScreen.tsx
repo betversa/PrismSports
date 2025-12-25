@@ -1,4 +1,3 @@
-// components/screens/OddsScreen.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
@@ -14,18 +13,26 @@ import {
 } from "recharts";
 
 /**
- * ODDS SCREEN — Collapsible Books (Mobile + Desktop)
+ * ODDS SCREEN — FULL REWRITE (Desktop + Mobile)
  *
- * ✅ Default view is CLEAN:
- *    - shows Matchup + Teams + Consensus only
- *    - Books start collapsed per game
- *    - Expand per game with "Show books"
+ * ✅ Mobile:
+ * - Cards are CLEAN: consensus always visible, books start collapsed
+ * - One books list (no Away/ Home separate blocks)
+ * - Each book row shows: [logo] | Away value | Home value (or Over/Under)
+ * - NO sportsbook name text (logo only)
+ * - Logos are always readable via white pill
  *
- * ✅ Mobile cards keep readable book logos (white pill)
- * ✅ History modal preserved
+ * ✅ Desktop:
+ * - Table starts "clean": Matchup + Consensus only
+ * - Toggle "Show Books" reveals the 5 book columns
+ *
+ * ✅ History modal:
+ * - Mobile-friendly sizing: max height, scrollable content area
+ * - Backdrop click + Esc close preserved
  */
 
 type Market = "ml" | "spread" | "total";
+type BookKey = "dk" | "fd" | "mgm" | "pin" | "bol";
 
 type SpreadCell = { line: number | null; odds: number | null };
 type TotalCell = { line: number | null; over: number | null; under: number | null };
@@ -52,21 +59,20 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos (full-color png/webp assets) */
-const BOOK_LOGOS = {
+/** Public folder book logos (FULL-COLOR assets) */
+const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
   mgm: "/books/mgm.png",
   pin: "/books/pin.png",
   bol: "/books/bol.png",
-} as const;
+};
 
-const BOOKS = ["dk", "fd", "mgm", "pin", "bol"] as const;
-type BookKey = (typeof BOOKS)[number];
+const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 
-/** Layout */
+/** Desktop layout */
 const COL_MATCHUP = 440;
-const COL_CONSENSUS = 220;
+const COL_CONSENSUS = 190;
 const COL_BOOK = 132;
 
 const BOOK_LOGO_W = 104;
@@ -74,38 +80,13 @@ const BOOK_LOGO_H = 26;
 
 /** Header colors */
 const HDR_LEFT_BG = "bg-[#0a0a0a]";
-const HDR_BOOK_BG = "bg-[#4a4a4a]";
+const HDR_BOOK_BG = "bg-[#3f3f3f]";
 const HDR_TEXT = "text-[#cfcfcf]";
 const HDR_BORDER = "border-[#2a2a2a]";
 
-/** Subtle glow (desktop headers) */
+/** Subtle glow for header logos */
 const BOOK_GLOW =
-  "drop-shadow(0 1px 0 rgba(0,0,0,0.65)) drop-shadow(0 0 8px rgba(255,255,255,0.14)) drop-shadow(0 0 8px rgba(212,175,55,0.22))";
-
-/** Mobile card logo styling: white pill keeps black logo text readable. */
-function BookLogoPill({ src, alt, fallbackLabel }: { src: string; alt: string; fallbackLabel: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div
-        className="h-8 w-[96px] rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center"
-        style={{
-          boxShadow:
-            "0 0 0 1px rgba(0,0,0,0.15), 0 8px 18px rgba(0,0,0,0.35), 0 0 10px rgba(212,175,55,0.10)",
-        }}
-      >
-        <img
-          src={src}
-          alt={alt}
-          className="h-5 w-auto object-contain"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
-          }}
-        />
-      </div>
-    </div>
-  );
-}
+  "drop-shadow(0 1px 0 rgba(0,0,0,0.65)) drop-shadow(0 0 8px rgba(255,255,255,0.12)) drop-shadow(0 0 8px rgba(212,175,55,0.18))";
 
 /** ---------- time helpers ---------- */
 function normalizeIso(raw: string | null | undefined): string | null {
@@ -242,7 +223,7 @@ function median(nums: number[]) {
 }
 
 /**
- * Consensus rendered for selected market.
+ * Consensus rendered like a book cell for selected market.
  * Total: AWAY row shows Over; HOME row shows Under.
  */
 function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME") {
@@ -342,6 +323,29 @@ function MarketButton({
   );
 }
 
+/** Mobile: white logo pill so black logo text is readable */
+function BookLogoPill({ src, alt, fallbackLabel }: { src: string; alt: string; fallbackLabel: string }) {
+  return (
+    <div
+      className="h-8 w-[96px] rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center"
+      style={{
+        boxShadow:
+          "0 0 0 1px rgba(0,0,0,0.15), 0 8px 18px rgba(0,0,0,0.35), 0 0 10px rgba(212,175,55,0.10)",
+      }}
+    >
+      <img
+        src={src}
+        alt={alt}
+        className="h-5 w-auto object-contain"
+        loading="lazy"
+        onError={(e) => {
+          (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+        }}
+      />
+    </div>
+  );
+}
+
 function BookHeader({
   src,
   alt,
@@ -429,17 +433,17 @@ function MiniTeamRow({
         <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
       )}
 
-      <div className="leading-tight min-w-0">
-        <div className="text-white font-extrabold text-[16px] truncate">{team}</div>
+      <div className="leading-tight">
+        <div className="text-white font-extrabold text-[16px]">{team}</div>
         <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
       </div>
     </div>
   );
 }
 
-/** =========================
- * HISTORY MODAL (unchanged)
- * ========================= */
+/** =========================================
+ * HISTORY MODAL (mobile-friendly sizing)
+ * ========================================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
 type HistSide = "home" | "away" | "over" | "under";
@@ -477,6 +481,19 @@ function seriesColor(bookmaker: string) {
   return BOOK_SERIES_COLOR[k] ?? "#9ca3af";
 }
 
+function fmtCTShortLabel(iso: string) {
+  const n = normalizeIso(iso) ?? iso;
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
 function impliedProbFromAmerican(odds: number) {
   if (!Number.isFinite(odds) || odds === 0) return NaN;
   if (odds > 0) return 100 / (odds + 100);
@@ -490,16 +507,6 @@ function floorToMinuteIso(iso: string) {
   d.setSeconds(0, 0);
   return d.toISOString();
 }
-
-type ChartPoint = {
-  ts: string;
-  t: string;
-  mw: number | null;
-  sharp: boolean;
-  shade: boolean;
-  pin?: number;
-  [book: string]: any;
-};
 
 function medianOfKeys(point: any, keys: string[], valueMode: "line" | "odds") {
   const vals: number[] = [];
@@ -516,6 +523,16 @@ function medianOfKeys(point: any, keys: string[], valueMode: "line" | "odds") {
   }
   return median(vals);
 }
+
+type ChartPoint = {
+  ts: string;
+  t: string;
+  mw: number | null;
+  sharp: boolean;
+  shade: boolean;
+  pin?: number;
+  [book: string]: any;
+};
 
 function buildChartSeries(
   rows: HistoryRow[],
@@ -547,7 +564,7 @@ function buildChartSeries(
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
-    const p: ChartPoint = { ts: bin, t: fmtCTDateTime(bin), mw: null, sharp: false, shade: false };
+    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false, shade: false };
 
     for (const b of books) {
       const row = byBook.get(b);
@@ -579,12 +596,13 @@ function buildChartSeries(
   });
 
   const SHADE_DP = 0.02;
+
   if (enableShading) {
     for (let i = 1; i < points.length; i++) {
       const prev = points[i - 1];
       const cur = points[i];
-      let shaded = false;
 
+      let shaded = false;
       for (const b of books) {
         const pv = prev[b];
         const cv = cur[b];
@@ -654,6 +672,41 @@ function buildChartSeries(
   return points;
 }
 
+function Badge({ label, kind }: { label: string; kind: "gold" | "red" | "gray" }) {
+  const cls =
+    kind === "gold"
+      ? "bg-[#d4af37] text-black"
+      : kind === "red"
+      ? "bg-red-500 text-white"
+      : "bg-[#2a2a2a] text-[#cfcfcf]";
+  return <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold ${cls}`}>{label}</span>;
+}
+
+function TogglePill({
+  on,
+  onClick,
+  label,
+}: {
+  on: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-2.5 py-1 rounded-md text-[11px] font-extrabold border",
+        on
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
 function ModalShell({
   title,
   subtitle,
@@ -675,16 +728,16 @@ function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 p-4"
+      className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 p-2 sm:p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-6xl rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
-        <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4">
-          <div>
+      <div className="w-full max-w-6xl rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col">
+        <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
+          <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5">{subtitle}</div>}
+            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
           </div>
           <button
             className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
@@ -694,14 +747,386 @@ function ModalShell({
             ✕
           </button>
         </div>
-        <div className="p-4">{children}</div>
+
+        {/* scrollable body */}
+        <div className="p-3 sm:p-4 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
 }
 
-/** ---------- Mobile card row for 1 book ---------- */
-function BookLineRow({ book, label, value }: { book: BookKey; label: string; value: string }) {
+function LineMovementModal({
+  ev,
+  uiMarket,
+  onClose,
+}: {
+  ev: EventOdds;
+  uiMarket: Market;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  const [hoursBack] = useState(24);
+  const [showWidth, setShowWidth] = useState(true);
+  const [showShading, setShowShading] = useState(true);
+  const [showSharp, setShowSharp] = useState(true);
+
+  const [valueMode, setValueMode] = useState<"line" | "odds">(
+    uiMarket === "ml" ? "odds" : uiMarket === "total" ? "odds" : "line"
+  );
+
+  useEffect(() => {
+    setValueMode(uiMarket === "ml" ? "odds" : uiMarket === "total" ? "odds" : "line");
+  }, [uiMarket]);
+
+  const [books, setBooks] = useState<string[]>([]);
+  const [seriesA, setSeriesA] = useState<ChartPoint[]>([]);
+  const [seriesB, setSeriesB] = useState<ChartPoint[]>([]);
+
+  const panelA: HistSide = uiMarket === "total" ? "over" : "away";
+  const panelB: HistSide = uiMarket === "total" ? "under" : "home";
+
+  useEffect(() => {
+    let alive = true;
+
+    async function run() {
+      setLoading(true);
+      setErr("");
+
+      const histMarket = UI_TO_HIST_MARKET[uiMarket];
+      const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+
+      const { data, error } = await supabase
+        .from(HISTORY_TABLE)
+        .select("id,ts,event_id,bookmaker,market,side,line,odds,last_update,inserted_at")
+        .eq("event_id", ev.eventId)
+        .eq("market", histMarket)
+        .gte("ts", since)
+        .order("ts", { ascending: true });
+
+      if (!alive) return;
+
+      if (error) {
+        setErr(error.message);
+        setBooks([]);
+        setSeriesA([]);
+        setSeriesB([]);
+        setLoading(false);
+        return;
+      }
+
+      const rows = (data ?? []) as HistoryRow[];
+
+      const set = new Set<string>();
+      for (const r of rows) set.add(String(r.bookmaker || "").toLowerCase());
+      const bookList = Array.from(set).sort((a, b) => a.localeCompare(b));
+      setBooks(bookList);
+
+      const aRows = rows.filter((r) => String(r.side).toLowerCase() === panelA);
+      const bRows = rows.filter((r) => String(r.side).toLowerCase() === panelB);
+
+      const A = buildChartSeries(aRows, uiMarket, valueMode, bookList, showWidth, showShading, showSharp);
+      const B = buildChartSeries(bRows, uiMarket, valueMode, bookList, showWidth, showShading, showSharp);
+
+      setSeriesA(A);
+      setSeriesB(B);
+
+      setLoading(false);
+    }
+
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [ev.eventId, uiMarket, hoursBack, valueMode, showWidth, showShading, showSharp]);
+
+  const subtitle = [
+    ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
+    `Market: ${uiMarket.toUpperCase()} (${UI_TO_HIST_MARKET[uiMarket]})`,
+    `Mode: ${valueMode === "line" ? "Line" : "Odds"}`,
+    `Window: last ${hoursBack}h`,
+    "Bucket: 1-min",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const yLabel =
+    valueMode === "line"
+      ? uiMarket === "spread"
+        ? "Spread Line"
+        : uiMarket === "total"
+        ? "Total Line"
+        : "Line"
+      : uiMarket === "ml"
+      ? "ML Odds"
+      : "Odds";
+
+  const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
+  const panelTitleA = uiMarket === "total" ? "OVER" : "AWAY";
+  const panelTitleB = uiMarket === "total" ? "UNDER" : "HOME";
+
+  const anySharpA = seriesA.some((p) => p.sharp);
+  const anyShadeA = seriesA.some((p) => p.shade);
+  const anySharpB = seriesB.some((p) => p.sharp);
+  const anyShadeB = seriesB.some((p) => p.shade);
+
+  return (
+    <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {uiMarket !== "ml" && (
+            <>
+              <TogglePill on={valueMode === "line"} onClick={() => setValueMode("line")} label="Line" />
+              <TogglePill on={valueMode === "odds"} onClick={() => setValueMode("odds")} label="Odds" />
+            </>
+          )}
+          <TogglePill on={showWidth} onClick={() => setShowWidth((v) => !v)} label="Market Width" />
+          <TogglePill on={showShading} onClick={() => setShowShading((v) => !v)} label="Soft Shading" />
+          <TogglePill on={showSharp} onClick={() => setShowSharp((v) => !v)} label="Sharp Moves" />
+        </div>
+
+        <div className="flex items-center gap-2">
+          {(showSharp && (anySharpA || anySharpB)) && <Badge label="Sharp Move Detected" kind="red" />}
+          {(showShading && (anyShadeA || anyShadeB)) && <Badge label="Soft Shading" kind="gold" />}
+          {!anySharpA && !anySharpB && !anyShadeA && !anyShadeB && <Badge label="No Alerts" kind="gray" />}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-[#808080]">Loading snapshots…</div>
+      ) : err ? (
+        <div className="text-xs text-red-400">Supabase error: {err}</div>
+      ) : !seriesA.length && !seriesB.length ? (
+        <div className="text-xs text-[#808080]">No history rows found for this event/market in the selected window.</div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {[
+            { title: panelTitleA, data: seriesA, anySharp: anySharpA, anyShade: anyShadeA } as const,
+            { title: panelTitleB, data: seriesB, anySharp: anySharpB, anyShade: anyShadeB } as const,
+          ].map((panel) => (
+            <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-white font-bold text-xs">{panel.title}</div>
+                <div className="flex items-center gap-2">
+                  {showSharp && panel.anySharp && <Badge label="Sharp" kind="red" />}
+                  {showShading && panel.anyShade && <Badge label="Shading" kind="gold" />}
+                </div>
+              </div>
+
+              <div className="h-[320px] sm:h-[360px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={panel.data}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="t" tick={{ fontSize: 11 }} />
+                    <YAxis
+                      yAxisId="main"
+                      tick={{ fontSize: 11 }}
+                      label={{ value: yLabel, angle: -90, position: "insideLeft" }}
+                    />
+                    {showWidth && (
+                      <YAxis
+                        yAxisId="mw"
+                        orientation="right"
+                        tick={{ fontSize: 11 }}
+                        label={{ value: mwLabel, angle: 90, position: "insideRight" }}
+                      />
+                    )}
+
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        const row: any = payload[0]?.payload;
+                        const lines = (payload ?? [])
+                          .filter((p) => p?.dataKey && typeof p.value === "number")
+                          .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
+                          .filter((x) => x.k !== "mw");
+
+                        return (
+                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[260px]">
+                            <div className="font-extrabold text-white mb-1">{label}</div>
+
+                            {showWidth && row?.mw != null && (
+                              <div className="mb-1">
+                                <span className="font-bold">Width:</span> {row.mw}
+                              </div>
+                            )}
+
+                            <div className="space-y-0.5">
+                              {lines.slice(0, 8).map((x) => (
+                                <div key={x.k} className="flex items-center justify-between gap-2">
+                                  <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
+                                  <span className="text-white font-extrabold tabular-nums">{x.v}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="flex gap-2 mt-2">
+                              {showSharp && row?.sharp && <Badge label="Sharp" kind="red" />}
+                              {showShading && row?.shade && <Badge label="Shading" kind="gold" />}
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+
+                    <Legend />
+
+                    {books.map((b) => (
+                      <Line
+                        key={b}
+                        yAxisId="main"
+                        type="monotone"
+                        dataKey={b}
+                        name={b}
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls
+                        stroke={seriesColor(b)}
+                      />
+                    ))}
+
+                    {showWidth && (
+                      <Line
+                        yAxisId="mw"
+                        type="monotone"
+                        dataKey="mw"
+                        name="Market Width"
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls
+                        stroke="#e5e7eb"
+                        strokeDasharray="6 6"
+                      />
+                    )}
+
+                    {showSharp &&
+                      panel.data
+                        .filter((p) => p.sharp)
+                        .map((p) => (
+                          <ReferenceLine
+                            key={`sharp-${panel.title}-${p.ts}`}
+                            x={p.t}
+                            stroke="rgba(239,68,68,0.55)"
+                            strokeDasharray="3 3"
+                            yAxisId="main"
+                          />
+                        ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </ModalShell>
+  );
+}
+
+/** ---------- Desktop two-row renderer (supports hide/show books) ---------- */
+function EventTwoRows({
+  ev,
+  market,
+  showBooks,
+  onOpenHistory,
+}: {
+  ev: EventOdds;
+  market: Market;
+  showBooks: boolean;
+  onOpenHistory: (ev: EventOdds) => void;
+}) {
+  const away = ev.away;
+  const home = ev.home;
+
+  const mk = (s: SideOdds | undefined) => {
+    if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
+    if (market === "ml") {
+      return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
+    }
+    if (market === "spread") {
+      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
+    }
+    return {
+      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
+      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
+      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
+      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
+      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
+    };
+  };
+
+  const awayCells = mk(away);
+  const homeCells = mk(home);
+
+  const awayConsensus = consensusValueForRow(ev, market, "AWAY");
+  const homeConsensus = consensusValueForRow(ev, market, "HOME");
+
+  return (
+    <>
+      <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
+        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
+          <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3 flex items-center justify-between gap-3">
+            <span>{fmtCTTimeOnly(ev.commenceTime)} CT</span>
+            <button
+              type="button"
+              onClick={() => onOpenHistory(ev)}
+              className="text-[11px] font-extrabold text-[#d4af37] hover:underline"
+              title="View line movement history"
+            >
+              History
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <MiniTeamRow team={away?.team ?? "Away"} logoUrl={away?.logoUrl ?? null} side="AWAY" />
+            <MiniTeamRow team={home?.team ?? "Home"} logoUrl={home?.logoUrl ?? null} side="HOME" />
+          </div>
+        </td>
+
+        <ConsensusValue value={awayConsensus} />
+
+        {showBooks && (
+          <>
+            <BookValue value={awayCells.dk} borderLeft />
+            <BookValue value={awayCells.fd} />
+            <BookValue value={awayCells.mgm} />
+            <BookValue value={awayCells.pin} />
+            <BookValue value={awayCells.bol} />
+          </>
+        )}
+      </tr>
+
+      <tr className={["hover:bg-[#0f0f0f]/50 transition-colors", `border-t border-[#1a1a1a]/60 border-b-2 ${HDR_BORDER}`].join(" ")}>
+        <ConsensusValue value={homeConsensus} />
+
+        {showBooks && (
+          <>
+            <BookValue value={homeCells.dk} borderLeft />
+            <BookValue value={homeCells.fd} />
+            <BookValue value={homeCells.mgm} />
+            <BookValue value={homeCells.pin} />
+            <BookValue value={homeCells.bol} />
+          </>
+        )}
+      </tr>
+    </>
+  );
+}
+
+/** ---------- Mobile: one book row with two values (logo only) ---------- */
+function BookRowMobile2Col({
+  book,
+  leftLabel,
+  leftValue,
+  rightLabel,
+  rightValue,
+}: {
+  book: BookKey;
+  leftLabel: string;
+  leftValue: string;
+  rightLabel: string;
+  rightValue: string;
+}) {
   const meta =
     book === "dk"
       ? { alt: "DraftKings", fb: "DK" }
@@ -714,167 +1139,42 @@ function BookLineRow({ book, label, value }: { book: BookKey; label: string; val
       : { alt: "BetOnline", fb: "BOL" };
 
   return (
-    <div className="flex items-center justify-between gap-3 py-2 border-b border-[#141414] last:border-b-0">
-      <div className="flex items-center gap-3 min-w-0">
+    <div className="py-2 border-b border-[#141414] last:border-b-0">
+      <div className="flex items-center justify-between gap-3">
         <BookLogoPill src={BOOK_LOGOS[book]} alt={meta.alt} fallbackLabel={meta.fb} />
-        <div className="text-[11px] text-[#9a9a9a] font-semibold">{label}</div>
+
+        <div className="flex items-center gap-4 shrink-0">
+          <div className="text-right">
+            <div className="text-[10px] text-[#808080] font-semibold leading-none">{leftLabel}</div>
+            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight">{leftValue}</div>
+          </div>
+          <div className="w-px h-8 bg-[#1f1f1f]" />
+          <div className="text-right">
+            <div className="text-[10px] text-[#808080] font-semibold leading-none">{rightLabel}</div>
+            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight">{rightValue}</div>
+          </div>
+        </div>
       </div>
-      <div className="text-[13px] text-white font-extrabold tabular-nums">{value}</div>
     </div>
   );
 }
 
-/** ---------- Desktop: condensed consensus-only rows + optional expanded books ---------- */
-function EventDesktopBlock({
-  ev,
-  market,
-  expanded,
-  onToggle,
-  onOpenHistory,
-}: {
-  ev: EventOdds;
-  market: Market;
-  expanded: boolean;
-  onToggle: () => void;
-  onOpenHistory: (ev: EventOdds) => void;
-}) {
-  const away = ev.away;
-  const home = ev.home;
-
-  const awayTeam = away?.team ?? "Away";
-  const homeTeam = home?.team ?? "Home";
-
-  const awayCons = consensusValueForRow(ev, market, "AWAY");
-  const homeCons = consensusValueForRow(ev, market, "HOME");
-
-  // when expanded, compute book values
-  const mkRow = (s: SideOdds | undefined) => {
-    if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
-    if (market === "ml") {
-      return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
-    }
-    if (market === "spread") {
-      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
-    }
-    return {
-      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
-      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
-      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
-      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
-      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
-    };
-  };
-
-  const awayCells = mkRow(away);
-  const homeCells = mkRow(home);
-
-  return (
-    <div className="border-b border-[#2a2a2a]">
-      <div className="flex items-center justify-between gap-3 px-3 py-3 bg-black/10">
-        <div className="text-[12px] text-[#cfcfcf] font-semibold">
-          {fmtCTTimeOnly(ev.commenceTime)} CT
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onOpenHistory(ev)}
-            className="text-[11px] font-extrabold text-[#d4af37] hover:underline"
-          >
-            History
-          </button>
-          <button
-            type="button"
-            onClick={onToggle}
-            className={[
-              "text-[11px] font-extrabold rounded-md px-2.5 py-1 border transition-colors",
-              expanded
-                ? "bg-[#d4af37] text-black border-[#d4af37]"
-                : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
-            ].join(" ")}
-          >
-            {expanded ? "Hide books" : "Show books"}
-          </button>
-        </div>
-      </div>
-
-      {/* consensus-only always visible */}
-      <div className="grid grid-cols-[1fr_220px]">
-        <div className="px-3 py-3 space-y-3">
-          <MiniTeamRow team={awayTeam} logoUrl={away?.logoUrl ?? null} side="AWAY" />
-          <MiniTeamRow team={homeTeam} logoUrl={home?.logoUrl ?? null} side="HOME" />
-        </div>
-
-        <div className="px-3 py-3 border-l border-[#2a2a2a] bg-black/10">
-          <div className="text-[12px] text-white font-extrabold mb-2">Consensus</div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-[#9a9a9a] font-semibold">Away</span>
-              <span className="text-[13px] text-white font-extrabold tabular-nums">{awayCons}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-[#9a9a9a] font-semibold">Home</span>
-              <span className="text-[13px] text-white font-extrabold tabular-nums">{homeCons}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* books: only when expanded */}
-      {expanded && (
-        <div className="px-3 pb-3">
-          <div className="rounded-lg border border-[#2a2a2a] overflow-hidden">
-            <div className="grid grid-cols-6 bg-[#0b0b0b]">
-              <div className="px-3 py-2 text-[11px] font-extrabold text-white">Side</div>
-              <div className="px-3 py-2 text-[11px] font-extrabold text-white">DK</div>
-              <div className="px-3 py-2 text-[11px] font-extrabold text-white">FD</div>
-              <div className="px-3 py-2 text-[11px] font-extrabold text-white">MGM</div>
-              <div className="px-3 py-2 text-[11px] font-extrabold text-white">PIN</div>
-              <div className="px-3 py-2 text-[11px] font-extrabold text-white">BOL</div>
-            </div>
-
-            <div className="grid grid-cols-6 border-t border-[#141414]">
-              <div className="px-3 py-2 text-[11px] text-[#9a9a9a] font-extrabold">Away</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{awayCells.dk}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{awayCells.fd}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{awayCells.mgm}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{awayCells.pin}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{awayCells.bol}</div>
-            </div>
-
-            <div className="grid grid-cols-6 border-t border-[#141414]">
-              <div className="px-3 py-2 text-[11px] text-[#9a9a9a] font-extrabold">Home</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{homeCells.dk}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{homeCells.fd}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{homeCells.mgm}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{homeCells.pin}</div>
-              <div className="px-3 py-2 text-[12px] text-white font-extrabold tabular-nums">{homeCells.bol}</div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** ---------- Mobile card renderer for one event (books collapsible) ---------- */
+/** ---------- Mobile card renderer (books collapsible; consensus always visible) ---------- */
 function EventCardMobile({
   ev,
   market,
-  expanded,
-  onToggle,
+  booksOpen,
+  onToggleBooks,
   onOpenHistory,
 }: {
   ev: EventOdds;
   market: Market;
-  expanded: boolean;
-  onToggle: () => void;
+  booksOpen: boolean;
+  onToggleBooks: () => void;
   onOpenHistory: (ev: EventOdds) => void;
 }) {
   const away = ev.away;
   const home = ev.home;
-
-  const awayTeam = away?.team ?? "Away";
-  const homeTeam = home?.team ?? "Home";
 
   const mkRow = (s: SideOdds | undefined) => {
     if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
@@ -899,38 +1199,38 @@ function EventCardMobile({
   const awayCons = consensusValueForRow(ev, market, "AWAY");
   const homeCons = consensusValueForRow(ev, market, "HOME");
 
+  const leftLabel = market === "total" ? "Over" : "Away";
+  const rightLabel = market === "total" ? "Under" : "Home";
+
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-      {/* header */}
+      {/* top bar */}
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onToggleBooks}
+            className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+          >
+            {booksOpen ? "Hide Books" : "Show Books"}
+          </button>
+
           <button
             type="button"
             onClick={() => onOpenHistory(ev)}
             className="text-[11px] font-extrabold text-[#d4af37] hover:underline"
           >
             History
-          </button>
-          <button
-            type="button"
-            onClick={onToggle}
-            className={[
-              "text-[11px] font-extrabold rounded-md px-2.5 py-1 border transition-colors",
-              expanded
-                ? "bg-[#d4af37] text-black border-[#d4af37]"
-                : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
-            ].join(" ")}
-          >
-            {expanded ? "Hide books" : "Show books"}
           </button>
         </div>
       </div>
 
       {/* teams */}
       <div className="px-4 py-3 space-y-3">
-        <MiniTeamRow team={awayTeam} logoUrl={away?.logoUrl ?? null} side="AWAY" />
-        <MiniTeamRow team={homeTeam} logoUrl={home?.logoUrl ?? null} side="HOME" />
+        <MiniTeamRow team={away?.team ?? "Away"} logoUrl={away?.logoUrl ?? null} side="AWAY" />
+        <MiniTeamRow team={home?.team ?? "Home"} logoUrl={home?.logoUrl ?? null} side="HOME" />
       </div>
 
       {/* consensus always visible */}
@@ -949,41 +1249,30 @@ function EventCardMobile({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-2">
-            <div className="flex items-center justify-between">
-              <div className="text-[11px] text-[#9a9a9a] font-semibold">Away</div>
-              <div className="text-[13px] text-white font-extrabold tabular-nums">{awayCons}</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5">{leftLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums">{awayCons}</div>
             </div>
-            <div className="flex items-center justify-between">
-              <div className="text-[11px] text-[#9a9a9a] font-semibold">Home</div>
-              <div className="text-[13px] text-white font-extrabold tabular-nums">{homeCons}</div>
+            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5">{rightLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums">{homeCons}</div>
             </div>
           </div>
         </div>
 
         {/* books collapsible */}
-        {expanded && (
+        {booksOpen && (
           <div className="mt-3 rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
             <div className="px-4 py-2 border-b border-[#141414] text-[12px] text-white font-extrabold">
-              Books (Away)
+              Books
             </div>
             <div className="px-4">
-              <BookLineRow book="dk" label="DraftKings" value={awayCells.dk} />
-              <BookLineRow book="fd" label="FanDuel" value={awayCells.fd} />
-              <BookLineRow book="mgm" label="BetMGM" value={awayCells.mgm} />
-              <BookLineRow book="pin" label="Pinnacle" value={awayCells.pin} />
-              <BookLineRow book="bol" label="BetOnline" value={awayCells.bol} />
-            </div>
-
-            <div className="px-4 py-2 border-y border-[#141414] text-[12px] text-white font-extrabold">
-              Books (Home)
-            </div>
-            <div className="px-4 pb-2">
-              <BookLineRow book="dk" label="DraftKings" value={homeCells.dk} />
-              <BookLineRow book="fd" label="FanDuel" value={homeCells.fd} />
-              <BookLineRow book="mgm" label="BetMGM" value={homeCells.mgm} />
-              <BookLineRow book="pin" label="Pinnacle" value={homeCells.pin} />
-              <BookLineRow book="bol" label="BetOnline" value={homeCells.bol} />
+              <BookRowMobile2Col book="dk" leftLabel={leftLabel} leftValue={awayCells.dk} rightLabel={rightLabel} rightValue={homeCells.dk} />
+              <BookRowMobile2Col book="fd" leftLabel={leftLabel} leftValue={awayCells.fd} rightLabel={rightLabel} rightValue={homeCells.fd} />
+              <BookRowMobile2Col book="mgm" leftLabel={leftLabel} leftValue={awayCells.mgm} rightLabel={rightLabel} rightValue={homeCells.mgm} />
+              <BookRowMobile2Col book="pin" leftLabel={leftLabel} leftValue={awayCells.pin} rightLabel={rightLabel} rightValue={homeCells.pin} />
+              <BookRowMobile2Col book="bol" leftLabel={leftLabel} leftValue={awayCells.bol} rightLabel={rightLabel} rightValue={homeCells.bol} />
             </div>
           </div>
         )}
@@ -1004,8 +1293,11 @@ export function OddsScreen() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyEvent, setHistoryEvent] = useState<EventOdds | null>(null);
 
-  // per-event expansion state (collapsed by default)
-  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+  // Desktop: start clean
+  const [showBooksDesktop, setShowBooksDesktop] = useState(false);
+
+  // Mobile: per-event collapsed state (default collapsed)
+  const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
 
   function openHistory(ev: EventOdds) {
     setHistoryEvent(ev);
@@ -1014,10 +1306,6 @@ export function OddsScreen() {
   function closeHistory() {
     setHistoryOpen(false);
     setHistoryEvent(null);
-  }
-
-  function toggleEvent(eventId: string) {
-    setExpandedEvents((prev) => ({ ...prev, [eventId]: !prev[eventId] }));
   }
 
   async function load() {
@@ -1108,7 +1396,6 @@ export function OddsScreen() {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
-      // only future games if selected date is today
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -1118,17 +1405,16 @@ export function OddsScreen() {
     });
   }, [allEvents, selectedDate]);
 
-  // prune expansion state when date changes or list changes (optional but keeps memory tidy)
+  const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
+
+  // keep map clean if slate changes
   useEffect(() => {
-    const ids = new Set(events.map((e) => e.eventId));
-    setExpandedEvents((prev) => {
+    setMobileOpenMap((prev) => {
       const next: Record<string, boolean> = {};
-      for (const k of Object.keys(prev)) if (ids.has(k)) next[k] = prev[k];
+      for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false; // default collapsed
       return next;
     });
-  }, [selectedDate, events.length]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
+  }, [events]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -1166,7 +1452,7 @@ export function OddsScreen() {
         ))}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <MarketButton active={market === "ml"} onClick={() => setMarket("ml")}>
           Moneyline
         </MarketButton>
@@ -1176,6 +1462,22 @@ export function OddsScreen() {
         <MarketButton active={market === "total"} onClick={() => setMarket("total")}>
           Total
         </MarketButton>
+
+        {/* Desktop-only: start clean, let you show books when you want */}
+        <div className="hidden md:flex items-center ml-2">
+          <button
+            type="button"
+            onClick={() => setShowBooksDesktop((v) => !v)}
+            className={[
+              "px-3 py-1.5 rounded-md text-xs border transition-colors",
+              showBooksDesktop
+                ? "bg-[#d4af37] text-black border-[#d4af37]"
+                : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+            ].join(" ")}
+          >
+            {showBooksDesktop ? "Hide Books" : "Show Books"}
+          </button>
+        </div>
       </div>
 
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
@@ -1194,8 +1496,10 @@ export function OddsScreen() {
                   key={ev.eventId}
                   ev={ev}
                   market={market}
-                  expanded={!!expandedEvents[ev.eventId]}
-                  onToggle={() => toggleEvent(ev.eventId)}
+                  booksOpen={!!mobileOpenMap[ev.eventId]}
+                  onToggleBooks={() =>
+                    setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                  }
                   onOpenHistory={openHistory}
                 />
               ))}
@@ -1203,8 +1507,8 @@ export function OddsScreen() {
           )}
         </div>
 
-        {/* DESKTOP: condensed list (consensus only) with per-game expand */}
-        <div className="hidden md:block">
+        {/* DESKTOP: table */}
+        <div className="hidden md:block overflow-x-auto">
           {loading ? (
             <div className="p-4 text-xs text-[#808080]">Loading odds_wide_latest…</div>
           ) : error ? (
@@ -1212,18 +1516,55 @@ export function OddsScreen() {
           ) : !events.length ? (
             <div className="p-4 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>
           ) : (
-            <div>
-              {events.map((ev) => (
-                <EventDesktopBlock
-                  key={ev.eventId}
-                  ev={ev}
-                  market={market}
-                  expanded={!!expandedEvents[ev.eventId]}
-                  onToggle={() => toggleEvent(ev.eventId)}
-                  onOpenHistory={openHistory}
-                />
-              ))}
-            </div>
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col style={{ width: COL_MATCHUP }} />
+                <col style={{ width: COL_CONSENSUS }} />
+                {showBooksDesktop && (
+                  <>
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
+                  </>
+                )}
+              </colgroup>
+
+              <thead className="sticky top-0 z-20">
+                <tr className={`border-b ${HDR_BORDER}`}>
+                  <th className={["text-left px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-sm font-extrabold"].join(" ")}>
+                    Matchup
+                  </th>
+
+                  <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
+                    Consensus
+                  </th>
+
+                  {showBooksDesktop && (
+                    <>
+                      <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
+                      <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
+                      <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
+                      <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" fallbackLabel="PIN" />
+                      <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" fallbackLabel="BOL" />
+                    </>
+                  )}
+                </tr>
+              </thead>
+
+              <tbody>
+                {events.map((ev) => (
+                  <EventTwoRows
+                    key={ev.eventId}
+                    ev={ev}
+                    market={market}
+                    showBooks={showBooksDesktop}
+                    onOpenHistory={openHistory}
+                  />
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       </div>
@@ -1234,6 +1575,3 @@ export function OddsScreen() {
     </div>
   );
 }
-
-
-
