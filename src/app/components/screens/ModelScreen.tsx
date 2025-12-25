@@ -3,19 +3,16 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MODEL PICKS (EV PLAYS) — FULL REWRITE (SIMPLE ROW LIST)
+ * MODEL PICKS (EV PLAYS) — FINAL REWRITE
  *
  * ✅ Uses public.ev_plays (no mock data)
- * ✅ One row per +EV play (no ML/Spread/Total sections)
- * ✅ Columns: Matchup | Market | Pick | Line | Quantum | Book | SpectrumEV | Score | Stake %
+ * ✅ One row per +EV play
+ * ✅ Filter: sportsbook (SOFT books only) — default = All
+ * ✅ Book column uses square logos in /public/books/
+ *    - dksquare.png, fdsquare.png, mgmsquare.png
+ * ✅ No sharp logos shown
  *
- * UI rules requested:
- * - "Quantum" header = /public/logos/Quantum.png
- * - "EV%" header = /public/logos/SpectrumEV.png
- * - Stake % renamed (was %) to be clearer
- * - Row behavior:
- *    • h2h/spreads: show a single row with the pick team
- *    • totals: show matchup (both teams) as the pick label
+ * Columns: Matchup | Market | Pick | Line | Quantum | Book | SpectrumEV | Score | Stake %
  */
 
 type MarketKey = "h2h" | "spreads" | "totals";
@@ -49,13 +46,15 @@ type EvPlayRow = {
   created_at?: string;
 };
 
-type SportKey =
-  | "basketball_ncaab"
-  | "basketball_nba"
-  | "football_nfl"
-  | "football_ncaaf"
-  | "hockey_nhl"
-  | "baseball_mlb";
+type SoftBookKey = "all" | "draftkings" | "fanduel" | "betmgm";
+
+// Only show/filter these in the dropdown (soft books only)
+const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
+  { key: "all", label: "All Books" },
+  { key: "draftkings", label: "DraftKings" },
+  { key: "fanduel", label: "FanDuel" },
+  { key: "betmgm", label: "BetMGM" },
+];
 
 function fmtTimeCentral(iso: string | null) {
   if (!iso) return "—";
@@ -83,24 +82,6 @@ function american(odds: number) {
   return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
 }
 
-function bookLabel(bookmaker: string) {
-  const b = (bookmaker || "").toLowerCase();
-  if (b === "draftkings") return "DK";
-  if (b === "fanduel") return "FD";
-  if (b === "betmgm") return "MGM";
-  if (b === "betonline" || b === "betonlineag") return "BOL";
-  if (b === "pinnacle") return "PIN";
-  return (bookmaker || "BOOK").toUpperCase();
-}
-
-function bookColorClass(bookmaker: string) {
-  const b = (bookmaker || "").toLowerCase();
-  if (b === "draftkings") return "text-green-400";
-  if (b === "fanduel") return "text-blue-400";
-  if (b === "betmgm") return "text-[#d4af37]";
-  return "text-[#b0b0b0]";
-}
-
 function marketLabel(market: MarketKey) {
   if (market === "h2h") return "Moneyline";
   if (market === "spreads") return "Spread";
@@ -116,7 +97,6 @@ function fmtLine(market: MarketKey, line: number | null) {
   if (market === "h2h") return "—";
   if (line == null || !Number.isFinite(line)) return "—";
   if (market === "spreads") return `${line > 0 ? "+" : ""}${line}`;
-  // totals: show just number (Over/Under is separate)
   return `${line}`;
 }
 
@@ -124,8 +104,32 @@ function sumBetFraction(rows: EvPlayRow[]) {
   return rows.reduce((a, r) => a + Math.max(0, Number(r.bet_fraction ?? 0)), 0);
 }
 
+function normalizeBookKey(bookmaker: string): SoftBookKey | "other" {
+  const b = (bookmaker || "").toLowerCase();
+  if (b === "draftkings") return "draftkings";
+  if (b === "fanduel") return "fanduel";
+  if (b === "betmgm") return "betmgm";
+  return "other";
+}
+
+function bookLogoSrc(bookmaker: string): string | null {
+  const b = (bookmaker || "").toLowerCase();
+  if (b === "draftkings") return "/books/dksquare.png";
+  if (b === "fanduel") return "/books/fdsquare.png";
+  if (b === "betmgm") return "/books/mgmsquare.png";
+  return null;
+}
+
+function bookFallbackLabel(bookmaker: string) {
+  const b = (bookmaker || "").toLowerCase();
+  if (b === "draftkings") return "DK";
+  if (b === "fanduel") return "FD";
+  if (b === "betmgm") return "MGM";
+  return (bookmaker || "BOOK").toUpperCase();
+}
+
 export function ModelScreen() {
-  const [sportKey, setSportKey] = useState<SportKey>("basketball_ncaab");
+  const [bookFilter, setBookFilter] = useState<SoftBookKey>("all");
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<EvPlayRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -139,15 +143,18 @@ export function ModelScreen() {
 
       const nowIso = new Date().toISOString();
 
-      // Pull ev_plays for future events, then filter by sport via events table
-      const { data: ev, error: evErr } = await supabase
+      const q = supabase
         .from("ev_plays")
         .select(
           "run_id,event_id,commence_time,matchup,team,market,side,line,bookmaker,book_odds,quantum_prob,quantum_odds,ev_pct,confidence_score,confidence_tier,kelly_fraction,bet_fraction,created_at"
         )
         .gte("commence_time", nowIso)
+        // only soft books (and only those we have square logos for)
+        .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
+
+      const { data, error: evErr } = await q;
 
       if (!mounted) return;
 
@@ -158,33 +165,13 @@ export function ModelScreen() {
         return;
       }
 
-      const evRows = (ev ?? []) as EvPlayRow[];
+      const evRows = (data ?? []) as EvPlayRow[];
 
-      const eventIds = Array.from(new Set(evRows.map((r) => r.event_id).filter(Boolean)));
-      if (!eventIds.length) {
-        setRows([]);
-        setLoading(false);
-        return;
-      }
-
-      const { data: events, error: eventsErr } = await supabase
-        .from("events")
-        .select("event_id,sport_key")
-        .in("event_id", eventIds);
-
-      if (!mounted) return;
-
-      if (eventsErr) {
-        // if events lookup fails, still show something
-        setRows(evRows);
-        setLoading(false);
-        return;
-      }
-
-      const sportMap = new Map<string, string>();
-      for (const e of events ?? []) sportMap.set(e.event_id, e.sport_key);
-
-      const filtered = evRows.filter((r) => sportMap.get(r.event_id) === sportKey);
+      // Book filter (default = all soft books)
+      const filtered =
+        bookFilter === "all"
+          ? evRows
+          : evRows.filter((r) => normalizeBookKey(r.bookmaker) === bookFilter);
 
       setRows(filtered);
       setLoading(false);
@@ -194,7 +181,7 @@ export function ModelScreen() {
     return () => {
       mounted = false;
     };
-  }, [sportKey]);
+  }, [bookFilter]);
 
   const updatedText = useMemo(() => {
     const latest = rows
@@ -226,21 +213,23 @@ export function ModelScreen() {
         </div>
 
         <div className="flex items-center gap-2 text-xs">
+          {/* Book filter (soft books only) */}
           <select
-            value={sportKey}
-            onChange={(e) => setSportKey(e.target.value as SportKey)}
+            value={bookFilter}
+            onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
             className="px-2 py-1 bg-[#111] border border-[#2a2a2a] rounded text-[#d0d0d0] outline-none"
+            title="Filter by sportsbook"
           >
-            <option value="basketball_ncaab">NCAAB</option>
-            <option value="basketball_nba">NBA</option>
-            <option value="football_nfl">NFL</option>
-            <option value="football_ncaaf">NCAAF</option>
-            <option value="hockey_nhl">NHL</option>
-            <option value="baseball_mlb">MLB</option>
+            {SOFT_BOOKS.map((b) => (
+              <option key={b.key} value={b.key}>
+                {b.label}
+              </option>
+            ))}
           </select>
 
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Total Stake: <span className="text-[#d4af37]">{totalStakePct.toFixed(2)}%</span>
+            Total Stake:{" "}
+            <span className="text-[#d4af37]">{totalStakePct.toFixed(2)}%</span>
           </div>
         </div>
       </div>
@@ -267,9 +256,15 @@ export function ModelScreen() {
                   Matchup
                 </th>
 
-                <th className="text-left p-3 text-[#808080] min-w-[110px]">Market</th>
-                <th className="text-left p-3 text-[#808080] min-w-[190px]">Pick</th>
-                <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
+                <th className="text-left p-3 text-[#808080] min-w-[110px]">
+                  Market
+                </th>
+                <th className="text-left p-3 text-[#808080] min-w-[190px]">
+                  Pick
+                </th>
+                <th className="text-center p-3 text-[#808080] min-w-[80px]">
+                  Line
+                </th>
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
@@ -282,7 +277,9 @@ export function ModelScreen() {
                   </div>
                 </th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[120px]">Book</th>
+                <th className="text-center p-3 text-[#808080] min-w-[120px]">
+                  Book
+                </th>
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
@@ -295,20 +292,27 @@ export function ModelScreen() {
                   </div>
                 </th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
-                <th className="text-center p-3 text-[#808080] min-w-[100px]">Stake %</th>
+                <th className="text-center p-3 text-[#808080] min-w-[90px]">
+                  Score
+                </th>
+                <th className="text-center p-3 text-[#808080] min-w-[100px]">
+                  Stake %
+                </th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-[#1a1a1a]">
               {rows.map((r) => (
-                <PlayRow key={`${r.event_id}|${r.market}|${r.side}|${r.bookmaker}|${r.line ?? "x"}`} row={r} />
+                <PlayRow
+                  key={`${r.event_id}|${r.market}|${r.side}|${r.bookmaker}|${r.line ?? "x"}`}
+                  row={r}
+                />
               ))}
 
               {!loading && !rows.length && (
                 <tr>
                   <td colSpan={9} className="p-6 text-center text-xs text-[#808080]">
-                    No positive EV plays found for this sport.
+                    No positive EV plays found for this book filter.
                   </td>
                 </tr>
               )}
@@ -333,11 +337,14 @@ export function ModelScreen() {
 
 function PlayRow({ row }: { row: EvPlayRow }) {
   const isTotal = row.market === "totals";
+
   const pickLabel = isTotal
-    ? (row.matchup ?? (row.team || "Total"))
-    : (row.team ?? "—");
+    ? row.matchup ?? row.team ?? "Total"
+    : row.team ?? "—";
 
   const sideTxt = sideLabelForDisplay(row.market, row.side);
+
+  const logoSrc = bookLogoSrc(row.bookmaker);
 
   return (
     <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
@@ -376,17 +383,31 @@ function PlayRow({ row }: { row: EvPlayRow }) {
         <div className="text-white font-semibold">{american(row.quantum_odds)}</div>
       </td>
 
-      {/* Book */}
+      {/* Book (logo + odds) */}
       <td className="p-3 text-center">
-        <div className={`font-semibold ${bookColorClass(row.bookmaker)}`}>
-          {american(row.book_odds)}{" "}
-          <span className="text-[10px] text-[#606060]">({bookLabel(row.bookmaker)})</span>
+        <div className="inline-flex items-center justify-center gap-2">
+          {logoSrc ? (
+            <img
+              src={logoSrc}
+              alt={bookFallbackLabel(row.bookmaker)}
+              className="h-5 w-5 md:h-6 md:w-6 opacity-95 shrink-0"
+              draggable={false}
+            />
+          ) : (
+            <div className="h-5 w-5 md:h-6 md:w-6 rounded bg-[#1a1a1a] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080] shrink-0">
+              {bookFallbackLabel(row.bookmaker)}
+            </div>
+          )}
+
+          <div className="text-white font-semibold tabular-nums">
+            {american(row.book_odds)}
+          </div>
         </div>
       </td>
 
       {/* SpectrumEV */}
       <td className="p-3 text-center">
-        <div className="text-[#d4af37]">
+        <div className="text-[#d4af37] tabular-nums">
           {row.ev_pct > 0 ? "+" : ""}
           {Number(row.ev_pct).toFixed(1)}%
         </div>
@@ -424,8 +445,9 @@ function StakeValue({ frac }: { frac: number }) {
   if (pct <= 0) return <div className="text-[#404040]">—</div>;
 
   return (
-    <div className="inline-flex items-center justify-center px-2 py-0.5 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded text-[#d4af37]">
+    <div className="inline-flex items-center justify-center px-2 py-0.5 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded text-[#d4af37] tabular-nums">
       {pct.toFixed(2)}%
     </div>
   );
 }
+
