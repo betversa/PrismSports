@@ -3,29 +3,25 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MODEL SCREEN (EV PLAYS) — FULL REWRITE
+ * MODEL PICKS (EV PLAYS) — FULL REWRITE (SIMPLE ROW LIST)
  *
- * Reads from: public.ev_plays
- * Layout: same “two rows per game” style as OddsScreen / MonteCarlo tables
- * - Groups EV plays by event_id
- * - Renders 2 rows: away then home (like OddsScreen)
- * - Shows best play (by EV%) for each market bucket:
- *   • Moneyline: market=h2h (away/home)
- *   • Spread:    market=spreads (away/home) with line
- *   • Total:     market=totals (over/under) with line
+ * ✅ Uses public.ev_plays (no mock data)
+ * ✅ One row per +EV play (no ML/Spread/Total sections)
+ * ✅ Columns: Matchup | Market | Pick | Line | Quantum | Book | SpectrumEV | Score | Stake %
  *
- * “Prism” column in UI = Quantum No-Vig odds (quantum_odds)
- * “Book” column in UI  = soft book odds (book_odds) + book name
- * EV% = ev_pct
- * Score = confidence_score
- * Units = bet_fraction * 100 as “% bankroll” OR convert to units if you want (see comment)
+ * UI rules requested:
+ * - "Quantum" header = /public/logos/Quantum.png
+ * - "EV%" header = /public/logos/SpectrumEV.png
+ * - Stake % renamed (was %) to be clearer
+ * - Row behavior:
+ *    • h2h/spreads: show a single row with the pick team
+ *    • totals: show matchup (both teams) as the pick label
  */
 
 type MarketKey = "h2h" | "spreads" | "totals";
 type SideKey = "home" | "away" | "over" | "under";
 
 type EvPlayRow = {
-  id?: string;
   run_id: string;
   event_id: string;
   commence_time: string | null;
@@ -53,36 +49,13 @@ type EvPlayRow = {
   created_at?: string;
 };
 
-type EventGroup = {
-  event_id: string;
-  commence_time: string | null;
-  matchup: string | null;
-  awayTeam: string;
-  homeTeam: string;
-  awayRowPlays: MarketBucketPlays;
-  homeRowPlays: MarketBucketPlays;
-};
-
-type CellPlay = {
-  market: MarketKey;
-  side: SideKey;
-  line: number | null;
-  bookmaker: string;
-  book_odds: number;
-  quantum_odds: number;
-  ev_pct: number;
-  confidence_score: number;
-  confidence_tier: string;
-  bet_fraction: number;
-};
-
-type MarketBucketPlays = {
-  ml?: CellPlay | null;     // h2h
-  spread?: CellPlay | null;  // spreads
-  total?: CellPlay | null;   // totals
-};
-
-type SportKey = "basketball_ncaab" | "basketball_nba" | "football_nfl" | "football_ncaaf" | "hockey_nhl" | "baseball_mlb";
+type SportKey =
+  | "basketball_ncaab"
+  | "basketball_nba"
+  | "football_nfl"
+  | "football_ncaaf"
+  | "hockey_nhl"
+  | "baseball_mlb";
 
 function fmtTimeCentral(iso: string | null) {
   if (!iso) return "—";
@@ -110,15 +83,6 @@ function american(odds: number) {
   return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
 }
 
-function fmtLine(market: MarketKey, side: SideKey, line: number | null) {
-  if (market === "h2h") return "";
-  if (line == null || !Number.isFinite(line)) return "";
-  const sign = line > 0 ? "+" : "";
-  if (market === "spreads") return `${sign}${line}`;
-  // totals: just show the number (Over/Under label is in header)
-  return `${line}`;
-}
-
 function bookLabel(bookmaker: string) {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings") return "DK";
@@ -126,69 +90,46 @@ function bookLabel(bookmaker: string) {
   if (b === "betmgm") return "MGM";
   if (b === "betonline" || b === "betonlineag") return "BOL";
   if (b === "pinnacle") return "PIN";
-  return bookmaker?.toUpperCase?.() ?? "BOOK";
+  return (bookmaker || "BOOK").toUpperCase();
 }
 
 function bookColorClass(bookmaker: string) {
   const b = (bookmaker || "").toLowerCase();
-  // Match your brand rules: DK green, FD blue, MGM gold (you previously used these)
   if (b === "draftkings") return "text-green-400";
   if (b === "fanduel") return "text-blue-400";
   if (b === "betmgm") return "text-[#d4af37]";
   return "text-[#b0b0b0]";
 }
 
-function clamp0(x: number) {
-  return Math.max(0, x);
+function marketLabel(market: MarketKey) {
+  if (market === "h2h") return "Moneyline";
+  if (market === "spreads") return "Spread";
+  return "Total";
+}
+
+function sideLabelForDisplay(market: MarketKey, side: SideKey) {
+  if (market === "totals") return side === "over" ? "Over" : "Under";
+  return side === "home" ? "Home" : "Away";
+}
+
+function fmtLine(market: MarketKey, line: number | null) {
+  if (market === "h2h") return "—";
+  if (line == null || !Number.isFinite(line)) return "—";
+  if (market === "spreads") return `${line > 0 ? "+" : ""}${line}`;
+  // totals: show just number (Over/Under is separate)
+  return `${line}`;
 }
 
 function sumBetFraction(rows: EvPlayRow[]) {
-  return rows.reduce((a, r) => a + clamp0(Number(r.bet_fraction ?? 0)), 0);
-}
-
-/**
- * Choose the best play for a bucket:
- * - primary: highest EV%
- * - tie: higher confidence_score
- */
-function pickBest(rows: EvPlayRow[]): EvPlayRow | null {
-  if (!rows.length) return null;
-  return rows
-    .slice()
-    .sort((a, b) => {
-      const ev = (b.ev_pct ?? 0) - (a.ev_pct ?? 0);
-      if (Math.abs(ev) > 1e-9) return ev;
-      return (b.confidence_score ?? 0) - (a.confidence_score ?? 0);
-    })[0];
-}
-
-/**
- * Derive “away/home team names” from:
- * - matchup: "Away @ Home" preferred
- * - fallback: ev_plays.team (for h2h it should be team name)
- */
-function parseMatchup(matchup: string | null): { away: string; home: string } {
-  const m = (matchup || "").trim();
-  // Most common: "AWAY @ HOME"
-  if (m.includes("@")) {
-    const [a, h] = m.split("@").map((s) => s.trim());
-    if (a && h) return { away: a, home: h };
-  }
-  // Also allow "AWAY vs HOME"
-  if (m.toLowerCase().includes("vs")) {
-    const parts = m.split(/vs\.?/i).map((s) => s.trim());
-    if (parts.length === 2 && parts[0] && parts[1]) return { away: parts[0], home: parts[1] };
-  }
-  return { away: "Away", home: "Home" };
+  return rows.reduce((a, r) => a + Math.max(0, Number(r.bet_fraction ?? 0)), 0);
 }
 
 export function ModelScreen() {
   const [sportKey, setSportKey] = useState<SportKey>("basketball_ncaab");
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<EvPlayRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // ✅ Load EV plays (latest snapshot; table is cleared each run in your pipeline)
   useEffect(() => {
     let mounted = true;
 
@@ -196,18 +137,17 @@ export function ModelScreen() {
       setLoading(true);
       setError(null);
 
-      // We don’t have sport_key in ev_plays in your script.
-      // So we filter by joining to events? (cheap: pull event_ids from events by sport_key + future cutoff)
-      // If you add sport_key to ev_plays later, you can filter directly.
-      const now = new Date().toISOString();
+      const nowIso = new Date().toISOString();
 
+      // Pull ev_plays for future events, then filter by sport via events table
       const { data: ev, error: evErr } = await supabase
         .from("ev_plays")
         .select(
           "run_id,event_id,commence_time,matchup,team,market,side,line,bookmaker,book_odds,quantum_prob,quantum_odds,ev_pct,confidence_score,confidence_tier,kelly_fraction,bet_fraction,created_at"
         )
-        .gte("commence_time", now) // future games
-        .order("commence_time", { ascending: true });
+        .gte("commence_time", nowIso)
+        .order("commence_time", { ascending: true })
+        .order("ev_pct", { ascending: false });
 
       if (!mounted) return;
 
@@ -218,9 +158,9 @@ export function ModelScreen() {
         return;
       }
 
-      // Filter to sport by looking up event_ids from events (only if you want sport dropdown behavior)
-      const eventIds = Array.from(new Set((ev ?? []).map((r) => r.event_id).filter(Boolean)));
+      const evRows = (ev ?? []) as EvPlayRow[];
 
+      const eventIds = Array.from(new Set(evRows.map((r) => r.event_id).filter(Boolean)));
       if (!eventIds.length) {
         setRows([]);
         setLoading(false);
@@ -235,8 +175,8 @@ export function ModelScreen() {
       if (!mounted) return;
 
       if (eventsErr) {
-        // still show without sport filtering
-        setRows((ev ?? []) as EvPlayRow[]);
+        // if events lookup fails, still show something
+        setRows(evRows);
         setLoading(false);
         return;
       }
@@ -244,29 +184,24 @@ export function ModelScreen() {
       const sportMap = new Map<string, string>();
       for (const e of events ?? []) sportMap.set(e.event_id, e.sport_key);
 
-      const filtered = (ev ?? []).filter((r) => sportMap.get(r.event_id) === sportKey) as EvPlayRow[];
+      const filtered = evRows.filter((r) => sportMap.get(r.event_id) === sportKey);
 
       setRows(filtered);
       setLoading(false);
     }
 
     load();
-
     return () => {
       mounted = false;
     };
   }, [sportKey]);
 
-  const grouped = useMemo(() => buildEventGroups(rows), [rows]);
-
   const updatedText = useMemo(() => {
-    // If you want "Updated X" use max(created_at)
     const latest = rows
       .map((r) => r.created_at)
       .filter(Boolean)
       .sort()
       .slice(-1)[0];
-
     if (!latest) return "Updated —";
     const d = new Date(latest);
     const t = d.toLocaleTimeString("en-US", {
@@ -277,10 +212,7 @@ export function ModelScreen() {
     return `Updated ${t} CT`;
   }, [rows]);
 
-  const totalBankrollPct = useMemo(() => {
-    // bet_fraction is fraction of bankroll. Display as % bankroll.
-    return sumBetFraction(rows) * 100;
-  }, [rows]);
+  const totalStakePct = useMemo(() => sumBetFraction(rows) * 100, [rows]);
 
   return (
     <div className="space-y-4">
@@ -289,7 +221,7 @@ export function ModelScreen() {
         <div>
           <h2 className="text-xl text-white mb-1">Model Picks</h2>
           <p className="text-xs text-[#808080]">
-            {grouped.length} games · {updatedText}
+            {rows.length} plays · {updatedText}
           </p>
         </div>
 
@@ -308,7 +240,7 @@ export function ModelScreen() {
           </select>
 
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Total %: <span className="text-[#d4af37]">{totalBankrollPct.toFixed(2)}%</span>
+            Total Stake: <span className="text-[#d4af37]">{totalStakePct.toFixed(2)}%</span>
           </div>
         </div>
       </div>
@@ -325,79 +257,57 @@ export function ModelScreen() {
         </div>
       )}
 
-      {/* Main Table */}
+      {/* Table */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[240px]">
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[320px]">
                   Matchup
                 </th>
 
-                <th colSpan={5} className="text-center p-3 text-[#d4af37] border-l border-[#2a2a2a]">
-                  MONEYLINE
-                </th>
-                <th colSpan={5} className="text-center p-3 text-[#d4af37] border-l border-[#2a2a2a]">
-                  SPREAD
-                </th>
-                <th colSpan={5} className="text-center p-3 text-[#d4af37] border-l border-[#2a2a2a]">
-                  TOTAL
-                </th>
-              </tr>
+                <th className="text-left p-3 text-[#808080] min-w-[110px]">Market</th>
+                <th className="text-left p-3 text-[#808080] min-w-[190px]">Pick</th>
+                <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
 
-              <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a] text-[10px]">
-                <th className="sticky left-0 bg-[#0a0a0a] z-10" />
-
-                {/* ML */}
-                <th className="text-center p-2 text-[#606060] border-l border-[#2a2a2a]">Quantum</th>
-                <th className="text-center p-2 text-[#606060]">Book</th>
-                <th className="text-center p-2 text-[#606060]">EV%</th>
-                <th className="text-center p-2 text-[#606060]">Score</th>
-                <th className="text-center p-2 text-[#606060]">%</th>
-
-                {/* Spread */}
-                <th className="text-center p-2 text-[#606060] border-l border-[#2a2a2a]">Quantum</th>
-                <th className="text-center p-2 text-[#606060]">Book</th>
-                <th className="text-center p-2 text-[#606060]">EV%</th>
-                <th className="text-center p-2 text-[#606060]">Score</th>
-                <th className="text-center p-2 text-[#606060]">%</th>
-
-                {/* Total */}
-                <th className="text-center p-2 text-[#606060] border-l border-[#2a2a2a]">Quantum</th>
-                <th className="text-center p-2 text-[#606060]">Book</th>
-                <th className="text-center p-2 text-[#606060]">EV%</th>
-                <th className="text-center p-2 text-[#606060]">Score</th>
-                <th className="text-center p-2 text-[#606060]">%</th>
-              </tr>
-
-              {/* Label row for Away/Home/Over/Under */}
-              <tr className="bg-[#070707] border-b border-[#2a2a2a] text-[10px]">
-                <th className="sticky left-0 bg-[#070707] z-10 p-2 text-[#606060]">
-                  {/* blank */}
+                <th className="text-center p-3 text-[#808080] min-w-[110px]">
+                  <div className="flex items-center justify-center">
+                    <img
+                      src="/logos/Quantum.png"
+                      alt="Quantum"
+                      className="h-4 opacity-90"
+                      draggable={false}
+                    />
+                  </div>
                 </th>
 
-                {/* ML labels */}
-                <th colSpan={5} className="text-center p-2 border-l border-[#2a2a2a] text-[#606060]">
-                  Away / Home
+                <th className="text-center p-3 text-[#808080] min-w-[120px]">Book</th>
+
+                <th className="text-center p-3 text-[#808080] min-w-[110px]">
+                  <div className="flex items-center justify-center">
+                    <img
+                      src="/logos/SpectrumEV.png"
+                      alt="SpectrumEV"
+                      className="h-4 opacity-90"
+                      draggable={false}
+                    />
+                  </div>
                 </th>
-                <th colSpan={5} className="text-center p-2 border-l border-[#2a2a2a] text-[#606060]">
-                  Away / Home
-                </th>
-                <th colSpan={5} className="text-center p-2 border-l border-[#2a2a2a] text-[#606060]">
-                  Over / Under
-                </th>
+
+                <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
+                <th className="text-center p-3 text-[#808080] min-w-[100px]">Stake %</th>
               </tr>
             </thead>
 
             <tbody className="divide-y divide-[#1a1a1a]">
-              {grouped.map((g) => (
-                <EventTwoRow key={g.event_id} group={g} />
+              {rows.map((r) => (
+                <PlayRow key={`${r.event_id}|${r.market}|${r.side}|${r.bookmaker}|${r.line ?? "x"}`} row={r} />
               ))}
 
-              {!loading && !grouped.length && (
+              {!loading && !rows.length && (
                 <tr>
-                  <td colSpan={16} className="p-6 text-center text-xs text-[#808080]">
+                  <td colSpan={9} className="p-6 text-center text-xs text-[#808080]">
                     No positive EV plays found for this sport.
                   </td>
                 </tr>
@@ -414,155 +324,103 @@ export function ModelScreen() {
           <span>Positive EV (ev_plays)</span>
         </div>
         <div>
-          <span className="text-[#808080]">Score:</span> confidence_score (0-100)
-        </div>
-        <div>
-          <span className="text-[#808080]">%:</span> bet_fraction as % of bankroll (fractional Kelly)
+          <span className="text-[#808080]">Stake %:</span> fractional Kelly (bet_fraction × 100)
         </div>
       </div>
     </div>
   );
 }
 
-/* =========================================================
-   RENDER: 2 ROWS PER EVENT
-========================================================= */
+function PlayRow({ row }: { row: EvPlayRow }) {
+  const isTotal = row.market === "totals";
+  const pickLabel = isTotal
+    ? (row.matchup ?? (row.team || "Total"))
+    : (row.team ?? "—");
 
-function EventTwoRow({ group }: { group: EventGroup }) {
-  const { awayTeam, homeTeam, commence_time, matchup } = group;
-
-  return (
-    <>
-      {/* Away row */}
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[240px]">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="text-white">
-                <span className="text-[#b0b0b0]">{awayTeam}</span>
-                <span className="text-[#606060]"> @ </span>
-                <span className="text-white">{homeTeam}</span>
-              </div>
-              <div className="text-[10px] text-[#606060] mt-0.5">
-                {fmtDateCentral(commence_time)} · {fmtTimeCentral(commence_time)}
-                {matchup ? <span className="text-[#404040]"> · {matchup}</span> : null}
-              </div>
-            </div>
-            <div className="text-[10px] text-[#606060] mt-0.5 whitespace-nowrap">Away</div>
-          </div>
-        </td>
-
-        {/* ML */}
-        <CellBlock play={group.awayRowPlays.ml ?? null} borderLeft />
-        {/* Spread */}
-        <CellBlock play={group.awayRowPlays.spread ?? null} borderLeft />
-        {/* Total */}
-        <CellBlock play={group.awayRowPlays.total ?? null} borderLeft />
-      </tr>
-
-      {/* Home row */}
-      <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[240px]">
-          <div className="flex items-start justify-between gap-2">
-            <div className="text-white">{homeTeam}</div>
-            <div className="text-[10px] text-[#606060] mt-0.5 whitespace-nowrap">Home</div>
-          </div>
-        </td>
-
-        {/* ML */}
-        <CellBlock play={group.homeRowPlays.ml ?? null} borderLeft />
-        {/* Spread */}
-        <CellBlock play={group.homeRowPlays.spread ?? null} borderLeft />
-        {/* Total */}
-        <CellBlock play={group.homeRowPlays.total ?? null} borderLeft />
-      </tr>
-    </>
-  );
-}
-
-/**
- * Each CellBlock renders 5 columns: Quantum / Book / EV / Score / %
- * (Like your existing structure)
- */
-function CellBlock({ play, borderLeft }: { play: CellPlay | null; borderLeft?: boolean }) {
-  const faded = !play;
+  const sideTxt = sideLabelForDisplay(row.market, row.side);
 
   return (
-    <>
-      <td className={`text-center p-3 ${borderLeft ? "border-l border-[#2a2a2a]" : ""} ${faded ? "opacity-40" : ""}`}>
-        {play ? <QuantumValue play={play} /> : <Dash />}
+    <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
+      {/* Matchup */}
+      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[320px]">
+        <div className="text-white">
+          {row.matchup ?? "—"}
+          <span className="text-[#606060]"> · </span>
+          <span className="text-[#b0b0b0]">{fmtDateCentral(row.commence_time)}</span>
+          <span className="text-[#606060]"> </span>
+          <span className="text-[#b0b0b0]">{fmtTimeCentral(row.commence_time)}</span>
+        </div>
+        <div className="text-[10px] text-[#606060] mt-0.5">
+          Event: <span className="text-[#404040]">{row.event_id}</span>
+        </div>
       </td>
 
-      <td className={`text-center p-3 ${faded ? "opacity-40" : ""}`}>
-        {play ? <BookValue play={play} /> : <Dash />}
+      {/* Market */}
+      <td className="p-3 text-left">
+        <div className="text-white">{marketLabel(row.market)}</div>
+        <div className="text-[10px] text-[#606060] mt-0.5">{sideTxt}</div>
       </td>
 
-      <td className={`text-center p-3 ${faded ? "opacity-40" : ""}`}>
-        {play ? <EVValue value={play.ev_pct} /> : <Dash />}
+      {/* Pick */}
+      <td className="p-3 text-left">
+        <div className="text-white">{pickLabel}</div>
       </td>
 
-      <td className={`text-center p-3 ${faded ? "opacity-40" : ""}`}>
-        {play ? <ScoreValue value={play.confidence_score} tier={play.confidence_tier} /> : <Dash />}
+      {/* Line */}
+      <td className="p-3 text-center">
+        <div className="text-white">{fmtLine(row.market, row.line)}</div>
       </td>
 
-      <td className={`text-center p-3 ${faded ? "opacity-40" : ""}`}>
-        {play ? <PctValue frac={play.bet_fraction} /> : <Dash />}
+      {/* Quantum */}
+      <td className="p-3 text-center">
+        <div className="text-white font-semibold">{american(row.quantum_odds)}</div>
       </td>
-    </>
-  );
-}
 
-function Dash() {
-  return <div className="text-[#404040]">—</div>;
-}
+      {/* Book */}
+      <td className="p-3 text-center">
+        <div className={`font-semibold ${bookColorClass(row.bookmaker)}`}>
+          {american(row.book_odds)}{" "}
+          <span className="text-[10px] text-[#606060]">({bookLabel(row.bookmaker)})</span>
+        </div>
+      </td>
 
-function QuantumValue({ play }: { play: CellPlay }) {
-  const lineStr = fmtLine(play.market, play.side, play.line);
-  return (
-    <div className="text-white leading-tight">
-      <div className="font-semibold">{american(play.quantum_odds)}</div>
-      {lineStr ? <div className="text-[10px] text-[#606060] mt-0.5">{lineStr}</div> : null}
-    </div>
-  );
-}
+      {/* SpectrumEV */}
+      <td className="p-3 text-center">
+        <div className="text-[#d4af37]">
+          {row.ev_pct > 0 ? "+" : ""}
+          {Number(row.ev_pct).toFixed(1)}%
+        </div>
+      </td>
 
-function BookValue({ play }: { play: CellPlay }) {
-  const lineStr = fmtLine(play.market, play.side, play.line);
-  return (
-    <div className="leading-tight">
-      <div className={`font-semibold ${bookColorClass(play.bookmaker)}`}>
-        {american(play.book_odds)} <span className="text-[10px] text-[#606060]">({bookLabel(play.bookmaker)})</span>
-      </div>
-      {lineStr ? <div className="text-[10px] text-[#606060] mt-0.5">{lineStr}</div> : null}
-    </div>
-  );
-}
+      {/* Score */}
+      <td className="p-3 text-center">
+        <ScoreValue value={row.confidence_score} tier={row.confidence_tier} />
+      </td>
 
-function EVValue({ value }: { value: number }) {
-  const isPositive = value > 0;
-  return (
-    <div className={`${isPositive ? "text-[#d4af37]" : "text-[#808080]"}`}>
-      {value > 0 ? "+" : ""}
-      {value.toFixed(1)}%
-    </div>
+      {/* Stake % */}
+      <td className="p-3 text-center">
+        <StakeValue frac={row.bet_fraction} />
+      </td>
+    </tr>
   );
 }
 
 function ScoreValue({ value, tier }: { value: number; tier?: string }) {
+  const v = Number(value ?? 0);
   let color = "text-[#606060]";
-  if (value >= 85) color = "text-[#d4af37]";
-  else if (value >= 70) color = "text-white";
+  if (v >= 85) color = "text-[#d4af37]";
+  else if (v >= 70) color = "text-white";
 
   return (
     <div className={color}>
-      {Math.round(value)}
+      {Math.round(v)}
       {tier ? <span className="text-[10px] text-[#606060]"> {tier}</span> : null}
     </div>
   );
 }
 
-function PctValue({ frac }: { frac: number }) {
-  const pct = Math.max(0, frac) * 100;
+function StakeValue({ frac }: { frac: number }) {
+  const pct = Math.max(0, Number(frac ?? 0)) * 100;
   if (pct <= 0) return <div className="text-[#404040]">—</div>;
 
   return (
@@ -570,86 +428,4 @@ function PctValue({ frac }: { frac: number }) {
       {pct.toFixed(2)}%
     </div>
   );
-}
-
-/* =========================================================
-   GROUPING HELPERS
-========================================================= */
-
-function buildEventGroups(rows: EvPlayRow[]): EventGroup[] {
-  // group by event_id
-  const byEvent = new Map<string, EvPlayRow[]>();
-  for (const r of rows) {
-    const eid = r.event_id;
-    if (!eid) continue;
-    const arr = byEvent.get(eid) ?? [];
-    arr.push(r);
-    byEvent.set(eid, arr);
-  }
-
-  const groups: EventGroup[] = [];
-
-  for (const [event_id, evs] of byEvent.entries()) {
-    // determine matchup + teams
-    const first = evs[0];
-    const commence_time = first.commence_time ?? null;
-    const matchup = first.matchup ?? null;
-
-    const { away, home } = parseMatchup(matchup);
-
-    // Split candidates per row (away/home) and per market bucket
-    const awayML = pickBest(evs.filter((r) => r.market === "h2h" && r.side === "away"));
-    const homeML = pickBest(evs.filter((r) => r.market === "h2h" && r.side === "home"));
-
-    const awaySpread = pickBest(evs.filter((r) => r.market === "spreads" && r.side === "away"));
-    const homeSpread = pickBest(evs.filter((r) => r.market === "spreads" && r.side === "home"));
-
-    const overTotal = pickBest(evs.filter((r) => r.market === "totals" && r.side === "over"));
-    const underTotal = pickBest(evs.filter((r) => r.market === "totals" && r.side === "under"));
-
-    groups.push({
-      event_id,
-      commence_time,
-      matchup,
-
-      awayTeam: away,
-      homeTeam: home,
-
-      awayRowPlays: {
-        ml: awayML ? toCell(awayML) : null,
-        spread: awaySpread ? toCell(awaySpread) : null,
-        total: overTotal ? toCell(overTotal) : null, // totals are OVER on away row
-      },
-
-      homeRowPlays: {
-        ml: homeML ? toCell(homeML) : null,
-        spread: homeSpread ? toCell(homeSpread) : null,
-        total: underTotal ? toCell(underTotal) : null, // totals are UNDER on home row
-      },
-    });
-  }
-
-  // sort by time
-  groups.sort((a, b) => {
-    const ta = a.commence_time ? new Date(a.commence_time).getTime() : 0;
-    const tb = b.commence_time ? new Date(b.commence_time).getTime() : 0;
-    return ta - tb;
-  });
-
-  return groups;
-}
-
-function toCell(r: EvPlayRow): CellPlay {
-  return {
-    market: r.market,
-    side: r.side,
-    line: r.line ?? null,
-    bookmaker: r.bookmaker,
-    book_odds: r.book_odds,
-    quantum_odds: r.quantum_odds,
-    ev_pct: r.ev_pct,
-    confidence_score: r.confidence_score,
-    confidence_tier: r.confidence_tier,
-    bet_fraction: r.bet_fraction,
-  };
 }
