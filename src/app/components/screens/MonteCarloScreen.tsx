@@ -2,9 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MONTE CARLO SCREEN (RESPONSIVE)
- * - Mobile (<md): Card layout (friendly, no sticky table issues)
- * - Desktop (md+): OddsScreen-style two-row table with sticky matchup cell
+ * MONTE CARLO SCREEN — FULL REWRITE
+ *
+ * Default view (clean):
+ * - Shows matchup (two rows per game) with team logos
+ * - Shows projected score right next to team name
+ * - Winner team name is green
+ * - Shows away/home win prob in small text next to team name
+ * - "Show Details" dropdown reveals full projection + consensus metrics (like OddsScreen)
+ *
+ * Responsive:
+ * - Mobile: card layout with collapsible details
+ * - Desktop: OddsScreen-style table; details collapsible per event
  */
 
 type MonteCarloRun = {
@@ -32,6 +41,10 @@ type MonteCarloResultRow = {
 
   over_prob: number | null;
   under_prob: number | null;
+
+  // Optional: if these exist in your table, we’ll show them
+  home_win_prob?: number | null;
+  away_win_prob?: number | null;
 };
 
 type TeamMapLogoRow = {
@@ -73,12 +86,14 @@ type TeamRow = {
   logoUrl: string | null;
 
   projPoints: number;
-  projMargin: number; // team-view
+  projMarginTeam: number; // team-view
   coverProbTeam: number | null;
 
   projTotal: number; // game-view
   overProb: number | null;
   underProb: number | null;
+
+  winProbTeam: number | null;
 
   consSpreadLineTeam: number | null;
   consSpreadOddsTeam: number | null;
@@ -95,6 +110,9 @@ type EventBundle = {
   commenceTime: string | null;
   away: TeamRow;
   home: TeamRow;
+  // for convenience
+  projTotal: number;
+  projMarginHome: number;
 };
 
 /** ---------- Side normalization for odds_snapshot consensus ---------- */
@@ -115,85 +133,12 @@ function normalizeSide(raw: string | null): "home" | "away" | "over" | "under" |
   return null;
 }
 
-/** ---------- OddsScreen-like styling constants ---------- */
+/** ---------- Styling constants (OddsScreen vibe) ---------- */
 const HDR_LEFT_BG = "bg-[#0a0a0a]";
 const HDR_TEXT = "text-[#cfcfcf]";
 const HDR_BORDER = "border-[#2a2a2a]";
 
-const COL_MATCHUP = 440;
-const COL_POINTS = 140;
-const COL_MARGIN = 190;
-const COL_TOTAL = 170;
-const COL_CONS_MARGIN = 210;
-const COL_CONS_TOTAL = 210;
-
-/** ---------- Matchup bits (OddsScreen style) ---------- */
-function MiniTeamRow({
-  team,
-  logoUrl,
-  side,
-}: {
-  team: string;
-  logoUrl: string | null;
-  side: "AWAY" | "HOME";
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      {logoUrl ? (
-        <img
-          src={logoUrl}
-          alt={`${team} logo`}
-          className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
-      ) : (
-        <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
-      )}
-
-      <div className="leading-tight">
-        <div className="text-white font-extrabold text-[16px]">{team}</div>
-        <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
-      </div>
-    </div>
-  );
-}
-
-/** ---------- Mobile team row (slightly tighter) ---------- */
-function MiniTeamRowMobile({
-  team,
-  logoUrl,
-  side,
-}: {
-  team: string;
-  logoUrl: string | null;
-  side: "AWAY" | "HOME";
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      {logoUrl ? (
-        <img
-          src={logoUrl}
-          alt={`${team} logo`}
-          className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
-      ) : (
-        <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
-      )}
-
-      <div className="leading-tight min-w-0">
-        <div className="text-white font-extrabold text-[15px] truncate">{team}</div>
-        <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
-      </div>
-    </div>
-  );
-}
+const COL_MATCHUP = 520;
 
 /** ---------- Formatters ---------- */
 function formatTs(ts: string) {
@@ -215,7 +160,7 @@ function formatAmerican(odds: number) {
 }
 
 // expects prob as 0..1 -> "55.5%"
-function formatPct(prob01: number) {
+function formatPct(prob01: number | null) {
   const p = Number(prob01);
   if (!Number.isFinite(p)) return "—";
   return `${(p * 100).toFixed(1)}%`;
@@ -251,323 +196,200 @@ function medianOrNull(nums: number[]): number | null {
   return (arr[mid - 1] + arr[mid]) / 2;
 }
 
-/** ---------- Desktop metric cell ---------- */
-function MetricCell({ value }: { value: React.ReactNode }) {
+/** ---------- Winner highlight helpers ---------- */
+function TeamNameWithScore({
+  name,
+  score,
+  winProb,
+  isWinner,
+}: {
+  name: string;
+  score: number;
+  winProb: number | null;
+  isWinner: boolean;
+}) {
   return (
-    <td className="p-3 text-center tabular-nums font-bold text-[13.5px] text-white">
-      {value}
-    </td>
+    <div className="min-w-0">
+      <div className="flex items-baseline gap-2 min-w-0">
+        <div className={["font-extrabold text-[16px] truncate", isWinner ? "text-green-400" : "text-white"].join(" ")}>
+          {name}
+        </div>
+        <div className={["font-extrabold tabular-nums text-[16px] shrink-0", isWinner ? "text-green-400" : "text-white"].join(" ")}>
+          {score.toFixed(1)}
+        </div>
+      </div>
+      <div className="text-[11px] text-[#7a7a7a] font-semibold">
+        Win: <span className="text-[#bdbdbd]">{formatPct(winProb)}</span>
+      </div>
+    </div>
   );
 }
 
-/** ---------- Desktop two-row event renderer (OddsScreen style) ---------- */
-function EventTwoRows({ ev }: { ev: EventBundle }) {
-  const away = ev.away;
-  const home = ev.home;
+function LogoBox({ team, url, size = 48 }: { team: string; url: string | null; size?: number }) {
+  if (!url) {
+    return <div style={{ width: size, height: size }} className="rounded-md bg-white border border-[#e5e5e5]" />;
+  }
+  return (
+    <img
+      src={url}
+      alt={`${team} logo`}
+      style={{ width: size, height: size }}
+      className="rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+      loading="lazy"
+      onError={(e) => {
+        (e.currentTarget as HTMLImageElement).style.display = "none";
+      }}
+    />
+  );
+}
 
+/** ---------- Detail dropdown (shared) ---------- */
+function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   const awayTotalLabel = `o${away.projTotal.toFixed(1)}`;
   const homeTotalLabel = `u${home.projTotal.toFixed(1)}`;
 
+  const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
+  const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
+
+  const consSpreadAway =
+    away.consSpreadLineTeam == null
+      ? "—"
+      : `${away.consSpreadLineTeam > 0 ? "+" : ""}${away.consSpreadLineTeam.toFixed(1)} (${away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)})`;
+
+  const consSpreadHome =
+    home.consSpreadLineTeam == null
+      ? "—"
+      : `${home.consSpreadLineTeam > 0 ? "+" : ""}${home.consSpreadLineTeam.toFixed(1)} (${home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)})`;
+
+  const consTotalOver =
+    away.consTotalLine == null
+      ? "—"
+      : `o${away.consTotalLine.toFixed(1)} (${away.consTotalOverOdds == null ? "—" : formatAmerican(away.consTotalOverOdds)})`;
+
+  const consTotalUnder =
+    home.consTotalLine == null
+      ? "—"
+      : `u${home.consTotalLine.toFixed(1)} (${home.consTotalUnderOdds == null ? "—" : formatAmerican(home.consTotalUnderOdds)})`;
+
+  const row = (label: string, a: React.ReactNode, h: React.ReactNode) => (
+    <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414] last:border-b-0">
+      <div className="text-[11px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
+      <div className="text-[12px] text-white font-bold tabular-nums text-right">{a}</div>
+      <div className="text-[12px] text-white font-bold tabular-nums text-right">{h}</div>
+    </div>
+  );
+
+  return (
+    <div className="rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
+      <div className="px-4 py-2 border-b border-[#141414] text-[12px] text-white font-extrabold">Details</div>
+      <div className="px-4">
+        {row("Proj Margin", <>{projMarginAway} <span className="text-[#808080] font-semibold">({formatPct(away.coverProbTeam)})</span></>, <>{projMarginHome} <span className="text-[#808080] font-semibold">({formatPct(home.coverProbTeam)})</span></>)}
+        {row("Proj Total", <>{awayTotalLabel} <span className="text-[#808080] font-semibold">({formatPct(away.overProb)})</span></>, <>{homeTotalLabel} <span className="text-[#808080] font-semibold">({formatPct(home.underProb)})</span></>)}
+        {row("Cons Spread", consSpreadAway, consSpreadHome)}
+        {row("Cons Total", consTotalOver, consTotalUnder)}
+      </div>
+    </div>
+  );
+}
+
+/** ---------- Desktop renderer (two rows per event, dropdown details) ---------- */
+function EventTwoRows({
+  ev,
+  open,
+  onToggle,
+}: {
+  ev: EventBundle;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const away = ev.away;
+  const home = ev.home;
+
   return (
     <>
-      {/* AWAY row */}
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td
-          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
-          rowSpan={2}
-        >
+        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-top", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3 flex items-center justify-between gap-3">
             <span>{away.commenceTime ? formatStartStamp(away.commenceTime) : "TBD"}</span>
+            <button
+              type="button"
+              onClick={onToggle}
+              className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+            >
+              {open ? "Hide Details" : "Show Details"}
+            </button>
           </div>
 
           <div className="space-y-3">
-            <MiniTeamRow team={away.teamName} logoUrl={away.logoUrl} side="AWAY" />
-            <MiniTeamRow team={home.teamName} logoUrl={home.logoUrl} side="HOME" />
+            {/* away line */}
+            <div className="flex items-center gap-3">
+              <LogoBox team={away.teamName} url={away.logoUrl} size={48} />
+              <TeamNameWithScore name={away.teamName} score={away.projPoints} winProb={away.winProbTeam} isWinner={away.isProjectedWinner} />
+              <div className="ml-auto text-[11px] text-[#7a7a7a] font-semibold">AWAY</div>
+            </div>
+
+            {/* home line */}
+            <div className="flex items-center gap-3">
+              <LogoBox team={home.teamName} url={home.logoUrl} size={48} />
+              <TeamNameWithScore name={home.teamName} score={home.projPoints} winProb={home.winProbTeam} isWinner={home.isProjectedWinner} />
+              <div className="ml-auto text-[11px] text-[#7a7a7a] font-semibold">HOME</div>
+            </div>
+
+            {open && <div className="pt-2"><DetailsBlock away={away} home={home} /></div>}
           </div>
         </td>
-
-        <MetricCell
-          value={
-            <span className={away.isProjectedWinner ? "text-green-400 font-extrabold" : "text-white"}>
-              {away.projPoints.toFixed(1)}
-            </span>
-          }
-        />
-
-        <MetricCell
-          value={
-            <>
-              {away.projMargin > 0 ? "+" : ""}
-              {away.projMargin.toFixed(1)}{" "}
-              <span className="text-[#808080] font-semibold">
-                ({away.coverProbTeam == null ? "—" : formatPct(away.coverProbTeam)})
-              </span>
-            </>
-          }
-        />
-
-        <MetricCell
-          value={
-            <>
-              {awayTotalLabel}{" "}
-              <span className="text-[#808080] font-semibold">
-                ({away.overProb == null ? "—" : formatPct(away.overProb)})
-              </span>
-            </>
-          }
-        />
-
-        <MetricCell
-          value={
-            away.consSpreadLineTeam == null ? (
-              <span className="text-[#3a3a3a]">—</span>
-            ) : (
-              <>
-                {away.consSpreadLineTeam > 0 ? "+" : ""}
-                {away.consSpreadLineTeam.toFixed(1)}{" "}
-                <span className="text-[#808080] font-semibold">
-                  ({away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)})
-                </span>
-              </>
-            )
-          }
-        />
-
-        <MetricCell
-          value={
-            away.consTotalLine == null ? (
-              <span className="text-[#3a3a3a]">—</span>
-            ) : (
-              <>
-                o{away.consTotalLine.toFixed(1)}{" "}
-                <span className="text-[#808080] font-semibold">
-                  ({away.consTotalOverOdds == null ? "—" : formatAmerican(away.consTotalOverOdds)})
-                </span>
-              </>
-            )
-          }
-        />
       </tr>
 
-      {/* HOME row */}
-      <tr className={["hover:bg-[#0f0f0f]/50 transition-colors", `border-t border-[#1a1a1a]/60 border-b-2 ${HDR_BORDER}`].join(" ")}>
-        <MetricCell
-          value={
-            <span className={home.isProjectedWinner ? "text-green-400 font-extrabold" : "text-white"}>
-              {home.projPoints.toFixed(1)}
-            </span>
-          }
-        />
-
-        <MetricCell
-          value={
-            <>
-              {home.projMargin > 0 ? "+" : ""}
-              {home.projMargin.toFixed(1)}{" "}
-              <span className="text-[#808080] font-semibold">
-                ({home.coverProbTeam == null ? "—" : formatPct(home.coverProbTeam)})
-              </span>
-            </>
-          }
-        />
-
-        <MetricCell
-          value={
-            <>
-              {homeTotalLabel}{" "}
-              <span className="text-[#808080] font-semibold">
-                ({home.underProb == null ? "—" : formatPct(home.underProb)})
-              </span>
-            </>
-          }
-        />
-
-        <MetricCell
-          value={
-            home.consSpreadLineTeam == null ? (
-              <span className="text-[#3a3a3a]">—</span>
-            ) : (
-              <>
-                {home.consSpreadLineTeam > 0 ? "+" : ""}
-                {home.consSpreadLineTeam.toFixed(1)}{" "}
-                <span className="text-[#808080] font-semibold">
-                  ({home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)})
-                </span>
-              </>
-            )
-          }
-        />
-
-        <MetricCell
-          value={
-            home.consTotalLine == null ? (
-              <span className="text-[#3a3a3a]">—</span>
-            ) : (
-              <>
-                u{home.consTotalLine.toFixed(1)}{" "}
-                <span className="text-[#808080] font-semibold">
-                  ({home.consTotalUnderOdds == null ? "—" : formatAmerican(home.consTotalUnderOdds)})
-                </span>
-              </>
-            )
-          }
-        />
+      {/* spacer row to keep 2-row rhythm like OddsScreen */}
+      <tr className={["border-b-2", HDR_BORDER].join(" ")}>
+        <td className="p-0" />
       </tr>
     </>
   );
 }
 
-/** ---------- Mobile card renderer ---------- */
-function MetricRowMobile({
-  label,
-  awayValue,
-  homeValue,
+/** ---------- Mobile card renderer (clean summary + dropdown details) ---------- */
+function EventCardMobile({
+  ev,
+  open,
+  onToggle,
 }: {
-  label: string;
-  awayValue: React.ReactNode;
-  homeValue: React.ReactNode;
+  ev: EventBundle;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  return (
-    <div className="grid grid-cols-3 gap-2 items-center">
-      <div className="text-[11px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">
-        {label}
-      </div>
-      <div className="text-[12px] text-white font-bold tabular-nums text-right">{awayValue}</div>
-      <div className="text-[12px] text-white font-bold tabular-nums text-right">{homeValue}</div>
-    </div>
-  );
-}
-
-function EventCardMobile({ ev }: { ev: EventBundle }) {
   const away = ev.away;
   const home = ev.home;
 
   const timeLabel = away.commenceTime ? formatStartStamp(away.commenceTime) : "TBD";
 
-  const awayScore = (
-    <span className={away.isProjectedWinner ? "text-green-400 font-extrabold" : "text-white"}>
-      {away.projPoints.toFixed(1)}
-    </span>
-  );
-  const homeScore = (
-    <span className={home.isProjectedWinner ? "text-green-400 font-extrabold" : "text-white"}>
-      {home.projPoints.toFixed(1)}
-    </span>
-  );
-
-  const awayMargin = (
-    <>
-      {away.projMargin > 0 ? "+" : ""}
-      {away.projMargin.toFixed(1)}{" "}
-      <span className="text-[#808080] font-semibold">
-        ({away.coverProbTeam == null ? "—" : formatPct(away.coverProbTeam)})
-      </span>
-    </>
-  );
-  const homeMargin = (
-    <>
-      {home.projMargin > 0 ? "+" : ""}
-      {home.projMargin.toFixed(1)}{" "}
-      <span className="text-[#808080] font-semibold">
-        ({home.coverProbTeam == null ? "—" : formatPct(home.coverProbTeam)})
-      </span>
-    </>
-  );
-
-  const awayTotal = (
-    <>
-      o{away.projTotal.toFixed(1)}{" "}
-      <span className="text-[#808080] font-semibold">
-        ({away.overProb == null ? "—" : formatPct(away.overProb)})
-      </span>
-    </>
-  );
-  const homeTotal = (
-    <>
-      u{home.projTotal.toFixed(1)}{" "}
-      <span className="text-[#808080] font-semibold">
-        ({home.underProb == null ? "—" : formatPct(home.underProb)})
-      </span>
-    </>
-  );
-
-  const awayConsSpread =
-    away.consSpreadLineTeam == null ? (
-      <span className="text-[#3a3a3a]">—</span>
-    ) : (
-      <>
-        {away.consSpreadLineTeam > 0 ? "+" : ""}
-        {away.consSpreadLineTeam.toFixed(1)}{" "}
-        <span className="text-[#808080] font-semibold">
-          ({away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)})
-        </span>
-      </>
-    );
-
-  const homeConsSpread =
-    home.consSpreadLineTeam == null ? (
-      <span className="text-[#3a3a3a]">—</span>
-    ) : (
-      <>
-        {home.consSpreadLineTeam > 0 ? "+" : ""}
-        {home.consSpreadLineTeam.toFixed(1)}{" "}
-        <span className="text-[#808080] font-semibold">
-          ({home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)})
-        </span>
-      </>
-    );
-
-  const awayConsTotal =
-    away.consTotalLine == null ? (
-      <span className="text-[#3a3a3a]">—</span>
-    ) : (
-      <>
-        o{away.consTotalLine.toFixed(1)}{" "}
-        <span className="text-[#808080] font-semibold">
-          ({away.consTotalOverOdds == null ? "—" : formatAmerican(away.consTotalOverOdds)})
-        </span>
-      </>
-    );
-
-  const homeConsTotal =
-    home.consTotalLine == null ? (
-      <span className="text-[#3a3a3a]">—</span>
-    ) : (
-      <>
-        u{home.consTotalLine.toFixed(1)}{" "}
-        <span className="text-[#808080] font-semibold">
-          ({home.consTotalUnderOdds == null ? "—" : formatAmerican(home.consTotalUnderOdds)})
-        </span>
-      </>
-    );
-
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
       <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between">
         <div className="text-[11px] text-[#cfcfcf] font-extrabold">{timeLabel}</div>
-        <div className="text-[10px] text-[#7a7a7a] font-semibold">Monte Carlo</div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+        >
+          {open ? "Hide Details" : "Show Details"}
+        </button>
       </div>
 
       <div className="p-3 space-y-3">
-        <div className="space-y-2">
-          <MiniTeamRowMobile team={away.teamName} logoUrl={away.logoUrl} side="AWAY" />
-          <MiniTeamRowMobile team={home.teamName} logoUrl={home.logoUrl} side="HOME" />
+        <div className="flex items-center gap-3">
+          <LogoBox team={away.teamName} url={away.logoUrl} size={44} />
+          <TeamNameWithScore name={away.teamName} score={away.projPoints} winProb={away.winProbTeam} isWinner={away.isProjectedWinner} />
+          <div className="ml-auto text-[11px] text-[#7a7a7a] font-semibold">AWAY</div>
         </div>
 
-        <div className="h-px bg-[#1f1f1f]" />
-
-        {/* Column header row */}
-        <div className="grid grid-cols-3 gap-2 items-center">
-          <div />
-          <div className="text-[10px] text-[#808080] font-extrabold uppercase tracking-wide text-right">Away</div>
-          <div className="text-[10px] text-[#808080] font-extrabold uppercase tracking-wide text-right">Home</div>
+        <div className="flex items-center gap-3">
+          <LogoBox team={home.teamName} url={home.logoUrl} size={44} />
+          <TeamNameWithScore name={home.teamName} score={home.projPoints} winProb={home.winProbTeam} isWinner={home.isProjectedWinner} />
+          <div className="ml-auto text-[11px] text-[#7a7a7a] font-semibold">HOME</div>
         </div>
 
-        <MetricRowMobile label="Proj Score" awayValue={awayScore} homeValue={homeScore} />
-        <MetricRowMobile label="Proj Margin" awayValue={awayMargin} homeValue={homeMargin} />
-        <MetricRowMobile label="Proj Total" awayValue={awayTotal} homeValue={homeTotal} />
-        <MetricRowMobile label="Cons Spread" awayValue={awayConsSpread} homeValue={homeConsSpread} />
-        <MetricRowMobile label="Cons Total" awayValue={awayConsTotal} homeValue={homeConsTotal} />
+        {open && <DetailsBlock away={away} home={home} />}
       </div>
     </div>
   );
@@ -578,6 +400,8 @@ export function MonteCarloScreen() {
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
+
+  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
 
   const [loadingRun, setLoadingRun] = useState(true);
   const [loadingResults, setLoadingResults] = useState(false);
@@ -667,6 +491,9 @@ export function MonteCarloScreen() {
         "away_cover_prob",
         "over_prob",
         "under_prob",
+        // optional cols:
+        "home_win_prob",
+        "away_win_prob",
       ].join(",");
 
       const { data, error } = await supabase
@@ -828,6 +655,15 @@ export function MonteCarloScreen() {
       const pOver = numOrNullable(r.over_prob);
       const pUnder = numOrNullable(r.under_prob);
 
+      // win probs (if present)
+      const pHomeWin = numOrNullable((r as any).home_win_prob);
+      const pAwayWin = numOrNullable((r as any).away_win_prob);
+
+      // fallback: if missing, derive a “soft” win prob based on margin direction
+      const fallbackHome = pHomeWin == null && pAwayWin == null ? (homePts === awayPts ? 0.5 : homePts > awayPts ? 0.6 : 0.4) : null;
+      const finalHomeWin = pHomeWin ?? (pAwayWin != null ? 1 - pAwayWin : fallbackHome);
+      const finalAwayWin = pAwayWin ?? (finalHomeWin != null ? 1 - finalHomeWin : null);
+
       const c = consensusMap.get(r.event_id) ?? null;
       const consSpreadHome = numOrNullable(c?.spread_home_line);
       const consTotal = numOrNullable(c?.total_line);
@@ -844,12 +680,14 @@ export function MonteCarloScreen() {
         logoUrl: logoMap.get(away) ?? null,
 
         projPoints: awayPts,
-        projMargin: -marginHome,
+        projMarginTeam: -marginHome,
         coverProbTeam: pAwayCover,
 
         projTotal: totalProj,
         overProb: pOver,
         underProb: pUnder,
+
+        winProbTeam: finalAwayWin ?? null,
 
         consSpreadLineTeam: consSpreadHome == null ? null : -consSpreadHome,
         consSpreadOddsTeam: numOrNullable(c?.spread_away_odds),
@@ -870,12 +708,14 @@ export function MonteCarloScreen() {
         logoUrl: logoMap.get(home) ?? null,
 
         projPoints: homePts,
-        projMargin: marginHome,
+        projMarginTeam: marginHome,
         coverProbTeam: pHomeCover,
 
         projTotal: totalProj,
         overProb: pOver,
         underProb: pUnder,
+
+        winProbTeam: finalHomeWin ?? null,
 
         consSpreadLineTeam: consSpreadHome,
         consSpreadOddsTeam: numOrNullable(c?.spread_home_odds),
@@ -892,11 +732,22 @@ export function MonteCarloScreen() {
         commenceTime: r.commence_time ?? null,
         away: awayRow,
         home: homeRow,
+        projTotal: totalProj,
+        projMarginHome: marginHome,
       });
     }
 
     return out;
   }, [results, logoMap, consensusMap]);
+
+  // keep openMap in sync
+  useEffect(() => {
+    setOpenMap((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false; // default collapsed
+      return next;
+    });
+  }, [events]);
 
   const loading = loadingRun || loadingResults;
 
@@ -929,11 +780,18 @@ export function MonteCarloScreen() {
           ) : !events.length ? (
             <div className="text-xs text-[#808080] py-3">No Monte Carlo rows found for latest run.</div>
           ) : (
-            events.map((ev) => <EventCardMobile key={ev.eventId} ev={ev} />)
+            events.map((ev) => (
+              <EventCardMobile
+                key={ev.eventId}
+                ev={ev}
+                open={!!openMap[ev.eventId]}
+                onToggle={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
+              />
+            ))
           )}
         </div>
 
-        {/* DESKTOP: table */}
+        {/* DESKTOP: table (matchup cell contains dropdown details) */}
         <div className="hidden md:block h-full bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
           <div className="h-full overflow-y-auto overflow-x-auto">
             {loading ? (
@@ -944,44 +802,28 @@ export function MonteCarloScreen() {
               <table className="w-full table-fixed">
                 <colgroup>
                   <col style={{ width: COL_MATCHUP }} />
-                  <col style={{ width: COL_POINTS }} />
-                  <col style={{ width: COL_MARGIN }} />
-                  <col style={{ width: COL_TOTAL }} />
-                  <col style={{ width: COL_CONS_MARGIN }} />
-                  <col style={{ width: COL_CONS_TOTAL }} />
+                  <col />
                 </colgroup>
 
                 <thead className="sticky top-0 z-20">
                   <tr className={`border-b ${HDR_BORDER}`}>
                     <th className={["text-left px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-sm font-extrabold"].join(" ")}>
-                      Matchup
+                      Matchup · Proj Score · Win%
                     </th>
-
-                    <th className={["text-center px-3 py-3", HDR_LEFT_BG, "text-[#d4af37]", "text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
-                      Proj Score
-                    </th>
-
-                    <th className={["text-center px-3 py-3", HDR_LEFT_BG, "text-[#d4af37]", "text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
-                      Proj Margin (Cover %)
-                    </th>
-
-                    <th className={["text-center px-3 py-3", HDR_LEFT_BG, "text-[#d4af37]", "text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
-                      Proj Total
-                    </th>
-
-                    <th className={["text-center px-3 py-3", HDR_LEFT_BG, "text-[#d4af37]", "text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
-                      Consensus Margin (Odds)
-                    </th>
-
-                    <th className={["text-center px-3 py-3", HDR_LEFT_BG, "text-[#d4af37]", "text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
-                      Consensus Total (Odds)
+                    <th className={["px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
+                      {/* intentionally blank – keeps layout consistent */}
                     </th>
                   </tr>
                 </thead>
 
                 <tbody>
                   {events.map((ev) => (
-                    <EventTwoRows key={ev.eventId} ev={ev} />
+                    <EventTwoRows
+                      key={ev.eventId}
+                      ev={ev}
+                      open={!!openMap[ev.eventId]}
+                      onToggle={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
+                    />
                   ))}
                 </tbody>
               </table>
