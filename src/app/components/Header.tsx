@@ -24,6 +24,12 @@ const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 const GOLD = "#d4af37";
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
 
+/** Close grace:
+ * - long enough to move mouse into menu without it vanishing
+ * - short enough to feel snappy
+ */
+const DROPDOWN_CLOSE_DELAY_MS = 240;
+
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -49,7 +55,6 @@ function NavItem({
       type="button"
       onClick={onClick}
       className={[
-        // less “cheesy”: slightly smaller, normal tracking, medium weight
         "relative px-1 py-1 text-[14px] md:text-[15px] font-medium tracking-normal",
         "transition-colors",
         active ? "text-white" : "text-[#cfcfcf] hover:text-white",
@@ -88,23 +93,30 @@ function HoverDropdown({
       closeTimer.current = null;
     }
   };
-  const scheduleClose = () => {
+
+  const closeNow = () => {
     clearTimer();
-    closeTimer.current = window.setTimeout(() => setOpen(false), 140);
+    setOpen(false);
   };
 
+  const scheduleClose = () => {
+    clearTimer();
+    closeTimer.current = window.setTimeout(() => setOpen(false), DROPDOWN_CLOSE_DELAY_MS);
+  };
+
+  // When another dropdown opens, close immediately (removes the "lag" when switching)
   useEffect(() => {
     const handler = (e: Event) => {
       const ev = e as CustomEvent<{ id: string }>;
       const openedId = ev?.detail?.id;
       if (!openedId) return;
       if (openedId !== idRef.current) {
-        clearTimer();
-        setOpen(false);
+        closeNow();
       }
     };
     window.addEventListener(DROPDOWN_EVENT, handler as EventListener);
     return () => window.removeEventListener(DROPDOWN_EVENT, handler as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const openNow = () => {
@@ -128,7 +140,11 @@ function HoverDropdown({
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
         onMouseEnter={openNow}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // Click toggles, but also broadcasts so the other dropdown closes instantly
+          window.dispatchEvent(new CustomEvent(DROPDOWN_EVENT, { detail: { id: idRef.current } }));
+          setOpen((v) => !v);
+        }}
       >
         {label}
         <ChevronDown className="w-4 h-4 opacity-70" />
@@ -217,7 +233,7 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
       ref={headerRef}
       className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]"
     >
-      {/* upgraded header feel: subtle top sheen + gold accent line */}
+      {/* subtle top sheen + gold accent line */}
       <div className="pointer-events-none absolute inset-0">
         <div
           className="absolute inset-0 opacity-80"
@@ -228,31 +244,34 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
         />
         <div
           className="absolute left-0 right-0 top-0 h-[1px]"
-          style={{ background: "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.55), rgba(212,175,55,0.0))" }}
+          style={{
+            background:
+              "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.55), rgba(212,175,55,0.0))",
+          }}
         />
       </div>
 
-      <div className="relative w-full flex items-center justify-between">
-        {/* Left: menu + logo */}
-        <div className="flex items-start min-w-0 pl-3 md:pl-6 pt-2 md:pt-3">
+      {/* padding: slight left + matching top feel (not huge) */}
+      <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-3">
+        {/* Left: menu + logo + nav */}
+        <div className="flex items-start min-w-0">
           <button
             onClick={onOpenMenu}
-            className="md:hidden mt-2 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
+            className="md:hidden mt-1.5 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
             aria-label="Open menu"
             type="button"
           >
             <Menu className="w-5 h-5" />
           </button>
 
-          <div className="flex flex-col items-start gap-2">
+          <div className="flex flex-col items-start gap-2 min-w-0">
             <img
               src="/logos/mainlogo.png"
               alt="PrismSports"
-              className="h-25 md:h-27 w-auto object-contain select-none"
+              className="h-14 sm:h-16 md:h-20 w-auto object-contain select-none"
               draggable={false}
             />
 
-            {/* cleaner nav row (less loud typography) */}
             <nav className="hidden md:flex items-center gap-7 pb-3">
               <HoverDropdown
                 label="Odds"
@@ -275,22 +294,14 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
               <div className="h-5 w-px bg-[#2a2a2a]" />
 
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
-              <NavItem
-                label="Results"
-                active={activeScreen === "results"}
-                onClick={() => onNavigate?.("results")}
-              />
-              <NavItem
-                label="Settings"
-                active={activeScreen === "settings"}
-                onClick={() => onNavigate?.("settings")}
-              />
+              <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
+              <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
             </nav>
           </div>
         </div>
 
         {/* Right: live pill */}
-        <div className="hidden sm:flex items-center pr-3 md:pr-6 pt-4">
+        <div className="hidden sm:flex items-center">
           <div
             className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
             style={{
