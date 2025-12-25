@@ -1,3 +1,13 @@
+// screens/OddsScreen.tsx (FULL REWRITE)
+// - Odds table/cards unchanged in spirit, cleaned + deterministic
+// - History modal FIXES:
+//   ✅ Soft shading removed
+//   ✅ Market Width ALWAYS ON
+//   ✅ Sharp Moves ALWAYS ON
+//   ✅ ML / Spread / Total buttons INSIDE modal (quick switch)
+//   ✅ Modal preloads ALL 3 markets in one query (fast switching)
+//   ✅ Axis labels centered + not clipped on mobile (margins + label style + offsets)
+
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
@@ -12,28 +22,9 @@ import {
   ReferenceLine,
 } from "recharts";
 
-/**
- * ODDS SCREEN — FULL REWRITE (Desktop + Mobile)
- *
- * ✅ Mobile:
- * - Cards are CLEAN: consensus always visible, books start collapsed
- * - One books list (no Away/ Home separate blocks)
- * - Each book row shows: [logo] | Away value | Home value (or Over/Under)
- * - NO sportsbook name text (logo only)
- * - Logos are always readable via white pill
- *
- * ✅ Desktop:
- * - Table starts "clean": Matchup + Consensus only
- * - Toggle "Show Books" reveals the 5 book columns
- *
- * ✅ History modal (FULL FIX):
- * - Soft shading REMOVED entirely
- * - Sharp Moves ALWAYS ON
- * - Market Width ALWAYS ON
- * - No toggle buttons for those features
- * - Axis label fixed (MW label no longer clipped on mobile)
- * - Loads ALL 3 markets (ML + Spread + Total) in one modal for quick-look
- */
+/** =========================
+ * TYPES / CONSTANTS
+ * ========================= */
 
 type Market = "ml" | "spread" | "total";
 type BookKey = "dk" | "fd" | "mgm" | "pin" | "bol";
@@ -63,7 +54,6 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos (FULL-COLOR assets) */
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -92,7 +82,10 @@ const HDR_BORDER = "border-[#2a2a2a]";
 const BOOK_GLOW =
   "drop-shadow(0 1px 0 rgba(0,0,0,0.65)) drop-shadow(0 0 8px rgba(255,255,255,0.12)) drop-shadow(0 0 8px rgba(212,175,55,0.18))";
 
-/** ---------- time helpers ---------- */
+/** =========================
+ * TIME HELPERS
+ * ========================= */
+
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let s = String(raw).trim();
@@ -153,15 +146,30 @@ function fmtDateBtn(ymd: string) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-/** ---------- formatting helpers ---------- */
+function maxIso(a: string | null, b: string | null) {
+  if (!a) return b;
+  if (!b) return a;
+  const an = normalizeIso(a);
+  const bn = normalizeIso(b);
+  if (!an) return b;
+  if (!bn) return a;
+  return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
+}
+
+/** =========================
+ * FORMATTING HELPERS
+ * ========================= */
+
 function fmtML(v: number | null) {
   return v == null ? "—" : `${v}`;
 }
+
 function fmtSpread(cell: SpreadCell) {
   if (!cell || cell.line == null) return "—";
   if (cell.odds == null) return `${cell.line}`;
   return `${cell.line} (${cell.odds})`;
 }
+
 function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
   if (!cell || cell.line == null) return "—";
   const v = which === "over" ? cell.over : cell.under;
@@ -169,13 +177,18 @@ function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
   return `${cell.line} ${tag}${v == null ? "—" : v}`;
 }
 
-/** ---------- mapping helpers ---------- */
+/** =========================
+ * MAPPING HELPERS
+ * ========================= */
+
 function pickLogoUrl(row: any): string | null {
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? null;
 }
+
 function pickUpdatedAt(row: any): string | null {
   return row.updated_at ?? row.last_updated ?? row.updatedAt ?? null;
 }
+
 function mapWideRowToSideOdds(row: any): SideOdds {
   return {
     side: row.side,
@@ -208,17 +221,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
   };
 }
-function maxIso(a: string | null, b: string | null) {
-  if (!a) return b;
-  if (!b) return a;
-  const an = normalizeIso(a);
-  const bn = normalizeIso(b);
-  if (!an) return b;
-  if (!bn) return a;
-  return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
-}
 
-/** ---------- consensus helpers ---------- */
+/** =========================
+ * CONSENSUS HELPERS
+ * ========================= */
+
 function median(nums: number[]) {
   const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
   if (!a.length) return null;
@@ -238,7 +245,8 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   if (market === "ml") {
     const odds: number[] = [];
     if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
-    return fmtML(median(odds) as any);
+    const m = median(odds);
+    return fmtML(m as any);
   }
 
   if (market === "spread") {
@@ -288,7 +296,10 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     : `${mLine} U${mUnder == null ? "—" : mUnder}`;
 }
 
-/** ---------- header logo fallback ---------- */
+/** =========================
+ * HEADER LOGO FALLBACK
+ * ========================= */
+
 function headerFallbackPillDataUri(label: string) {
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}">
@@ -301,7 +312,10 @@ function headerFallbackPillDataUri(label: string) {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
 
-/** ---------- UI components ---------- */
+/** =========================
+ * UI COMPONENTS
+ * ========================= */
+
 function MarketButton({
   active,
   onClick,
@@ -321,6 +335,31 @@ function MarketButton({
           : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
       ].join(" ")}
       type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
+function ModalMarketButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 rounded-md text-xs font-extrabold border transition-colors",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#cfcfcf] border-[#2a2a2a] hover:border-[#3a3a3a]",
+      ].join(" ")}
     >
       {children}
     </button>
@@ -406,7 +445,12 @@ function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean 
 
 function ConsensusValue({ value }: { value: string }) {
   return (
-    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px]", `border-r ${HDR_BORDER}`].join(" ")}>
+    <td
+      className={[
+        "p-3 text-white text-center tabular-nums font-bold text-[13.5px]",
+        `border-r ${HDR_BORDER}`,
+      ].join(" ")}
+    >
       {value}
     </td>
   );
@@ -445,9 +489,9 @@ function MiniTeamRow({
   );
 }
 
-/** =========================================
- * HISTORY MODAL (fixed + all markets)
- * ========================================= */
+/** =========================
+ * HISTORY MODAL
+ * ========================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
 type HistSide = "home" | "away" | "over" | "under";
@@ -532,13 +576,12 @@ type ChartPoint = {
   [book: string]: any;
 };
 
-function buildChartSeries(
-  rows: HistoryRow[],
-  uiMarket: Market,
-  valueMode: "line" | "odds",
-  books: string[]
-): ChartPoint[] {
-  // bucket to 1-min; keep most recent row per minute+book
+/**
+ * Builds 1-min bucketed time series.
+ * ALWAYS computes market width (mw).
+ * ALWAYS marks sharp moves (sharp).
+ */
+function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line" | "odds", books: string[]) {
   const binMap = new Map<string, Map<string, HistoryRow>>();
 
   for (const r of rows) {
@@ -575,7 +618,7 @@ function buildChartSeries(
 
     if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
 
-    // Market width ALWAYS ON
+    // Market width (always)
     if (valueMode === "line") {
       const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
       if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
@@ -591,7 +634,7 @@ function buildChartSeries(
     return p;
   });
 
-  // Sharp moves ALWAYS ON
+  // Sharp moves (always)
   const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
   const PROB_MOVE = 0.02;
 
@@ -649,6 +692,18 @@ function Badge({ label, kind }: { label: string; kind: "gold" | "red" | "gray" }
   return <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold ${cls}`}>{label}</span>;
 }
 
+function useIsMobile(bp = 640) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const on = () => setIsMobile(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, [bp]);
+  return isMobile;
+}
+
 function ModalShell({
   title,
   subtitle,
@@ -690,26 +745,13 @@ function ModalShell({
           </button>
         </div>
 
-        {/* scrollable body */}
         <div className="p-3 sm:p-4 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
 }
 
-function useIsMobile(bp = 640) {
-  const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${bp}px)`);
-    const on = () => setIsMobile(mq.matches);
-    on();
-    mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener?.("change", on);
-  }, [bp]);
-  return isMobile;
-}
-
-function HistoryMarketSection({
+function HistoryChartsPanel({
   title,
   uiMarket,
   valueMode,
@@ -746,173 +788,193 @@ function HistoryMarketSection({
   const anySharpA = seriesA.some((p) => p.sharp);
   const anySharpB = seriesB.some((p) => p.sharp);
 
-  // ✅ FIX: make room for right-side label so it doesn't clip on mobile
+  // ✅ Axis label + margin tuning to avoid clipping and to center label visually on mobile.
   const chartMargin = useMemo(
-    () => (isMobile ? { top: 10, right: 60, left: 10, bottom: 10 } : { top: 10, right: 52, left: 10, bottom: 10 }),
+    () => (isMobile ? { top: 10, right: 84, left: 44, bottom: 10 } : { top: 10, right: 68, left: 34, bottom: 12 }),
     [isMobile]
   );
 
-  if (!seriesA.length && !seriesB.length) {
-    return (
-      <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-white font-extrabold text-sm">{title}</div>
-          <Badge label="No Data" kind="gray" />
-        </div>
-        <div className="text-xs text-[#808080]">No history rows found in this window for this market.</div>
-      </div>
-    );
-  }
+  const axisLabelStyle = useMemo(
+    () =>
+      ({
+        fill: "#cfcfcf",
+        fontSize: isMobile ? 11 : 12,
+        fontWeight: 800,
+        dominantBaseline: "middle",
+        textAnchor: "middle",
+      }) as React.CSSProperties,
+    [isMobile]
+  );
+
+  const mwOffset = isMobile ? 36 : 26;
+  const mainOffset = isMobile ? 24 : 18;
 
   return (
     <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-      <div className="flex items-center justify-between gap-3 mb-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div className="text-white font-extrabold text-sm">{title}</div>
-        {(anySharpA || anySharpB) ? <Badge label="Sharp Move Detected" kind="red" /> : <Badge label="No Sharp Moves" kind="gray" />}
+        <div className="flex items-center gap-2">
+          <Badge label="Market Width ON" kind="gold" />
+          {(anySharpA || anySharpB) ? <Badge label="Sharp Move Detected" kind="red" /> : <Badge label="No Sharp Moves" kind="gray" />}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {[
-          { title: panelTitleA, data: seriesA, anySharp: anySharpA } as const,
-          { title: panelTitleB, data: seriesB, anySharp: anySharpB } as const,
-        ].map((panel) => (
-          <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-white font-bold text-xs">{panel.title}</div>
-              {panel.anySharp ? <Badge label="Sharp" kind="red" /> : <Badge label="—" kind="gray" />}
-            </div>
+      {!seriesA.length && !seriesB.length ? (
+        <div className="text-xs text-[#808080]">No history rows found in this window for this market.</div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {[
+            { title: panelTitleA, data: seriesA, anySharp: anySharpA } as const,
+            { title: panelTitleB, data: seriesB, anySharp: anySharpB } as const,
+          ].map((panel) => (
+            <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-white font-bold text-xs">{panel.title}</div>
+                {panel.anySharp ? <Badge label="Sharp" kind="red" /> : <Badge label="—" kind="gray" />}
+              </div>
 
-            <div className={isMobile ? "h-[260px]" : "h-[340px]"}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={panel.data} margin={chartMargin}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="t" tick={{ fontSize: isMobile ? 10 : 11 }} interval="preserveStartEnd" />
+              <div className={isMobile ? "h-[260px]" : "h-[340px]"}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={panel.data} margin={chartMargin}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="t" tick={{ fontSize: isMobile ? 10 : 11 }} interval="preserveStartEnd" />
 
-                  <YAxis
-                    yAxisId="main"
-                    tick={{ fontSize: isMobile ? 10 : 11 }}
-                    tickMargin={6}
-                    label={{
-                      value: yLabel,
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: isMobile ? 10 : 12,
-                    }}
-                  />
-
-                  <YAxis
-                    yAxisId="mw"
-                    orientation="right"
-                    tick={{ fontSize: isMobile ? 10 : 11 }}
-                    tickMargin={10}
-                    label={{
-                      value: mwLabel,
-                      angle: 90,
-                      position: "insideRight",
-                      offset: isMobile ? 24 : 18,
-                    }}
-                  />
-
-                  <Tooltip
-                    content={({ active, payload, label }) => {
-                      if (!active || !payload?.length) return null;
-                      const row: any = payload[0]?.payload;
-
-                      const lines = (payload ?? [])
-                        .filter((p) => p?.dataKey && typeof p.value === "number")
-                        .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
-                        .filter((x) => x.k !== "mw");
-
-                      return (
-                        <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[260px]">
-                          <div className="font-extrabold text-white mb-1">{label}</div>
-
-                          {row?.mw != null && (
-                            <div className="mb-1">
-                              <span className="font-bold">Width:</span> {row.mw}
-                            </div>
-                          )}
-
-                          <div className="space-y-0.5">
-                            {lines.slice(0, 8).map((x) => (
-                              <div key={x.k} className="flex items-center justify-between gap-2">
-                                <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
-                                <span className="text-white font-extrabold tabular-nums">{x.v}</span>
-                              </div>
-                            ))}
-                          </div>
-
-                          <div className="flex gap-2 mt-2">
-                            {row?.sharp ? <Badge label="Sharp" kind="red" /> : <Badge label="—" kind="gray" />}
-                          </div>
-                        </div>
-                      );
-                    }}
-                  />
-
-                  <Legend />
-
-                  {books.map((b) => (
-                    <Line
-                      key={b}
+                    <YAxis
                       yAxisId="main"
+                      tick={{ fontSize: isMobile ? 10 : 11 }}
+                      tickMargin={8}
+                      label={{
+                        value: yLabel,
+                        angle: -90,
+                        position: "insideLeft",
+                        offset: mainOffset,
+                        style: axisLabelStyle,
+                      }}
+                    />
+
+                    <YAxis
+                      yAxisId="mw"
+                      orientation="right"
+                      tick={{ fontSize: isMobile ? 10 : 11 }}
+                      tickMargin={12}
+                      label={{
+                        value: mwLabel,
+                        angle: 90,
+                        position: "insideRight",
+                        offset: mwOffset,
+                        style: axisLabelStyle,
+                      }}
+                    />
+
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        const row: any = payload[0]?.payload;
+
+                        // include ALL series values; remove mw from book list, but show mw separately
+                        const lines = (payload ?? [])
+                          .filter((p) => p?.dataKey && typeof p.value === "number")
+                          .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
+                          .filter((x) => x.k !== "mw");
+
+                        return (
+                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[260px]">
+                            <div className="font-extrabold text-white mb-1">{label}</div>
+
+                            {row?.mw != null && (
+                              <div className="mb-1">
+                                <span className="font-bold">Width:</span> {row.mw}
+                              </div>
+                            )}
+
+                            <div className="space-y-0.5">
+                              {lines.slice(0, 10).map((x) => (
+                                <div key={x.k} className="flex items-center justify-between gap-2">
+                                  <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
+                                  <span className="text-white font-extrabold tabular-nums">{x.v}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="flex gap-2 mt-2">
+                              {row?.sharp ? <Badge label="Sharp" kind="red" /> : <Badge label="—" kind="gray" />}
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+
+                    <Legend />
+
+                    {books.map((b) => (
+                      <Line
+                        key={b}
+                        yAxisId="main"
+                        type="monotone"
+                        dataKey={b}
+                        name={b}
+                        dot={false}
+                        strokeWidth={2}
+                        connectNulls
+                        stroke={seriesColor(b)}
+                      />
+                    ))}
+
+                    <Line
+                      yAxisId="mw"
                       type="monotone"
-                      dataKey={b}
-                      name={b}
+                      dataKey="mw"
+                      name="Market Width"
                       dot={false}
                       strokeWidth={2}
                       connectNulls
-                      stroke={seriesColor(b)}
+                      stroke="#e5e7eb"
+                      strokeDasharray="6 6"
                     />
-                  ))}
 
-                  <Line
-                    yAxisId="mw"
-                    type="monotone"
-                    dataKey="mw"
-                    name="Market Width"
-                    dot={false}
-                    strokeWidth={2}
-                    connectNulls
-                    stroke="#e5e7eb"
-                    strokeDasharray="6 6"
-                  />
-
-                  {panel.data
-                    .filter((p) => p.sharp)
-                    .map((p) => (
-                      <ReferenceLine
-                        key={`sharp-${panel.title}-${p.ts}`}
-                        x={p.t}
-                        stroke="rgba(239,68,68,0.55)"
-                        strokeDasharray="3 3"
-                        yAxisId="main"
-                      />
-                    ))}
-                </LineChart>
-              </ResponsiveContainer>
+                    {panel.data
+                      .filter((p) => p.sharp)
+                      .map((p) => (
+                        <ReferenceLine
+                          key={`sharp-${panel.title}-${p.ts}`}
+                          x={p.t}
+                          stroke="rgba(239,68,68,0.55)"
+                          strokeDasharray="3 3"
+                          yAxisId="main"
+                        />
+                      ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 function LineMovementModal({
   ev,
+  uiMarket,
   onClose,
 }: {
   ev: EventOdds;
+  uiMarket: Market;
   onClose: () => void;
 }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
+  // Modal market tabs
+  const [activeMarket, setActiveMarket] = useState<Market>(uiMarket);
+  useEffect(() => setActiveMarket(uiMarket), [uiMarket]);
+
   const hoursBack = 24;
 
   const [books, setBooks] = useState<string[]>([]);
 
+  // Preloaded series for all markets
   const [mlAway, setMlAway] = useState<ChartPoint[]>([]);
   const [mlHome, setMlHome] = useState<ChartPoint[]>([]);
   const [spAway, setSpAway] = useState<ChartPoint[]>([]);
@@ -929,7 +991,7 @@ function LineMovementModal({
 
       const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
 
-      // Pull ALL markets for this event, then split client-side.
+      // ✅ Pull ALL markets for the event in one query
       const { data, error } = await supabase
         .from(HISTORY_TABLE)
         .select("id,ts,event_id,bookmaker,market,side,line,odds,last_update,inserted_at")
@@ -959,15 +1021,15 @@ function LineMovementModal({
       const pick = (m: HistMarket, s: HistSide) =>
         rows.filter((r) => String(r.market).toLowerCase() === m && String(r.side).toLowerCase() === s);
 
-      // ML: odds mode
+      // ML uses odds mode (American odds), width computed on implied prob internally
       setMlAway(buildChartSeries(pick("h2h", "away"), "ml", "odds", bookList));
       setMlHome(buildChartSeries(pick("h2h", "home"), "ml", "odds", bookList));
 
-      // Spread: line mode
+      // Spread uses line mode
       setSpAway(buildChartSeries(pick("spreads", "away"), "spread", "line", bookList));
       setSpHome(buildChartSeries(pick("spreads", "home"), "spread", "line", bookList));
 
-      // Totals: line mode (Over/Under)
+      // Total uses line mode
       setToOver(buildChartSeries(pick("totals", "over"), "total", "line", bookList));
       setToUnder(buildChartSeries(pick("totals", "under"), "total", "line", bookList));
 
@@ -978,65 +1040,91 @@ function LineMovementModal({
     return () => {
       alive = false;
     };
-  }, [ev.eventId, hoursBack]);
+  }, [ev.eventId]);
 
   const subtitle = [
     ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
     `Window: last ${hoursBack}h`,
     "Bucket: 1-min",
-    "Market Width: ON",
-    "Sharp Moves: ON",
   ]
     .filter(Boolean)
     .join(" · ");
 
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <ModalMarketButton active={activeMarket === "ml"} onClick={() => setActiveMarket("ml")}>
+            Moneyline
+          </ModalMarketButton>
+          <ModalMarketButton active={activeMarket === "spread"} onClick={() => setActiveMarket("spread")}>
+            Spread
+          </ModalMarketButton>
+          <ModalMarketButton active={activeMarket === "total"} onClick={() => setActiveMarket("total")}>
+            Total
+          </ModalMarketButton>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Badge label="Market Width ON" kind="gold" />
+          <Badge label="Sharp Moves ON" kind="red" />
+        </div>
+      </div>
+
       {loading ? (
         <div className="text-xs text-[#808080]">Loading snapshots…</div>
       ) : err ? (
         <div className="text-xs text-red-400">Supabase error: {err}</div>
       ) : (
         <div className="space-y-4">
-          <HistoryMarketSection
-            title="Moneyline"
-            uiMarket="ml"
-            valueMode="odds"
-            books={books}
-            seriesA={mlAway}
-            seriesB={mlHome}
-            panelTitleA="AWAY"
-            panelTitleB="HOME"
-          />
+          {activeMarket === "ml" && (
+            <HistoryChartsPanel
+              title="Moneyline"
+              uiMarket="ml"
+              valueMode="odds"
+              books={books}
+              seriesA={mlAway}
+              seriesB={mlHome}
+              panelTitleA="AWAY"
+              panelTitleB="HOME"
+            />
+          )}
 
-          <HistoryMarketSection
-            title="Spread"
-            uiMarket="spread"
-            valueMode="line"
-            books={books}
-            seriesA={spAway}
-            seriesB={spHome}
-            panelTitleA="AWAY"
-            panelTitleB="HOME"
-          />
+          {activeMarket === "spread" && (
+            <HistoryChartsPanel
+              title="Spread"
+              uiMarket="spread"
+              valueMode="line"
+              books={books}
+              seriesA={spAway}
+              seriesB={spHome}
+              panelTitleA="AWAY"
+              panelTitleB="HOME"
+            />
+          )}
 
-          <HistoryMarketSection
-            title="Total"
-            uiMarket="total"
-            valueMode="line"
-            books={books}
-            seriesA={toOver}
-            seriesB={toUnder}
-            panelTitleA="OVER"
-            panelTitleB="UNDER"
-          />
+          {activeMarket === "total" && (
+            <HistoryChartsPanel
+              title="Total"
+              uiMarket="total"
+              valueMode="line"
+              books={books}
+              seriesA={toOver}
+              seriesB={toUnder}
+              panelTitleA="OVER"
+              panelTitleB="UNDER"
+            />
+          )}
         </div>
       )}
     </ModalShell>
   );
 }
 
-/** ---------- Desktop two-row renderer (supports hide/show books) ---------- */
+/** =========================
+ * ODDS RENDERERS
+ * ========================= */
+
 function EventTwoRows({
   ev,
   market,
@@ -1077,7 +1165,10 @@ function EventTwoRows({
   return (
     <>
       <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
+        <td
+          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
+          rowSpan={2}
+        >
           <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3 flex items-center justify-between gap-3">
             <span>{fmtCTTimeOnly(ev.commenceTime)} CT</span>
             <button
@@ -1126,7 +1217,6 @@ function EventTwoRows({
   );
 }
 
-/** ---------- Mobile: one book row with two values (logo only) ---------- */
 function BookRowMobile2Col({
   book,
   leftLabel,
@@ -1172,7 +1262,6 @@ function BookRowMobile2Col({
   );
 }
 
-/** ---------- Mobile card renderer (books collapsible; consensus always visible) ---------- */
 function EventCardMobile({
   ev,
   market,
@@ -1217,7 +1306,6 @@ function EventCardMobile({
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-      {/* top bar */}
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
@@ -1240,13 +1328,11 @@ function EventCardMobile({
         </div>
       </div>
 
-      {/* teams */}
       <div className="px-4 py-3 space-y-3">
         <MiniTeamRow team={away?.team ?? "Away"} logoUrl={away?.logoUrl ?? null} side="AWAY" />
         <MiniTeamRow team={home?.team ?? "Home"} logoUrl={home?.logoUrl ?? null} side="HOME" />
       </div>
 
-      {/* consensus always visible */}
       <div className="px-4 pb-4">
         <div
           className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3"
@@ -1274,12 +1360,9 @@ function EventCardMobile({
           </div>
         </div>
 
-        {/* books collapsible */}
         {booksOpen && (
           <div className="mt-3 rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
-            <div className="px-4 py-2 border-b border-[#141414] text-[12px] text-white font-extrabold">
-              Books
-            </div>
+            <div className="px-4 py-2 border-b border-[#141414] text-[12px] text-white font-extrabold">Books</div>
             <div className="px-4">
               <BookRowMobile2Col book="dk" leftLabel={leftLabel} leftValue={awayCells.dk} rightLabel={rightLabel} rightValue={homeCells.dk} />
               <BookRowMobile2Col book="fd" leftLabel={leftLabel} leftValue={awayCells.fd} rightLabel={rightLabel} rightValue={homeCells.fd} />
@@ -1294,7 +1377,10 @@ function EventCardMobile({
   );
 }
 
-/** ---------- Screen ---------- */
+/** =========================
+ * SCREEN
+ * ========================= */
+
 export function OddsScreen() {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
@@ -1409,6 +1495,7 @@ export function OddsScreen() {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
+      // if selected is today, hide games that already started
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -1420,11 +1507,10 @@ export function OddsScreen() {
 
   const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
 
-  // keep map clean if slate changes
   useEffect(() => {
     setMobileOpenMap((prev) => {
       const next: Record<string, boolean> = {};
-      for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false; // default collapsed
+      for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false;
       return next;
     });
   }, [events]);
@@ -1476,7 +1562,6 @@ export function OddsScreen() {
           Total
         </MarketButton>
 
-        {/* Desktop-only: start clean, let you show books when you want */}
         <div className="hidden md:flex items-center ml-2">
           <button
             type="button"
@@ -1494,7 +1579,7 @@ export function OddsScreen() {
       </div>
 
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
-        {/* MOBILE: cards */}
+        {/* MOBILE */}
         <div className="md:hidden">
           {loading ? (
             <div className="p-4 text-xs text-[#808080]">Loading odds_wide_latest…</div>
@@ -1510,9 +1595,7 @@ export function OddsScreen() {
                   ev={ev}
                   market={market}
                   booksOpen={!!mobileOpenMap[ev.eventId]}
-                  onToggleBooks={() =>
-                    setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
-                  }
+                  onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
                   onOpenHistory={openHistory}
                 />
               ))}
@@ -1520,7 +1603,7 @@ export function OddsScreen() {
           )}
         </div>
 
-        {/* DESKTOP: table */}
+        {/* DESKTOP */}
         <div className="hidden md:block overflow-x-auto">
           {loading ? (
             <div className="p-4 text-xs text-[#808080]">Loading odds_wide_latest…</div>
@@ -1546,11 +1629,26 @@ export function OddsScreen() {
 
               <thead className="sticky top-0 z-20">
                 <tr className={`border-b ${HDR_BORDER}`}>
-                  <th className={["text-left px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-sm font-extrabold"].join(" ")}>
+                  <th
+                    className={[
+                      "text-left px-3 py-3",
+                      HDR_LEFT_BG,
+                      HDR_TEXT,
+                      "sticky left-0 z-30 text-sm font-extrabold",
+                    ].join(" ")}
+                  >
                     Matchup
                   </th>
 
-                  <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-sm font-extrabold border-l", HDR_BORDER].join(" ")}>
+                  <th
+                    className={[
+                      "text-center px-3 py-3",
+                      HDR_LEFT_BG,
+                      HDR_TEXT,
+                      "z-20 text-sm font-extrabold border-l",
+                      HDR_BORDER,
+                    ].join(" ")}
+                  >
                     Consensus
                   </th>
 
@@ -1582,10 +1680,10 @@ export function OddsScreen() {
         </div>
       </div>
 
-      {/* ✅ Modal now ignores current market and loads ML+Spread+Total always */}
       {historyOpen && historyEvent?.eventId && (
-        <LineMovementModal ev={historyEvent} onClose={closeHistory} />
+        <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
       )}
     </div>
   );
 }
+
