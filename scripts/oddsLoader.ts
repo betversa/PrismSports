@@ -346,7 +346,7 @@ async function main() {
     if (error) throw error;
   }
 
-  await supabase.rpc("prune_odds_snapshot_history", { keep_n: 10 });
+  await supabase.rpc("prune_odds_snapshot_history", { keep_n: 432 });
 
   console.log(
     JSON.stringify(
