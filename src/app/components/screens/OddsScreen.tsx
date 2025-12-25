@@ -1,14 +1,9 @@
-// screens/OddsScreen.tsx — FULL REWRITE (History modal: top-side axis labels)
-// ✅ Mobile charts are WIDE (no skinny plot area)
-// ✅ Axis labels moved to TOP of chart area:
-//    - Main axis label: TOP-LEFT
-//    - Market Width label: TOP-RIGHT
-// ✅ NO label overlap with tick labels (labels are outside plot, above chart)
-// ✅ Spread + Total toggle Line ↔ Odds (Moneyline = Odds only)
-// ✅ Market Width + Sharp Moves ALWAYS ON
-// ✅ Red Sharp Move badge when detected
-// ✅ Tooltip shows values + width + sharp
-// ✅ Books section: Away/Home (or Over/Under) label shown once at top
+// screens/OddsScreen.tsx — FULL REWRITE (Books section centering + column headers + totals no O/U prefix)
+// ✅ Books values are CENTERED (so "—" doesn't look misaligned)
+// ✅ Away/Home OR Over/Under labels sit ABOVE their respective columns (mobile + desktop books)
+// ✅ Totals book cells NO LONGER prefix O/U (headers already define it)
+// ✅ History modal keeps: big charts, top-side axis labels, sharp badge, width+sharp always on
+// ✅ Spread + Total history can toggle Line ↔ Odds (Moneyline = Odds only)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -56,7 +51,7 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos (FULL-COLOR assets) */
+/** Public folder book logos */
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -165,16 +160,23 @@ function maxIso(a: string | null, b: string | null) {
 function fmtML(v: number | null) {
   return v == null ? "—" : `${v}`;
 }
+
 function fmtSpread(cell: SpreadCell) {
   if (!cell || cell.line == null) return "—";
   if (cell.odds == null) return `${cell.line}`;
   return `${cell.line} (${cell.odds})`;
 }
-function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
+
+/**
+ * Totals: no O/U prefix because headers already specify Over / Under.
+ * - Over column uses cell.over
+ * - Under column uses cell.under
+ */
+function fmtTotalSide(cell: TotalCell, which: "over" | "under") {
   if (!cell || cell.line == null) return "—";
   const v = which === "over" ? cell.over : cell.under;
-  const tag = which === "over" ? "O" : "U";
-  return `${cell.line} ${tag}${v == null ? "—" : v}`;
+  if (v == null) return `${cell.line}`;
+  return `${cell.line} (${v})`;
 }
 
 /** =========================
@@ -262,6 +264,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     return `${mLine} (${mOdds})`;
   }
 
+  // totals: AWAY = Over column, HOME = Under column
   const lines: number[] = [];
   const overOdds: number[] = [];
   const underOdds: number[] = [];
@@ -286,9 +289,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   const mUnder = median(underOdds);
 
   if (mLine == null) return "—";
-  return side === "AWAY"
-    ? `${mLine} O${mOver == null ? "—" : mOver}`
-    : `${mLine} U${mUnder == null ? "—" : mUnder}`;
+  return side === "AWAY" ? `${mLine} (${mOver == null ? "—" : mOver})` : `${mLine} (${mUnder == null ? "—" : mUnder})`;
 }
 
 /** =========================
@@ -424,23 +425,28 @@ function BookHeader({
   );
 }
 
+/** Books cell is always CENTERED (including "—") */
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
     <td
       className={[
-        "p-3 text-white text-center tabular-nums font-bold text-[13.5px]",
+        "p-3 text-white text-center tabular-nums font-bold text-[13.5px] align-middle",
         borderLeft ? `border-l ${HDR_BORDER}` : "",
       ].join(" ")}
     >
-      {value}
+      <div className="w-full flex items-center justify-center">
+        <span className="inline-block text-center">{value}</span>
+      </div>
     </td>
   );
 }
 
 function ConsensusValue({ value }: { value: string }) {
   return (
-    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px]", `border-r ${HDR_BORDER}`].join(" ")}>
-      {value}
+    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px] align-middle", `border-r ${HDR_BORDER}`].join(" ")}>
+      <div className="w-full flex items-center justify-center">
+        <span className="inline-block text-center">{value}</span>
+      </div>
     </td>
   );
 }
@@ -602,9 +608,9 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
 
     if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
 
-    // Width always on:
-    // - line: range of lines across books in this minute bucket
-    // - odds: range of IMPLIED PROBABILITIES across books in this bucket
+    // Market Width:
+    // - line mode: range of lines across books
+    // - odds mode: range of implied probabilities across books
     if (valueMode === "line") {
       const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
       if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
@@ -620,7 +626,7 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
     return p;
   });
 
-  // Sharp moves always on (same logic you had; left intact)
+  // Sharp moves always on
   const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
   const PROB_MOVE = 0.02;
 
@@ -721,7 +727,7 @@ function ModalShell({
 
 /** =========================
  * HISTORY CHART PAIR
- * Labels at top-left / top-right (outside plot)
+ * labels top-left / top-right (outside plot)
  * ========================= */
 
 function HistoryChartPair({
@@ -765,10 +771,7 @@ function HistoryChartPair({
 
   const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
 
-  // Wide plot: keep margins modest, remove axis labels entirely.
   const margin = isMobile ? { top: 8, right: 10, left: 8, bottom: 18 } : { top: 10, right: 16, left: 12, bottom: 18 };
-
-  // Main axis needs some width for ticks; MW axis: we keep it tickless to stay wide.
   const mainAxisWidth = isMobile ? 46 : 54;
   const mwAxisWidth = isMobile ? 10 : 10;
 
@@ -822,31 +825,19 @@ function HistoryChartPair({
                   )}
                 </div>
 
-                {/* ✅ TOP-SIDE AXIS LABELS */}
                 <div className="mt-2 mb-2 flex items-center justify-between">
-                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">
-                    {mainLabel}
-                  </div>
-                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">
-                    {mwLabel}
-                  </div>
+                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">{mainLabel}</div>
+                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">{mwLabel}</div>
                 </div>
 
                 <div className="w-full min-w-0" style={{ height: chartHeight }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={panel.data} margin={margin}>
                       <CartesianGrid strokeDasharray="3 3" />
-
                       <XAxis dataKey="t" tick={{ fontSize: isMobile ? 10 : 11 }} interval="preserveStartEnd" />
 
-                      <YAxis
-                        yAxisId="main"
-                        width={mainAxisWidth}
-                        tick={{ fontSize: isMobile ? 10 : 11 }}
-                        tickMargin={6}
-                      />
+                      <YAxis yAxisId="main" width={mainAxisWidth} tick={{ fontSize: isMobile ? 10 : 11 }} tickMargin={6} />
 
-                      {/* MW axis stays RIGHT but tickless to keep plot wide */}
                       <YAxis
                         yAxisId="mw"
                         orientation="right"
@@ -1133,7 +1124,7 @@ function LineMovementModal({
 }
 
 /** =========================
- * MOBILE BOOK ROW (labels once at top)
+ * MOBILE BOOK ROW (CENTERED VALUES)
  * ========================= */
 
 function BookRowMobile2Col({
@@ -1161,13 +1152,12 @@ function BookRowMobile2Col({
       <div className="flex items-center justify-between gap-3">
         <BookLogoPill src={BOOK_LOGOS[book]} alt={meta.alt} fallbackLabel={meta.fb} />
 
-        <div className="flex items-center gap-4 shrink-0">
-          <div className="text-right">
-            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight">{leftValue}</div>
+        <div className="grid grid-cols-2 gap-3 w-[52%]">
+          <div className="flex items-center justify-center">
+            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight text-center">{leftValue}</div>
           </div>
-          <div className="w-px h-8 bg-[#1f1f1f]" />
-          <div className="text-right">
-            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight">{rightValue}</div>
+          <div className="flex items-center justify-center">
+            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight text-center">{rightValue}</div>
           </div>
         </div>
       </div>
@@ -1195,31 +1185,40 @@ function EventCardMobile({
   const away = ev.away;
   const home = ev.home;
 
-  const mkRow = (s: SideOdds | undefined) => {
+  const mkRow = (s: SideOdds | undefined, whichForTotal: "over" | "under") => {
     if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
+
     if (market === "ml") {
       return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
     }
     if (market === "spread") {
-      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
+      return {
+        dk: fmtSpread(s.spread.dk),
+        fd: fmtSpread(s.spread.fd),
+        mgm: fmtSpread(s.spread.mgm),
+        pin: fmtSpread(s.spread.pin),
+        bol: fmtSpread(s.spread.bol),
+      };
     }
+    // total: left column is OVER, right column is UNDER
     return {
-      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
-      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
-      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
-      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
-      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
+      dk: fmtTotalSide(s.total.dk, whichForTotal),
+      fd: fmtTotalSide(s.total.fd, whichForTotal),
+      mgm: fmtTotalSide(s.total.mgm, whichForTotal),
+      pin: fmtTotalSide(s.total.pin, whichForTotal),
+      bol: fmtTotalSide(s.total.bol, whichForTotal),
     };
   };
 
-  const awayCells = mkRow(away);
-  const homeCells = mkRow(home);
+  const leftIsOver = market === "total";
+  const leftLabel = leftIsOver ? "Over" : "Away";
+  const rightLabel = leftIsOver ? "Under" : "Home";
 
-  const awayCons = consensusValueForRow(ev, market, "AWAY");
-  const homeCons = consensusValueForRow(ev, market, "HOME");
+  const leftCells = leftIsOver ? mkRow(away, "over") : mkRow(away, "over");   // over arg ignored outside totals
+  const rightCells = leftIsOver ? mkRow(home, "under") : mkRow(home, "under"); // under arg ignored outside totals
 
-  const leftLabel = market === "total" ? "Over" : "Away";
-  const rightLabel = market === "total" ? "Under" : "Home";
+  const leftCons = consensusValueForRow(ev, market, "AWAY");
+  const rightCons = consensusValueForRow(ev, market, "HOME");
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
@@ -1267,12 +1266,12 @@ function EventCardMobile({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums">{awayCons}</div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{leftCons}</div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums">{homeCons}</div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{rightCons}</div>
             </div>
           </div>
         </div>
@@ -1281,18 +1280,23 @@ function EventCardMobile({
           <div className="mt-3 rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
             <div className="px-4 py-2 border-b border-[#141414]">
               <div className="text-[12px] text-white font-extrabold">Books</div>
-              <div className="mt-1 grid grid-cols-2 gap-3">
-                <div className="text-[10px] text-[#808080] font-semibold">{leftLabel}</div>
-                <div className="text-[10px] text-[#808080] font-semibold text-right">{rightLabel}</div>
+
+              {/* ✅ headers aligned over their columns */}
+              <div className="mt-1 grid grid-cols-[96px_1fr] items-center">
+                <div />
+                <div className="grid grid-cols-2 gap-3 w-[52%] ml-auto">
+                  <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
+                  <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
+                </div>
               </div>
             </div>
 
             <div className="px-4">
-              <BookRowMobile2Col book="dk" leftValue={awayCells.dk} rightValue={homeCells.dk} />
-              <BookRowMobile2Col book="fd" leftValue={awayCells.fd} rightValue={homeCells.fd} />
-              <BookRowMobile2Col book="mgm" leftValue={awayCells.mgm} rightValue={homeCells.mgm} />
-              <BookRowMobile2Col book="pin" leftValue={awayCells.pin} rightValue={homeCells.pin} />
-              <BookRowMobile2Col book="bol" leftValue={awayCells.bol} rightValue={homeCells.bol} />
+              <BookRowMobile2Col book="dk" leftValue={leftCells.dk} rightValue={rightCells.dk} />
+              <BookRowMobile2Col book="fd" leftValue={leftCells.fd} rightValue={rightCells.fd} />
+              <BookRowMobile2Col book="mgm" leftValue={leftCells.mgm} rightValue={rightCells.mgm} />
+              <BookRowMobile2Col book="pin" leftValue={leftCells.pin} rightValue={rightCells.pin} />
+              <BookRowMobile2Col book="bol" leftValue={leftCells.bol} rightValue={rightCells.bol} />
             </div>
           </div>
         )}
@@ -1302,8 +1306,43 @@ function EventCardMobile({
 }
 
 /** =========================
- * DESKTOP TWO-ROW TABLE
+ * DESKTOP TWO-ROW TABLE + COLUMN LABEL ROW (when books shown)
  * ========================= */
+
+function BooksSideHeaderRow({ market }: { market: Market }) {
+  const left = market === "total" ? "Over" : "Away";
+  const right = market === "total" ? "Under" : "Home";
+
+  return (
+    <tr className={`border-b ${HDR_BORDER}`}>
+      <th className={["text-left px-3 py-2", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-xs font-extrabold"].join(" ")}>
+        {/* blank */}
+      </th>
+      <th className={["text-center px-3 py-2", HDR_LEFT_BG, HDR_TEXT, "text-xs font-extrabold border-l", HDR_BORDER].join(" ")}>
+        {/* blank */}
+      </th>
+
+      {BOOKS.map((b, idx) => (
+        <th
+          key={`sidehdr-${b}`}
+          className={[
+            "text-center px-2 py-2",
+            HDR_BOOK_BG,
+            "border-b",
+            HDR_BORDER,
+            idx === 0 ? `border-l ${HDR_BORDER}` : "",
+          ].join(" ")}
+          style={{ width: COL_BOOK }}
+        >
+          <div className="grid grid-cols-2 gap-2">
+            <div className="text-[10px] text-[#cfcfcf] font-extrabold">{left}</div>
+            <div className="text-[10px] text-[#cfcfcf] font-extrabold">{right}</div>
+          </div>
+        </th>
+      ))}
+    </tr>
+  );
+}
 
 function EventTwoRows({
   ev,
@@ -1319,8 +1358,9 @@ function EventTwoRows({
   const away = ev.away;
   const home = ev.home;
 
-  const mk = (s: SideOdds | undefined) => {
+  const mk = (s: SideOdds | undefined, whichForTotal: "over" | "under") => {
     if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
+
     if (market === "ml") {
       return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
     }
@@ -1328,16 +1368,20 @@ function EventTwoRows({
       return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
     }
     return {
-      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
-      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
-      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
-      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
-      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
+      dk: fmtTotalSide(s.total.dk, whichForTotal),
+      fd: fmtTotalSide(s.total.fd, whichForTotal),
+      mgm: fmtTotalSide(s.total.mgm, whichForTotal),
+      pin: fmtTotalSide(s.total.pin, whichForTotal),
+      bol: fmtTotalSide(s.total.bol, whichForTotal),
     };
   };
 
-  const awayCells = mk(away);
-  const homeCells = mk(home);
+  const leftLabel = market === "total" ? "Over" : "Away";
+  const rightLabel = market === "total" ? "Under" : "Home";
+
+  // left column values = AWAY row (or OVER); right column values = HOME row (or UNDER)
+  const leftCells = market === "total" ? mk(away, "over") : mk(away, "over");
+  const rightCells = market === "total" ? mk(home, "under") : mk(home, "under");
 
   const awayConsensus = consensusValueForRow(ev, market, "AWAY");
   const homeConsensus = consensusValueForRow(ev, market, "HOME");
@@ -1368,25 +1412,48 @@ function EventTwoRows({
 
         {showBooks && (
           <>
-            <BookValue value={awayCells.dk} borderLeft />
-            <BookValue value={awayCells.fd} />
-            <BookValue value={awayCells.mgm} />
-            <BookValue value={awayCells.pin} />
-            <BookValue value={awayCells.bol} />
+            {/* ✅ each book column shows left/right (Away/Home or Over/Under) centered */}
+            <td className={`p-3 border-l ${HDR_BORDER}`}>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.dk}</div>
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.dk}</div>
+              </div>
+            </td>
+            <td className="p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.fd}</div>
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.fd}</div>
+              </div>
+            </td>
+            <td className="p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.mgm}</div>
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.mgm}</div>
+              </div>
+            </td>
+            <td className="p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.pin}</div>
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.pin}</div>
+              </div>
+            </td>
+            <td className="p-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.bol}</div>
+                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.bol}</div>
+              </div>
+            </td>
           </>
         )}
       </tr>
 
+      {/* second row still shows consensus only (kept simple & consistent) */}
       <tr className={["hover:bg-[#0f0f0f]/50 transition-colors", `border-t border-[#1a1a1a]/60 border-b-2 ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue value={homeConsensus} />
-
         {showBooks && (
           <>
-            <BookValue value={homeCells.dk} borderLeft />
-            <BookValue value={homeCells.fd} />
-            <BookValue value={homeCells.mgm} />
-            <BookValue value={homeCells.pin} />
-            <BookValue value={homeCells.bol} />
+            {/* filler so table structure stays consistent; values already shown per-book in the top row */}
+            <td colSpan={5} className="p-0" />
           </>
         )}
       </tr>
@@ -1660,6 +1727,9 @@ export function OddsScreen() {
                     </>
                   )}
                 </tr>
+
+                {/* ✅ side labels row */}
+                {showBooksDesktop && <BooksSideHeaderRow market={market} />}
               </thead>
 
               <tbody>
