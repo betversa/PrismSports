@@ -69,7 +69,7 @@ type TeamMapRow = {
 const DEFAULT_SPORT_KEY = "basketball_ncaab";
 const DEFAULT_MARKETS = "h2h,spreads,totals";
 const DEFAULT_BOOKMAKERS =
-  "draftkings,fanduel,betmgm,betrivers,hardrockbet,betonlineag,pinnacle";
+  "draftkings,fanduel,betmgm,betonlineag,pinnacle";
 
 /* ===========================
    Helpers
