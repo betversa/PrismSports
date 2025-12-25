@@ -1,11 +1,14 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Books section centering + column headers + totals no O/U prefix)
-// ✅ Books values are CENTERED (so "—" doesn't look misaligned)
-// ✅ Away/Home OR Over/Under labels sit ABOVE their respective columns (mobile + desktop books)
-// ✅ Totals book cells NO LONGER prefix O/U (headers already define it)
-// ✅ History modal keeps: big charts, top-side axis labels, sharp badge, width+sharp always on
-// ✅ Spread + Total history can toggle Line ↔ Odds (Moneyline = Odds only)
+// screens/OddsScreen.tsx — FULL REWRITE (mobile books formatting + history modal wide charts)
+// ✅ Mobile Books: ALWAYS 2-line format (Line on top, Odds below) so wrapping never makes rows inconsistent
+// ✅ Mobile Books headers (Away/Home or Over/Under) are perfectly centered above their columns
+// ✅ Totals no longer show "O"/"U" prefixes because headers already indicate Over/Under
+// ✅ History modal charts are NOT skinny on mobile (no axis-side labels stealing width)
+// ✅ History chart "axis labels" moved to TOP (left/right) and never overlay tick labels
+// ✅ Market width + sharp moves ALWAYS ON (no toggles)
+// ✅ Spread/Total history can toggle Line ↔ Odds (Moneyline stays odds-only)
+// ✅ Sharp move shown as a RED badge in tooltip when detected
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   ResponsiveContainer,
@@ -51,7 +54,7 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos */
+/** Public folder book logos (FULL-COLOR assets) */
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -168,11 +171,10 @@ function fmtSpread(cell: SpreadCell) {
 }
 
 /**
- * Totals: no O/U prefix because headers already specify Over / Under.
- * - Over column uses cell.over
- * - Under column uses cell.under
+ * Totals: do NOT prefix with O/U since headers indicate Over/Under.
+ * Always return "line (odds)" when odds exists.
  */
-function fmtTotalSide(cell: TotalCell, which: "over" | "under") {
+function fmtTotalSplit(cell: TotalCell, which: "over" | "under") {
   if (!cell || cell.line == null) return "—";
   const v = which === "over" ? cell.over : cell.under;
   if (v == null) return `${cell.line}`;
@@ -243,7 +245,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     const odds: number[] = [];
     if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
     const m = median(odds);
-    return fmtML(m as any);
+    return m == null ? "—" : `${m}`;
   }
 
   if (market === "spread") {
@@ -264,7 +266,7 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
     return `${mLine} (${mOdds})`;
   }
 
-  // totals: AWAY = Over column, HOME = Under column
+  // totals: side is AWAY => Over cell, HOME => Under cell (matches your UI)
   const lines: number[] = [];
   const overOdds: number[] = [];
   const underOdds: number[] = [];
@@ -289,11 +291,12 @@ function consensusValueForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   const mUnder = median(underOdds);
 
   if (mLine == null) return "—";
-  return side === "AWAY" ? `${mLine} (${mOver == null ? "—" : mOver})` : `${mLine} (${mUnder == null ? "—" : mUnder})`;
+  if (side === "AWAY") return mOver == null ? `${mLine}` : `${mLine} (${mOver})`;
+  return mUnder == null ? `${mLine}` : `${mLine} (${mUnder})`;
 }
 
 /** =========================
- * HEADER FALLBACK
+ * HEADER FALLBACK (logos)
  * ========================= */
 
 function headerFallbackPillDataUri(label: string) {
@@ -425,28 +428,23 @@ function BookHeader({
   );
 }
 
-/** Books cell is always CENTERED (including "—") */
 function BookValue({ value, borderLeft }: { value: string; borderLeft?: boolean }) {
   return (
     <td
       className={[
-        "p-3 text-white text-center tabular-nums font-bold text-[13.5px] align-middle",
+        "p-3 text-white text-center tabular-nums font-bold text-[13.5px]",
         borderLeft ? `border-l ${HDR_BORDER}` : "",
       ].join(" ")}
     >
-      <div className="w-full flex items-center justify-center">
-        <span className="inline-block text-center">{value}</span>
-      </div>
+      {value}
     </td>
   );
 }
 
 function ConsensusValue({ value }: { value: string }) {
   return (
-    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px] align-middle", `border-r ${HDR_BORDER}`].join(" ")}>
-      <div className="w-full flex items-center justify-center">
-        <span className="inline-block text-center">{value}</span>
-      </div>
+    <td className={["p-3 text-white text-center tabular-nums font-bold text-[13.5px]", `border-r ${HDR_BORDER}`].join(" ")}>
+      {value}
     </td>
   );
 }
@@ -571,19 +569,25 @@ type ChartPoint = {
   [book: string]: any;
 };
 
+/**
+ * valueMode:
+ * - "line": width = max(line)-min(line)
+ * - "odds": width = max(impliedProb)-min(impliedProb)
+ */
 function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line" | "odds", books: string[]) {
   const binMap = new Map<string, Map<string, HistoryRow>>();
 
   for (const r of rows) {
     const bin = floorToMinuteIso(r.ts);
     const byBook = binMap.get(bin) ?? new Map<string, HistoryRow>();
-    const prev = byBook.get(r.bookmaker);
+    const prev = byBook.get(String(r.bookmaker).toLowerCase());
 
-    if (!prev) byBook.set(r.bookmaker, r);
+    const key = String(r.bookmaker || "").toLowerCase();
+    if (!prev) byBook.set(key, r);
     else {
       const pt = new Date(normalizeIso(prev.ts) ?? prev.ts).getTime();
       const rt = new Date(normalizeIso(r.ts) ?? r.ts).getTime();
-      if (rt >= pt) byBook.set(r.bookmaker, r);
+      if (rt >= pt) byBook.set(key, r);
     }
 
     binMap.set(bin, byBook);
@@ -596,7 +600,7 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
     const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
 
     for (const b of books) {
-      const row = byBook.get(b);
+      const row = byBook.get(String(b).toLowerCase());
       if (!row) continue;
 
       if (valueMode === "line") {
@@ -608,9 +612,6 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
 
     if (typeof p["pinnacle"] === "number") p.pin = p["pinnacle"];
 
-    // Market Width:
-    // - line mode: range of lines across books
-    // - odds mode: range of implied probabilities across books
     if (valueMode === "line") {
       const vals = books.map((b) => p[b]).filter((v) => typeof v === "number" && Number.isFinite(v));
       if (vals.length >= 2) p.mw = +(Math.max(...vals) - Math.min(...vals)).toFixed(2);
@@ -626,7 +627,7 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
     return p;
   });
 
-  // Sharp moves always on
+  // sharp moves always on
   const LINE_MOVE = uiMarket === "spread" ? 0.5 : uiMarket === "total" ? 1.0 : 0.0;
   const PROB_MOVE = 0.02;
 
@@ -672,6 +673,18 @@ function buildChartSeries(rows: HistoryRow[], uiMarket: Market, valueMode: "line
   }
 
   return points;
+}
+
+function useIsMobile(bp = 640) {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const on = () => setIsMobile(mq.matches);
+    on();
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, [bp]);
+  return isMobile;
 }
 
 /** =========================
@@ -726,8 +739,7 @@ function ModalShell({
 }
 
 /** =========================
- * HISTORY CHART PAIR
- * labels top-left / top-right (outside plot)
+ * HISTORY CHART PANEL (TOP labels, not skinny)
  * ========================= */
 
 function HistoryChartPair({
@@ -753,10 +765,11 @@ function HistoryChartPair({
   panelTitleB: string;
   canToggleMode: boolean;
 }) {
-  const isMobile = typeof window !== "undefined" ? window.matchMedia?.("(max-width: 640px)")?.matches ?? false : false;
-  const chartHeight = isMobile ? 420 : 560;
+  const isMobile = useIsMobile();
 
-  const mainLabel =
+  const chartHeight = isMobile ? 420 : 520;
+
+  const leftTopLabel =
     valueMode === "line"
       ? uiMarket === "spread"
         ? "Spread Line"
@@ -769,17 +782,19 @@ function HistoryChartPair({
       ? "Spread Odds"
       : "Total Odds";
 
-  const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
+  const rightTopLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
 
-  const margin = isMobile ? { top: 8, right: 10, left: 8, bottom: 18 } : { top: 10, right: 16, left: 12, bottom: 18 };
-  const mainAxisWidth = isMobile ? 46 : 54;
-  const mwAxisWidth = isMobile ? 10 : 10;
+  // no side axis labels => we can reclaim width (this fixes "skinny chart")
+  const margin = isMobile ? { top: 10, right: 16, left: 32, bottom: 14 } : { top: 10, right: 18, left: 34, bottom: 16 };
 
   const legendWrapperStyle = {
     fontSize: isMobile ? 10 : 11,
     fontWeight: 700,
     color: "#cfcfcf",
   } as React.CSSProperties;
+
+  const xTickSize = isMobile ? 10 : 11;
+  const yTickSize = isMobile ? 10 : 11;
 
   const empty = !seriesA.length && !seriesB.length;
 
@@ -807,136 +822,128 @@ function HistoryChartPair({
           {[
             { title: panelTitleA, data: seriesA } as const,
             { title: panelTitleB, data: seriesB } as const,
-          ].map((panel) => {
-            const hasSharp = panel.data.some((p) => !!p.sharp);
+          ].map((panel) => (
+            <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="text-white font-bold text-xs">{panel.title}</div>
 
-            return (
-              <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-white font-bold text-xs">{panel.title}</div>
-                  {hasSharp ? (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
-                      Sharp Move
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#2a2a2a] text-[#cfcfcf]">
-                      —
-                    </span>
-                  )}
+                {/* ✅ "axis labels" at TOP, left/right, never collide with ticks */}
+                <div className="flex items-center justify-end gap-3 min-w-0">
+                  <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{leftTopLabel}</div>
+                  <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{rightTopLabel}</div>
                 </div>
+              </div>
 
-                <div className="mt-2 mb-2 flex items-center justify-between">
-                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">{mainLabel}</div>
-                  <div className="text-[10px] sm:text-[11px] text-[#cfcfcf] font-extrabold">{mwLabel}</div>
-                </div>
+              <div style={{ height: chartHeight }} className="w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={panel.data} margin={margin}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="t" tick={{ fontSize: xTickSize }} interval="preserveStartEnd" />
 
-                <div className="w-full min-w-0" style={{ height: chartHeight }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={panel.data} margin={margin}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="t" tick={{ fontSize: isMobile ? 10 : 11 }} interval="preserveStartEnd" />
+                    <YAxis
+                      yAxisId="main"
+                      tick={{ fontSize: yTickSize }}
+                      tickMargin={8}
+                      width={isMobile ? 32 : 36}
+                    />
 
-                      <YAxis yAxisId="main" width={mainAxisWidth} tick={{ fontSize: isMobile ? 10 : 11 }} tickMargin={6} />
+                    <YAxis
+                      yAxisId="mw"
+                      orientation="right"
+                      tick={{ fontSize: yTickSize }}
+                      tickMargin={8}
+                      width={isMobile ? 36 : 40}
+                    />
 
-                      <YAxis
-                        yAxisId="mw"
-                        orientation="right"
-                        width={mwAxisWidth}
-                        tick={false}
-                        axisLine={false}
-                        tickLine={false}
-                      />
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload?.length) return null;
+                        const row: any = payload[0]?.payload;
 
-                      <Tooltip
-                        content={({ active, payload, label }) => {
-                          if (!active || !payload?.length) return null;
-                          const row: any = payload[0]?.payload;
+                        const lines = (payload ?? [])
+                          .filter((p) => p?.dataKey && typeof p.value === "number")
+                          .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
+                          .filter((x) => x.k !== "mw");
 
-                          const lines = (payload ?? [])
-                            .filter((p) => p?.dataKey && typeof p.value === "number")
-                            .map((p) => ({ k: String(p.dataKey), v: p.value as number }))
-                            .filter((x) => x.k !== "mw");
+                        return (
+                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[300px]">
+                            <div className="font-extrabold text-white mb-1">{label}</div>
 
-                          return (
-                            <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[280px]">
-                              <div className="font-extrabold text-white mb-1">{label}</div>
+                            {row?.mw != null && (
+                              <div className="mb-1">
+                                <span className="font-bold">Width:</span> {row.mw}
+                              </div>
+                            )}
 
-                              {row?.mw != null && (
-                                <div className="mb-1">
-                                  <span className="font-bold">Width:</span> {row.mw}
+                            <div className="space-y-0.5">
+                              {lines.slice(0, 12).map((x) => (
+                                <div key={x.k} className="flex items-center justify-between gap-2">
+                                  <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
+                                  <span className="text-white font-extrabold tabular-nums">{x.v}</span>
                                 </div>
-                              )}
-
-                              <div className="space-y-0.5">
-                                {lines.slice(0, 12).map((x) => (
-                                  <div key={x.k} className="flex items-center justify-between gap-2">
-                                    <span className="text-[#9a9a9a] font-semibold">{x.k}</span>
-                                    <span className="text-white font-extrabold tabular-nums">{x.v}</span>
-                                  </div>
-                                ))}
-                              </div>
-
-                              <div className="mt-2">
-                                {row?.sharp ? (
-                                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
-                                    Sharp
-                                  </span>
-                                ) : (
-                                  <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#2a2a2a] text-[#cfcfcf]">
-                                    —
-                                  </span>
-                                )}
-                              </div>
+                              ))}
                             </div>
-                          );
-                        }}
-                      />
 
-                      <Legend wrapperStyle={legendWrapperStyle} />
+                            <div className="mt-2">
+                              {row?.sharp ? (
+                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
+                                  Sharp Move
+                                </span>
+                              ) : (
+                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#2a2a2a] text-[#cfcfcf]">
+                                  —
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
 
-                      {books.map((b) => (
-                        <Line
-                          key={b}
-                          yAxisId="main"
-                          type="monotone"
-                          dataKey={b}
-                          name={b}
-                          dot={false}
-                          strokeWidth={2}
-                          connectNulls
-                          stroke={seriesColor(b)}
-                        />
-                      ))}
+                    <Legend wrapperStyle={legendWrapperStyle} />
 
+                    {books.map((b) => (
                       <Line
-                        yAxisId="mw"
+                        key={b}
+                        yAxisId="main"
                         type="monotone"
-                        dataKey="mw"
-                        name="Market Width"
+                        dataKey={b}
+                        name={b}
                         dot={false}
                         strokeWidth={2}
                         connectNulls
-                        stroke="#e5e7eb"
-                        strokeDasharray="6 6"
+                        stroke={seriesColor(b)}
                       />
+                    ))}
 
-                      {panel.data
-                        .filter((p) => p.sharp)
-                        .map((p) => (
-                          <ReferenceLine
-                            key={`sharp-${panel.title}-${p.ts}`}
-                            x={p.t}
-                            stroke="rgba(239,68,68,0.55)"
-                            strokeDasharray="3 3"
-                            yAxisId="main"
-                          />
-                        ))}
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                    <Line
+                      yAxisId="mw"
+                      type="monotone"
+                      dataKey="mw"
+                      name="Market Width"
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      stroke="#e5e7eb"
+                      strokeDasharray="6 6"
+                    />
+
+                    {panel.data
+                      .filter((p) => p.sharp)
+                      .map((p) => (
+                        <ReferenceLine
+                          key={`sharp-${panel.title}-${p.ts}`}
+                          x={p.t}
+                          stroke="rgba(239,68,68,0.55)"
+                          strokeDasharray="3 3"
+                          yAxisId="main"
+                        />
+                      ))}
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -1003,9 +1010,16 @@ function LineMovementModal({
       if (error) {
         setErr(error.message);
         setBooks([]);
-        setMlAwayOdds([]); setMlHomeOdds([]);
-        setSpAwayLine([]); setSpHomeLine([]); setSpAwayOdds([]); setSpHomeOdds([]);
-        setToOverLine([]); setToUnderLine([]); setToOverOdds([]); setToUnderOdds([]);
+        setMlAwayOdds([]);
+        setMlHomeOdds([]);
+        setSpAwayLine([]);
+        setSpHomeLine([]);
+        setSpAwayOdds([]);
+        setSpHomeOdds([]);
+        setToOverLine([]);
+        setToUnderLine([]);
+        setToOverOdds([]);
+        setToUnderOdds([]);
         setLoading(false);
         return;
       }
@@ -1124,8 +1138,31 @@ function LineMovementModal({
 }
 
 /** =========================
- * MOBILE BOOK ROW (CENTERED VALUES)
+ * MOBILE BOOKS (CONSISTENT 2-LINE CELLS)
  * ========================= */
+
+function splitLineOdds(value: string) {
+  const v = (value ?? "").trim();
+  if (!v || v === "—" || v === "-") return { line: "—", odds: "" };
+
+  // "164.5 (-110)" => { line: "164.5", odds: "(-110)" }
+  const m = v.match(/^(.+?)\s*\(\s*([^)]+)\s*\)\s*$/);
+  if (m) return { line: m[1].trim(), odds: `(${m[2].trim()})` };
+
+  // line-only
+  return { line: v, odds: "" };
+}
+
+function MobileBookCell({ value }: { value: string }) {
+  const { line, odds } = splitLineOdds(value);
+
+  return (
+    <div className="flex flex-col items-center justify-center text-center leading-tight min-w-0">
+      <div className="text-[13px] text-white font-extrabold tabular-nums">{line}</div>
+      {odds ? <div className="text-[12px] text-white/90 font-extrabold tabular-nums">{odds}</div> : <div className="h-[16px]" />}
+    </div>
+  );
+}
 
 function BookRowMobile2Col({
   book,
@@ -1149,16 +1186,15 @@ function BookRowMobile2Col({
 
   return (
     <div className="py-2 border-b border-[#141414] last:border-b-0">
-      <div className="flex items-center justify-between gap-3">
-        <BookLogoPill src={BOOK_LOGOS[book]} alt={meta.alt} fallbackLabel={meta.fb} />
+      <div className="grid grid-cols-[96px_1fr] items-center gap-3">
+        <div className="flex items-center justify-start">
+          <BookLogoPill src={BOOK_LOGOS[book]} alt={meta.alt} fallbackLabel={meta.fb} />
+        </div>
 
-        <div className="grid grid-cols-2 gap-3 w-[52%]">
-          <div className="flex items-center justify-center">
-            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight text-center">{leftValue}</div>
-          </div>
-          <div className="flex items-center justify-center">
-            <div className="text-[13px] text-white font-extrabold tabular-nums leading-tight text-center">{rightValue}</div>
-          </div>
+        {/* ✅ same 2-col grid as header labels */}
+        <div className="grid grid-cols-2 gap-3 w-full">
+          <MobileBookCell value={leftValue} />
+          <MobileBookCell value={rightValue} />
         </div>
       </div>
     </div>
@@ -1185,12 +1221,19 @@ function EventCardMobile({
   const away = ev.away;
   const home = ev.home;
 
-  const mkRow = (s: SideOdds | undefined, whichForTotal: "over" | "under") => {
+  const mkRow = (s: SideOdds | undefined) => {
     if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
 
     if (market === "ml") {
-      return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
+      return {
+        dk: fmtML(s.ml.dk),
+        fd: fmtML(s.ml.fd),
+        mgm: fmtML(s.ml.mgm),
+        pin: fmtML(s.ml.pin),
+        bol: fmtML(s.ml.bol),
+      };
     }
+
     if (market === "spread") {
       return {
         dk: fmtSpread(s.spread.dk),
@@ -1200,25 +1243,25 @@ function EventCardMobile({
         bol: fmtSpread(s.spread.bol),
       };
     }
-    // total: left column is OVER, right column is UNDER
+
+    // total: away row is OVER, home row is UNDER
     return {
-      dk: fmtTotalSide(s.total.dk, whichForTotal),
-      fd: fmtTotalSide(s.total.fd, whichForTotal),
-      mgm: fmtTotalSide(s.total.mgm, whichForTotal),
-      pin: fmtTotalSide(s.total.pin, whichForTotal),
-      bol: fmtTotalSide(s.total.bol, whichForTotal),
+      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
+      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
+      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
+      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
+      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
     };
   };
 
-  const leftIsOver = market === "total";
-  const leftLabel = leftIsOver ? "Over" : "Away";
-  const rightLabel = leftIsOver ? "Under" : "Home";
+  const awayCells = mkRow(away);
+  const homeCells = mkRow(home);
 
-  const leftCells = leftIsOver ? mkRow(away, "over") : mkRow(away, "over");   // over arg ignored outside totals
-  const rightCells = leftIsOver ? mkRow(home, "under") : mkRow(home, "under"); // under arg ignored outside totals
+  const awayCons = consensusValueForRow(ev, market, "AWAY");
+  const homeCons = consensusValueForRow(ev, market, "HOME");
 
-  const leftCons = consensusValueForRow(ev, market, "AWAY");
-  const rightCons = consensusValueForRow(ev, market, "HOME");
+  const leftLabel = market === "total" ? "Over" : "Away";
+  const rightLabel = market === "total" ? "Under" : "Home";
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
@@ -1267,11 +1310,11 @@ function EventCardMobile({
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{leftCons}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{awayCons}</div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{rightCons}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{homeCons}</div>
             </div>
           </div>
         </div>
@@ -1281,22 +1324,24 @@ function EventCardMobile({
             <div className="px-4 py-2 border-b border-[#141414]">
               <div className="text-[12px] text-white font-extrabold">Books</div>
 
-              {/* ✅ headers aligned over their columns */}
+              {/* ✅ labels centered over value columns (no weird width hacks) */}
               <div className="mt-1 grid grid-cols-[96px_1fr] items-center">
                 <div />
-                <div className="grid grid-cols-2 gap-3 w-[52%] ml-auto">
-                  <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
-                  <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
+                <div className="w-full">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
+                    <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
+                  </div>
                 </div>
               </div>
             </div>
 
             <div className="px-4">
-              <BookRowMobile2Col book="dk" leftValue={leftCells.dk} rightValue={rightCells.dk} />
-              <BookRowMobile2Col book="fd" leftValue={leftCells.fd} rightValue={rightCells.fd} />
-              <BookRowMobile2Col book="mgm" leftValue={leftCells.mgm} rightValue={rightCells.mgm} />
-              <BookRowMobile2Col book="pin" leftValue={leftCells.pin} rightValue={rightCells.pin} />
-              <BookRowMobile2Col book="bol" leftValue={leftCells.bol} rightValue={rightCells.bol} />
+              <BookRowMobile2Col book="dk" leftValue={awayCells.dk} rightValue={homeCells.dk} />
+              <BookRowMobile2Col book="fd" leftValue={awayCells.fd} rightValue={homeCells.fd} />
+              <BookRowMobile2Col book="mgm" leftValue={awayCells.mgm} rightValue={homeCells.mgm} />
+              <BookRowMobile2Col book="pin" leftValue={awayCells.pin} rightValue={homeCells.pin} />
+              <BookRowMobile2Col book="bol" />
             </div>
           </div>
         )}
@@ -1306,43 +1351,8 @@ function EventCardMobile({
 }
 
 /** =========================
- * DESKTOP TWO-ROW TABLE + COLUMN LABEL ROW (when books shown)
+ * DESKTOP TWO-ROW TABLE
  * ========================= */
-
-function BooksSideHeaderRow({ market }: { market: Market }) {
-  const left = market === "total" ? "Over" : "Away";
-  const right = market === "total" ? "Under" : "Home";
-
-  return (
-    <tr className={`border-b ${HDR_BORDER}`}>
-      <th className={["text-left px-3 py-2", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-xs font-extrabold"].join(" ")}>
-        {/* blank */}
-      </th>
-      <th className={["text-center px-3 py-2", HDR_LEFT_BG, HDR_TEXT, "text-xs font-extrabold border-l", HDR_BORDER].join(" ")}>
-        {/* blank */}
-      </th>
-
-      {BOOKS.map((b, idx) => (
-        <th
-          key={`sidehdr-${b}`}
-          className={[
-            "text-center px-2 py-2",
-            HDR_BOOK_BG,
-            "border-b",
-            HDR_BORDER,
-            idx === 0 ? `border-l ${HDR_BORDER}` : "",
-          ].join(" ")}
-          style={{ width: COL_BOOK }}
-        >
-          <div className="grid grid-cols-2 gap-2">
-            <div className="text-[10px] text-[#cfcfcf] font-extrabold">{left}</div>
-            <div className="text-[10px] text-[#cfcfcf] font-extrabold">{right}</div>
-          </div>
-        </th>
-      ))}
-    </tr>
-  );
-}
 
 function EventTwoRows({
   ev,
@@ -1358,30 +1368,31 @@ function EventTwoRows({
   const away = ev.away;
   const home = ev.home;
 
-  const mk = (s: SideOdds | undefined, whichForTotal: "over" | "under") => {
+  const mk = (s: SideOdds | undefined) => {
     if (!s) return { dk: "—", fd: "—", mgm: "—", pin: "—", bol: "—" };
-
     if (market === "ml") {
       return { dk: fmtML(s.ml.dk), fd: fmtML(s.ml.fd), mgm: fmtML(s.ml.mgm), pin: fmtML(s.ml.pin), bol: fmtML(s.ml.bol) };
     }
     if (market === "spread") {
-      return { dk: fmtSpread(s.spread.dk), fd: fmtSpread(s.spread.fd), mgm: fmtSpread(s.spread.mgm), pin: fmtSpread(s.spread.pin), bol: fmtSpread(s.spread.bol) };
+      return {
+        dk: fmtSpread(s.spread.dk),
+        fd: fmtSpread(s.spread.fd),
+        mgm: fmtSpread(s.spread.mgm),
+        pin: fmtSpread(s.spread.pin),
+        bol: fmtSpread(s.spread.bol),
+      };
     }
     return {
-      dk: fmtTotalSide(s.total.dk, whichForTotal),
-      fd: fmtTotalSide(s.total.fd, whichForTotal),
-      mgm: fmtTotalSide(s.total.mgm, whichForTotal),
-      pin: fmtTotalSide(s.total.pin, whichForTotal),
-      bol: fmtTotalSide(s.total.bol, whichForTotal),
+      dk: fmtTotalSplit(s.total.dk, s.side === "AWAY" ? "over" : "under"),
+      fd: fmtTotalSplit(s.total.fd, s.side === "AWAY" ? "over" : "under"),
+      mgm: fmtTotalSplit(s.total.mgm, s.side === "AWAY" ? "over" : "under"),
+      pin: fmtTotalSplit(s.total.pin, s.side === "AWAY" ? "over" : "under"),
+      bol: fmtTotalSplit(s.total.bol, s.side === "AWAY" ? "over" : "under"),
     };
   };
 
-  const leftLabel = market === "total" ? "Over" : "Away";
-  const rightLabel = market === "total" ? "Under" : "Home";
-
-  // left column values = AWAY row (or OVER); right column values = HOME row (or UNDER)
-  const leftCells = market === "total" ? mk(away, "over") : mk(away, "over");
-  const rightCells = market === "total" ? mk(home, "under") : mk(home, "under");
+  const awayCells = mk(away);
+  const homeCells = mk(home);
 
   const awayConsensus = consensusValueForRow(ev, market, "AWAY");
   const homeConsensus = consensusValueForRow(ev, market, "HOME");
@@ -1412,48 +1423,25 @@ function EventTwoRows({
 
         {showBooks && (
           <>
-            {/* ✅ each book column shows left/right (Away/Home or Over/Under) centered */}
-            <td className={`p-3 border-l ${HDR_BORDER}`}>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.dk}</div>
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.dk}</div>
-              </div>
-            </td>
-            <td className="p-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.fd}</div>
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.fd}</div>
-              </div>
-            </td>
-            <td className="p-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.mgm}</div>
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.mgm}</div>
-              </div>
-            </td>
-            <td className="p-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.pin}</div>
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.pin}</div>
-              </div>
-            </td>
-            <td className="p-3">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{leftCells.bol}</div>
-                <div className="flex items-center justify-center text-white font-extrabold tabular-nums text-[13.5px]">{rightCells.bol}</div>
-              </div>
-            </td>
+            <BookValue value={awayCells.dk} borderLeft />
+            <BookValue value={awayCells.fd} />
+            <BookValue value={awayCells.mgm} />
+            <BookValue value={awayCells.pin} />
+            <BookValue value={awayCells.bol} />
           </>
         )}
       </tr>
 
-      {/* second row still shows consensus only (kept simple & consistent) */}
       <tr className={["hover:bg-[#0f0f0f]/50 transition-colors", `border-t border-[#1a1a1a]/60 border-b-2 ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue value={homeConsensus} />
+
         {showBooks && (
           <>
-            {/* filler so table structure stays consistent; values already shown per-book in the top row */}
-            <td colSpan={5} className="p-0" />
+            <BookValue value={homeCells.dk} borderLeft />
+            <BookValue value={homeCells.fd} />
+            <BookValue value={homeCells.mgm} />
+            <BookValue value={homeCells.pin} />
+            <BookValue value={homeCells.bol} />
           </>
         )}
       </tr>
@@ -1727,9 +1715,6 @@ export function OddsScreen() {
                     </>
                   )}
                 </tr>
-
-                {/* ✅ side labels row */}
-                {showBooksDesktop && <BooksSideHeaderRow market={market} />}
               </thead>
 
               <tbody>
@@ -1746,4 +1731,3 @@ export function OddsScreen() {
     </div>
   );
 }
-
