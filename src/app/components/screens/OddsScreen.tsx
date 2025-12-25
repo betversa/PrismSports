@@ -791,8 +791,8 @@ function HistoryChartPair({
 }) {
   const isMobile = useIsMobile();
 
-  // bigger again (and truly fills width)
-  const chartHeight = isMobile ? 440 : 560;
+  // BIG graphs, but *usable* width on mobile
+  const chartHeight = isMobile ? 420 : 560;
 
   const yLabel =
     valueMode === "line"
@@ -809,9 +809,15 @@ function HistoryChartPair({
 
   const mwLabel = valueMode === "line" ? "Market Width (Pts)" : "Market Width (Prob)";
 
-  // margins tuned so right label never clips on mobile, without crushing plot area
-  const margin = isMobile ? { top: 10, right: 76, left: 44, bottom: 18 } : { top: 10, right: 72, left: 44, bottom: 18 };
+  // ✅ Key fix: on mobile, don't waste width on the right axis
+  const showRightAxis = !isMobile;
 
+  // ✅ Much tighter margins on mobile so plot area isn't crushed
+  const margin = isMobile
+    ? { top: 8, right: 12, left: 36, bottom: 16 }
+    : { top: 10, right: 72, left: 44, bottom: 18 };
+
+  // smaller axis label on mobile
   const axisLabelStyle = {
     fill: "#cfcfcf",
     fontSize: isMobile ? 10 : 11,
@@ -829,12 +835,11 @@ function HistoryChartPair({
   const xTickSize = isMobile ? 10 : 11;
   const yTickSize = isMobile ? 10 : 11;
 
-  const mainOffset = isMobile ? 16 : 14;
-  const mwOffset = isMobile ? 26 : 22;
+  const mainOffset = isMobile ? 14 : 14;
+  const mwOffset = isMobile ? 0 : 22;
 
   const empty = !seriesA.length && !seriesB.length;
 
-  // dataKey builder for current mode
   const keyFor = (b: string) => (valueMode === "line" ? `${b}_line` : `${b}_odds`);
   const mwKey = valueMode === "line" ? "mw_line" : "mw_prob";
   const sharpKey = valueMode === "line" ? "sharp_line" : "sharp_odds";
@@ -859,7 +864,6 @@ function HistoryChartPair({
       {empty ? (
         <div className="p-4 text-xs text-[#808080]">No history rows found in this window for this market.</div>
       ) : (
-        // Breakpoint change: side-by-side from lg, not xl (gives you “wide” sooner)
         <div className="p-3 sm:p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
           {[
             { title: panelTitleA, data: seriesA } as const,
@@ -868,7 +872,8 @@ function HistoryChartPair({
             <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
               <div className="text-white font-bold text-xs mb-2">{panel.title}</div>
 
-              <div style={{ height: chartHeight }} className="w-full">
+              {/* ✅ Ensure the chart container cannot become narrow */}
+              <div style={{ height: chartHeight, width: "100%" }} className="w-full min-w-0">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={panel.data} margin={margin}>
                     <CartesianGrid strokeDasharray="3 3" />
@@ -877,7 +882,8 @@ function HistoryChartPair({
                     <YAxis
                       yAxisId="main"
                       tick={{ fontSize: yTickSize }}
-                      tickMargin={8}
+                      tickMargin={6}
+                      width={isMobile ? 38 : 48}
                       label={{
                         value: yLabel,
                         angle: -90,
@@ -887,18 +893,25 @@ function HistoryChartPair({
                       }}
                     />
 
+                    {/* ✅ RIGHT AXIS: keep MW plotted, but hide the axis on mobile to save width */}
                     <YAxis
                       yAxisId="mw"
                       orientation="right"
-                      tick={{ fontSize: yTickSize }}
-                      tickMargin={10}
-                      label={{
-                        value: mwLabel,
-                        angle: 90,
-                        position: "insideRight",
-                        offset: mwOffset,
-                        style: axisLabelStyle,
-                      }}
+                      hide={!showRightAxis}
+                      tick={showRightAxis ? { fontSize: yTickSize } : false}
+                      tickMargin={showRightAxis ? 10 : 0}
+                      width={showRightAxis ? 48 : 0}
+                      label={
+                        showRightAxis
+                          ? {
+                              value: mwLabel,
+                              angle: 90,
+                              position: "insideRight",
+                              offset: mwOffset,
+                              style: axisLabelStyle,
+                            }
+                          : undefined
+                      }
                     />
 
                     <Tooltip
@@ -906,7 +919,7 @@ function HistoryChartPair({
                         if (!active || !payload?.length) return null;
                         const row: any = payload[0]?.payload;
 
-                        // show BOTH line + odds for each book (when available)
+                        // show BOTH line + odds for each book when available
                         const items = books
                           .map((b) => {
                             const line = row?.[`${b}_line`];
@@ -936,16 +949,12 @@ function HistoryChartPair({
                                     {valueMode === "line" ? (
                                       <>
                                         {x.line ?? "—"}{" "}
-                                        <span className="text-[#9a9a9a] font-semibold">
-                                          ({x.odds ?? "—"})
-                                        </span>
+                                        <span className="text-[#9a9a9a] font-semibold">({x.odds ?? "—"})</span>
                                       </>
                                     ) : (
                                       <>
                                         {x.odds ?? "—"}{" "}
-                                        <span className="text-[#9a9a9a] font-semibold">
-                                          ({x.line ?? "—"})
-                                        </span>
+                                        <span className="text-[#9a9a9a] font-semibold">({x.line ?? "—"})</span>
                                       </>
                                     )}
                                   </span>
@@ -985,6 +994,7 @@ function HistoryChartPair({
                       />
                     ))}
 
+                    {/* ✅ MW still plotted on mobile; axis is just hidden */}
                     <Line
                       yAxisId="mw"
                       type="monotone"
