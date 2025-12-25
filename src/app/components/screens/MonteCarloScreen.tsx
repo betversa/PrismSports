@@ -2,23 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MONTE CARLO SCREEN — FULL REWRITE (SUMMARY LAYOUT v3.3)
+ * MONTE CARLO SCREEN — v3.5
  *
- * Changes in this version:
- * ✅ Card mini header text smaller + aligned with score/win% columns
- *    - Uses the SAME right-side layout widths as SummaryLine so headers center/line up
- * ✅ Details section now has Away/Home column headers
- *
- * Summary layout:
- * - Team name NEVER green
- * - AWAY/HOME label under the team name
- * - Proj score on the far right
- * - Win% next to proj score (no "Win:" prefix)
- * - Only ONE thing green: winner's SCORE (win% stays neutral)
- *
- * Responsive:
- * - Mobile: card list w/ mini header + dropdown details
- * - Desktop: table with sticky matchup cell containing the summary + dropdown details
+ * Fix in this version:
+ * ✅ Team font smaller + better truncation behavior so names don’t get chopped as aggressively
+ *    - Mobile team: 11px (was 12px)
+ *    - Desktop team: 13px (was 15px)
+ * ✅ Slightly more width for the team/name block by reducing logo size a touch
+ * ✅ Keeps score/win columns fixed so alignment remains clean
  */
 
 type MonteCarloRun = {
@@ -116,7 +107,7 @@ type EventBundle = {
   home: TeamRow;
 };
 
-/** ---------- Side normalization for odds_snapshot consensus ---------- */
+/** ---------- Side normalization ---------- */
 const SIDE_ALIASES = {
   home: new Set(["home", "h", "team1", "t1"]),
   away: new Set(["away", "a", "team2", "t2"]),
@@ -134,16 +125,15 @@ function normalizeSide(raw: string | null): "home" | "away" | "over" | "under" |
   return null;
 }
 
-/** ---------- Styling constants ---------- */
+/** ---------- Layout constants ---------- */
 const HDR_LEFT_BG = "bg-[#0a0a0a]";
 const HDR_TEXT = "text-[#cfcfcf]";
 const HDR_BORDER = "border-[#2a2a2a]";
-const COL_MATCHUP = 560;
+const COL_MATCHUP = 580;
 
-/** Right-side column alignment for score + win% (matches SummaryLine) */
-const SCORE_COL_W = 56; // px
-const WIN_COL_W = 58; // px
-const RIGHT_GAP_PX = 8; // gap between score and win columns
+const SCORE_COL_W = 56;
+const WIN_COL_W = 58;
+const RIGHT_GAP_PX = 8;
 
 /** ---------- Formatters ---------- */
 function formatTs(ts: string) {
@@ -176,22 +166,18 @@ function pushMap(map: Map<string, number[]>, key: string, v: number) {
   arr.push(v);
   map.set(key, arr);
 }
-
 function numOr(v: number | null | undefined, fb: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
 }
-
 function numOrNullable(v: any): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
-
 function safeRound1(x: number) {
   if (!Number.isFinite(x)) return 0;
   return Math.round(x * 10) / 10;
 }
-
 function medianOrNull(nums: number[]): number | null {
   const arr = nums
     .filter((n) => Number.isFinite(n))
@@ -204,7 +190,7 @@ function medianOrNull(nums: number[]): number | null {
 }
 
 /** ---------- UI bits ---------- */
-function LogoBox({ team, url, size = 48 }: { team: string; url: string | null; size?: number }) {
+function LogoBox({ team, url, size }: { team: string; url: string | null; size: number }) {
   if (!url) {
     return <div style={{ width: size, height: size }} className="rounded-md bg-white border border-[#e5e5e5]" />;
   }
@@ -222,14 +208,6 @@ function LogoBox({ team, url, size = 48 }: { team: string; url: string | null; s
   );
 }
 
-/**
- * Summary row layout:
- * [logo] [team name + (AWAY/HOME label under)] ............ [score] [win%]
- * - team name never green
- * - only score is green for winner
- *
- * "compact" is used for mobile cards and makes ALL text smaller.
- */
 function SummaryLine({
   team,
   sideLabel,
@@ -237,7 +215,7 @@ function SummaryLine({
   score,
   winProb,
   isWinner,
-  compact,
+  variant,
 }: {
   team: string;
   sideLabel: "AWAY" | "HOME";
@@ -245,25 +223,32 @@ function SummaryLine({
   score: number;
   winProb: number | null;
   isWinner: boolean;
-  compact?: boolean;
+  variant: "mobile" | "desktop";
 }) {
-  const logoSize = compact ? 38 : 48;
+  const isMobile = variant === "mobile";
 
-  const teamText = compact ? "text-[12px]" : "text-[16px]";
-  const sideText = compact ? "text-[9px]" : "text-[11px]";
-  const scoreText = compact ? "text-[13px]" : "text-[17px]";
-  const winText = compact ? "text-[10px]" : "text-[13px]";
+  // Make logo slightly smaller to give team text more horizontal room
+  const logoSize = isMobile ? 34 : 42;
+
+  // ✅ Smaller team font sizes
+  const teamText = isMobile ? "text-[11px]" : "text-[13px]";
+  const sideText = isMobile ? "text-[9px]" : "text-[10px]";
+  const scoreText = isMobile ? "text-[13px]" : "text-[16px]";
+  const winText = isMobile ? "text-[10px]" : "text-[12px]";
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 min-w-0">
       <LogoBox team={team} url={logoUrl} size={logoSize} />
 
-      <div className="min-w-0 leading-tight">
-        <div className={["text-white font-extrabold truncate", teamText].join(" ")}>{team}</div>
+      {/* min-w-0 ensures truncate works; pr-1 gives ellipsis breathing room */}
+      <div className="min-w-0 leading-tight pr-1">
+        <div className={["text-white font-extrabold truncate", teamText].join(" ")} title={team}>
+          {team}
+        </div>
         <div className={["text-[#7a7a7a] font-semibold", sideText].join(" ")}>{sideLabel}</div>
       </div>
 
-      <div className="ml-auto flex items-baseline tabular-nums" style={{ gap: RIGHT_GAP_PX }}>
+      <div className="ml-auto flex items-baseline tabular-nums shrink-0" style={{ gap: RIGHT_GAP_PX }}>
         <div
           className={["font-extrabold text-right", scoreText, isWinner ? "text-green-400" : "text-white"].join(" ")}
           style={{ width: SCORE_COL_W }}
@@ -278,19 +263,19 @@ function SummaryLine({
   );
 }
 
-/** ---------- Card mini header row (aligned to SummaryLine right columns) ---------- */
-function CardMiniHeader({ timeLabel }: { timeLabel: string }) {
-  // smaller text so it visually centers better with the tighter score/win columns
-  const labelText = "text-[9px]";
+function EventMiniHeader({ timeLabel, variant }: { timeLabel: string; variant: "mobile" | "desktop" }) {
+  const isMobile = variant === "mobile";
+  const labelText = isMobile ? "text-[9px]" : "text-[10px]";
+  const timeText = isMobile ? "text-[10px]" : "text-[11px]";
 
   return (
-    <div className="flex items-end">
+    <div className="flex items-end min-w-0">
       <div className="min-w-0">
         <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a]", labelText].join(" ")}>Matchup</div>
-        <div className="text-[10px] text-[#cfcfcf] font-extrabold truncate">{timeLabel}</div>
+        <div className={["text-[#cfcfcf] font-extrabold truncate", timeText].join(" ")}>{timeLabel}</div>
       </div>
 
-      <div className="ml-auto flex items-end tabular-nums" style={{ gap: RIGHT_GAP_PX }}>
+      <div className="ml-auto flex items-end tabular-nums shrink-0" style={{ gap: RIGHT_GAP_PX }}>
         <div
           className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right", labelText].join(" ")}
           style={{ width: SCORE_COL_W }}
@@ -308,7 +293,7 @@ function CardMiniHeader({ timeLabel }: { timeLabel: string }) {
   );
 }
 
-/** ---------- Details block (now includes Away/Home column headers) ---------- */
+/** ---------- Details block ---------- */
 function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
   const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
@@ -387,12 +372,68 @@ function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   );
 }
 
+function DesktopEventBlock({
+  ev,
+  open,
+  onToggle,
+}: {
+  ev: EventBundle;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <EventMiniHeader timeLabel={timeLabel} variant="desktop" />
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="shrink-0 text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+        >
+          {open ? "Hide Details" : "Show Details"}
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        <SummaryLine
+          team={ev.away.teamName}
+          sideLabel="AWAY"
+          logoUrl={ev.away.logoUrl}
+          score={ev.away.projPoints}
+          winProb={ev.away.winProbTeam}
+          isWinner={ev.away.isProjectedWinner}
+          variant="desktop"
+        />
+        <SummaryLine
+          team={ev.home.teamName}
+          sideLabel="HOME"
+          logoUrl={ev.home.logoUrl}
+          score={ev.home.projPoints}
+          winProb={ev.home.winProbTeam}
+          isWinner={ev.home.isProjectedWinner}
+          variant="desktop"
+        />
+      </div>
+
+      {open ? (
+        <div className="pt-1">
+          <DetailsBlock away={ev.away} home={ev.home} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** ---------- Main Screen ---------- */
 export function MonteCarloScreen() {
   const [run, setRun] = useState<MonteCarloRun | null>(null);
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
-
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
 
   const [loadingRun, setLoadingRun] = useState(true);
@@ -514,7 +555,7 @@ export function MonteCarloScreen() {
     };
   }, [run?.id]);
 
-  // 3) consensus from odds_snapshot
+  // 3) consensus
   useEffect(() => {
     let alive = true;
 
@@ -756,7 +797,6 @@ export function MonteCarloScreen() {
         </div>
       ) : null}
 
-      {/* Main content */}
       <div className="flex-1 overflow-hidden">
         {/* MOBILE */}
         <div className="md:hidden h-full overflow-y-auto px-3 pb-4 space-y-3">
@@ -770,7 +810,6 @@ export function MonteCarloScreen() {
 
               return (
                 <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
-                  {/* Top bar: toggle only (time is now in mini header) */}
                   <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-end">
                     <button
                       type="button"
@@ -782,9 +821,8 @@ export function MonteCarloScreen() {
                   </div>
 
                   <div className="p-3 space-y-3">
-                    {/* Mini header row inside card (aligned columns) */}
                     <div className="pb-2 border-b border-[#141414]">
-                      <CardMiniHeader timeLabel={timeLabel} />
+                      <EventMiniHeader timeLabel={timeLabel} variant="mobile" />
                     </div>
 
                     <SummaryLine
@@ -794,7 +832,7 @@ export function MonteCarloScreen() {
                       score={ev.away.projPoints}
                       winProb={ev.away.winProbTeam}
                       isWinner={ev.away.isProjectedWinner}
-                      compact
+                      variant="mobile"
                     />
                     <SummaryLine
                       team={ev.home.teamName}
@@ -803,7 +841,7 @@ export function MonteCarloScreen() {
                       score={ev.home.projPoints}
                       winProb={ev.home.winProbTeam}
                       isWinner={ev.home.isProjectedWinner}
-                      compact
+                      variant="mobile"
                     />
 
                     {openMap[ev.eventId] ? <DetailsBlock away={ev.away} home={ev.home} /> : null}
@@ -844,41 +882,11 @@ export function MonteCarloScreen() {
                     <>
                       <tr key={`${ev.eventId}-row`} className="hover:bg-[#0f0f0f]/50 transition-colors">
                         <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-top", `border-r ${HDR_BORDER}`].join(" ")}>
-                          <div className="text-[12px] text-[#cfcfcf] font-semibold mb-3 flex items-center justify-between gap-3">
-                            <span>{ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD"}</span>
-                            <button
-                              type="button"
-                              onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                              className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
-                            >
-                              {openMap[ev.eventId] ? "Hide Details" : "Show Details"}
-                            </button>
-                          </div>
-
-                          <div className="space-y-3">
-                            <SummaryLine
-                              team={ev.away.teamName}
-                              sideLabel="AWAY"
-                              logoUrl={ev.away.logoUrl}
-                              score={ev.away.projPoints}
-                              winProb={ev.away.winProbTeam}
-                              isWinner={ev.away.isProjectedWinner}
-                            />
-                            <SummaryLine
-                              team={ev.home.teamName}
-                              sideLabel="HOME"
-                              logoUrl={ev.home.logoUrl}
-                              score={ev.home.projPoints}
-                              winProb={ev.home.winProbTeam}
-                              isWinner={ev.home.isProjectedWinner}
-                            />
-
-                            {openMap[ev.eventId] ? (
-                              <div className="pt-2">
-                                <DetailsBlock away={ev.away} home={ev.home} />
-                              </div>
-                            ) : null}
-                          </div>
+                          <DesktopEventBlock
+                            ev={ev}
+                            open={!!openMap[ev.eventId]}
+                            onToggle={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
+                          />
                         </td>
                         <td className="p-0" />
                       </tr>
@@ -898,7 +906,4 @@ export function MonteCarloScreen() {
     </div>
   );
 }
-
-
-
 
