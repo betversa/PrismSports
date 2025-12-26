@@ -1,24 +1,23 @@
-// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE
-// ✅ Desktop: ALWAYS shows full details (no per-game toggle on desktop)
-// ✅ Mobile: keeps card layout + toggle, but replaces "AWAY/HOME" labels with team abbreviations from team_map.abbreviation
-// ✅ Mobile Details header also uses abbreviations instead of "Away/Home"
-// ✅ Same data tables + consensus logic (no logic changes to where data comes from)
+// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (Desktop upgraded to match OddsScreen “web” layout)
+// ✅ Desktop uses centered max-width container + “site” feel
+// ✅ Desktop is NO LONGER a 2-col table shell — it renders event blocks in a clean grid list (like OddsScreen card rhythm)
+// ✅ Desktop details toggle per-game (kept), with better spacing + borders
+// ✅ Mobile stays card-based (unchanged behavior, just aligned styling)
+// ✅ No data logic changes (same tables + consensus logic you already have)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MONTE CARLO SCREEN — v4.1
+ * MONTE CARLO SCREEN — v4.0 (DESKTOP WEB LAYOUT)
  *
- * Desktop:
- * ✅ Centered max-width container (web feel)
- * ✅ Event blocks (OddsScreen rhythm)
- * ✅ Always show Details for each event (no toggle)
+ * Desktop upgrades:
+ * ✅ Centered max-width container (less “app”, more “web”)
+ * ✅ Clean event blocks with consistent spacing + separators
+ * ✅ Sticky header removed (not needed now that desktop isn't table-based)
  *
  * Mobile:
- * ✅ Card layout + toggle
- * ✅ Uses team abbreviation in place of AWAY/HOME labels (team_map.abbreviation)
- * ✅ Details header uses abbreviations instead of Away/Home
+ * ✅ Same card layout + details toggle
  */
 
 type MonteCarloRun = {
@@ -51,9 +50,8 @@ type MonteCarloResultRow = {
   away_win_prob?: number | null;
 };
 
-type TeamMapRow = {
+type TeamMapLogoRow = {
   canonical: string;
-  abbreviation?: string | null;
   "Logo URL": string | null;
 };
 
@@ -89,7 +87,6 @@ type TeamRow = {
   side: SideKey;
   teamName: string;
   logoUrl: string | null;
-  abbr: string | null;
 
   projPoints: number;
   projMarginTeam: number;
@@ -223,7 +220,7 @@ function SummaryLine({
   variant,
 }: {
   team: string;
-  sideLabel: string; // can be "AWAY"/"HOME" (desktop) OR "DUKE"/"UNC" etc (mobile)
+  sideLabel: "AWAY" | "HOME";
   logoUrl: string | null;
   score: number;
   winProb: number | null;
@@ -246,9 +243,7 @@ function SummaryLine({
         <div className={["text-white font-extrabold truncate", teamText].join(" ")} title={team}>
           {team}
         </div>
-        <div className={["text-[#7a7a7a] font-semibold uppercase tracking-wide", sideText].join(" ")}>
-          {sideLabel}
-        </div>
+        <div className={["text-[#7a7a7a] font-semibold", sideText].join(" ")}>{sideLabel}</div>
       </div>
 
       <div className="ml-auto flex items-baseline tabular-nums shrink-0" style={{ gap: RIGHT_GAP_PX }}>
@@ -297,17 +292,7 @@ function EventMiniHeader({ timeLabel, variant }: { timeLabel: string; variant: "
 }
 
 /** ---------- Details block ---------- */
-function DetailsBlock({
-  away,
-  home,
-  headerLeft,
-  headerRight,
-}: {
-  away: TeamRow;
-  home: TeamRow;
-  headerLeft: string; // header label for away column (desktop: "Away", mobile: "DUKE")
-  headerRight: string; // header label for home column (desktop: "Home", mobile: "UNC")
-}) {
+function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
   const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
 
@@ -338,12 +323,8 @@ function DetailsBlock({
   const headerRow = (
     <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414]">
       <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide"> </div>
-      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right truncate">
-        {headerLeft}
-      </div>
-      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right truncate">
-        {headerRight}
-      </div>
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">Away</div>
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">Home</div>
     </div>
   );
 
@@ -390,13 +371,31 @@ function DetailsBlock({
 }
 
 /** ---------- Desktop event block (web style) ---------- */
-function DesktopEventBlock({ ev }: { ev: EventBundle }) {
+function DesktopEventBlock({
+  ev,
+  open,
+  onToggle,
+}: {
+  ev: EventBundle;
+  open: boolean;
+  onToggle: () => void;
+}) {
   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
 
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.32)]">
-      <div className="px-5 py-4 border-b border-[#2a2a2a] bg-black/20">
-        <EventMiniHeader timeLabel={timeLabel} variant="desktop" />
+      <div className="px-5 py-4 border-b border-[#2a2a2a] bg-black/20 flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <EventMiniHeader timeLabel={timeLabel} variant="desktop" />
+        </div>
+
+        <button
+          type="button"
+          onClick={onToggle}
+          className="shrink-0 text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+        >
+          {open ? "Hide Details" : "Show Details"}
+        </button>
       </div>
 
       <div className="px-5 py-4 space-y-3">
@@ -419,10 +418,11 @@ function DesktopEventBlock({ ev }: { ev: EventBundle }) {
           variant="desktop"
         />
 
-        {/* ✅ Desktop ALWAYS shows details */}
-        <div className="pt-2">
-          <DetailsBlock away={ev.away} home={ev.home} headerLeft="Away" headerRight="Home" />
-        </div>
+        {open ? (
+          <div className="pt-2">
+            <DetailsBlock away={ev.away} home={ev.home} />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -433,7 +433,6 @@ export function MonteCarloScreen() {
   const [run, setRun] = useState<MonteCarloRun | null>(null);
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
-  const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
 
@@ -442,34 +441,26 @@ export function MonteCarloScreen() {
   const [loadingConsensus, setLoadingConsensus] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 0) logos + abbreviations
+  // 0) logos
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data, error } = await supabase.from("team_map").select('canonical,abbreviation,"Logo URL"');
+      const { data, error } = await supabase.from("team_map").select('canonical,"Logo URL"');
       if (!alive) return;
 
       if (error) {
-        console.warn("[MonteCarloScreen] team_map lookup failed:", error.message);
+        console.warn("[MonteCarloScreen] team_map logos failed:", error.message);
         setLogoMap(new Map());
-        setAbbrMap(new Map());
         return;
       }
 
-      const lm = new Map<string, string>();
-      const am = new Map<string, string>();
-
-      for (const r of (data ?? []) as TeamMapRow[]) {
+      const m = new Map<string, string>();
+      for (const r of (data ?? []) as TeamMapLogoRow[]) {
         const canon = (r.canonical ?? "").trim();
         const url = (r["Logo URL"] ?? "").trim();
-        const abbr = ((r.abbreviation as any) ?? "").toString().trim();
-
-        if (canon && url) lm.set(canon, url);
-        if (canon && abbr) am.set(canon, abbr.toUpperCase());
+        if (canon && url) m.set(canon, url);
       }
-
-      setLogoMap(lm);
-      setAbbrMap(am);
+      setLogoMap(m);
     })();
 
     return () => {
@@ -708,9 +699,6 @@ export function MonteCarloScreen() {
       const awayIsWinner = awayPts > homePts;
       const homeIsWinner = homePts > awayPts;
 
-      const awayAbbr = abbrMap.get(away) ?? null;
-      const homeAbbr = abbrMap.get(home) ?? null;
-
       const awayRow: TeamRow = {
         key: `${r.event_id}-AWAY`,
         eventId: r.event_id,
@@ -718,7 +706,6 @@ export function MonteCarloScreen() {
         side: "AWAY",
         teamName: away,
         logoUrl: logoMap.get(away) ?? null,
-        abbr: awayAbbr,
 
         projPoints: awayPts,
         projMarginTeam: -marginHome,
@@ -747,7 +734,6 @@ export function MonteCarloScreen() {
         side: "HOME",
         teamName: home,
         logoUrl: logoMap.get(home) ?? null,
-        abbr: homeAbbr,
 
         projPoints: homePts,
         projMarginTeam: marginHome,
@@ -778,9 +764,9 @@ export function MonteCarloScreen() {
     }
 
     return out;
-  }, [results, logoMap, abbrMap, consensusMap]);
+  }, [results, logoMap, consensusMap]);
 
-  // keep mobile open state aligned
+  // keep open state aligned
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
@@ -793,6 +779,7 @@ export function MonteCarloScreen() {
 
   return (
     <div className="w-full">
+      {/* ✅ Desktop web container */}
       <div className="max-w-[1320px] mx-auto px-4 md:px-8">
         {/* Header */}
         <div className="pt-4 md:pt-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
@@ -800,15 +787,13 @@ export function MonteCarloScreen() {
             <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">Monte Carlo</h2>
             <div className="text-xs text-[#8a8a8a] mt-1">
               Latest simulation snapshot
-              {run?.created_at ? (
-                <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span>
-              ) : null}
+              {run?.created_at ? <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span> : null}
               {loadingConsensus ? <span className="ml-2 text-[#5a5a5a]">· Loading consensus…</span> : null}
             </div>
           </div>
 
           <div className="hidden md:block text-right">
-            <div className="text-[10px] text-[#6a6a6a] font-semibold">Games</div>
+            <div className="text-[10px] text-[#6a6a6a] font-semibold">Rows</div>
             <div className="text-xs text-white">
               <span className="font-extrabold tabular-nums">{events.length}</span>
             </div>
@@ -835,9 +820,6 @@ export function MonteCarloScreen() {
                   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
                   const open = !!openMap[ev.eventId];
 
-                  const awayLabel = (ev.away.abbr || "AWAY").toUpperCase();
-                  const homeLabel = (ev.home.abbr || "HOME").toUpperCase();
-
                   return (
                     <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
                       <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-end">
@@ -855,10 +837,9 @@ export function MonteCarloScreen() {
                           <EventMiniHeader timeLabel={timeLabel} variant="mobile" />
                         </div>
 
-                        {/* ✅ Mobile uses abbreviations instead of AWAY/HOME */}
                         <SummaryLine
                           team={ev.away.teamName}
-                          sideLabel={awayLabel}
+                          sideLabel="AWAY"
                           logoUrl={ev.away.logoUrl}
                           score={ev.away.projPoints}
                           winProb={ev.away.winProbTeam}
@@ -867,7 +848,7 @@ export function MonteCarloScreen() {
                         />
                         <SummaryLine
                           team={ev.home.teamName}
-                          sideLabel={homeLabel}
+                          sideLabel="HOME"
                           logoUrl={ev.home.logoUrl}
                           score={ev.home.projPoints}
                           winProb={ev.home.winProbTeam}
@@ -875,14 +856,7 @@ export function MonteCarloScreen() {
                           variant="mobile"
                         />
 
-                        {open ? (
-                          <DetailsBlock
-                            away={ev.away}
-                            home={ev.home}
-                            headerLeft={awayLabel}
-                            headerRight={homeLabel}
-                          />
-                        ) : null}
+                        {open ? <DetailsBlock away={ev.away} home={ev.home} /> : null}
                       </div>
                     </div>
                   );
@@ -891,7 +865,7 @@ export function MonteCarloScreen() {
             )}
           </div>
 
-          {/* DESKTOP */}
+          {/* DESKTOP (web blocks) */}
           <div className="hidden md:block">
             {loading ? (
               <div className="p-8 text-sm text-[#808080]">Loading Monte Carlo results…</div>
@@ -899,9 +873,15 @@ export function MonteCarloScreen() {
               <div className="p-8 text-sm text-[#808080]">No Monte Carlo rows found for latest run.</div>
             ) : (
               <div className="p-6">
+                {/* Desktop list — slightly tighter than cards, still “web” */}
                 <div className="space-y-5">
                   {events.map((ev) => (
-                    <DesktopEventBlock key={ev.eventId} ev={ev} />
+                    <DesktopEventBlock
+                      key={ev.eventId}
+                      ev={ev}
+                      open={!!openMap[ev.eventId]}
+                      onToggle={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
+                    />
                   ))}
                 </div>
               </div>
