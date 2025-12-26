@@ -147,7 +147,7 @@ export function Sidebar({
             {openPreds && (
               <div className="mt-2 ml-7 space-y-1">
                 {SPORTS.map((sport) => {
-                  const enabled = sport === "NCAAB";
+                  const enabled = sport === "NCAAB" || sport === "NBA";
                   return (
                     <button
                       key={`preds-${sport}`}
