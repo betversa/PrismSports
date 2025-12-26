@@ -1,4 +1,4 @@
-name: Odds Loader (NCAAB)
+name: Odds Loader (NCAAB + NBA + NBA Props)
 
 on:
   workflow_dispatch:
@@ -22,11 +22,15 @@ jobs:
         run: npm ci
 
       - name: Run odds loader
+        run: npm run odds:load
         env:
+          # Secrets
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          SPORT_KEY: basketball_ncaab
-          BOOKMAKERS: draftkings,fanduel,betmgm,betonlineag,pinnacle
-          MARKETS: h2h,spreads,totals
-        run: npm run odds:load
+
+          # Variables (from Settings → Secrets and variables → Actions → Variables)
+          SPORT_KEYS: ${{ vars.SPORT_KEYS }}
+          GAME_MARKETS: ${{ vars.GAME_MARKETS }}
+          PROPS_MARKETS: ${{ vars.PROPS_MARKETS }}
+          BOOKMAKERS: ${{ vars.BOOKMAKERS }}
