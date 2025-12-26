@@ -1,8 +1,9 @@
 // screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.2)
 // ✅ Filters by selected sport (sportKey prop) using monte_carlo_runs.sport_key + monte_carlo_results.sport_key
-// ✅ Desktop: NO details toggle — projection + margin/total + consensus are IN THE SAME BLOCK (fills dead space)
-// ✅ Mobile: cards + collapsible details (kept), but Away/Home headers use TEAM ABBREVIATIONS from team_map
-// ✅ Logos + abbreviations pulled from team_map (canonical match)
+// ✅ Robust logo + abbreviation mapping from team_map (canonical, Abbreviation, "Logo URL")
+// ✅ Normalized key matching (fixes “some logos missing”)
+// ✅ Desktop: details (Proj Margin/Total + Cons Spread/Total) lives INLINE beside Proj Score (fills dead space)
+// ✅ Mobile: cards + collapsible details, Away/Home headers use team abbreviations (from team_map)
 // ✅ Consensus derived from odds_snapshot (spreads/totals) for displayed event_ids
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -18,19 +19,19 @@ type MonteCarloRun = {
 
 type MonteCarloResultRow = {
   run_id: string;
-  sport_key?: string | null;
+  sport_key: string;
 
   event_id: string;
   commence_time: string | null;
 
-  home_team: string | null; // canonical
-  away_team: string | null; // canonical
+  home_team: string | null;
+  away_team: string | null;
 
-  projected_margin_home: number | null; // stored convention in DB
+  projected_margin_home: number | null; // stored convention (may be negative for home better depending on your pipeline)
   projected_total: number | null;
 
-  projected_home_points?: number | null;
-  projected_away_points?: number | null;
+  projected_home_points: number | null;
+  projected_away_points: number | null;
 
   home_cover_prob: number | null;
   away_cover_prob: number | null;
@@ -38,14 +39,13 @@ type MonteCarloResultRow = {
   over_prob: number | null;
   under_prob: number | null;
 
-  home_win_prob?: number | null;
-  away_win_prob?: number | null;
+  home_win_prob: number | null;
+  away_win_prob: number | null;
 };
 
 type TeamMapRow = {
   canonical: string;
-  abbreviation?: string | null;
-  Abbreviation?: string | null; // just in case column is capitalized differently
+  Abbreviation: string | null;
   "Logo URL": string | null;
 };
 
@@ -53,7 +53,7 @@ type OddsSnapshotRow = {
   ts: string;
   event_id: string;
   market: string; // spreads | totals
-  side: string | null; // home/away | over/under
+  side: string | null; // home/away | over/under (or variants)
   line: number | null;
   odds: number | null;
   bookmaker: string | null;
@@ -79,12 +79,13 @@ type TeamRow = {
   commenceTime: string | null;
 
   side: SideKey;
-  teamName: string; // canonical
-  abbr: string; // from team_map, fallback to side label
+  teamName: string;
+  teamAbbr: string; // from team_map
   logoUrl: string | null;
 
   projPoints: number;
-  projMarginTeam: number; // team perspective
+
+  projMarginTeam: number; // margin for THIS team
   coverProbTeam: number | null;
 
   projTotal: number;
@@ -93,7 +94,7 @@ type TeamRow = {
 
   winProbTeam: number | null;
 
-  consSpreadLineTeam: number | null; // team perspective
+  consSpreadLineTeam: number | null;
   consSpreadOddsTeam: number | null;
 
   consTotalLine: number | null;
@@ -110,7 +111,15 @@ type EventBundle = {
   home: TeamRow;
 };
 
-/** ---------------- Side normalization ---------------- */
+/** ---------------- Normalizers ---------------- */
+const normKey = (s: string) =>
+  (s ?? "")
+    .toString()
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+/** ---------------- Side normalization (odds_snapshot) ---------------- */
 const SIDE_ALIASES = {
   home: new Set(["home", "h", "team1", "t1"]),
   away: new Set(["away", "a", "team2", "t2"]),
@@ -141,7 +150,7 @@ function formatStartStamp(ts: string) {
   return d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
 
-function formatAmerican(odds: number) {
+function formatAmerican(odds: number | null) {
   const n = Math.round(Number(odds));
   if (!Number.isFinite(n) || n === 0) return "—";
   return n > 0 ? `+${n}` : `${n}`;
@@ -159,18 +168,22 @@ function pushMap(map: Map<string, number[]>, key: string, v: number) {
   arr.push(v);
   map.set(key, arr);
 }
+
 function numOr(v: number | null | undefined, fb: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
 }
+
 function numOrNullable(v: any): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
+
 function safeRound1(x: number) {
   if (!Number.isFinite(x)) return 0;
   return Math.round(x * 10) / 10;
 }
+
 function medianOrNull(nums: number[]): number | null {
   const arr = nums
     .filter((n) => Number.isFinite(n))
@@ -182,9 +195,11 @@ function medianOrNull(nums: number[]): number | null {
   return (arr[mid - 1] + arr[mid]) / 2;
 }
 
-/** ---------------- UI bits ---------------- */
+/** ---------------- Logo component (robust fallback) ---------------- */
 function LogoBox({ team, url, size }: { team: string; url: string | null; size: number }) {
-  if (!url) {
+  const [ok, setOk] = React.useState(true);
+
+  if (!url || !ok) {
     return (
       <div
         style={{ width: size, height: size }}
@@ -202,105 +217,56 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
       className="rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
       loading="lazy"
       referrerPolicy="no-referrer"
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.display = "none";
-      }}
+      onError={() => setOk(false)}
     />
   );
 }
 
-const SCORE_COL_W = 64;
-const WIN_COL_W = 58;
-const RIGHT_GAP_PX = 10;
+/** ---------------- Desktop row pieces ---------------- */
+const SCORE_COL_W = 62;
+const WIN_COL_W = 62;
 
-/** ---------------- Header Row ---------------- */
-function EventMiniHeader({
-  timeLabel,
-  variant,
-}: {
-  timeLabel: string;
-  variant: "mobile" | "desktop";
-}) {
-  const isMobile = variant === "mobile";
-  const labelText = isMobile ? "text-[9px]" : "text-[10px]";
-  const timeText = isMobile ? "text-[10px]" : "text-[11px]";
-
-  return (
-    <div className="flex items-end min-w-0">
-      <div className="min-w-0">
-        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a]", labelText].join(" ")}>
-          Matchup
-        </div>
-        <div className={["text-[#cfcfcf] font-extrabold truncate", timeText].join(" ")}>{timeLabel}</div>
-      </div>
-
-      <div className="ml-auto flex items-end tabular-nums shrink-0" style={{ gap: RIGHT_GAP_PX }}>
-        <div
-          className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right", labelText].join(" ")}
-          style={{ width: SCORE_COL_W }}
-        >
-          Proj
-        </div>
-        <div
-          className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right", labelText].join(" ")}
-          style={{ width: WIN_COL_W }}
-        >
-          Win%
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** ---------------- Team row (top line) ---------------- */
-function SummaryLine({
+function TeamLineDesktop({
   team,
+  abbr,
   sideLabel,
   logoUrl,
   score,
   winProb,
   isWinner,
-  variant,
 }: {
   team: string;
-  sideLabel: string; // we’ll pass abbreviation here for mobile headers too
+  abbr: string;
+  sideLabel: "AWAY" | "HOME";
   logoUrl: string | null;
   score: number;
   winProb: number | null;
   isWinner: boolean;
-  variant: "mobile" | "desktop";
 }) {
-  const isMobile = variant === "mobile";
-  const logoSize = isMobile ? 34 : 42;
-
-  const teamText = isMobile ? "text-[11px]" : "text-[13px]";
-  const sideText = isMobile ? "text-[9px]" : "text-[10px]";
-  const scoreText = isMobile ? "text-[13px]" : "text-[16px]";
-  const winText = isMobile ? "text-[10px]" : "text-[12px]";
-
   return (
     <div className="flex items-center gap-3 min-w-0">
-      <div className="shrink-0">
-        <LogoBox team={team} url={logoUrl} size={logoSize} />
-      </div>
+      <LogoBox team={team} url={logoUrl} size={44} />
 
-      <div className="min-w-0 leading-tight pr-1">
-        <div className={["text-white font-extrabold truncate", teamText].join(" ")} title={team}>
+      <div className="min-w-0 leading-tight">
+        <div className="text-[13px] text-white font-extrabold truncate" title={team}>
           {team}
         </div>
-        <div className={["text-[#7a7a7a] font-semibold uppercase tracking-wide", sideText].join(" ")}>
-          {sideLabel}
+        <div className="text-[10px] text-[#7a7a7a] font-semibold">
+          {sideLabel} · {abbr}
         </div>
       </div>
 
-      <div className="ml-auto flex items-baseline tabular-nums shrink-0" style={{ gap: RIGHT_GAP_PX }}>
+      <div className="ml-auto flex items-baseline tabular-nums shrink-0 gap-3">
         <div
-          className={["font-extrabold text-right", scoreText, isWinner ? "text-green-400" : "text-white"].join(" ")}
+          className={[
+            "text-right font-extrabold text-[16px]",
+            isWinner ? "text-green-400" : "text-white",
+          ].join(" ")}
           style={{ width: SCORE_COL_W }}
         >
           {score.toFixed(1)}
         </div>
-        <div className={["font-bold text-[#bdbdbd] text-right", winText].join(" ")} style={{ width: WIN_COL_W }}>
+        <div className="text-right font-bold text-[12px] text-[#bdbdbd]" style={{ width: WIN_COL_W }}>
           {formatPct(winProb)}
         </div>
       </div>
@@ -308,139 +274,172 @@ function SummaryLine({
   );
 }
 
-/** ---------------- Desktop “inline details” grid ---------------- */
-function DesktopInlineDetails({ away, home }: { away: TeamRow; home: TeamRow }) {
-  const fmtSigned = (x: number) => `${x > 0 ? "+" : ""}${x.toFixed(1)}`;
-
-  const awayProjMargin = (
-    <div className="text-right tabular-nums text-white font-extrabold text-[12px]">
-      {fmtSigned(away.projMarginTeam)}{" "}
-      <span className="text-[#8a8a8a] font-semibold text-[11px]">({formatPct(away.coverProbTeam)})</span>
-    </div>
-  );
-  const homeProjMargin = (
-    <div className="text-right tabular-nums text-white font-extrabold text-[12px]">
-      {fmtSigned(home.projMarginTeam)}{" "}
-      <span className="text-[#8a8a8a] font-semibold text-[11px]">({formatPct(home.coverProbTeam)})</span>
-    </div>
-  );
-
-  const awayProjTotal = (
-    <div className="text-right tabular-nums text-white font-extrabold text-[12px]">
-      o{away.projTotal.toFixed(1)}{" "}
-      <span className="text-[#8a8a8a] font-semibold text-[11px]">({formatPct(away.overProb)})</span>
-    </div>
-  );
-  const homeProjTotal = (
-    <div className="text-right tabular-nums text-white font-extrabold text-[12px]">
-      u{home.projTotal.toFixed(1)}{" "}
-      <span className="text-[#8a8a8a] font-semibold text-[11px]">({formatPct(home.underProb)})</span>
-    </div>
-  );
-
-  const consSpreadAway =
-    away.consSpreadLineTeam == null
-      ? <span className="text-[#8a8a8a]">—</span>
-      : (
-        <span className="tabular-nums text-white font-extrabold text-[12px]">
-          {fmtSigned(away.consSpreadLineTeam)}{" "}
-          <span className="text-[#8a8a8a] font-semibold text-[11px]">
-            ({away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)})
-          </span>
-        </span>
-      );
-
-  const consSpreadHome =
-    home.consSpreadLineTeam == null
-      ? <span className="text-[#8a8a8a]">—</span>
-      : (
-        <span className="tabular-nums text-white font-extrabold text-[12px]">
-          {fmtSigned(home.consSpreadLineTeam)}{" "}
-          <span className="text-[#8a8a8a] font-semibold text-[11px]">
-            ({home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)})
-          </span>
-        </span>
-      );
-
-  const consTotalOver =
-    away.consTotalLine == null
-      ? <span className="text-[#8a8a8a]">—</span>
-      : (
-        <span className="tabular-nums text-white font-extrabold text-[12px]">
-          o{away.consTotalLine.toFixed(1)}{" "}
-          <span className="text-[#8a8a8a] font-semibold text-[11px]">
-            ({away.consTotalOverOdds == null ? "—" : formatAmerican(away.consTotalOverOdds)})
-          </span>
-        </span>
-      );
-
-  const consTotalUnder =
-    home.consTotalLine == null
-      ? <span className="text-[#8a8a8a]">—</span>
-      : (
-        <span className="tabular-nums text-white font-extrabold text-[12px]">
-          u{home.consTotalLine.toFixed(1)}{" "}
-          <span className="text-[#8a8a8a] font-semibold text-[11px]">
-            ({home.consTotalUnderOdds == null ? "—" : formatAmerican(home.consTotalUnderOdds)})
-          </span>
-        </span>
-      );
-
+function MetricRow({
+  label,
+  away,
+  home,
+  awayHdr,
+  homeHdr,
+}: {
+  label: string;
+  away: React.ReactNode;
+  home: React.ReactNode;
+  awayHdr: string;
+  homeHdr: string;
+}) {
   return (
-    <div className="mt-4 rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
-      {/* Header row with abbreviations */}
-      <div className="grid grid-cols-3 gap-3 px-4 py-2 border-b border-[#141414] items-center">
-        <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide"> </div>
-        <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
-          {away.abbr}
-        </div>
-        <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
-          {home.abbr}
-        </div>
+    <div className="grid grid-cols-[86px_1fr_1fr] gap-3 items-center py-2 border-b border-[#141414] last:border-b-0">
+      <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
+      <div className="text-right">
+        <div className="text-[9px] text-[#6f6f6f] font-extrabold uppercase tracking-wide">{awayHdr}</div>
+        <div className="text-[12px] text-white font-bold tabular-nums">{away}</div>
       </div>
-
-      {/* Rows */}
-      <div className="px-4">
-        <div className="grid grid-cols-3 gap-3 py-2 border-b border-[#141414] items-center">
-          <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">Proj Margin</div>
-          {awayProjMargin}
-          {homeProjMargin}
-        </div>
-
-        <div className="grid grid-cols-3 gap-3 py-2 border-b border-[#141414] items-center">
-          <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">Proj Total</div>
-          {awayProjTotal}
-          {homeProjTotal}
-        </div>
-
-        <div className="grid grid-cols-3 gap-3 py-2 border-b border-[#141414] items-center">
-          <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">Cons Spread</div>
-          <div className="text-right">{consSpreadAway}</div>
-          <div className="text-right">{consSpreadHome}</div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-3 py-2 items-center">
-          <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">Cons Total</div>
-          <div className="text-right">{consTotalOver}</div>
-          <div className="text-right">{consTotalUnder}</div>
-        </div>
+      <div className="text-right">
+        <div className="text-[9px] text-[#6f6f6f] font-extrabold uppercase tracking-wide">{homeHdr}</div>
+        <div className="text-[12px] text-white font-bold tabular-nums">{home}</div>
       </div>
     </div>
   );
 }
 
-/** ---------------- Mobile collapsible details block (abbr headers) ---------------- */
+function DesktopInlineDetails({
+  away,
+  home,
+}: {
+  away: TeamRow;
+  home: TeamRow;
+}) {
+  const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
+  const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
+
+  const projTotalOver =
+    away.projTotal ? `o${away.projTotal.toFixed(1)}` : "—";
+  const projTotalUnder =
+    home.projTotal ? `u${home.projTotal.toFixed(1)}` : "—";
+
+  const consSpreadAway =
+    away.consSpreadLineTeam == null
+      ? "—"
+      : `${away.consSpreadLineTeam > 0 ? "+" : ""}${away.consSpreadLineTeam.toFixed(1)} (${formatAmerican(
+          away.consSpreadOddsTeam
+        )})`;
+
+  const consSpreadHome =
+    home.consSpreadLineTeam == null
+      ? "—"
+      : `${home.consSpreadLineTeam > 0 ? "+" : ""}${home.consSpreadLineTeam.toFixed(1)} (${formatAmerican(
+          home.consSpreadOddsTeam
+        )})`;
+
+  const consTotalOver =
+    away.consTotalLine == null
+      ? "—"
+      : `o${away.consTotalLine.toFixed(1)} (${formatAmerican(away.consTotalOverOdds)})`;
+
+  const consTotalUnder =
+    home.consTotalLine == null
+      ? "—"
+      : `u${home.consTotalLine.toFixed(1)} (${formatAmerican(home.consTotalUnderOdds)})`;
+
+  return (
+    <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
+      <div className="px-4 py-3 border-b border-[#141414]">
+        <div className="text-[11px] text-white font-extrabold">Details</div>
+      </div>
+      <div className="px-4 py-2">
+        <MetricRow
+          label="Proj Margin"
+          away={
+            <>
+              {projMarginAway}{" "}
+              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(away.coverProbTeam)})</span>
+            </>
+          }
+          home={
+            <>
+              {projMarginHome}{" "}
+              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(home.coverProbTeam)})</span>
+            </>
+          }
+          awayHdr={away.teamAbbr}
+          homeHdr={home.teamAbbr}
+        />
+
+        <MetricRow
+          label="Proj Total"
+          away={
+            <>
+              {projTotalOver}{" "}
+              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(away.overProb)})</span>
+            </>
+          }
+          home={
+            <>
+              {projTotalUnder}{" "}
+              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(home.underProb)})</span>
+            </>
+          }
+          awayHdr={`O (${away.teamAbbr})`}
+          homeHdr={`U (${home.teamAbbr})`}
+        />
+
+        <MetricRow
+          label="Cons Spread"
+          away={consSpreadAway}
+          home={consSpreadHome}
+          awayHdr={away.teamAbbr}
+          homeHdr={home.teamAbbr}
+        />
+
+        <MetricRow
+          label="Cons Total"
+          away={consTotalOver}
+          home={consTotalUnder}
+          awayHdr="OVER"
+          homeHdr="UNDER"
+        />
+      </div>
+    </div>
+  );
+}
+
+/** ---------------- Mobile details block (abbr headers) ---------------- */
 function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
-  const fmtSigned = (x: number) => `${x > 0 ? "+" : ""}${x.toFixed(1)}`;
+  const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
+  const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
+
+  const consSpreadAway =
+    away.consSpreadLineTeam == null
+      ? "—"
+      : `${away.consSpreadLineTeam > 0 ? "+" : ""}${away.consSpreadLineTeam.toFixed(1)} (${formatAmerican(
+          away.consSpreadOddsTeam
+        )})`;
+
+  const consSpreadHome =
+    home.consSpreadLineTeam == null
+      ? "—"
+      : `${home.consSpreadLineTeam > 0 ? "+" : ""}${home.consSpreadLineTeam.toFixed(1)} (${formatAmerican(
+          home.consSpreadOddsTeam
+        )})`;
+
+  const consTotalOver =
+    away.consTotalLine == null
+      ? "—"
+      : `o${away.consTotalLine.toFixed(1)} (${formatAmerican(away.consTotalOverOdds)})`;
+
+  const consTotalUnder =
+    home.consTotalLine == null
+      ? "—"
+      : `u${home.consTotalLine.toFixed(1)} (${formatAmerican(home.consTotalUnderOdds)})`;
 
   const headerRow = (
     <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414]">
       <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide"> </div>
       <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
-        {away.abbr}
+        {away.teamAbbr}
       </div>
       <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
-        {home.abbr}
+        {home.teamAbbr}
       </div>
     </div>
   );
@@ -453,26 +452,6 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
     </div>
   );
 
-  const consSpreadAway =
-    away.consSpreadLineTeam == null
-      ? "—"
-      : `${fmtSigned(away.consSpreadLineTeam)} (${away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)})`;
-
-  const consSpreadHome =
-    home.consSpreadLineTeam == null
-      ? "—"
-      : `${fmtSigned(home.consSpreadLineTeam)} (${home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)})`;
-
-  const consTotalOver =
-    away.consTotalLine == null
-      ? "—"
-      : `o${away.consTotalLine.toFixed(1)} (${away.consTotalOverOdds == null ? "—" : formatAmerican(away.consTotalOverOdds)})`;
-
-  const consTotalUnder =
-    home.consTotalLine == null
-      ? "—"
-      : `u${home.consTotalLine.toFixed(1)} (${home.consTotalUnderOdds == null ? "—" : formatAmerican(home.consTotalUnderOdds)})`;
-
   return (
     <div className="rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
       <div className="px-4 py-2 border-b border-[#141414] text-[11px] text-white font-extrabold">Details</div>
@@ -481,11 +460,11 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
         {row(
           "Proj Margin",
           <>
-            {fmtSigned(away.projMarginTeam)}{" "}
+            {projMarginAway}{" "}
             <span className="text-[#808080] font-semibold text-[10px]">({formatPct(away.coverProbTeam)})</span>
           </>,
           <>
-            {fmtSigned(home.projMarginTeam)}{" "}
+            {projMarginHome}{" "}
             <span className="text-[#808080] font-semibold text-[10px]">({formatPct(home.coverProbTeam)})</span>
           </>
         )}
@@ -507,41 +486,53 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   );
 }
 
-/** ---------------- Desktop event block (no toggle) ---------------- */
+/** ---------------- Desktop Event Block (inline details) ---------------- */
 function DesktopEventBlock({ ev }: { ev: EventBundle }) {
   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
 
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.32)]">
-      {/* top mini header */}
       <div className="px-5 py-4 border-b border-[#2a2a2a] bg-black/20">
-        <EventMiniHeader timeLabel={timeLabel} variant="desktop" />
+        <div className="flex items-end justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a]">Matchup</div>
+            <div className="text-[12px] text-[#cfcfcf] font-extrabold truncate">{timeLabel}</div>
+          </div>
+
+          <div className="flex items-end tabular-nums gap-3 shrink-0">
+            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right" style={{ width: SCORE_COL_W }}>
+              Proj Score
+            </div>
+            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right" style={{ width: WIN_COL_W }}>
+              Win%
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* core */}
-      <div className="px-5 py-4">
+      {/* two-column desktop body: left teams, right inline details */}
+      <div className="p-5 grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-4">
         <div className="space-y-3">
-          <SummaryLine
+          <TeamLineDesktop
             team={ev.away.teamName}
-            sideLabel={ev.away.abbr}
+            abbr={ev.away.teamAbbr}
+            sideLabel="AWAY"
             logoUrl={ev.away.logoUrl}
             score={ev.away.projPoints}
             winProb={ev.away.winProbTeam}
             isWinner={ev.away.isProjectedWinner}
-            variant="desktop"
           />
-          <SummaryLine
+          <TeamLineDesktop
             team={ev.home.teamName}
-            sideLabel={ev.home.abbr}
+            abbr={ev.home.teamAbbr}
+            sideLabel="HOME"
             logoUrl={ev.home.logoUrl}
             score={ev.home.projPoints}
             winProb={ev.home.winProbTeam}
             isWinner={ev.home.isProjectedWinner}
-            variant="desktop"
           />
         </div>
 
-        {/* ✅ Inline details to kill dead space */}
         <DesktopInlineDetails away={ev.away} home={ev.home} />
       </div>
     </div>
@@ -552,11 +543,8 @@ function DesktopEventBlock({ ev }: { ev: EventBundle }) {
 export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
   const [run, setRun] = useState<MonteCarloRun | null>(null);
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
-
-  // Canonical -> {logo, abbr}
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
-
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
 
@@ -565,14 +553,14 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
   const [loadingConsensus, setLoadingConsensus] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /** 0) team_map (logos + abbreviations) */
+  /** 0) logos + abbreviations */
   useEffect(() => {
     let alive = true;
 
     (async () => {
       const { data, error } = await supabase
         .from("team_map")
-        .select('canonical,"Logo URL",abbreviation,Abbreviation');
+        .select('canonical,"Logo URL","Abbreviation"');
 
       if (!alive) return;
 
@@ -587,14 +575,14 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
       const am = new Map<string, string>();
 
       for (const r of (data ?? []) as TeamMapRow[]) {
-        const canon = (r.canonical ?? "").trim();
-        if (!canon) continue;
+        const k = normKey(r.canonical);
+        if (!k) continue;
 
         const url = (r["Logo URL"] ?? "").trim();
-        if (url) lm.set(canon, url);
+        if (url) lm.set(k, url);
 
-        const abbr = ((r.abbreviation ?? r.Abbreviation) ?? "").toString().trim();
-        if (abbr) am.set(canon, abbr.toUpperCase());
+        const ab = (r.Abbreviation ?? "").trim();
+        if (ab) am.set(k, ab.toUpperCase());
       }
 
       setLogoMap(lm);
@@ -606,7 +594,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     };
   }, []);
 
-  /** 1) latest run (filtered by sport) */
+  /** 1) latest run (FILTERED BY SPORT) */
   useEffect(() => {
     let alive = true;
 
@@ -641,7 +629,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     };
   }, [sportKey]);
 
-  /** 2) results (filtered by run + sport) */
+  /** 2) results (FILTERED BY RUN + SPORT) */
   useEffect(() => {
     let alive = true;
 
@@ -697,7 +685,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     };
   }, [run?.id, sportKey]);
 
-  /** 3) consensus (spreads/totals) */
+  /** 3) consensus (spreads/totals) for event_ids in this run */
   useEffect(() => {
     let alive = true;
 
@@ -727,7 +715,6 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
       }
 
       const rows = (data ?? []) as OddsSnapshotRow[];
-
       const seen = new Set<string>();
 
       const spreadHomeLines: Map<string, number[]> = new Map();
@@ -745,6 +732,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
         const market = (r.market ?? "").trim().toLowerCase();
         const book = (r.bookmaker ?? "").trim().toLowerCase() || "unknown";
         const side = normalizeSide(r.side);
+
         const line = numOrNullable(r.line);
         const odds = numOrNullable(r.odds);
 
@@ -810,21 +798,24 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     const out: EventBundle[] = [];
 
     for (const r of results) {
-      const home = (r.home_team ?? "").trim();
-      const away = (r.away_team ?? "").trim();
-      if (!home || !away) continue;
+      const homeRaw = (r.home_team ?? "").trim();
+      const awayRaw = (r.away_team ?? "").trim();
+      if (!homeRaw || !awayRaw) continue;
 
-      const marginHomeStored = numOr(r.projected_margin_home, 0);
+      const homeKey = normKey(homeRaw);
+      const awayKey = normKey(awayRaw);
+
+      const homeAbbr = abbrMap.get(homeKey) ?? "HOME";
+      const awayAbbr = abbrMap.get(awayKey) ?? "AWAY";
+
+      const marginHome = numOr(r.projected_margin_home, 0);
       const totalProj = numOr(r.projected_total, 0);
 
       const homePtsStored = numOrNullable(r.projected_home_points);
       const awayPtsStored = numOrNullable(r.projected_away_points);
 
-      // NOTE: we treat stored margin as "home perspective", but don’t assume sign convention here.
-      // We only need team-perspective margin values for display.
-      // If stored margin convention is inverted, it affects both sides equally; UI still shows +/− consistently.
-      const homePts = homePtsStored ?? safeRound1((totalProj + marginHomeStored) / 2);
-      const awayPts = awayPtsStored ?? safeRound1((totalProj - marginHomeStored) / 2);
+      const homePts = homePtsStored ?? safeRound1((totalProj + marginHome) / 2);
+      const awayPts = awayPtsStored ?? safeRound1((totalProj - marginHome) / 2);
 
       const pHomeCover = numOrNullable(r.home_cover_prob);
       const pAwayCover = numOrNullable(r.away_cover_prob);
@@ -845,20 +836,17 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
       const awayIsWinner = awayPts > homePts;
       const homeIsWinner = homePts > awayPts;
 
-      const awayAbbr = abbrMap.get(away) ?? "AWAY";
-      const homeAbbr = abbrMap.get(home) ?? "HOME";
-
       const awayRow: TeamRow = {
         key: `${r.event_id}-AWAY`,
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
         side: "AWAY",
-        teamName: away,
-        abbr: awayAbbr,
-        logoUrl: logoMap.get(away) ?? null,
+        teamName: awayRaw,
+        teamAbbr: awayAbbr,
+        logoUrl: logoMap.get(awayKey) ?? null,
 
         projPoints: awayPts,
-        projMarginTeam: -marginHomeStored,
+        projMarginTeam: -marginHome,
         coverProbTeam: pAwayCover,
 
         projTotal: totalProj,
@@ -882,12 +870,12 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
         side: "HOME",
-        teamName: home,
-        abbr: homeAbbr,
-        logoUrl: logoMap.get(home) ?? null,
+        teamName: homeRaw,
+        teamAbbr: homeAbbr,
+        logoUrl: logoMap.get(homeKey) ?? null,
 
         projPoints: homePts,
-        projMarginTeam: marginHomeStored,
+        projMarginTeam: marginHome,
         coverProbTeam: pHomeCover,
 
         projTotal: totalProj,
@@ -915,9 +903,9 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     }
 
     return out;
-  }, [results, logoMap, consensusMap, abbrMap]);
+  }, [results, logoMap, abbrMap, consensusMap]);
 
-  /** Keep open state aligned */
+  /** keep open state aligned */
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
@@ -934,9 +922,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
         {/* Header */}
         <div className="pt-4 md:pt-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
-            <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
-              Monte Carlo
-            </h2>
+            <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">Monte Carlo</h2>
             <div className="text-xs text-[#8a8a8a] mt-1">
               Sport: <span className="text-white font-extrabold">{sportKey}</span>
               {run?.created_at ? (
@@ -976,10 +962,9 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                   return (
                     <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
                       <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between">
-                        <div className="text-[10px] font-extrabold text-[#cfcfcf] truncate">
+                        <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a] truncate">
                           {timeLabel}
                         </div>
-
                         <button
                           type="button"
                           onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
@@ -990,28 +975,43 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                       </div>
 
                       <div className="p-3 space-y-3">
-                        <div className="pb-2 border-b border-[#141414]">
-                          <EventMiniHeader timeLabel={timeLabel} variant="mobile" />
+                        {/* Away */}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <LogoBox team={ev.away.teamName} url={ev.away.logoUrl} size={34} />
+                          <div className="min-w-0 leading-tight">
+                            <div className="text-[11px] text-white font-extrabold truncate" title={ev.away.teamName}>
+                              {ev.away.teamName}
+                            </div>
+                            <div className="text-[9px] text-[#7a7a7a] font-semibold">
+                              AWAY · {ev.away.teamAbbr}
+                            </div>
+                          </div>
+                          <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
+                            <div className={["font-extrabold text-[13px]", ev.away.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+                              {ev.away.projPoints.toFixed(1)}
+                            </div>
+                            <div className="font-bold text-[10px] text-[#bdbdbd]">{formatPct(ev.away.winProbTeam)}</div>
+                          </div>
                         </div>
 
-                        <SummaryLine
-                          team={ev.away.teamName}
-                          sideLabel={ev.away.abbr}
-                          logoUrl={ev.away.logoUrl}
-                          score={ev.away.projPoints}
-                          winProb={ev.away.winProbTeam}
-                          isWinner={ev.away.isProjectedWinner}
-                          variant="mobile"
-                        />
-                        <SummaryLine
-                          team={ev.home.teamName}
-                          sideLabel={ev.home.abbr}
-                          logoUrl={ev.home.logoUrl}
-                          score={ev.home.projPoints}
-                          winProb={ev.home.winProbTeam}
-                          isWinner={ev.home.isProjectedWinner}
-                          variant="mobile"
-                        />
+                        {/* Home */}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <LogoBox team={ev.home.teamName} url={ev.home.logoUrl} size={34} />
+                          <div className="min-w-0 leading-tight">
+                            <div className="text-[11px] text-white font-extrabold truncate" title={ev.home.teamName}>
+                              {ev.home.teamName}
+                            </div>
+                            <div className="text-[9px] text-[#7a7a7a] font-semibold">
+                              HOME · {ev.home.teamAbbr}
+                            </div>
+                          </div>
+                          <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
+                            <div className={["font-extrabold text-[13px]", ev.home.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+                              {ev.home.projPoints.toFixed(1)}
+                            </div>
+                            <div className="font-bold text-[10px] text-[#bdbdbd]">{formatPct(ev.home.winProbTeam)}</div>
+                          </div>
+                        </div>
 
                         {open ? <MobileDetailsBlock away={ev.away} home={ev.home} /> : null}
                       </div>
@@ -1045,4 +1045,3 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     </div>
   );
 }
-
