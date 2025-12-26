@@ -270,7 +270,7 @@ async function loadTeamMapNba(
 ): Promise<{ canonSet: Set<string>; brToCanon: Map<string, string> }> {
   const { data, error } = await supabase
     .from("team_map")
-    .select('canonical,"BasketballReference"')
+    .select('canonical,"SR_School"')
     .not("canonical", "is", null);
 
   if (error) throw error;
