@@ -283,7 +283,7 @@ async function loadTeamMapNba(
     if (!canonical) continue;
     canonSet.add(canonical);
 
-    const brName = String(r.BasketballReference || "").trim();
+    const brName = String(r.SR_School || "").trim();
     if (brName) brToCanon.set(normalizeKey(brName), canonical);
   }
 
