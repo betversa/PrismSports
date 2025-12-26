@@ -1,27 +1,34 @@
 /**
  * Odds Loader — The Odds API → Supabase
  *
+ * Supports split workflows via LOADER_MODE:
+ *   - LOADER_MODE=games  → ONLY featured game markets (h2h/spreads/totals)
+ *   - LOADER_MODE=props  → ONLY NBA player props (points/reb/ast/3PM) via event endpoint
+ *   - LOADER_MODE=all    → both (useful for manual runs)
+ *
  * SNAPSHOT MODE (HARD GUARANTEES):
- * - events table:
- *   • ONLY events returned by the Odds API for this sport remain
- *   • all stale events are deleted each run (via RPC if available)
+ * - events:
+ *   • ONLY events returned by featured Odds API call remain (per sport)
+ *   • stale events pruned via RPC if available
  *
  * - odds_snapshot (GAME markets):
  *   • FULL RESET each run (per sport)
- *
  * - odds_snapshot_history:
  *   • append-only
  *   • pruned via RPC if available
  *
  * - player_props_snapshot (NBA props):
  *   • FULL RESET each run (per sport)
- *
  * - player_props_history:
  *   • append-only
  *   • pruned via RPC if available
+ *
+ * IMPORTANT:
+ * Player props markets are NOT supported on the main /odds endpoint.
+ * They must be fetched per event via /events/{eventId}/odds.
  */
 
-import "dotenv/config"; // safe to keep for local; ignored in GitHub Actions if no .env
+import "dotenv/config"; // safe for local; GitHub Actions injects env vars regardless
 import { createClient } from "@supabase/supabase-js";
 
 /* ===========================
@@ -53,6 +60,9 @@ type OddsApiEvent = {
   away_team: string;
   bookmakers: OddsApiBookmaker[];
 };
+
+// /events/{eventId}/odds returns a single event object (same-ish shape)
+type OddsApiEventOdds = OddsApiEvent;
 
 type TeamMapRow = {
   canonical: string;
@@ -89,6 +99,7 @@ type PlayerPropsRow = {
 
   player_name: string;
   player_id?: string | null;
+
   team?: string | null;
   opponent?: string | null;
 
@@ -102,7 +113,7 @@ type PlayerPropsRow = {
 };
 
 /* ===========================
-   Config defaults
+   Defaults
 =========================== */
 
 const DEFAULT_SPORT_KEYS = "basketball_ncaab,basketball_nba";
@@ -110,6 +121,14 @@ const DEFAULT_GAME_MARKETS = "h2h,spreads,totals";
 const DEFAULT_PROPS_MARKETS =
   "player_points,player_rebounds,player_assists,player_threes";
 const DEFAULT_BOOKMAKERS = "draftkings,fanduel,betmgm,betonlineag,pinnacle";
+
+const SUPPORTED_GAME_MARKETS = new Set(["h2h", "spreads", "totals"]);
+const SUPPORTED_PROP_MARKETS = new Set([
+  "player_points",
+  "player_rebounds",
+  "player_assists",
+  "player_threes",
+]);
 
 /* ===========================
    Helpers
@@ -176,6 +195,39 @@ function isNBA(sportKey: string) {
   return sportKey === "basketball_nba";
 }
 
+function parseList(s?: string): string[] {
+  return String(s || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+// Small concurrency limiter for per-event props calls
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, idx: number) => Promise<R>
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let i = 0;
+
+  async function worker() {
+    while (true) {
+      const idx = i++;
+      if (idx >= items.length) return;
+      out[idx] = await fn(items[idx], idx);
+    }
+  }
+
+  const n = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return out;
+}
+
+/* ===========================
+   Supabase helpers
+=========================== */
+
 async function tryRpc(
   supabase: ReturnType<typeof createClient>,
   fn: string,
@@ -187,17 +239,13 @@ async function tryRpc(
   const code = (error as any).code;
   const msg = (error as any).message || String(error);
 
-  // Undefined function (RPC missing) → skip gracefully
+  // RPC missing → skip gracefully
   if (code === "42883" || /does not exist/i.test(msg)) {
     console.warn(`[warn] RPC missing, skipped: ${fn}`);
     return;
   }
   throw error;
 }
-
-/* ===========================
-   Supabase helpers
-=========================== */
 
 async function buildAliasMap(supabase: ReturnType<typeof createClient>) {
   const { data, error } = await supabase
@@ -214,7 +262,6 @@ async function buildAliasMap(supabase: ReturnType<typeof createClient>) {
 
     map.set(normalizeTeamKey(r.canonical), r.canonical);
 
-    // map all variation fields → canonical
     Object.values(r).forEach((v) => {
       if (typeof v === "string" && v.trim()) {
         map.set(normalizeTeamKey(v), r.canonical);
@@ -225,15 +272,17 @@ async function buildAliasMap(supabase: ReturnType<typeof createClient>) {
 }
 
 /* ===========================
-   Odds API fetch
+   Odds API fetchers
 =========================== */
 
-async function fetchOddsApi(
-  sportKey: string,
-  markets: string,
-  bookmakers: string,
-  apiKey: string
-): Promise<OddsApiEvent[]> {
+async function fetchOddsApiFeatured(params: {
+  sportKey: string;
+  markets: string;
+  bookmakers: string;
+  apiKey: string;
+}): Promise<OddsApiEvent[]> {
+  const { sportKey, markets, bookmakers, apiKey } = params;
+
   const url =
     `https://api.the-odds-api.com/v4/sports/${sportKey}/odds` +
     `?apiKey=${apiKey}` +
@@ -246,174 +295,48 @@ async function fetchOddsApi(
   return res.json();
 }
 
-/* ===========================
-   Props parsing
-=========================== */
+async function fetchOddsApiEventOdds(params: {
+  sportKey: string;
+  eventId: string;
+  markets: string;
+  bookmakers: string;
+  apiKey: string;
+}): Promise<OddsApiEventOdds | null> {
+  const { sportKey, eventId, markets, bookmakers, apiKey } = params;
 
-// Expectation from Odds API for props outcomes:
-// { name: "Over"/"Under", point: 24.5, price: -110, description: "Player Name" }
-function buildPlayerPropsRows(params: {
-  ts: string;
-  run_id: string;
-  sport_key: string;
-  event: OddsApiEvent;
-  bookmaker: OddsApiBookmaker;
-  market: OddsApiMarket;
-}): PlayerPropsRow[] {
-  const { ts, run_id, sport_key, event, bookmaker, market } = params;
+  const url =
+    `https://api.the-odds-api.com/v4/sports/${sportKey}/events/${eventId}/odds` +
+    `?apiKey=${apiKey}` +
+    `&markets=${encodeURIComponent(markets)}` +
+    `&bookmakers=${encodeURIComponent(bookmakers)}` +
+    `&oddsFormat=american&dateFormat=iso`;
 
-  const outs = market.outcomes || [];
-  const byPlayer = new Map<string, { over?: OddsApiOutcome; under?: OddsApiOutcome }>();
+  const res = await fetch(url);
 
-  for (const o of outs) {
-    const nm = (o?.name || "").toLowerCase();
-    const isOver = nm === "over";
-    const isUnder = nm === "under";
-    if (!isOver && !isUnder) continue;
+  // event could vanish; ignore quietly
+  if (res.status === 404) return null;
 
-    const player = (o.description || "").trim();
-    if (!player) continue;
-
-    if (!byPlayer.has(player)) byPlayer.set(player, {});
-    const entry = byPlayer.get(player)!;
-
-    if (isOver) entry.over = o;
-    if (isUnder) entry.under = o;
-  }
-
-  const rows: PlayerPropsRow[] = [];
-
-  for (const [player_name, pair] of byPlayer.entries()) {
-    const over = pair.over;
-    const under = pair.under;
-
-    const lineRaw = over?.point ?? under?.point;
-    const line = Number(lineRaw);
-
-    if (!Number.isFinite(line)) continue;
-
-    if (over?.price !== undefined && over?.price !== null) {
-      rows.push({
-        ts,
-        run_id,
-        sport_key,
-        event_id: event.id,
-        commence_time: isoOrNull(event.commence_time),
-        home_team: event.home_team,
-        away_team: event.away_team,
-        player_name,
-        market: market.key,
-        side: "over",
-        line,
-        odds: Number(over.price),
-        bookmaker: bookmaker.key,
-        source: "oddsapi",
-      });
-    }
-
-    if (under?.price !== undefined && under?.price !== null) {
-      rows.push({
-        ts,
-        run_id,
-        sport_key,
-        event_id: event.id,
-        commence_time: isoOrNull(event.commence_time),
-        home_team: event.home_team,
-        away_team: event.away_team,
-        player_name,
-        market: market.key,
-        side: "under",
-        line,
-        odds: Number(under.price),
-        bookmaker: bookmaker.key,
-        source: "oddsapi",
-      });
-    }
-  }
-
-  return rows;
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 /* ===========================
-   Core runner per sport
+   Builders
 =========================== */
 
-async function runForSport(params: {
-  supabase: ReturnType<typeof createClient>;
-  aliasMap: Map<string, string>;
+function buildGameSnapshotRows(params: {
+  ts: string;
   sportKey: string;
-  gameMarkets: string;
-  propsMarkets: string;
-  bookmakers: string;
-  apiKey: string;
-}) {
-  const { supabase, aliasMap, sportKey, gameMarkets, propsMarkets, bookmakers, apiKey } =
-    params;
+  events: OddsApiEvent[];
+}): GameSnapshotRow[] {
+  const { ts, sportKey, events } = params;
+  const snapshot: GameSnapshotRow[] = [];
 
-  const ts = new Date().toISOString();
-  const run_id = safeRunId();
-
-  const missingTeams = new Set<string>();
-  const canonicalize = (name: string) => {
-    const canon = aliasMap.get(normalizeTeamKey(name));
-    if (!canon) missingTeams.add(name);
-    return canon ?? name;
-  };
-
-  // 1) Fetch game odds
-  const apiEventsGame = await fetchOddsApi(sportKey, gameMarkets, bookmakers, apiKey);
-
-  // 2) Fetch props (NBA only)
-  const includeProps = isNBA(sportKey) && propsMarkets.trim().length > 0;
-  const apiEventsProps = includeProps
-    ? await fetchOddsApi(sportKey, propsMarkets, bookmakers, apiKey)
-    : [];
-
-  // Union events for pruning/upserting events table
-  const eventsById = new Map<string, OddsApiEvent>();
-  for (const e of apiEventsGame) eventsById.set(e.id, e);
-  for (const e of apiEventsProps) if (!eventsById.has(e.id)) eventsById.set(e.id, e);
-  const apiEventsAll = [...eventsById.values()];
-  const seenEventIds = apiEventsAll.map((e) => e.id);
-
-  // 3) Prune events (RPC if you have it)
-  if (seenEventIds.length === 0) {
-    await tryRpc(supabase, "clear_events_for_sport", { p_sport_key: sportKey });
-  } else {
-    await tryRpc(supabase, "prune_events_not_in_ids", {
-      p_sport_key: sportKey,
-      p_event_ids: seenEventIds,
-    });
-  }
-
-  // 4) Upsert events
-  const eventRows = apiEventsAll.map((e) => ({
-    event_id: e.id,
-    sport_key: sportKey,
-    commence_time: e.commence_time,
-
-    api_home_team: e.home_team,
-    api_away_team: e.away_team,
-
-    canon_home_team: canonicalize(e.home_team),
-    canon_away_team: canonicalize(e.away_team),
-
-    matchup: matchup(canonicalize(e.away_team), canonicalize(e.home_team)),
-
-    updated_at: new Date().toISOString(),
-  }));
-
-  for (const batch of chunk(eventRows, 500)) {
-    const { error } = await supabase.from("events").upsert(batch, { onConflict: "event_id" });
-    if (error) throw error;
-  }
-
-  // 5) Build GAME snapshot rows
-  const gameSnapshot: GameSnapshotRow[] = [];
-
-  for (const e of apiEventsGame) {
+  for (const e of events) {
     for (const bk of e.bookmakers || []) {
       for (const mk of bk.markets || []) {
+        if (!SUPPORTED_GAME_MARKETS.has(mk.key)) continue;
+
         const outs = mk.outcomes || [];
 
         if (mk.key === "totals") {
@@ -421,7 +344,7 @@ async function runForSport(params: {
           const under = findOutcome(outs, "Under");
           const line = (over?.point ?? under?.point ?? null) as number | null;
 
-          gameSnapshot.push(
+          snapshot.push(
             {
               ts,
               sport_key: sportKey,
@@ -448,9 +371,13 @@ async function runForSport(params: {
         }
 
         if (mk.key === "h2h" || mk.key === "spreads") {
-          const { homeObj, awayObj } = splitHomeAwayOutcomes(e.home_team, e.away_team, outs);
+          const { homeObj, awayObj } = splitHomeAwayOutcomes(
+            e.home_team,
+            e.away_team,
+            outs
+          );
 
-          gameSnapshot.push(
+          snapshot.push(
             {
               ts,
               sport_key: sportKey,
@@ -479,48 +406,181 @@ async function runForSport(params: {
     }
   }
 
-  // 6) Build PROPS snapshot rows
-  const propsSnapshot: PlayerPropsRow[] = [];
+  return snapshot;
+}
 
-  if (includeProps) {
-    for (const e of apiEventsProps) {
-      for (const bk of e.bookmakers || []) {
-        for (const mk of bk.markets || []) {
-          if (
-            mk.key !== "player_points" &&
-            mk.key !== "player_rebounds" &&
-            mk.key !== "player_assists" &&
-            mk.key !== "player_threes"
-          ) {
-            continue;
-          }
+// Props outcomes are usually keyed by player in `description`
+function buildPlayerPropsRows(params: {
+  ts: string;
+  run_id: string;
+  sportKey: string;
+  event: OddsApiEventOdds;
+  bookmaker: OddsApiBookmaker;
+  market: OddsApiMarket;
+}): PlayerPropsRow[] {
+  const { ts, run_id, sportKey, event, bookmaker, market } = params;
 
-          propsSnapshot.push(
-            ...buildPlayerPropsRows({
-              ts,
-              run_id,
-              sport_key: sportKey,
-              event: e,
-              bookmaker: bk,
-              market: mk,
-            })
-          );
-        }
-      }
+  const outs = market.outcomes || [];
+
+  const byPlayer = new Map<
+    string,
+    { over?: OddsApiOutcome; under?: OddsApiOutcome }
+  >();
+
+  for (const o of outs) {
+    const nm = (o?.name || "").toLowerCase();
+    const isOver = nm === "over";
+    const isUnder = nm === "under";
+    if (!isOver && !isUnder) continue;
+
+    const player = (o.description || "").trim();
+    if (!player) continue;
+
+    if (!byPlayer.has(player)) byPlayer.set(player, {});
+    const entry = byPlayer.get(player)!;
+
+    if (isOver) entry.over = o;
+    if (isUnder) entry.under = o;
+  }
+
+  const rows: PlayerPropsRow[] = [];
+
+  for (const [player_name, pair] of byPlayer.entries()) {
+    const over = pair.over;
+    const under = pair.under;
+
+    const lineRaw = over?.point ?? under?.point;
+    const line = Number(lineRaw);
+    if (!Number.isFinite(line)) continue;
+
+    if (over?.price !== undefined && over?.price !== null) {
+      rows.push({
+        ts,
+        run_id,
+        sport_key: sportKey,
+        event_id: event.id,
+        commence_time: isoOrNull(event.commence_time),
+        home_team: event.home_team,
+        away_team: event.away_team,
+        player_name,
+        market: market.key,
+        side: "over",
+        line,
+        odds: Number(over.price),
+        bookmaker: bookmaker.key,
+        source: "oddsapi",
+      });
+    }
+
+    if (under?.price !== undefined && under?.price !== null) {
+      rows.push({
+        ts,
+        run_id,
+        sport_key: sportKey,
+        event_id: event.id,
+        commence_time: isoOrNull(event.commence_time),
+        home_team: event.home_team,
+        away_team: event.away_team,
+        player_name,
+        market: market.key,
+        side: "under",
+        line,
+        odds: Number(under.price),
+        bookmaker: bookmaker.key,
+        source: "oddsapi",
+      });
     }
   }
 
-  // 7) Reset + write odds_snapshot (GAME)
-  // Use your existing reset RPC if you have it; else delete by sport_key
-  await tryRpc(supabase, "clear_odds_snapshot_for_sport", { p_sport_key: sportKey }).catch(
-    async (e) => {
-      // If your RPC is missing, we fallback to delete directly
-      console.warn(`[warn] clear_odds_snapshot_for_sport fallback to delete: ${sportKey}`);
-      const { error } = await supabase.from("odds_snapshot").delete().eq("sport_key", sportKey);
-      if (error) throw error;
-      return;
-    }
-  );
+  return rows;
+}
+
+/* ===========================
+   Loaders (games / props)
+=========================== */
+
+async function loadGamesForSport(params: {
+  supabase: ReturnType<typeof createClient>;
+  aliasMap: Map<string, string>;
+  sportKey: string;
+  gameMarkets: string;
+  bookmakers: string;
+  apiKey: string;
+  ts: string;
+}) {
+  const { supabase, aliasMap, sportKey, gameMarkets, bookmakers, apiKey, ts } =
+    params;
+
+  const missingTeams = new Set<string>();
+  const canonicalize = (name: string) => {
+    const canon = aliasMap.get(normalizeTeamKey(name));
+    if (!canon) missingTeams.add(name);
+    return canon ?? name;
+  };
+
+  // Featured markets
+  const apiEventsGame = await fetchOddsApiFeatured({
+    sportKey,
+    markets: gameMarkets,
+    bookmakers,
+    apiKey,
+  });
+
+  const seenEventIds = apiEventsGame.map((e) => e.id);
+
+  // Prune events to only those seen
+  if (seenEventIds.length === 0) {
+    await tryRpc(supabase, "clear_events_for_sport", { p_sport_key: sportKey });
+  } else {
+    await tryRpc(supabase, "prune_events_not_in_ids", {
+      p_sport_key: sportKey,
+      p_event_ids: seenEventIds,
+    });
+  }
+
+  // Upsert events
+  const eventRows = apiEventsGame.map((e) => ({
+    event_id: e.id,
+    sport_key: sportKey,
+    commence_time: e.commence_time,
+
+    api_home_team: e.home_team,
+    api_away_team: e.away_team,
+
+    canon_home_team: canonicalize(e.home_team),
+    canon_away_team: canonicalize(e.away_team),
+
+    matchup: matchup(canonicalize(e.away_team), canonicalize(e.home_team)),
+
+    updated_at: new Date().toISOString(),
+  }));
+
+  for (const batch of chunk(eventRows, 500)) {
+    const { error } = await supabase
+      .from("events")
+      .upsert(batch, { onConflict: "event_id" });
+    if (error) throw error;
+  }
+
+  // Build + write snapshots
+  const gameSnapshot = buildGameSnapshotRows({
+    ts,
+    sportKey,
+    events: apiEventsGame,
+  });
+
+  // Reset current snapshot (prefer RPC, fallback delete by sport)
+  try {
+    await tryRpc(supabase, "clear_odds_snapshot_for_sport", {
+      p_sport_key: sportKey,
+    });
+  } catch {
+    const { error } = await supabase
+      .from("odds_snapshot")
+      .delete()
+      .eq("sport_key", sportKey);
+    if (error) throw error;
+  }
 
   for (const batch of chunk(gameSnapshot, 1000)) {
     const { error } = await supabase.from("odds_snapshot").upsert(batch, {
@@ -536,48 +596,119 @@ async function runForSport(params: {
 
   await tryRpc(supabase, "prune_odds_snapshot_history", { keep_n: 432 });
 
-  // 8) Reset + write props snapshot/history (NBA only)
-  if (includeProps) {
-    // FULL RESET per sport each run
+  return {
+    events_game: apiEventsGame.length,
+    game_snapshots: gameSnapshot.length,
+    seenEventIds,
+    missingTeams: [...missingTeams],
+  };
+}
+
+async function loadPropsForNBA(params: {
+  supabase: ReturnType<typeof createClient>;
+  sportKey: string; // must be basketball_nba
+  propsMarkets: string;
+  bookmakers: string;
+  apiKey: string;
+  ts: string;
+  run_id: string;
+
+  // we need event IDs for the per-event calls
+  nbaEventIds: string[];
+}) {
+  const {
+    supabase,
+    sportKey,
+    propsMarkets,
+    bookmakers,
+    apiKey,
+    ts,
+    run_id,
+    nbaEventIds,
+  } = params;
+
+  if (!isNBA(sportKey)) {
+    return { events_props: 0, props_snapshots: 0 };
+  }
+
+  const marketsList = parseList(propsMarkets).filter((m) =>
+    SUPPORTED_PROP_MARKETS.has(m)
+  );
+
+  if (marketsList.length === 0 || nbaEventIds.length === 0) {
+    // Still hard-reset current snapshot so UI doesn't show stale props forever
     const { error: delErr } = await supabase
       .from("player_props_snapshot")
       .delete()
       .eq("sport_key", sportKey);
     if (delErr) throw delErr;
 
-    for (const batch of chunk(propsSnapshot, 1000)) {
-      const { error } = await supabase.from("player_props_snapshot").upsert(batch, {
-        onConflict: "event_id,bookmaker,market,player_name,side,line",
-      });
-      if (error) throw error;
-    }
-
-    for (const batch of chunk(propsSnapshot, 1000)) {
-      const { error } = await supabase.from("player_props_history").insert(batch);
-      if (error) throw error;
-    }
-
-    // Optional RPC (if you create it). If missing, it just warns + continues.
-    await tryRpc(supabase, "prune_player_props_history", { keep_n: 10 });
+    return { events_props: 0, props_snapshots: 0 };
   }
 
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        sport: sportKey,
-        ts,
-        run_id,
-        events_game: apiEventsGame.length,
-        events_props: apiEventsProps.length,
-        game_snapshots: gameSnapshot.length,
-        props_snapshots: propsSnapshot.length,
-        missingTeams: [...missingTeams],
-      },
-      null,
-      2
-    )
-  );
+  const marketsParam = marketsList.join(",");
+
+  // Pull per event (limit concurrency to protect quota)
+  const concurrency = Number(process.env.PROPS_CONCURRENCY || "4");
+  const eventOdds = await mapLimit(nbaEventIds, concurrency, async (eventId) => {
+    return fetchOddsApiEventOdds({
+      sportKey,
+      eventId,
+      markets: marketsParam,
+      bookmakers,
+      apiKey,
+    });
+  });
+
+  const propsSnapshot: PlayerPropsRow[] = [];
+
+  for (const ev of eventOdds) {
+    if (!ev) continue;
+
+    for (const bk of ev.bookmakers || []) {
+      for (const mk of bk.markets || []) {
+        if (!SUPPORTED_PROP_MARKETS.has(mk.key)) continue;
+
+        propsSnapshot.push(
+          ...buildPlayerPropsRows({
+            ts,
+            run_id,
+            sportKey,
+            event: ev,
+            bookmaker: bk,
+            market: mk,
+          })
+        );
+      }
+    }
+  }
+
+  // FULL RESET current props board (per sport)
+  {
+    const { error: delErr } = await supabase
+      .from("player_props_snapshot")
+      .delete()
+      .eq("sport_key", sportKey);
+    if (delErr) throw delErr;
+  }
+
+  // Insert current + history
+  for (const batch of chunk(propsSnapshot, 1000)) {
+    const { error } = await supabase.from("player_props_snapshot").upsert(batch, {
+      onConflict: "event_id,bookmaker,market,player_name,side,line",
+    });
+    if (error) throw error;
+  }
+
+  for (const batch of chunk(propsSnapshot, 1000)) {
+    const { error } = await supabase.from("player_props_history").insert(batch);
+    if (error) throw error;
+  }
+
+  // Optional pruning RPC (skip if not created)
+  await tryRpc(supabase, "prune_player_props_history", { keep_n: 10 });
+
+  return { events_props: nbaEventIds.length, props_snapshots: propsSnapshot.length };
 }
 
 /* ===========================
@@ -590,11 +721,12 @@ async function main() {
     SUPABASE_SERVICE_ROLE_KEY,
     ODDS_API_KEY,
 
-    // GitHub Variables
     SPORT_KEYS = DEFAULT_SPORT_KEYS,
     GAME_MARKETS = DEFAULT_GAME_MARKETS,
     PROPS_MARKETS = DEFAULT_PROPS_MARKETS,
     BOOKMAKERS = DEFAULT_BOOKMAKERS,
+
+    LOADER_MODE = "all", // games | props | all
   } = process.env as Record<string, string>;
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !ODDS_API_KEY) {
@@ -603,30 +735,105 @@ async function main() {
     );
   }
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const mode = String(LOADER_MODE || "all").toLowerCase();
+  const doGames = mode === "games" || mode === "all";
+  const doProps = mode === "props" || mode === "all";
 
-  // Canonical team map (shared)
+  const sportKeys = parseList(SPORT_KEYS);
+  if (sportKeys.length === 0) throw new Error("No SPORT_KEYS provided.");
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const aliasMap = await buildAliasMap(supabase);
 
-  const sportKeys = String(SPORT_KEYS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Single timestamp per run for consistent snapshots
+  const ts = new Date().toISOString();
+  const run_id = safeRunId();
 
-  if (sportKeys.length === 0) {
-    throw new Error("No SPORT_KEYS provided.");
-  }
+  // We want NBA event IDs for props. Best source: events from the featured NBA fetch.
+  let nbaEventIdsForProps: string[] = [];
 
+  // Run games for each sport (this populates / prunes events as well)
   for (const sportKey of sportKeys) {
-    await runForSport({
+    if (!doGames) break;
+
+    const out = await loadGamesForSport({
       supabase,
       aliasMap,
       sportKey,
       gameMarkets: GAME_MARKETS,
+      bookmakers: BOOKMAKERS,
+      apiKey: ODDS_API_KEY,
+      ts,
+    });
+
+    if (isNBA(sportKey)) {
+      nbaEventIdsForProps = out.seenEventIds;
+    }
+
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          mode: "games",
+          sport: sportKey,
+          ts,
+          run_id,
+          events_game: out.events_game,
+          events_props: 0,
+          game_snapshots: out.game_snapshots,
+          props_snapshots: 0,
+          missingTeams: out.missingTeams,
+        },
+        null,
+        2
+      )
+    );
+  }
+
+  // Run props only (NBA)
+  if (doProps) {
+    const nbaKey = "basketball_nba";
+    const useIds =
+      nbaEventIdsForProps.length > 0
+        ? nbaEventIdsForProps
+        : // If this is a props-only workflow, we still need event IDs.
+          // Fetch featured NBA events quickly (no write), then props.
+          (await fetchOddsApiFeatured({
+            sportKey: nbaKey,
+            markets: "h2h", // lightest call just to get event IDs
+            bookmakers: "pinnacle", // lightest; just need event ids
+            apiKey: ODDS_API_KEY,
+          })).map((e) => e.id);
+
+    const propsOut = await loadPropsForNBA({
+      supabase,
+      sportKey: nbaKey,
       propsMarkets: PROPS_MARKETS,
       bookmakers: BOOKMAKERS,
       apiKey: ODDS_API_KEY,
+      ts,
+      run_id,
+      nbaEventIds: useIds,
     });
+
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          mode: "props",
+          sport: nbaKey,
+          ts,
+          run_id,
+          events_game: 0,
+          events_props: propsOut.events_props,
+          game_snapshots: 0,
+          props_snapshots: propsOut.props_snapshots,
+          missingTeams: [],
+        },
+        null,
+        2
+      )
+    );
   }
 }
 
@@ -634,5 +841,6 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
 
 
