@@ -1,23 +1,18 @@
 /**
- * ratingsBuilder.ts — KenPom → Opponent-Adjusted Ratings (Per-100 Possessions)
- * ---------------------------------------------------------------------------
+ * ratingsBuilder.ts — NCAAB KenPom → Opponent-Adjusted Ratings (Per-100 Possessions)
+ * ---------------------------------------------------------------------------------
  * Writes to: public.team_ratings
  * Keyed by: (sport_key, canonical, season)
  *
- * ASSUMPTIONS:
- *  - team_map.canonical contains your canonical team names
- *  - team_map has "KenPom" mapping column (for NCAAB)
- *  - team_ratings already has sport_key column (you confirmed)
+ * Key upgrade in this rewrite:
+ * ✅ Uses team_possessions pace to estimate game possessions:
+ *    gamePoss = avg(poss(team), poss(opponent))
+ *    then OT-scaled to 40-min equivalent
  *
- * HARD RULES:
- *  1) Universe = team_map (optionally filtered to sport_key if present)
- *  2) Only include KenPom games where BOTH teams map via team_map."KenPom" -> canonical
- *  3) Compute in-memory and upsert ratings (no big game table)
- *
- * UPGRADES:
- *  - sport_key included in all upserts
- *  - onConflict uses sport_key, canonical, season
- *  - robust to missing team_map.sport_key column (fallback to all)
+ * Still:
+ * ✅ Strict mapping: BOTH teams must map via team_map."KenPom" -> canonical
+ * ✅ Opponent-adjusted Off/Def solve in per-100 space
+ * ✅ Chunked upserts to team_ratings
  */
 
 import "dotenv/config";
@@ -38,40 +33,53 @@ type KpParsedLine = {
 type KpGame = {
   season: string;
   date: Date;
-  team1: string; // canonical (AWAY in kenpom cbbga file)
-  team2: string; // canonical (HOME in kenpom cbbga file) unless neutral
+
+  team1: string; // canonical (AWAY in kenpom file)
+  team2: string; // canonical (HOME in kenpom file) unless neutral
+
   score1: number; // regulation-equivalent points
-  score2: number; // regulation-equivalent points
+  score2: number;
+
   suffix: string;
   neutral: boolean;
-  gamePoss: number; // regulation-equivalent possessions (estimated)
+
+  gamePoss: number; // regulation-equivalent possessions estimate
 };
 
 type TeamGame = {
   team: string; // canonical
   opponent: string; // canonical
+
   off100: number; // points per 100 possessions scored by team
   oppOff100: number; // points per 100 possessions scored by opponent
-  pts: number; // regulation-equivalent points scored by team (PF in that game)
-  pa: number; // regulation-equivalent points allowed (PA in that game)
+
+  pts: number; // regulation-equivalent PF
+  pa: number;  // regulation-equivalent PA
+
   neutral: boolean;
   homeAway: "home" | "away" | "neutral";
-  w: number; // weight (recency)
+
+  w: number; // recency weight
   poss: number; // regulation-equivalent possessions
   suffix: string;
+};
+
+type TeamPossRow = {
+  canonical: string;
+  sport_key: string;
+  season: string;
+  [k: string]: any; // dynamic columns like "2025", "2024", "Last 3", etc.
 };
 
 /* =========================
    CONFIG
 ========================= */
-// NCAAB KenPom games feed
 const KP_URL = process.env.KP_URL ?? "https://kenpom.com/cbbga26.txt";
 
-// These should match your app expectations
 const SPORT_KEY = process.env.SPORT_KEY ?? "basketball_ncaab";
 const SEASON = process.env.SEASON ?? "2025-26";
 
-// possessions fallback (no team_possessions available)
+// Fallback if a team is missing in team_possessions
 const DEFAULT_LEAGUE_AVG_POSS = Number(process.env.DEFAULT_LEAGUE_AVG_POSS ?? "70");
 
 // solver + weighting
@@ -115,8 +123,13 @@ function clamp(x: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, x));
 }
 
+function toNullNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function parseMMDDYYYY(s: string): Date | null {
-  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const m = String(s || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return null;
   const mm = Number(m[1]);
   const dd = Number(m[2]);
@@ -148,8 +161,30 @@ function computeNumOT(suffix: string): number {
 }
 
 function isNeutralFromSuffix(suffix: string): boolean {
-  // KenPom uses "N", "1N", etc (often as a token in suffix)
+  // KenPom uses "N", "1N", etc
   return /\b[0-9]*\s*[Nn]\b/.test(suffix) || /\b[0-9]*[Nn]$/.test(suffix);
+}
+
+function seasonStartYear(season: string): number | null {
+  const m = String(season || "").match(/^(\d{4})\s*-\s*(\d{2}|\d{4})$/);
+  if (!m) return null;
+  return Number(m[1]);
+}
+
+function pickPossColumnForSeason(season: string): string | null {
+  const y = seasonStartYear(season);
+  if (!y) return null;
+  return String(y); // "2025" for "2025-26"
+}
+
+function possPgForTeam(possMap: Map<string, TeamPossRow>, canonical: string): number {
+  const row = possMap.get(canonical);
+  const col = pickPossColumnForSeason(SEASON);
+  if (row && col) {
+    const v = toNullNum(row[col]);
+    if (v != null && v > 40 && v < 120) return v; // sanity
+  }
+  return DEFAULT_LEAGUE_AVG_POSS;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -172,8 +207,6 @@ async function fetchKenPomText(): Promise<string> {
   if (!res.ok) throw new Error(`KenPom fetch failed: ${res.status} ${await res.text()}`);
 
   const raw = await res.text();
-
-  // If wrapped in <pre>, extract it
   const pre = raw.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
   return pre ? pre[1] : raw;
 }
@@ -205,13 +238,12 @@ function parseKenPomLines(text: string): KpParsedLine[] {
 }
 
 /* =========================
-   DB: LOAD TEAM MAP
-   - tries to filter by team_map.sport_key if that column exists
+   DB: LOAD TEAM MAP (KenPom)
 ========================= */
 async function loadTeamMap(
   supabase: ReturnType<typeof createClient>
 ): Promise<{ canonSet: Set<string>; kpToCanon: Map<string, string> }> {
-  // Try selecting sport_key too; if it errors (column missing), retry without it.
+  // Try selecting sport_key too; if it errors, retry without it.
   let data: any[] | null = null;
 
   {
@@ -223,7 +255,6 @@ async function loadTeamMap(
     if (!res.error) {
       data = (res.data ?? []) as any[];
     } else {
-      // fallback if team_map has no sport_key
       const res2 = await supabase
         .from("team_map")
         .select('canonical, "KenPom"')
@@ -240,7 +271,7 @@ async function loadTeamMap(
     const canonical = String(r.canonical ?? "").trim();
     if (!canonical) continue;
 
-    // If team_map.sport_key exists, filter to the current builder SPORT_KEY
+    // If team_map.sport_key exists, filter to current SPORT_KEY
     if (Object.prototype.hasOwnProperty.call(r, "sport_key")) {
       const sk = String(r.sport_key ?? "").trim();
       if (sk && sk !== SPORT_KEY) continue;
@@ -265,12 +296,37 @@ async function loadTeamMap(
 }
 
 /* =========================
-   BUILD GAMES (STRICT)
+   DB: LOAD TEAM POSSESSIONS
+========================= */
+async function loadTeamPossessions(
+  supabase: ReturnType<typeof createClient>
+): Promise<Map<string, TeamPossRow>> {
+  const { data, error } = await supabase
+    .from("team_possessions")
+    .select("*")
+    .eq("sport_key", SPORT_KEY)
+    .eq("season", SEASON);
+
+  if (error) throw error;
+
+  const m = new Map<string, TeamPossRow>();
+  for (const r of (data || []) as any[]) {
+    const canon = String(r.canonical || "").trim();
+    if (!canon) continue;
+    m.set(canon, r as TeamPossRow);
+  }
+
+  return m;
+}
+
+/* =========================
+   BUILD GAMES (STRICT + PACE)
 ========================= */
 function buildGamesFromKenPom(
   rawLines: KpParsedLine[],
   kpToCanon: Map<string, string>,
-  canonSet: Set<string>
+  canonSet: Set<string>,
+  possMap: Map<string, TeamPossRow>
 ): { games: KpGame[]; maxDate: Date } {
   const games: KpGame[] = [];
   let maxDate: Date | null = null;
@@ -287,29 +343,34 @@ function buildGamesFromKenPom(
 
     const neutral = isNeutralFromSuffix(g.suffix);
 
-    // possessions: constant estimate
-    const gamePoss = DEFAULT_LEAGUE_AVG_POSS;
+    // pace-based possessions estimate (per game), then OT scale to 40-min equivalent
+    const p1 = possPgForTeam(possMap, c1);
+    const p2 = possPgForTeam(possMap, c2);
+    const basePoss = (p1 + p2) / 2;
 
-    // OT scale back to 40-minute equivalent
     const numOT = computeNumOT(g.suffix);
     const possScale = numOT > 0 ? 40 / (40 + 5 * numOT) : 1.0;
 
-    const regPoss = gamePoss * possScale;
+    const regPoss = basePoss * possScale;
     const regScore1 = g.score1 * possScale;
     const regScore2 = g.score2 * possScale;
 
     if (!maxDate || date > maxDate) maxDate = date;
 
+    // sanity: if regPoss gets weird, fallback
+    const safePoss =
+      Number.isFinite(regPoss) && regPoss > 40 && regPoss < 120 ? regPoss : DEFAULT_LEAGUE_AVG_POSS * possScale;
+
     games.push({
       season: SEASON,
       date,
-      team1: c1, // away in kenpom file
-      team2: c2, // home in kenpom file unless neutral
+      team1: c1,
+      team2: c2,
       score1: regScore1,
       score2: regScore2,
       suffix: g.suffix,
       neutral,
-      gamePoss: regPoss,
+      gamePoss: safePoss,
     });
   }
 
@@ -531,9 +592,14 @@ function computeTrueHcaFromHomeMargins(
 }
 
 /* =========================
-   FUN FACTOR + SIGMAS + AVERAGES (per team)
+   FUN FACTOR + SIGMAS + AVERAGES
 ========================= */
-function computeFunAndSigmasFast(teamGames: TeamGame[], nTeams: number, teamIdxArr: number[], leagueAvgOff100: number) {
+function computeFunAndSigmasFast(
+  teamGames: TeamGame[],
+  nTeams: number,
+  teamIdxArr: number[],
+  leagueAvgOff100: number
+) {
   const nGames = teamGames.length;
 
   const totalPer100Sum = new Array<number>(nTeams).fill(0);
@@ -696,40 +762,42 @@ async function main() {
     auth: { persistSession: false },
   });
 
-  // 1) Universe from team_map (optionally filtered by sport_key)
+  // 1) Universe from team_map
   const { canonSet, kpToCanon } = await loadTeamMap(supabase);
 
-  // 2) fetch + parse KenPom
+  // 2) Load possessions for this sport+season
+  const possMap = await loadTeamPossessions(supabase);
+
+  // 3) fetch + parse KenPom
   const text = await fetchKenPomText();
   const rawLines = parseKenPomLines(text);
 
-  // 3) strict games
-  const { games, maxDate } = buildGamesFromKenPom(rawLines, kpToCanon, canonSet);
+  // 4) strict games + pace-based possessions
+  const { games, maxDate } = buildGamesFromKenPom(rawLines, kpToCanon, canonSet, possMap);
 
-  // 4) build team-games + league avg
+  // 5) build team-games + league avg
   const { teamGames, leagueAvgOff100 } = buildTeamGames(games, maxDate);
 
-  // 5) solve Off/Def
+  // 6) solve Off/Def
   const { teams, idx, teamIdx, gamesPerTeam, Off, Def } = solveOffDef(teamGames, leagueAvgOff100);
-
   const nTeams = teams.length;
 
-  // 6) engine ratings
+  // 7) engine ratings (per-100)
   const engineAdjOff = Off.map((x) => 100 + x);
   const engineAdjDef = Def.map((x) => 100 - x);
-  const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]); // = Off - Def
+  const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]); // Off - Def
 
-  // 7) HCA (margin-based)
+  // 8) HCA (margin-based)
   const { trueHca, homeGames, signal } = computeTrueHcaFromHomeMargins(games, idx, enginePower);
 
-  // 8) fun + sigmas + averages
+  // 9) fun + sigmas + averages
   const { funFactor, sigmaTotal100, sigmaMargin100, avgTotalPoints, avgMarginPoints } =
     computeFunAndSigmasFast(teamGames, nTeams, teamIdx, leagueAvgOff100);
 
-  // 9) PF/PA per game
+  // 10) PF/PA per game
   const { pfPg, paPg } = computePfPaPerGame(games, teams);
 
-  // 10) build rows (rounded 2 decimals)
+  // 11) build rows
   const nowIso = new Date().toISOString();
 
   const rows: any[] = teams.map((team, i) => ({
@@ -754,11 +822,11 @@ async function main() {
     pa_points: round2(paPg.get(team) || 0),
   }));
 
-  // rank by power desc (within sport+season)
+  // rank by power desc
   rows.sort((a, b) => Number(b.engine_power ?? 0) - Number(a.engine_power ?? 0));
   rows.forEach((r, i) => (r.power_rank = i + 1));
 
-  // 11) upsert into team_ratings (chunked)
+  // 12) upsert into team_ratings (chunked)
   for (const batch of chunk(rows, 500)) {
     const { error } = await supabase.from("team_ratings").upsert(batch, {
       onConflict: "sport_key,canonical,season",
@@ -766,35 +834,43 @@ async function main() {
     if (error) throw error;
   }
 
-  const hcaMin = Math.min(...trueHca);
-  const hcaMax = Math.max(...trueHca);
-  const sigMin = Math.min(...signal);
-  const sigMax = Math.max(...signal);
-  const homeMin = Math.min(...homeGames);
-  const homeMax = Math.max(...homeGames);
+  // Debug summary
+  const possCol = pickPossColumnForSeason(SEASON);
+  const usedPossTeams = possCol
+    ? Array.from(possMap.values()).filter((r) => toNullNum(r[possCol]) != null).length
+    : 0;
 
   console.log(
-    JSON.stringify({
-      ok: true,
-      sport_key: SPORT_KEY,
-      season: SEASON,
-      team_map_canonical_count: canonSet.size,
-      teams_rated: rows.length,
-      games_used: games.length,
-      kenpom_lines_parsed: rawLines.length,
-      leagueAvgOff100: round2(leagueAvgOff100),
-      poss_assumption: DEFAULT_LEAGUE_AVG_POSS,
-      hca: {
-        base: HCA_BASE,
-        shrink: HCA_SHRINK,
-        min: HCA_MIN,
-        max: HCA_MAX,
-        min_home_games: HCA_MIN_HOME_GAMES,
-        assigned_range: { min: round2(hcaMin), max: round2(hcaMax) },
-        signal_range: { min: round2(sigMin), max: round2(sigMax) },
-        home_games_range: { min: homeMin, max: homeMax },
+    JSON.stringify(
+      {
+        ok: true,
+        sport_key: SPORT_KEY,
+        season: SEASON,
+        team_map_canonical_count: canonSet.size,
+        teams_rated: rows.length,
+        games_used: games.length,
+        kenpom_lines_parsed: rawLines.length,
+        leagueAvgOff100: round2(leagueAvgOff100),
+        poss: {
+          source: "team_possessions",
+          season_column: possCol,
+          teams_with_poss_value: usedPossTeams,
+          fallback_default: DEFAULT_LEAGUE_AVG_POSS,
+        },
+        hca: {
+          base: HCA_BASE,
+          shrink: HCA_SHRINK,
+          min: HCA_MIN,
+          max: HCA_MAX,
+          min_home_games: HCA_MIN_HOME_GAMES,
+          assigned_range: { min: round2(Math.min(...trueHca)), max: round2(Math.max(...trueHca)) },
+          signal_range: { min: round2(Math.min(...signal)), max: round2(Math.max(...signal)) },
+          home_games_range: { min: Math.min(...homeGames), max: Math.max(...homeGames) },
+        },
       },
-    })
+      null,
+      2
+    )
   );
 }
 
@@ -802,3 +878,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
