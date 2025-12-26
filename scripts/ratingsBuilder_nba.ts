@@ -1,8 +1,11 @@
 /**
- * ratingsBuilder_nba.ts — Basketball-Reference Schedule → Opponent-Adjusted Ratings (Per-100 Possessions)
- * -----------------------------------------------------------------------------------------------------
+ * ratingsBuilder_nba.ts — Basketball-Reference Schedule → NBA OffRtg / DefRtg (Per-100 Possessions, non-adjusted)
+ * ------------------------------------------------------------------------------------------------------------
  * GOAL:
- *  - Build NBA team_ratings using the same opponent-adjusted Off/Def solver you use for NCAA.
+ *  - Build NBA team_ratings using simple (non-opponent-adjusted) season OffRtg and DefRtg:
+ *      OffRtg = (PF / Poss) * 100
+ *      DefRtg = (PA / Poss) * 100
+ *      NetRtg = OffRtg - DefRtg
  *
  * DATA SOURCE:
  *  - Basketball-Reference monthly schedule pages, e.g.
@@ -12,16 +15,22 @@
  * REQUIRED DB TABLE:
  *  - public.team_map:
  *      canonical (text, unique)
- *      BasketballReference (text)  // exact team name from B-Ref pages
+ *      SR_School (text)  // exact team name from B-Ref schedule pages (as you're using now)
  *
  * OUTPUT TABLE:
  *  - public.team_ratings (sport-aware):
- *      sport_key, season, canonical, engine_power, true_hca, pf_points, pa_points, avg_total_points,
- *      sigma_margin_100, sigma_total_100, fun_factor, etc.
+ *      sport_key, season, canonical,
+ *      engine_adj_off  -> OffRtg (raw)
+ *      engine_adj_def  -> DefRtg (raw)
+ *      engine_power    -> NetRtg (raw)
+ *      true_hca, pf_points, pa_points, avg_total_points,
+ *      sigma_margin_100, sigma_total_100, fun_factor, power_rank, updated_at
  *
- * NOTE:
+ * NOTES:
  *  - B-Ref may 403 in GitHub Actions. We set headers + retries.
  *  - We only use completed games (visitor_pts/home_pts must be present).
+ *  - Possessions are estimated with a constant (DEFAULT_LEAGUE_AVG_POSS) and OT scaling,
+ *    consistent with your previous NCAA-style approach.
  */
 
 import "dotenv/config";
@@ -35,9 +44,9 @@ type BrGame = {
   date: Date;
   away: string; // canonical
   home: string; // canonical
-  awayPts: number;
-  homePts: number;
-  suffix: string; // OT marker
+  awayPts: number; // OT-scaled to regulation-equivalent points
+  homePts: number; // OT-scaled to regulation-equivalent points
+  suffix: string; // OT marker (e.g., "OT", "2OT")
   neutral: boolean; // NBA regular season false
   gamePoss: number; // estimated possessions (regulation-equivalent)
 };
@@ -45,20 +54,15 @@ type BrGame = {
 type TeamGame = {
   team: string; // canonical
   opponent: string; // canonical
-  off100: number;
-  oppOff100: number;
+  off100: number; // per-game offensive points per 100 poss (using estimated poss)
+  oppOff100: number; // opponent per-game offensive points per 100 poss
   pts: number;
   pa: number;
   neutral: boolean;
   homeAway: "home" | "away" | "neutral";
-  w: number; // recency
+  w: number; // recency weight
   poss: number;
   suffix: string;
-};
-
-type TeamMapNbaRow = {
-  canonical: string;
-  BasketballReference?: string | null;
 };
 
 /* =========================
@@ -70,15 +74,10 @@ const SPORT_KEY = process.env.SPORT_KEY || "basketball_nba";
 const BR_LEAGUE_YEAR = Number(process.env.NBA_BR_LEAGUE_YEAR || "2025"); // NBA_2025
 const SEASON = process.env.SEASON || "2024-25";
 
-// possessions fallback (NBA pace is ~99–101; use a constant like NCAA did)
+// possessions fallback (NBA pace is ~99–101; use a constant)
 const DEFAULT_LEAGUE_AVG_POSS = Number(process.env.NBA_DEFAULT_POSS || "99");
 
-// solver + weighting
-const MAX_ITER = 1000;
-const TOL = 1e-6;
-const MARGIN_CAP_100 = 25;
-const PRIOR_GAMES = 5;
-
+// recency weighting (used only for fun/sigmas; OffRtg/DefRtg is season aggregate)
 const RECENCY_HALF_LIFE_DAYS = 30;
 const RECENCY_FLOOR = 0.3;
 
@@ -178,7 +177,6 @@ async function fetchHtmlWithRetries(url: string, maxTries = 4): Promise<string> 
     try {
       const res = await fetch(url, {
         headers: {
-          // This matters for B-Ref
           "User-Agent":
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
           Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -195,7 +193,6 @@ async function fetchHtmlWithRetries(url: string, maxTries = 4): Promise<string> 
       return await res.text();
     } catch (e) {
       lastErr = e;
-      // backoff
       const ms = 750 * t * t;
       await new Promise((r) => setTimeout(r, ms));
     }
@@ -206,13 +203,6 @@ async function fetchHtmlWithRetries(url: string, maxTries = 4): Promise<string> 
 
 /* =========================
    PARSE B-REF MONTH PAGE
-   We only need:
-   - date csk
-   - visitor_team_name anchor text
-   - visitor_pts
-   - home_team_name anchor text
-   - home_pts
-   - overtimes cell (may be blank)
 ========================= */
 function parseBrMonth(html: string) {
   const rows: Array<{
@@ -224,26 +214,26 @@ function parseBrMonth(html: string) {
     ot: string;
   }> = [];
 
-  // Grab all <tr ...>...</tr>
   const trMatches = html.match(/<tr[\s\S]*?<\/tr>/gi) || [];
 
   for (const tr of trMatches) {
-    // Date csk (preferred, stable)
     const cskMatch = tr.match(/data-stat="date_game"[^>]*csk="([^"]+)"/i);
     if (!cskMatch?.[1]) continue;
 
     const date = parseCskDate(cskMatch[1]);
     if (!date) continue;
 
-    // Visitor team
-    const awayMatch = tr.match(/data-stat="visitor_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
-    const homeMatch = tr.match(/data-stat="home_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
+    const awayMatch = tr.match(
+      /data-stat="visitor_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i
+    );
+    const homeMatch = tr.match(
+      /data-stat="home_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i
+    );
     if (!awayMatch?.[1] || !homeMatch?.[1]) continue;
 
     const awayName = awayMatch[1].trim();
     const homeName = homeMatch[1].trim();
 
-    // Points (completed games only)
     const awayPtsMatch = tr.match(/data-stat="visitor_pts"[^>]*>(\d+)</i);
     const homePtsMatch = tr.match(/data-stat="home_pts"[^>]*>(\d+)</i);
     if (!awayPtsMatch?.[1] || !homePtsMatch?.[1]) continue;
@@ -252,7 +242,6 @@ function parseBrMonth(html: string) {
     const homePts = Number(homePtsMatch[1]);
     if (!Number.isFinite(awayPts) || !Number.isFinite(homePts)) continue;
 
-    // OT cell
     const otMatch = tr.match(/data-stat="overtimes"[^>]*>([^<]*)</i);
     const ot = (otMatch?.[1] || "").trim();
 
@@ -263,7 +252,8 @@ function parseBrMonth(html: string) {
 }
 
 /* =========================
-   DB: LOAD NBA TEAM MAP
+   DB: LOAD TEAM MAP (NBA)
+   Using team_map.SR_School as requested
 ========================= */
 async function loadTeamMapNba(
   supabase: ReturnType<typeof createClient>
@@ -289,13 +279,13 @@ async function loadTeamMapNba(
 
   if (canonSet.size === 0) throw new Error("team_map has 0 canonical rows.");
   if (brToCanon.size === 0)
-    throw new Error('team_map has 0 BasketballReference mappings (BasketballReference column empty).');
+    throw new Error('team_map has 0 SR_School mappings (SR_School column empty).');
 
   return { canonSet, brToCanon };
 }
 
 /* =========================
-   BUILD GAMES (STRICT)
+   FETCH ALL GAMES (STRICT MAPPING)
 ========================= */
 async function fetchAllBrGamesStrict(
   brToCanon: Map<string, string>,
@@ -311,7 +301,6 @@ async function fetchAllBrGamesStrict(
     try {
       html = await fetchHtmlWithRetries(url, 4);
     } catch (e) {
-      // Some months might not exist depending on when you run; just continue.
       console.warn(`[NBA] Skip month=${month} (fetch failed):`, (e as any)?.message || e);
       continue;
     }
@@ -330,6 +319,7 @@ async function fetchAllBrGamesStrict(
       // NBA regulation 48 minutes; each OT is 5 minutes
       const possScale = numOT > 0 ? 48 / (48 + 5 * numOT) : 1.0;
 
+      // "regulation-equivalent" scaling consistent with prior script
       const regPoss = DEFAULT_LEAGUE_AVG_POSS * possScale;
       const regAwayPts = g.awayPts * possScale;
       const regHomePts = g.homePts * possScale;
@@ -352,7 +342,7 @@ async function fetchAllBrGamesStrict(
 
   if (!games.length) {
     throw new Error(
-      "[NBA] No valid games after strict BasketballReference->canonical mapping. Check team_map coverage or B-Ref blocking."
+      "[NBA] No valid games after strict SR_School->canonical mapping. Check team_map coverage or B-Ref blocking."
     );
   }
   if (!maxDate) throw new Error("[NBA] No maxDate computed.");
@@ -361,7 +351,7 @@ async function fetchAllBrGamesStrict(
 }
 
 /* =========================
-   TEAM-GAMES + LEAGUE AVG
+   TEAM-GAMES + LEAGUE AVG (for sigmas/fun)
 ========================= */
 function buildTeamGames(games: BrGame[], maxDate: Date) {
   const teamGames: TeamGame[] = [];
@@ -374,7 +364,6 @@ function buildTeamGames(games: BrGame[], maxDate: Date) {
     const off100Away = (g.awayPts / g.gamePoss) * 100;
     const off100Home = (g.homePts / g.gamePoss) * 100;
 
-    // away team row
     teamGames.push({
       team: g.away,
       opponent: g.home,
@@ -389,7 +378,6 @@ function buildTeamGames(games: BrGame[], maxDate: Date) {
       suffix: g.suffix,
     });
 
-    // home team row
     teamGames.push({
       team: g.home,
       opponent: g.away,
@@ -413,112 +401,44 @@ function buildTeamGames(games: BrGame[], maxDate: Date) {
 }
 
 /* =========================
-   SOLVE OFF/DEF (per-100 deviations)
+   OFFRTG / DEFRTG AGGREGATION
 ========================= */
-function solveOffDef(teamGames: TeamGame[], leagueAvgOff100: number) {
-  const teamSet = new Set<string>();
-  for (const tg of teamGames) teamSet.add(tg.team);
+function computeTeamOffDefRtg(games: BrGame[], teams: string[]) {
+  const pf = new Map<string, number>();
+  const pa = new Map<string, number>();
+  const poss = new Map<string, number>();
 
-  const teams = Array.from(teamSet).sort();
-  const nTeams = teams.length;
-
-  const idx = new Map<string, number>();
-  teams.forEach((t, i) => idx.set(t, i));
-
-  const nGames = teamGames.length;
-  const teamIdx = new Array<number>(nGames);
-  const oppIdx = new Array<number>(nGames);
-  const dPoints = new Array<number>(nGames);
-  const weights = new Array<number>(nGames);
-  const gamesPerTeam = new Array<number>(nTeams).fill(0);
-
-  for (let i = 0; i < nGames; i++) {
-    const g = teamGames[i];
-    const ti = idx.get(g.team)!;
-    const oi = idx.get(g.opponent)!;
-
-    teamIdx[i] = ti;
-    oppIdx[i] = oi;
-
-    const rawDp = g.off100 - leagueAvgOff100;
-    const dp = Math.max(Math.min(rawDp, MARGIN_CAP_100), -MARGIN_CAP_100);
-
-    dPoints[i] = dp;
-    weights[i] = g.w;
-    gamesPerTeam[ti] += 1;
+  for (const t of teams) {
+    pf.set(t, 0);
+    pa.set(t, 0);
+    poss.set(t, 0);
   }
 
-  let Off = new Array<number>(nTeams).fill(0);
-  let Def = new Array<number>(nTeams).fill(0);
+  for (const g of games) {
+    poss.set(g.away, (poss.get(g.away) || 0) + g.gamePoss);
+    poss.set(g.home, (poss.get(g.home) || 0) + g.gamePoss);
 
-  for (let iter = 0; iter < MAX_ITER; iter++) {
-    const offSum = new Array<number>(nTeams).fill(0);
-    const offW = new Array<number>(nTeams).fill(0);
-    const defSum = new Array<number>(nTeams).fill(0);
-    const defW = new Array<number>(nTeams).fill(0);
+    pf.set(g.away, (pf.get(g.away) || 0) + g.awayPts);
+    pa.set(g.away, (pa.get(g.away) || 0) + g.homePts);
 
-    for (let k = 0; k < nGames; k++) {
-      const ti = teamIdx[k];
-      const oi = oppIdx[k];
-      const dp = dPoints[k];
-      const w = weights[k];
-
-      offSum[ti] += w * (dp + Def[oi]);
-      offW[ti] += w;
-
-      defSum[oi] += w * (Off[ti] - dp);
-      defW[oi] += w;
-    }
-
-    const OffNew = new Array<number>(nTeams);
-    const DefNew = new Array<number>(nTeams);
-
-    for (let t = 0; t < nTeams; t++) {
-      OffNew[t] = offW[t] > 0 ? offSum[t] / offW[t] : Off[t];
-      DefNew[t] = defW[t] > 0 ? defSum[t] / defW[t] : Def[t];
-    }
-
-    // recenter
-    const offMean = average(OffNew);
-    const defMean = average(DefNew);
-    for (let t = 0; t < nTeams; t++) {
-      OffNew[t] -= offMean;
-      DefNew[t] -= defMean;
-    }
-
-    // convergence
-    let delta = 0;
-    for (let t = 0; t < nTeams; t++) {
-      delta = Math.max(delta, Math.abs(OffNew[t] - Off[t]), Math.abs(DefNew[t] - Def[t]));
-    }
-
-    Off = OffNew;
-    Def = DefNew;
-
-    if (delta < TOL) break;
+    pf.set(g.home, (pf.get(g.home) || 0) + g.homePts);
+    pa.set(g.home, (pa.get(g.home) || 0) + g.awayPts);
   }
 
-  // shrink early-season
-  for (let t = 0; t < nTeams; t++) {
-    const gc = gamesPerTeam[t] || 0;
-    const shrink = gc / (gc + PRIOR_GAMES);
-    Off[t] *= shrink;
-    Def[t] *= shrink;
+  const offRtg = new Map<string, number>();
+  const defRtg = new Map<string, number>();
+
+  for (const t of teams) {
+    const p = poss.get(t) || 0;
+    offRtg.set(t, p > 0 ? ((pf.get(t) || 0) / p) * 100 : 0);
+    defRtg.set(t, p > 0 ? ((pa.get(t) || 0) / p) * 100 : 0);
   }
 
-  // recenter after shrink
-  const offMean2 = average(Off);
-  const defMean2 = average(Def);
-  for (let t = 0; t < nTeams; t++) {
-    Off[t] -= offMean2;
-    Def[t] -= defMean2;
-  }
-
-  return { teams, idx, teamIdx, oppIdx, gamesPerTeam, Off, Def };
+  return { offRtg, defRtg, pf, pa, poss };
 }
 
 /* =========================
-   TRUE HCA (MARGIN-BASED, SAME METHOD)
+   TRUE HCA (MARGIN-BASED)
 ========================= */
 function computeTrueHcaFromHomeMargins(
   games: BrGame[],
@@ -743,19 +663,28 @@ async function main() {
   // 2) Fetch + parse B-Ref schedule pages (strict mapped games only)
   const { games, maxDate } = await fetchAllBrGamesStrict(brToCanon, canonSet);
 
-  // 3) Build team-games + league avg
+  // 3) Build team-games + league avg (for fun/sigma metrics)
   const { teamGames, leagueAvgOff100 } = buildTeamGames(games, maxDate);
 
-  // 4) Solve Off/Def
-  const { teams, idx, teamIdx, gamesPerTeam, Off, Def } = solveOffDef(teamGames, leagueAvgOff100);
+  // 4) Teams list + indices
+  const teamSet = new Set<string>();
+  for (const tg of teamGames) teamSet.add(tg.team);
+  const teams = Array.from(teamSet).sort();
   const nTeams = teams.length;
 
-  // 5) Engine ratings
-  const engineAdjOff = Off.map((x) => 100 + x);
-  const engineAdjDef = Def.map((x) => 100 - x);
-  const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]);
+  const idx = new Map<string, number>();
+  teams.forEach((t, i) => idx.set(t, i));
 
-  // 6) HCA
+  const teamIdx = teamGames.map((tg) => idx.get(tg.team) ?? -1);
+
+  // 5) OffRtg / DefRtg (raw, non-adjusted)
+  const { offRtg, defRtg } = computeTeamOffDefRtg(games, teams);
+
+  const engineAdjOff = teams.map((t) => offRtg.get(t) || 0); // OffRtg stored in engine_adj_off
+  const engineAdjDef = teams.map((t) => defRtg.get(t) || 0); // DefRtg stored in engine_adj_def
+  const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]); // NetRtg
+
+  // 6) HCA (uses NetRtg-based expectation)
   const { trueHca, homeGames, signal } = computeTrueHcaFromHomeMargins(games, idx, enginePower);
 
   // 7) Fun + sigmas + averages
@@ -774,9 +703,10 @@ async function main() {
     season: SEASON,
     updated_at: nowIso,
 
-    engine_adj_off: round2(engineAdjOff[i]),
-    engine_adj_def: round2(engineAdjDef[i]),
-    engine_power: round2(enginePower[i]),
+    // Raw NBA Ratings
+    engine_adj_off: round2(engineAdjOff[i]), // OffRtg
+    engine_adj_def: round2(engineAdjDef[i]), // DefRtg
+    engine_power: round2(enginePower[i]), // NetRtg
 
     true_hca: round2(trueHca[i]),
 
@@ -796,7 +726,6 @@ async function main() {
   // 10) Upsert into team_ratings
   for (const batch of chunk(rows, 500)) {
     const { error } = await supabase.from("team_ratings").upsert(batch, {
-      // ✅ make sure your unique index matches this
       onConflict: "sport_key,season,canonical",
     });
     if (error) throw error;
