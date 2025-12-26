@@ -1,0 +1,49 @@
+name: Weekly Team Possessions Loader
+
+on:
+  schedule:
+    # Runs every Monday at 06:15 UTC (00:15 America/Chicago during CST)
+    - cron: "15 6 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  group: team-possessions-weekly
+  cancel-in-progress: false
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        sport_key: [basketball_ncaab, basketball_nba]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Optional: if you use .env locally, DO NOT rely on it here.
+      # Use GitHub Actions secrets for Supabase creds instead.
+
+      - name: Run Team Possessions Loader
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SPORT_KEY: ${{ matrix.sport_key }}
+          # Pick whatever you want in the `season` column (can be static or passed in)
+          SEASON: "2025-26"
+          MAX_TRIES: "4"
+        run: |
+          # adjust the path if needed
+          npx tsx scripts/teamPossessionsLoader.ts
