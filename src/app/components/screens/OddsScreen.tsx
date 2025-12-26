@@ -2164,7 +2164,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           </div>
         </div>
 
-        {/* History modal */}
+                {/* History modal */}
         {historyOpen && historyEvent?.eventId && (
           <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
         )}
@@ -2182,7 +2182,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
         <div className="h-12" />
       </div>
-    </
+    </div>
+  </div>
+);
+}
+
  
 
 
