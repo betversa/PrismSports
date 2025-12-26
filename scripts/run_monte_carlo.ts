@@ -1,3 +1,15 @@
+/**
+ * run_monte_carlo.ts (MULTI-SPORT REWRITE)
+ * ------------------------------------------------------------
+ * Runs Monte Carlo + EV pipeline for multiple sports in one run.
+ *
+ * ✅ Multi-sport: SPORT_KEYS=basketball_ncaab,basketball_nba
+ * ✅ Uses events.sport_key to fetch upcoming events per sport
+ * ✅ Uses team_ratings.sport_key filter (critical!)
+ * ✅ Writes monte_carlo_runs + monte_carlo_results + ev_plays with sport_key separation
+ * ✅ Clears ev_plays per sport (RPC preferred, fallback delete by sport_key)
+ */
+
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 
@@ -81,7 +93,6 @@ type MonteCarloResultUpsert = {
 };
 
 type EvPlayInsert = {
-  // ✅ NEW (Option A)
   sport_key: string;
 
   run_id: string;
@@ -124,8 +135,10 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   throw new Error("[MC] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (preferred).");
 }
 
-// ✅ MULTI-SPORT
-const SPORT_KEYS = (process.env.SPORT_KEYS || process.env.SPORT_KEY || "basketball_ncaab")
+// ✅ MULTI-SPORT default includes NCAA + NBA
+const SPORT_KEYS = (process.env.SPORT_KEYS ||
+  process.env.SPORT_KEY ||
+  "basketball_ncaab,basketball_nba")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -173,9 +186,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 ========================================================= */
 
 async function main() {
-  if (!SPORT_KEYS.length) {
-    throw new Error("[MC] SPORT_KEYS is empty.");
-  }
+  if (!SPORT_KEYS.length) throw new Error("[MC] SPORT_KEYS is empty.");
 
   const now = new Date();
   const graceMs = START_GRACE_MINUTES * 60 * 1000;
@@ -188,6 +199,8 @@ async function main() {
   for (const sportKey of SPORT_KEYS) {
     await runForSport(sportKey, startCutoff);
   }
+
+  console.log(`[MC+EV] Done. sports=${SPORT_KEYS.join(",")}`);
 }
 
 async function runForSport(sportKey: string, startCutoff: Date) {
@@ -204,20 +217,20 @@ async function runForSport(sportKey: string, startCutoff: Date) {
 
   const eventIds = events.map((e) => e.event_id);
 
-  // 2) Snapshot: clear MC results for these events
+  // 2) Clear MC results for these events (fresh snapshot)
   await clearMonteCarloResultsForEvents(eventIds);
 
   // 3) Consensus lines from odds_snapshot
   const lineMap = await fetchConsensusLinesFromOddsSnapshot(eventIds);
 
-  // 4) Ratings
+  // 4) Ratings for this sport only
   const teamSet = new Set<string>();
   for (const e of events) {
     if (e.canon_home_team) teamSet.add(e.canon_home_team);
     if (e.canon_away_team) teamSet.add(e.canon_away_team);
   }
 
-  const ratings = await fetchTeamRatings([...teamSet]);
+  const ratings = await fetchTeamRatingsForSport(sportKey, [...teamSet]);
   const ratingMap = new Map<string, TeamRatingRow>();
   for (const r of ratings) ratingMap.set(r.canonical, r);
 
@@ -266,7 +279,9 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     if (!homeR || !awayR) {
       skipped.push({
         event_id: e.event_id,
-        reason: `missing team_ratings for ${!homeR ? home : ""}${!homeR && !awayR ? " & " : ""}${!awayR ? away : ""}`,
+        reason: `missing team_ratings(${sportKey}) for ${!homeR ? home : ""}${
+          !homeR && !awayR ? " & " : ""
+        }${!awayR ? away : ""}`,
       });
       continue;
     }
@@ -283,7 +298,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       marginHomeWinNegativeStore: MARGIN_HOME_WIN_NEGATIVE,
     });
 
-    const homePts = (sim.projectedTotal / 2) + (sim.projectedMarginHome_model / 2);
+    const homePts = sim.projectedTotal / 2 + sim.projectedMarginHome_model / 2;
     const awayPts = sim.projectedTotal - homePts;
 
     const trace = WRITE_TRACE
@@ -358,7 +373,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   await upsertMonteCarloResults(results);
   console.log(`[MC] (${sportKey}) Upserted ${results.length} rows (run_id=${runId}).`);
 
-  // 7) EV snapshot per sport (Option A)
+  // 7) EV snapshot per sport
   await rebuildEvPlaysForSport(sportKey, runId, results, eventIds);
 }
 
@@ -378,8 +393,6 @@ async function rebuildEvPlaysForSport(
   await clearEvPlaysForSport(sportKey);
 
   const oddsRows = await fetchOddsSnapshotForEvents(eventIds);
-
-  // Latest per (event,market,side,book)
   const latest = indexLatestOddsPerBook(oddsRows);
 
   const inserts: EvPlayInsert[] = [];
@@ -397,16 +410,11 @@ async function rebuildEvPlaysForSport(
         market === "h2h"
           ? ["home", "away"]
           : market === "spreads"
-            ? ["home", "away"]
-            : ["over", "under"];
+          ? ["home", "away"]
+          : ["over", "under"];
 
-      // Reference line for strict alignment (from MC consensus lines)
       const refLine =
-        market === "spreads"
-          ? mc.spread_line_home
-          : market === "totals"
-            ? mc.total_line
-            : null;
+        market === "spreads" ? mc.spread_line_home : market === "totals" ? mc.total_line : null;
 
       for (const side of sides) {
         const mcProb = getMcProbForMarket(mc, market, side);
@@ -415,9 +423,7 @@ async function rebuildEvPlaysForSport(
         const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
         if (!sharp) continue;
 
-        const quantumProb = clamp01(
-          QUANTUM_SHARP_WEIGHT * sharp.prob + QUANTUM_MC_WEIGHT * mcProb
-        );
+        const quantumProb = clamp01(QUANTUM_SHARP_WEIGHT * sharp.prob + QUANTUM_MC_WEIGHT * mcProb);
         const quantumOdds = probToAmericanOdds(quantumProb);
 
         for (const book of SOFT_BOOKS) {
@@ -427,7 +433,7 @@ async function rebuildEvPlaysForSport(
           const bookOdds = toNullNum(offer.odds);
           if (bookOdds == null) continue;
 
-          // Strict line alignment for spreads/totals
+          // strict line alignment for spreads/totals
           if (market === "spreads" || market === "totals") {
             if (refLine == null) continue;
 
@@ -436,7 +442,9 @@ async function rebuildEvPlaysForSport(
 
             const expected =
               market === "spreads"
-                ? (side === "home" ? refLine : -refLine)
+                ? side === "home"
+                  ? refLine
+                  : -refLine
                 : refLine;
 
             if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
@@ -453,11 +461,15 @@ async function rebuildEvPlaysForSport(
 
           const team =
             market === "totals"
-              ? (homeTeam && awayTeam ? `${awayTeam} vs ${homeTeam}` : mc.matchup ?? null)
-              : (side === "home" ? homeTeam : awayTeam);
+              ? homeTeam && awayTeam
+                ? `${awayTeam} vs ${homeTeam}`
+                : mc.matchup ?? null
+              : side === "home"
+              ? homeTeam
+              : awayTeam;
 
           inserts.push({
-            sport_key: sportKey, // ✅ NEW
+            sport_key: sportKey,
             run_id: runId,
             event_id: eid,
             commence_time: mc.commence_time,
@@ -529,7 +541,11 @@ async function fetchFutureEvents(startCutoff: Date, sportKey: string): Promise<E
   return out;
 }
 
-async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> {
+// ✅ FIX: fetch team_ratings per sport_key
+async function fetchTeamRatingsForSport(
+  sportKey: string,
+  canonicals: string[]
+): Promise<TeamRatingRow[]> {
   if (!canonicals.length) return [];
 
   const chunkSize = 400;
@@ -543,9 +559,10 @@ async function fetchTeamRatings(canonicals: string[]): Promise<TeamRatingRow[]> 
       .select(
         "canonical,engine_power,true_hca,pf_points,pa_points,avg_total_points,sigma_margin_100,sigma_total_100"
       )
+      .eq("sport_key", sportKey)
       .in("canonical", c);
 
-    if (error) throw new Error(`[MC] Failed to fetch team_ratings: ${error.message}`);
+    if (error) throw new Error(`[MC] Failed to fetch team_ratings (${sportKey}): ${error.message}`);
     out.push(...((data ?? []) as TeamRatingRow[]));
   }
 
@@ -594,19 +611,19 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     return out;
   }
 
-  // latest per (event,market,side,book)
   const latestPerBook = new Map<string, number>();
 
   for (const r of (data ?? []) as OddsSnapshotRow[]) {
-    const lineNum = Number(r.line);
+    const lineNum = Number((r as any).line);
     if (!Number.isFinite(lineNum)) continue;
 
-    const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
+    const k = `${(r as any).event_id}|${(r as any).market}|${(r as any).side}|${String(
+      (r as any).bookmaker || ""
+    ).toLowerCase()}`;
     if (latestPerBook.has(k)) continue;
     latestPerBook.set(k, lineNum);
   }
 
-  // avg across books -> consensus per (event,market,side)
   const buckets = new Map<string, number[]>();
   for (const [k, line] of latestPerBook.entries()) {
     const [eid, mkt, side] = k.split("|");
@@ -616,9 +633,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     buckets.set(k2, arr);
   }
 
-  for (const [k2, arr] of buckets.entries()) {
-    out.set(k2, mean(arr));
-  }
+  for (const [k2, arr] of buckets.entries()) out.set(k2, mean(arr));
 
   // repairs
   for (const id of eventIds) {
@@ -639,12 +654,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
 ========================================================= */
 
 async function createMonteCarloRun(payload: MonteCarloRunInsert): Promise<string> {
-  const { data, error } = await supabase
-    .from("monte_carlo_runs")
-    .insert(payload)
-    .select("id")
-    .single();
-
+  const { data, error } = await supabase.from("monte_carlo_runs").insert(payload).select("id").single();
   if (error) throw new Error(`[MC] Failed to insert monte_carlo_runs: ${error.message}`);
   if (!data?.id) throw new Error("[MC] Failed to create monte_carlo_runs row (no id).");
   return data.id as string;
@@ -743,7 +753,6 @@ function getSharpNoVigProb(
 
         if (!nearlyEqual(aLine, expA, LINE_TOL)) continue;
         if (!nearlyEqual(bLine, expB, LINE_TOL)) continue;
-
         if (!nearlyEqual(aLine + bLine, 0, 1e-4)) continue;
       } else {
         if (!nearlyEqual(aLine, refLine, LINE_TOL)) continue;
@@ -798,9 +807,7 @@ function americanOddsToProb(odds: number): number {
 function probToAmericanOdds(p: number): number {
   const pp = clamp01(p);
   if (pp <= 0 || pp >= 1) return 0;
-  return pp >= 0.5
-    ? Math.round((-100 * pp) / (1 - pp))
-    : Math.round((100 * (1 - pp)) / pp);
+  return pp >= 0.5 ? Math.round((-100 * pp) / (1 - pp)) : Math.round((100 * (1 - pp)) / pp);
 }
 
 function noVigPair(p1: number, p2: number): [number, number] {
@@ -1010,4 +1017,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
