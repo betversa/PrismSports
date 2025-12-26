@@ -10,7 +10,7 @@
  *    ...-november.html, ...-december.html, etc.
  *
  * REQUIRED DB TABLE:
- *  - public.team_map_nba:
+ *  - public.team_map:
  *      canonical (text, unique)
  *      BasketballReference (text)  // exact team name from B-Ref pages
  *
@@ -269,7 +269,7 @@ async function loadTeamMapNba(
   supabase: ReturnType<typeof createClient>
 ): Promise<{ canonSet: Set<string>; brToCanon: Map<string, string> }> {
   const { data, error } = await supabase
-    .from("team_map_nba")
+    .from("team_map")
     .select('canonical,"BasketballReference"')
     .not("canonical", "is", null);
 
@@ -287,9 +287,9 @@ async function loadTeamMapNba(
     if (brName) brToCanon.set(normalizeKey(brName), canonical);
   }
 
-  if (canonSet.size === 0) throw new Error("team_map_nba has 0 canonical rows.");
+  if (canonSet.size === 0) throw new Error("team_map has 0 canonical rows.");
   if (brToCanon.size === 0)
-    throw new Error('team_map_nba has 0 BasketballReference mappings (BasketballReference column empty).');
+    throw new Error('team_map has 0 BasketballReference mappings (BasketballReference column empty).');
 
   return { canonSet, brToCanon };
 }
@@ -352,7 +352,7 @@ async function fetchAllBrGamesStrict(
 
   if (!games.length) {
     throw new Error(
-      "[NBA] No valid games after strict BasketballReference->canonical mapping. Check team_map_nba coverage or B-Ref blocking."
+      "[NBA] No valid games after strict BasketballReference->canonical mapping. Check team_map coverage or B-Ref blocking."
     );
   }
   if (!maxDate) throw new Error("[NBA] No maxDate computed.");
