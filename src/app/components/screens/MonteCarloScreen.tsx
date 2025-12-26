@@ -337,31 +337,24 @@ const DESK_COLS = {
 function DesktopHeaderRow() {
   const hdr = "text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a]";
   return (
-    <div className="flex items-end justify-between gap-4">
-      <div className="min-w-0">
-        <div className={hdr}>Matchup</div>
-        <div className="text-[12px] text-[#cfcfcf] font-extrabold truncate"> </div>
+    <div className="ml-auto flex items-end gap-3 tabular-nums shrink-0">
+      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.score }}>
+        Proj Score
       </div>
-
-      <div className="ml-auto flex items-end gap-3 tabular-nums shrink-0">
-        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.score }}>
-          Proj Score
-        </div>
-        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.win }}>
-          Win%
-        </div>
-        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pm }}>
-          Proj Margin
-        </div>
-        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pt }}>
-          Proj Total
-        </div>
-        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.cs }}>
-          Cons Spread
-        </div>
-        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.ct }}>
-          Cons Total
-        </div>
+      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.win }}>
+        Win%
+      </div>
+      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pm }}>
+        Proj Margin
+      </div>
+      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pt }}>
+        Proj Total
+      </div>
+      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.cs }}>
+        Cons Spread
+      </div>
+      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.ct }}>
+        Cons Total
       </div>
     </div>
   );
