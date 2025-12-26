@@ -1,13 +1,25 @@
-// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE v4.3
-// ✅ Fixes logo regression by matching OddsScreen behavior:
-//    - Build team lookup maps with BOTH exact canonical + normalized keys
-//    - Lookup tries: exact -> normalized -> cleaned
-//    - Never "hide" the <img>; instead swap to a fallback tile when it errors
-// ✅ Mobile “details” header now ALWAYS uses team abbreviation (or derived fallback) — not Away/Home
-// ✅ Desktop: no separate “Details section” — metrics are inline under team rows (same block)
+// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE
+// ✅ Desktop: ALWAYS shows full details (no per-game toggle on desktop)
+// ✅ Mobile: keeps card layout + toggle, but replaces "AWAY/HOME" labels with team abbreviations from team_map.abbreviation
+// ✅ Mobile Details header also uses abbreviations instead of "Away/Home"
+// ✅ Same data tables + consensus logic (no logic changes to where data comes from)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+
+/**
+ * MONTE CARLO SCREEN — v4.1
+ *
+ * Desktop:
+ * ✅ Centered max-width container (web feel)
+ * ✅ Event blocks (OddsScreen rhythm)
+ * ✅ Always show Details for each event (no toggle)
+ *
+ * Mobile:
+ * ✅ Card layout + toggle
+ * ✅ Uses team abbreviation in place of AWAY/HOME labels (team_map.abbreviation)
+ * ✅ Details header uses abbreviations instead of Away/Home
+ */
 
 type MonteCarloRun = {
   id: string;
@@ -48,8 +60,8 @@ type TeamMapRow = {
 type OddsSnapshotRow = {
   ts: string;
   event_id: string;
-  market: string;
-  side: string | null;
+  market: string; // "spreads" | "totals"
+  side: string | null; // "home"/"away" | "over"/"under"
   line: number | null;
   odds: number | null;
   bookmaker: string | null;
@@ -76,9 +88,8 @@ type TeamRow = {
 
   side: SideKey;
   teamName: string;
-
   logoUrl: string | null;
-  abbr: string; // always non-empty (fallback derived)
+  abbr: string | null;
 
   projPoints: number;
   projMarginTeam: number;
@@ -107,23 +118,6 @@ type EventBundle = {
   home: TeamRow;
 };
 
-/** ---------- key helpers (logo/abbr map reliability) ---------- */
-function normKey(s: string | null | undefined) {
-  return (s ?? "").toString().trim().toLowerCase().replace(/\s+/g, " ");
-}
-function cleanKey(s: string | null | undefined) {
-  // drop punctuation that sometimes differs between feeds
-  return normKey(s).replace(/[^a-z0-9 ]/g, "");
-}
-function deriveAbbr(team: string) {
-  const t = (team ?? "").trim();
-  if (!t) return "—";
-  // Prefer last “word” if it looks like a mascot name; otherwise first 3 letters of full
-  const words = t.split(/\s+/).filter(Boolean);
-  const base = words[0] || t;
-  return base.slice(0, 3).toUpperCase();
-}
-
 /** ---------- Side normalization ---------- */
 const SIDE_ALIASES = {
   home: new Set(["home", "h", "team1", "t1"]),
@@ -148,25 +142,23 @@ function formatTs(ts: string) {
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString();
 }
+
 function formatStartStamp(ts: string) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
+
 function formatAmerican(odds: number) {
   const n = Math.round(Number(odds));
   if (!Number.isFinite(n) || n === 0) return "—";
   return n > 0 ? `+${n}` : `${n}`;
 }
+
 function formatPct(prob01: number | null) {
   const p = Number(prob01);
   if (!Number.isFinite(p)) return "—";
   return `${(p * 100).toFixed(1)}%`;
-}
-function fmtLine(x: number | null) {
-  if (x == null || !Number.isFinite(Number(x))) return "—";
-  const n = Number(x);
-  return `${n > 0 ? "+" : ""}${n.toFixed(1)}`;
 }
 
 /** ---------- numeric helpers ---------- */
@@ -198,33 +190,11 @@ function medianOrNull(nums: number[]): number | null {
   return (arr[mid - 1] + arr[mid]) / 2;
 }
 
-/** ---------- LogoBox (robust) ---------- */
+/** ---------- UI bits ---------- */
 function LogoBox({ team, url, size }: { team: string; url: string | null; size: number }) {
-  const [bad, setBad] = useState(false);
-
-  useEffect(() => {
-    setBad(false);
-  }, [url]);
-
-  const initials = useMemo(() => {
-    const parts = (team ?? "").split(/\s+/).filter(Boolean);
-    const a = parts[0]?.[0] ?? "T";
-    const b = parts[1]?.[0] ?? "";
-    return (a + b).toUpperCase();
-  }, [team]);
-
-  if (!url || bad) {
-    return (
-      <div
-        style={{ width: size, height: size }}
-        className="rounded-md border border-[#2a2a2a] bg-[#111] flex items-center justify-center text-[11px] font-extrabold text-[#d4af37] select-none"
-        title={team}
-      >
-        {initials}
-      </div>
-    );
+  if (!url) {
+    return <div style={{ width: size, height: size }} className="rounded-md bg-white border border-[#e5e5e5]" />;
   }
-
   return (
     <img
       src={url}
@@ -232,7 +202,9 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
       style={{ width: size, height: size }}
       className="rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
       loading="lazy"
-      onError={() => setBad(true)}
+      onError={(e) => {
+        (e.currentTarget as HTMLImageElement).style.display = "none";
+      }}
     />
   );
 }
@@ -241,9 +213,9 @@ const SCORE_COL_W = 56;
 const WIN_COL_W = 58;
 const RIGHT_GAP_PX = 8;
 
-function TeamLine({
+function SummaryLine({
   team,
-  label,
+  sideLabel,
   logoUrl,
   score,
   winProb,
@@ -251,7 +223,7 @@ function TeamLine({
   variant,
 }: {
   team: string;
-  label: string; // desktop: "AWAY/HOME", mobile: abbreviation
+  sideLabel: string; // can be "AWAY"/"HOME" (desktop) OR "DUKE"/"UNC" etc (mobile)
   logoUrl: string | null;
   score: number;
   winProb: number | null;
@@ -262,7 +234,7 @@ function TeamLine({
   const logoSize = isMobile ? 34 : 42;
 
   const teamText = isMobile ? "text-[11px]" : "text-[13px]";
-  const labelText = isMobile ? "text-[9px]" : "text-[10px]";
+  const sideText = isMobile ? "text-[9px]" : "text-[10px]";
   const scoreText = isMobile ? "text-[13px]" : "text-[16px]";
   const winText = isMobile ? "text-[10px]" : "text-[12px]";
 
@@ -274,8 +246,8 @@ function TeamLine({
         <div className={["text-white font-extrabold truncate", teamText].join(" ")} title={team}>
           {team}
         </div>
-        <div className={["text-[#7a7a7a] font-semibold uppercase tracking-wide", labelText].join(" ")}>
-          {label}
+        <div className={["text-[#7a7a7a] font-semibold uppercase tracking-wide", sideText].join(" ")}>
+          {sideLabel}
         </div>
       </div>
 
@@ -294,7 +266,7 @@ function TeamLine({
   );
 }
 
-function EventHeader({ timeLabel, variant }: { timeLabel: string; variant: "mobile" | "desktop" }) {
+function EventMiniHeader({ timeLabel, variant }: { timeLabel: string; variant: "mobile" | "desktop" }) {
   const isMobile = variant === "mobile";
   const labelText = isMobile ? "text-[9px]" : "text-[10px]";
   const timeText = isMobile ? "text-[10px]" : "text-[11px]";
@@ -302,9 +274,7 @@ function EventHeader({ timeLabel, variant }: { timeLabel: string; variant: "mobi
   return (
     <div className="flex items-end min-w-0">
       <div className="min-w-0">
-        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a]", labelText].join(" ")}>
-          Matchup
-        </div>
+        <div className={["font-extrabold uppercase tracking-wide text-[#8a8a8a]", labelText].join(" ")}>Matchup</div>
         <div className={["text-[#cfcfcf] font-extrabold truncate", timeText].join(" ")}>{timeLabel}</div>
       </div>
 
@@ -313,7 +283,7 @@ function EventHeader({ timeLabel, variant }: { timeLabel: string; variant: "mobi
           className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right", labelText].join(" ")}
           style={{ width: SCORE_COL_W }}
         >
-          Proj
+          Proj Score
         </div>
         <div
           className={["font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right", labelText].join(" ")}
@@ -326,137 +296,144 @@ function EventHeader({ timeLabel, variant }: { timeLabel: string; variant: "mobi
   );
 }
 
-/** ---------- Inline metrics panel (still in same block) ---------- */
-function InlineMetrics({
+/** ---------- Details block ---------- */
+function DetailsBlock({
   away,
   home,
-  colA,
-  colH,
+  headerLeft,
+  headerRight,
 }: {
   away: TeamRow;
   home: TeamRow;
-  colA: string; // for mobile MUST be abbreviation
-  colH: string; // for mobile MUST be abbreviation
+  headerLeft: string; // header label for away column (desktop: "Away", mobile: "DUKE")
+  headerRight: string; // header label for home column (desktop: "Home", mobile: "UNC")
 }) {
-  const consSpreadA =
+  const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
+  const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
+
+  const consSpreadAway =
     away.consSpreadLineTeam == null
       ? "—"
-      : `${fmtLine(away.consSpreadLineTeam)} (${away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)})`;
-  const consSpreadH =
+      : `${away.consSpreadLineTeam > 0 ? "+" : ""}${away.consSpreadLineTeam.toFixed(1)} (${
+          away.consSpreadOddsTeam == null ? "—" : formatAmerican(away.consSpreadOddsTeam)
+        })`;
+
+  const consSpreadHome =
     home.consSpreadLineTeam == null
       ? "—"
-      : `${fmtLine(home.consSpreadLineTeam)} (${home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)})`;
+      : `${home.consSpreadLineTeam > 0 ? "+" : ""}${home.consSpreadLineTeam.toFixed(1)} (${
+          home.consSpreadOddsTeam == null ? "—" : formatAmerican(home.consSpreadOddsTeam)
+        })`;
 
-  const consTotalO =
+  const consTotalOver =
     away.consTotalLine == null
       ? "—"
       : `o${away.consTotalLine.toFixed(1)} (${away.consTotalOverOdds == null ? "—" : formatAmerican(away.consTotalOverOdds)})`;
-  const consTotalU =
+
+  const consTotalUnder =
     home.consTotalLine == null
       ? "—"
       : `u${home.consTotalLine.toFixed(1)} (${home.consTotalUnderOdds == null ? "—" : formatAmerican(home.consTotalUnderOdds)})`;
 
-  const Row = (label: string, a: React.ReactNode, h: React.ReactNode) => (
+  const headerRow = (
+    <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414]">
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide"> </div>
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right truncate">
+        {headerLeft}
+      </div>
+      <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right truncate">
+        {headerRight}
+      </div>
+    </div>
+  );
+
+  const row = (label: string, a: React.ReactNode, h: React.ReactNode) => (
     <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414] last:border-b-0">
-      <div className="text-[#8a8a8a] text-[9px] font-extrabold uppercase tracking-wide">{label}</div>
-      <div className="text-white text-[10px] font-bold tabular-nums text-right">{a}</div>
-      <div className="text-white text-[10px] font-bold tabular-nums text-right">{h}</div>
+      <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
+      <div className="text-[11px] text-white font-bold tabular-nums text-right">{a}</div>
+      <div className="text-[11px] text-white font-bold tabular-nums text-right">{h}</div>
     </div>
   );
 
   return (
-    <div className="mt-3 rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
-      <div className="px-4 py-2 border-b border-[#141414]">
-        <div className="grid grid-cols-3 gap-2 items-center">
-          <div />
-          <div className="text-[#8a8a8a] text-[9px] font-extrabold uppercase tracking-wide text-right truncate">
-            {colA}
-          </div>
-          <div className="text-[#8a8a8a] text-[9px] font-extrabold uppercase tracking-wide text-right truncate">
-            {colH}
-          </div>
-        </div>
-      </div>
-
+    <div className="rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
+      <div className="px-4 py-2 border-b border-[#141414] text-[11px] text-white font-extrabold">Details</div>
       <div className="px-4">
-        {Row(
+        {headerRow}
+        {row(
           "Proj Margin",
           <>
-            {fmtLine(away.projMarginTeam)}{" "}
-            <span className="text-[#808080] font-semibold">{`(${formatPct(away.coverProbTeam)})`}</span>
+            {projMarginAway}{" "}
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(away.coverProbTeam)})</span>
           </>,
           <>
-            {fmtLine(home.projMarginTeam)}{" "}
-            <span className="text-[#808080] font-semibold">{`(${formatPct(home.coverProbTeam)})`}</span>
+            {projMarginHome}{" "}
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(home.coverProbTeam)})</span>
           </>
         )}
-
-        {Row(
+        {row(
           "Proj Total",
           <>
             o{away.projTotal.toFixed(1)}{" "}
-            <span className="text-[#808080] font-semibold">{`(${formatPct(away.overProb)})`}</span>
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(away.overProb)})</span>
           </>,
           <>
             u{home.projTotal.toFixed(1)}{" "}
-            <span className="text-[#808080] font-semibold">{`(${formatPct(home.underProb)})`}</span>
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(home.underProb)})</span>
           </>
         )}
-
-        {Row("Cons Spread", consSpreadA, consSpreadH)}
-        {Row("Cons Total", consTotalO, consTotalU)}
+        {row("Cons Spread", consSpreadAway, consSpreadHome)}
+        {row("Cons Total", consTotalOver, consTotalUnder)}
       </div>
     </div>
   );
 }
 
-/** ---------- Desktop event block (no separate details section) ---------- */
+/** ---------- Desktop event block (web style) ---------- */
 function DesktopEventBlock({ ev }: { ev: EventBundle }) {
   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
 
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.32)]">
       <div className="px-5 py-4 border-b border-[#2a2a2a] bg-black/20">
-        <EventHeader timeLabel={timeLabel} variant="desktop" />
+        <EventMiniHeader timeLabel={timeLabel} variant="desktop" />
       </div>
 
-      <div className="px-5 py-4">
-        <div className="space-y-3">
-          <TeamLine
-            team={ev.away.teamName}
-            label="AWAY"
-            logoUrl={ev.away.logoUrl}
-            score={ev.away.projPoints}
-            winProb={ev.away.winProbTeam}
-            isWinner={ev.away.isProjectedWinner}
-            variant="desktop"
-          />
-          <TeamLine
-            team={ev.home.teamName}
-            label="HOME"
-            logoUrl={ev.home.logoUrl}
-            score={ev.home.projPoints}
-            winProb={ev.home.winProbTeam}
-            isWinner={ev.home.isProjectedWinner}
-            variant="desktop"
-          />
-        </div>
+      <div className="px-5 py-4 space-y-3">
+        <SummaryLine
+          team={ev.away.teamName}
+          sideLabel="AWAY"
+          logoUrl={ev.away.logoUrl}
+          score={ev.away.projPoints}
+          winProb={ev.away.winProbTeam}
+          isWinner={ev.away.isProjectedWinner}
+          variant="desktop"
+        />
+        <SummaryLine
+          team={ev.home.teamName}
+          sideLabel="HOME"
+          logoUrl={ev.home.logoUrl}
+          score={ev.home.projPoints}
+          winProb={ev.home.winProbTeam}
+          isWinner={ev.home.isProjectedWinner}
+          variant="desktop"
+        />
 
-        {/* Still inline in same block */}
-        <InlineMetrics away={ev.away} home={ev.home} colA="Away" colH="Home" />
+        {/* ✅ Desktop ALWAYS shows details */}
+        <div className="pt-2">
+          <DetailsBlock away={ev.away} home={ev.home} headerLeft="Away" headerRight="Home" />
+        </div>
       </div>
     </div>
   );
 }
 
+/** ---------- Main Screen ---------- */
 export function MonteCarloScreen() {
   const [run, setRun] = useState<MonteCarloRun | null>(null);
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
-
-  // IMPORTANT: we store multiple keys so lookup matches OddsScreen even if strings differ slightly
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
-
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
 
@@ -465,32 +442,11 @@ export function MonteCarloScreen() {
   const [loadingConsensus, setLoadingConsensus] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /** Lookup helpers (try exact -> normalized -> cleaned) */
-  const getLogo = (team: string) => {
-    const exact = team.trim();
-    return (
-      logoMap.get(exact) ??
-      logoMap.get(normKey(exact)) ??
-      logoMap.get(cleanKey(exact)) ??
-      null
-    );
-  };
-  const getAbbr = (team: string) => {
-    const exact = team.trim();
-    return (
-      abbrMap.get(exact) ??
-      abbrMap.get(normKey(exact)) ??
-      abbrMap.get(cleanKey(exact)) ??
-      deriveAbbr(exact)
-    );
-  };
-
-  // 0) team_map: logos + abbreviations
+  // 0) logos + abbreviations
   useEffect(() => {
     let alive = true;
     (async () => {
       const { data, error } = await supabase.from("team_map").select('canonical,abbreviation,"Logo URL"');
-
       if (!alive) return;
 
       if (error) {
@@ -504,20 +460,12 @@ export function MonteCarloScreen() {
       const am = new Map<string, string>();
 
       for (const r of (data ?? []) as TeamMapRow[]) {
-        const canonicalRaw = (r.canonical ?? "").toString().trim();
-        if (!canonicalRaw) continue;
-
-        const url = (r["Logo URL"] ?? "").toString().trim();
+        const canon = (r.canonical ?? "").trim();
+        const url = (r["Logo URL"] ?? "").trim();
         const abbr = ((r.abbreviation as any) ?? "").toString().trim();
 
-        const keys = new Set<string>([
-          canonicalRaw, // exact
-          normKey(canonicalRaw), // normalized
-          cleanKey(canonicalRaw), // cleaned
-        ]);
-
-        if (url) for (const k of keys) lm.set(k, url);
-        if (abbr) for (const k of keys) am.set(k, abbr.toUpperCase());
+        if (canon && url) lm.set(canon, url);
+        if (canon && abbr) am.set(canon, abbr.toUpperCase());
       }
 
       setLogoMap(lm);
@@ -723,7 +671,7 @@ export function MonteCarloScreen() {
     };
   }, [results]);
 
-  // 4) bundles
+  // 4) build bundles
   const events: EventBundle[] = useMemo(() => {
     const out: EventBundle[] = [];
 
@@ -760,14 +708,17 @@ export function MonteCarloScreen() {
       const awayIsWinner = awayPts > homePts;
       const homeIsWinner = homePts > awayPts;
 
+      const awayAbbr = abbrMap.get(away) ?? null;
+      const homeAbbr = abbrMap.get(home) ?? null;
+
       const awayRow: TeamRow = {
         key: `${r.event_id}-AWAY`,
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
         side: "AWAY",
         teamName: away,
-        logoUrl: getLogo(away),
-        abbr: getAbbr(away),
+        logoUrl: logoMap.get(away) ?? null,
+        abbr: awayAbbr,
 
         projPoints: awayPts,
         projMarginTeam: -marginHome,
@@ -795,8 +746,8 @@ export function MonteCarloScreen() {
         commenceTime: r.commence_time ?? null,
         side: "HOME",
         teamName: home,
-        logoUrl: getLogo(home),
-        abbr: getAbbr(home),
+        logoUrl: logoMap.get(home) ?? null,
+        abbr: homeAbbr,
 
         projPoints: homePts,
         projMarginTeam: marginHome,
@@ -827,9 +778,9 @@ export function MonteCarloScreen() {
     }
 
     return out;
-  }, [results, consensusMap, logoMap, abbrMap]);
+  }, [results, logoMap, abbrMap, consensusMap]);
 
-  // mobile open state
+  // keep mobile open state aligned
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
@@ -849,7 +800,9 @@ export function MonteCarloScreen() {
             <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">Monte Carlo</h2>
             <div className="text-xs text-[#8a8a8a] mt-1">
               Latest simulation snapshot
-              {run?.created_at ? <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span> : null}
+              {run?.created_at ? (
+                <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span>
+              ) : null}
               {loadingConsensus ? <span className="ml-2 text-[#5a5a5a]">· Loading consensus…</span> : null}
             </div>
           </div>
@@ -882,49 +835,54 @@ export function MonteCarloScreen() {
                   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
                   const open = !!openMap[ev.eventId];
 
-                  // ✅ Mobile labels are ALWAYS abbreviations now (with derived fallback)
-                  const awayLabel = ev.away.abbr;
-                  const homeLabel = ev.home.abbr;
+                  const awayLabel = (ev.away.abbr || "AWAY").toUpperCase();
+                  const homeLabel = (ev.home.abbr || "HOME").toUpperCase();
 
                   return (
                     <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
-                      <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <EventHeader timeLabel={timeLabel} variant="mobile" />
-                        </div>
-
+                      <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-end">
                         <button
                           type="button"
                           onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                          className="shrink-0 text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+                          className="text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
                         >
-                          {open ? "Hide" : "More"}
+                          {open ? "Hide Details" : "Show Details"}
                         </button>
                       </div>
 
-                      <div className="p-3">
-                        <div className="space-y-3">
-                          <TeamLine
-                            team={ev.away.teamName}
-                            label={awayLabel}
-                            logoUrl={ev.away.logoUrl}
-                            score={ev.away.projPoints}
-                            winProb={ev.away.winProbTeam}
-                            isWinner={ev.away.isProjectedWinner}
-                            variant="mobile"
-                          />
-                          <TeamLine
-                            team={ev.home.teamName}
-                            label={homeLabel}
-                            logoUrl={ev.home.logoUrl}
-                            score={ev.home.projPoints}
-                            winProb={ev.home.winProbTeam}
-                            isWinner={ev.home.isProjectedWinner}
-                            variant="mobile"
-                          />
+                      <div className="p-3 space-y-3">
+                        <div className="pb-2 border-b border-[#141414]">
+                          <EventMiniHeader timeLabel={timeLabel} variant="mobile" />
                         </div>
 
-                        {open ? <InlineMetrics away={ev.away} home={ev.home} colA={awayLabel} colH={homeLabel} /> : null}
+                        {/* ✅ Mobile uses abbreviations instead of AWAY/HOME */}
+                        <SummaryLine
+                          team={ev.away.teamName}
+                          sideLabel={awayLabel}
+                          logoUrl={ev.away.logoUrl}
+                          score={ev.away.projPoints}
+                          winProb={ev.away.winProbTeam}
+                          isWinner={ev.away.isProjectedWinner}
+                          variant="mobile"
+                        />
+                        <SummaryLine
+                          team={ev.home.teamName}
+                          sideLabel={homeLabel}
+                          logoUrl={ev.home.logoUrl}
+                          score={ev.home.projPoints}
+                          winProb={ev.home.winProbTeam}
+                          isWinner={ev.home.isProjectedWinner}
+                          variant="mobile"
+                        />
+
+                        {open ? (
+                          <DetailsBlock
+                            away={ev.away}
+                            home={ev.home}
+                            headerLeft={awayLabel}
+                            headerRight={homeLabel}
+                          />
+                        ) : null}
                       </div>
                     </div>
                   );
