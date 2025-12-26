@@ -1,36 +1,29 @@
 /**
- * ratingsBuilder_nba.ts — Basketball-Reference Schedule → NBA OffRtg / DefRtg (Per-100 Possessions, non-adjusted)
- * ------------------------------------------------------------------------------------------------------------
+ * ratingsBuilder_nba.ts — B-Ref Schedule → NBA OffRtg / DefRtg using TeamRankings pace (team_possessions)
+ * ------------------------------------------------------------------------------------------------------
  * GOAL:
- *  - Build NBA team_ratings using simple (non-opponent-adjusted) season OffRtg and DefRtg:
- *      OffRtg = (PF / Poss) * 100
- *      DefRtg = (PA / Poss) * 100
+ *  - Build NBA team_ratings using raw (non-opponent-adjusted) OffRtg/DefRtg with REALISTIC pace:
+ *      poss_total = poss_pg * games_played
+ *      OffRtg = (PF / poss_total) * 100
+ *      DefRtg = (PA / poss_total) * 100
  *      NetRtg = OffRtg - DefRtg
  *
- * DATA SOURCE:
- *  - Basketball-Reference monthly schedule pages, e.g.
- *    https://www.basketball-reference.com/leagues/NBA_2025_games-october.html
- *    ...-november.html, ...-december.html, etc.
+ * DATA:
+ *  - Games from Basketball-Reference schedule pages (PF/PA, GP)
+ *  - Pace from public.team_possessions (TeamRankings):
+ *      canonical, sport_key, season, "2025", "2024", "Last 3", "Last 1", "Home", "Away", updated_at
  *
- * REQUIRED DB TABLE:
+ * TEAM MAP:
  *  - public.team_map:
- *      canonical (text, unique)
- *      SR_School (text)  // exact team name from B-Ref schedule pages (as you're using now)
+ *      canonical (text)
+ *      SR_School (text)  // exact team name as shown on B-Ref schedule pages
  *
- * OUTPUT TABLE:
- *  - public.team_ratings (sport-aware):
- *      sport_key, season, canonical,
- *      engine_adj_off  -> OffRtg (raw)
- *      engine_adj_def  -> DefRtg (raw)
- *      engine_power    -> NetRtg (raw)
- *      true_hca, pf_points, pa_points, avg_total_points,
- *      sigma_margin_100, sigma_total_100, fun_factor, power_rank, updated_at
- *
- * NOTES:
- *  - B-Ref may 403 in GitHub Actions. We set headers + retries.
- *  - We only use completed games (visitor_pts/home_pts must be present).
- *  - Possessions are estimated with a constant (DEFAULT_LEAGUE_AVG_POSS) and OT scaling,
- *    consistent with your previous NCAA-style approach.
+ * OUTPUT:
+ *  - public.team_ratings:
+ *      engine_adj_off = OffRtg (raw)
+ *      engine_adj_def = DefRtg (raw)
+ *      engine_power   = NetRtg (raw)
+ *      plus: true_hca, fun_factor, sigma_total_100, sigma_margin_100, avg_total_points, avg_margin_points, pf/pa per game
  */
 
 import "dotenv/config";
@@ -44,51 +37,54 @@ type BrGame = {
   date: Date;
   away: string; // canonical
   home: string; // canonical
-  awayPts: number; // OT-scaled to regulation-equivalent points
-  homePts: number; // OT-scaled to regulation-equivalent points
-  suffix: string; // OT marker (e.g., "OT", "2OT")
+  awayPts: number; // raw points (no OT scaling)
+  homePts: number; // raw points (no OT scaling)
+  suffix: string; // OT marker
   neutral: boolean; // NBA regular season false
-  gamePoss: number; // estimated possessions (regulation-equivalent)
 };
 
 type TeamGame = {
   team: string; // canonical
   opponent: string; // canonical
-  off100: number; // per-game offensive points per 100 poss (using estimated poss)
-  oppOff100: number; // opponent per-game offensive points per 100 poss
+  off100: number; // points per 100 (using estimated game possessions from pace table)
+  oppOff100: number;
   pts: number;
   pa: number;
   neutral: boolean;
   homeAway: "home" | "away" | "neutral";
   w: number; // recency weight
-  poss: number;
+  gamePoss: number; // estimated possessions for this game
   suffix: string;
+};
+
+type TeamPossRow = {
+  canonical: string;
+  sport_key: string;
+  season: string;
+  // columns are weird strings like "2025", "Last 3", etc.
+  [k: string]: any;
 };
 
 /* =========================
    CONFIG
 ========================= */
 const SPORT_KEY = process.env.SPORT_KEY || "basketball_nba";
-
-// NBA_2025 == 2024-25 season on Basketball-Reference
 const BR_LEAGUE_YEAR = Number(process.env.NBA_BR_LEAGUE_YEAR || "2025"); // NBA_2025
 const SEASON = process.env.SEASON || "2024-25";
 
-// possessions fallback (NBA pace is ~99–101; use a constant)
-const DEFAULT_LEAGUE_AVG_POSS = Number(process.env.NBA_DEFAULT_POSS || "99");
-
-// recency weighting (used only for fun/sigmas; OffRtg/DefRtg is season aggregate)
 const RECENCY_HALF_LIFE_DAYS = 30;
 const RECENCY_FLOOR = 0.3;
 
-// HCA model (margin-based)
+// HCA model
 const HCA_BASE = 3.0;
 const HCA_SHRINK = 0.35;
 const HCA_MIN = 1.5;
 const HCA_MAX = 4.8;
 const HCA_MIN_HOME_GAMES = 5;
 
-// months to try (B-Ref pages exist by month name)
+// fallback if team_possessions missing a team (should be rare)
+const DEFAULT_POSS_PG_FALLBACK = Number(process.env.NBA_DEFAULT_POSS || "99");
+
 const MONTHS = [
   "october",
   "november",
@@ -140,18 +136,7 @@ function recencyWeight(gameDate: Date, maxDate: Date): number {
   return Math.max(RECENCY_FLOOR, w);
 }
 
-function computeNumOT(otCell: string): number {
-  const s = String(otCell || "").trim().toUpperCase();
-  if (!s) return 0;
-  // Common patterns: "OT", "2OT", "3OT"
-  const m = s.match(/^(\d+)\s*OT$/i);
-  if (m?.[1]) return parseInt(m[1], 10);
-  if (s === "OT") return 1;
-  return 0;
-}
-
 function parseCskDate(csk: string): Date | null {
-  // e.g. csk="202410220BOS" -> YYYYMMDD...
   const m = String(csk || "").match(/^(\d{4})(\d{2})(\d{2})/);
   if (!m) return null;
   const yyyy = Number(m[1]);
@@ -165,6 +150,18 @@ function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
+}
+
+function seasonStartYear(season: string): number | null {
+  // "2024-25" -> 2024
+  const m = String(season || "").match(/^(\d{4})\s*-\s*(\d{2}|\d{4})$/);
+  if (!m) return null;
+  return Number(m[1]);
+}
+
+function toNullNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 /* =========================
@@ -203,6 +200,7 @@ async function fetchHtmlWithRetries(url: string, maxTries = 4): Promise<string> 
 
 /* =========================
    PARSE B-REF MONTH PAGE
+   - completed games only
 ========================= */
 function parseBrMonth(html: string) {
   const rows: Array<{
@@ -223,12 +221,8 @@ function parseBrMonth(html: string) {
     const date = parseCskDate(cskMatch[1]);
     if (!date) continue;
 
-    const awayMatch = tr.match(
-      /data-stat="visitor_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i
-    );
-    const homeMatch = tr.match(
-      /data-stat="home_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i
-    );
+    const awayMatch = tr.match(/data-stat="visitor_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
+    const homeMatch = tr.match(/data-stat="home_team_name"[\s\S]*?<a[^>]*>([^<]+)<\/a>/i);
     if (!awayMatch?.[1] || !homeMatch?.[1]) continue;
 
     const awayName = awayMatch[1].trim();
@@ -253,7 +247,6 @@ function parseBrMonth(html: string) {
 
 /* =========================
    DB: LOAD TEAM MAP (NBA)
-   Using team_map.SR_School as requested
 ========================= */
 async function loadTeamMapNba(
   supabase: ReturnType<typeof createClient>
@@ -278,10 +271,50 @@ async function loadTeamMapNba(
   }
 
   if (canonSet.size === 0) throw new Error("team_map has 0 canonical rows.");
-  if (brToCanon.size === 0)
-    throw new Error('team_map has 0 SR_School mappings (SR_School column empty).');
+  if (brToCanon.size === 0) throw new Error('team_map has 0 SR_School mappings (SR_School empty).');
 
   return { canonSet, brToCanon };
+}
+
+/* =========================
+   DB: LOAD TEAM POSSESSIONS
+========================= */
+async function loadTeamPossessions(
+  supabase: ReturnType<typeof createClient>
+): Promise<Map<string, TeamPossRow>> {
+  const { data, error } = await supabase
+    .from("team_possessions")
+    .select("*")
+    .eq("sport_key", SPORT_KEY)
+    .eq("season", SEASON);
+
+  if (error) throw error;
+
+  const m = new Map<string, TeamPossRow>();
+  for (const r of (data || []) as any[]) {
+    const canon = String(r.canonical || "").trim();
+    if (!canon) continue;
+    m.set(canon, r as TeamPossRow);
+  }
+  return m;
+}
+
+function pickPossColumnForSeason(season: string): string | null {
+  // Use season start year column: "2024-25" -> "2024"
+  const y = seasonStartYear(season);
+  if (!y) return null;
+  return String(y);
+}
+
+function possPgForTeam(possMap: Map<string, TeamPossRow>, canonical: string): number {
+  const row = possMap.get(canonical);
+  const col = pickPossColumnForSeason(SEASON);
+  if (row && col && row[col] != null) {
+    const v = toNullNum(row[col]);
+    if (v != null && v > 40 && v < 130) return v;
+  }
+  // fallback to Home/Away/Last 3 etc if you want later — for now keep it stable
+  return DEFAULT_POSS_PG_FALLBACK;
 }
 
 /* =========================
@@ -312,17 +345,7 @@ async function fetchAllBrGamesStrict(
       const cAway = brToCanon.get(normalizeKey(g.awayName));
       const cHome = brToCanon.get(normalizeKey(g.homeName));
       if (!cAway || !cHome) continue;
-
       if (!canonSet.has(cAway) || !canonSet.has(cHome)) continue;
-
-      const numOT = computeNumOT(g.ot);
-      // NBA regulation 48 minutes; each OT is 5 minutes
-      const possScale = numOT > 0 ? 48 / (48 + 5 * numOT) : 1.0;
-
-      // "regulation-equivalent" scaling consistent with prior script
-      const regPoss = DEFAULT_LEAGUE_AVG_POSS * possScale;
-      const regAwayPts = g.awayPts * possScale;
-      const regHomePts = g.homePts * possScale;
 
       if (!maxDate || g.date > maxDate) maxDate = g.date;
 
@@ -331,38 +354,87 @@ async function fetchAllBrGamesStrict(
         date: g.date,
         away: cAway,
         home: cHome,
-        awayPts: regAwayPts,
-        homePts: regHomePts,
+        awayPts: g.awayPts, // raw points
+        homePts: g.homePts, // raw points
         suffix: g.ot || "",
         neutral: false,
-        gamePoss: regPoss,
       });
     }
   }
 
-  if (!games.length) {
-    throw new Error(
-      "[NBA] No valid games after strict SR_School->canonical mapping. Check team_map coverage or B-Ref blocking."
-    );
-  }
+  if (!games.length) throw new Error("[NBA] No valid games after SR_School->canonical mapping.");
   if (!maxDate) throw new Error("[NBA] No maxDate computed.");
 
   return { games, maxDate };
 }
 
 /* =========================
-   TEAM-GAMES + LEAGUE AVG (for sigmas/fun)
+   TEAM LIST
 ========================= */
-function buildTeamGames(games: BrGame[], maxDate: Date) {
+function getTeamsFromGames(games: BrGame[]): string[] {
+  const set = new Set<string>();
+  for (const g of games) {
+    set.add(g.away);
+    set.add(g.home);
+  }
+  return Array.from(set).sort();
+}
+
+/* =========================
+   AGG: PF/PA/GP
+========================= */
+function computePfPaGp(games: BrGame[], teams: string[]) {
+  const pfTot = new Map<string, number>();
+  const paTot = new Map<string, number>();
+  const gp = new Map<string, number>();
+  const homeGp = new Map<string, number>();
+
+  for (const t of teams) {
+    pfTot.set(t, 0);
+    paTot.set(t, 0);
+    gp.set(t, 0);
+    homeGp.set(t, 0);
+  }
+
+  for (const g of games) {
+    // away
+    pfTot.set(g.away, (pfTot.get(g.away) || 0) + g.awayPts);
+    paTot.set(g.away, (paTot.get(g.away) || 0) + g.homePts);
+    gp.set(g.away, (gp.get(g.away) || 0) + 1);
+
+    // home
+    pfTot.set(g.home, (pfTot.get(g.home) || 0) + g.homePts);
+    paTot.set(g.home, (paTot.get(g.home) || 0) + g.awayPts);
+    gp.set(g.home, (gp.get(g.home) || 0) + 1);
+    homeGp.set(g.home, (homeGp.get(g.home) || 0) + 1);
+  }
+
+  return { pfTot, paTot, gp, homeGp };
+}
+
+/* =========================
+   BUILD TEAM-GAMES (for fun/sigmas)
+   gamePoss = avg(team poss_pg, opp poss_pg)
+========================= */
+function buildTeamGames(
+  games: BrGame[],
+  maxDate: Date,
+  possMap: Map<string, TeamPossRow>
+) {
   const teamGames: TeamGame[] = [];
+
   let totalPtsAll = 0;
   let totalPossAll = 0;
 
   for (const g of games) {
     const w = recencyWeight(g.date, maxDate);
 
-    const off100Away = (g.awayPts / g.gamePoss) * 100;
-    const off100Home = (g.homePts / g.gamePoss) * 100;
+    const possAway = possPgForTeam(possMap, g.away);
+    const possHome = possPgForTeam(possMap, g.home);
+    const gamePoss = (possAway + possHome) / 2;
+
+    const off100Away = (g.awayPts / gamePoss) * 100;
+    const off100Home = (g.homePts / gamePoss) * 100;
 
     teamGames.push({
       team: g.away,
@@ -374,7 +446,7 @@ function buildTeamGames(games: BrGame[], maxDate: Date) {
       neutral: g.neutral,
       homeAway: g.neutral ? "neutral" : "away",
       w,
-      poss: g.gamePoss,
+      gamePoss,
       suffix: g.suffix,
     });
 
@@ -388,12 +460,12 @@ function buildTeamGames(games: BrGame[], maxDate: Date) {
       neutral: g.neutral,
       homeAway: g.neutral ? "neutral" : "home",
       w,
-      poss: g.gamePoss,
+      gamePoss,
       suffix: g.suffix,
     });
 
     totalPtsAll += g.awayPts + g.homePts;
-    totalPossAll += g.gamePoss + g.gamePoss;
+    totalPossAll += gamePoss + gamePoss;
   }
 
   const leagueAvgOff100 = (totalPtsAll / totalPossAll) * 100;
@@ -401,101 +473,16 @@ function buildTeamGames(games: BrGame[], maxDate: Date) {
 }
 
 /* =========================
-   OFFRTG / DEFRTG AGGREGATION
-========================= */
-function computeTeamOffDefRtg(games: BrGame[], teams: string[]) {
-  const pf = new Map<string, number>();
-  const pa = new Map<string, number>();
-  const poss = new Map<string, number>();
-
-  for (const t of teams) {
-    pf.set(t, 0);
-    pa.set(t, 0);
-    poss.set(t, 0);
-  }
-
-  for (const g of games) {
-    poss.set(g.away, (poss.get(g.away) || 0) + g.gamePoss);
-    poss.set(g.home, (poss.get(g.home) || 0) + g.gamePoss);
-
-    pf.set(g.away, (pf.get(g.away) || 0) + g.awayPts);
-    pa.set(g.away, (pa.get(g.away) || 0) + g.homePts);
-
-    pf.set(g.home, (pf.get(g.home) || 0) + g.homePts);
-    pa.set(g.home, (pa.get(g.home) || 0) + g.awayPts);
-  }
-
-  const offRtg = new Map<string, number>();
-  const defRtg = new Map<string, number>();
-
-  for (const t of teams) {
-    const p = poss.get(t) || 0;
-    offRtg.set(t, p > 0 ? ((pf.get(t) || 0) / p) * 100 : 0);
-    defRtg.set(t, p > 0 ? ((pa.get(t) || 0) / p) * 100 : 0);
-  }
-
-  return { offRtg, defRtg, pf, pa, poss };
-}
-
-/* =========================
-   TRUE HCA (MARGIN-BASED)
-========================= */
-function computeTrueHcaFromHomeMargins(
-  games: BrGame[],
-  idx: Map<string, number>,
-  enginePower: number[]
-) {
-  const nTeams = enginePower.length;
-
-  const sumDelta = new Array<number>(nTeams).fill(0);
-  const cntHome = new Array<number>(nTeams).fill(0);
-
-  for (const g of games) {
-    if (g.neutral) continue;
-
-    const home = g.home;
-    const away = g.away;
-
-    const hi = idx.get(home);
-    const ai = idx.get(away);
-    if (hi === undefined || ai === undefined) continue;
-
-    const actualMargin = g.homePts - g.awayPts;
-    const expectedMargin = enginePower[hi] - enginePower[ai];
-
-    const delta = actualMargin - expectedMargin;
-
-    sumDelta[hi] += delta;
-    cntHome[hi] += 1;
-  }
-
-  const signal = new Array<number>(nTeams).fill(0);
-  const trueHca = new Array<number>(nTeams).fill(HCA_BASE);
-
-  for (let t = 0; t < nTeams; t++) {
-    if (cntHome[t] >= 1) signal[t] = sumDelta[t] / cntHome[t];
-
-    if (cntHome[t] < HCA_MIN_HOME_GAMES) {
-      trueHca[t] = HCA_BASE;
-    } else {
-      const raw = HCA_BASE + HCA_SHRINK * signal[t];
-      trueHca[t] = clamp(raw, HCA_MIN, HCA_MAX);
-    }
-  }
-
-  return { trueHca, homeGames: cntHome, signal };
-}
-
-/* =========================
-   FUN FACTOR + SIGMAS + AVERAGES (per team)
+   FUN FACTOR + SIGMAS
 ========================= */
 function computeFunAndSigmasFast(
   teamGames: TeamGame[],
-  nTeams: number,
-  teamIdx: number[],
+  teams: string[],
   leagueAvgOff100: number
 ) {
-  const nGames = teamGames.length;
+  const idx = new Map<string, number>();
+  teams.forEach((t, i) => idx.set(t, i));
+  const nTeams = teams.length;
 
   const totalPer100Sum = new Array<number>(nTeams).fill(0);
   const totalPer100Sq = new Array<number>(nTeams).fill(0);
@@ -513,9 +500,9 @@ function computeFunAndSigmasFast(
   const gameCount = new Array<number>(nTeams).fill(0);
   const otCount = new Array<number>(nTeams).fill(0);
 
-  for (let i = 0; i < nGames; i++) {
-    const g = teamGames[i];
-    const ti = teamIdx[i];
+  for (const g of teamGames) {
+    const ti = idx.get(g.team);
+    if (ti == null) continue;
 
     const totalPer100 = g.off100 + g.oppOff100;
     const signedMargin100 = g.off100 - g.oppOff100;
@@ -583,12 +570,7 @@ function computeFunAndSigmasFast(
 
     const otRate = otCount[t] / gc;
 
-    const rf =
-      0.4 * scoringScore +
-      0.3 * closenessScore +
-      0.2 * volatilityScore +
-      0.1 * (otRate * 2);
-
+    const rf = 0.4 * scoringScore + 0.3 * closenessScore + 0.2 * volatilityScore + 0.1 * (otRate * 2);
     rawFun[t] = rf;
     minFun = minFun === null ? rf : Math.min(minFun, rf);
     maxFun = maxFun === null ? rf : Math.max(maxFun, rf);
@@ -607,39 +589,47 @@ function computeFunAndSigmasFast(
 }
 
 /* =========================
-   PF / PA PER GAME (TEAM-LEVEL)
+   TRUE HCA (MARGIN-BASED)
 ========================= */
-function computePfPaPerGame(games: BrGame[], teams: string[]) {
-  const pfTot = new Map<string, number>();
-  const paTot = new Map<string, number>();
-  const gp = new Map<string, number>();
-
-  for (const t of teams) {
-    pfTot.set(t, 0);
-    paTot.set(t, 0);
-    gp.set(t, 0);
-  }
+function computeTrueHcaFromHomeMargins(
+  games: BrGame[],
+  idx: Map<string, number>,
+  enginePower: number[]
+) {
+  const nTeams = enginePower.length;
+  const sumDelta = new Array<number>(nTeams).fill(0);
+  const cntHome = new Array<number>(nTeams).fill(0);
 
   for (const g of games) {
-    pfTot.set(g.away, (pfTot.get(g.away) || 0) + g.awayPts);
-    paTot.set(g.away, (paTot.get(g.away) || 0) + g.homePts);
-    gp.set(g.away, (gp.get(g.away) || 0) + 1);
+    if (g.neutral) continue;
 
-    pfTot.set(g.home, (pfTot.get(g.home) || 0) + g.homePts);
-    paTot.set(g.home, (paTot.get(g.home) || 0) + g.awayPts);
-    gp.set(g.home, (gp.get(g.home) || 0) + 1);
+    const hi = idx.get(g.home);
+    const ai = idx.get(g.away);
+    if (hi === undefined || ai === undefined) continue;
+
+    const actualMargin = g.homePts - g.awayPts;
+    const expectedMargin = enginePower[hi] - enginePower[ai];
+    const delta = actualMargin - expectedMargin;
+
+    sumDelta[hi] += delta;
+    cntHome[hi] += 1;
   }
 
-  const pfPg = new Map<string, number>();
-  const paPg = new Map<string, number>();
+  const signal = new Array<number>(nTeams).fill(0);
+  const trueHca = new Array<number>(nTeams).fill(HCA_BASE);
 
-  for (const t of teams) {
-    const gcount = gp.get(t) || 0;
-    pfPg.set(t, gcount ? (pfTot.get(t) || 0) / gcount : 0);
-    paPg.set(t, gcount ? (paTot.get(t) || 0) / gcount : 0);
+  for (let t = 0; t < nTeams; t++) {
+    if (cntHome[t] >= 1) signal[t] = sumDelta[t] / cntHome[t];
+
+    if (cntHome[t] < HCA_MIN_HOME_GAMES) {
+      trueHca[t] = HCA_BASE;
+    } else {
+      const raw = HCA_BASE + HCA_SHRINK * signal[t];
+      trueHca[t] = clamp(raw, HCA_MIN, HCA_MAX);
+    }
   }
 
-  return { pfPg, paPg };
+  return { trueHca, homeGames: cntHome, signal };
 }
 
 /* =========================
@@ -657,56 +647,87 @@ async function main() {
     auth: { persistSession: false },
   });
 
-  // 1) NBA universe
+  // 1) team map
   const { canonSet, brToCanon } = await loadTeamMapNba(supabase);
 
-  // 2) Fetch + parse B-Ref schedule pages (strict mapped games only)
+  // 2) pace table for this sport+season
+  const possMap = await loadTeamPossessions(supabase);
+
+  // 3) games
   const { games, maxDate } = await fetchAllBrGamesStrict(brToCanon, canonSet);
 
-  // 3) Build team-games + league avg (for fun/sigma metrics)
-  const { teamGames, leagueAvgOff100 } = buildTeamGames(games, maxDate);
-
-  // 4) Teams list + indices
-  const teamSet = new Set<string>();
-  for (const tg of teamGames) teamSet.add(tg.team);
-  const teams = Array.from(teamSet).sort();
+  // 4) teams
+  const teams = getTeamsFromGames(games);
   const nTeams = teams.length;
 
   const idx = new Map<string, number>();
   teams.forEach((t, i) => idx.set(t, i));
 
-  const teamIdx = teamGames.map((tg) => idx.get(tg.team) ?? -1);
+  // 5) PF/PA/GP
+  const { pfTot, paTot, gp } = computePfPaGp(games, teams);
 
-  // 5) OffRtg / DefRtg (raw, non-adjusted)
-  const { offRtg, defRtg } = computeTeamOffDefRtg(games, teams);
+  // 6) OffRtg/DefRtg using poss_pg from team_possessions
+  const offRtgArr: number[] = [];
+  const defRtgArr: number[] = [];
 
-  const engineAdjOff = teams.map((t) => offRtg.get(t) || 0); // OffRtg stored in engine_adj_off
-  const engineAdjDef = teams.map((t) => defRtg.get(t) || 0); // DefRtg stored in engine_adj_def
+  let leaguePf = 0;
+  let leaguePa = 0;
+  let leaguePossTotal = 0;
+
+  for (const t of teams) {
+    const gcount = gp.get(t) || 0;
+    const possPg = possPgForTeam(possMap, t);
+    const possTotal = possPg * gcount;
+
+    const pf = pfTot.get(t) || 0;
+    const pa = paTot.get(t) || 0;
+
+    const off = possTotal > 0 ? (pf / possTotal) * 100 : 0;
+    const def = possTotal > 0 ? (pa / possTotal) * 100 : 0;
+
+    offRtgArr.push(off);
+    defRtgArr.push(def);
+
+    leaguePf += pf;
+    leaguePa += pa;
+    leaguePossTotal += possTotal;
+  }
+
+  const leagueAvgOff100 = leaguePossTotal > 0 ? (leaguePf / leaguePossTotal) * 100 : 0;
+
+  const engineAdjOff = offRtgArr;
+  const engineAdjDef = defRtgArr;
   const enginePower = engineAdjOff.map((o, i) => o - engineAdjDef[i]); // NetRtg
 
-  // 6) HCA (uses NetRtg-based expectation)
+  // 7) teamGames for fun/sigmas using gamePoss from pace table
+  const { teamGames } = buildTeamGames(games, maxDate, possMap);
+  const { funFactor, sigmaTotal100, sigmaMargin100, avgTotalPoints, avgMarginPoints } =
+    computeFunAndSigmasFast(teamGames, teams, leagueAvgOff100);
+
+  // 8) HCA
   const { trueHca, homeGames, signal } = computeTrueHcaFromHomeMargins(games, idx, enginePower);
 
-  // 7) Fun + sigmas + averages
-  const { funFactor, sigmaTotal100, sigmaMargin100, avgTotalPoints, avgMarginPoints } =
-    computeFunAndSigmasFast(teamGames, nTeams, teamIdx, leagueAvgOff100);
+  // 9) PF/PA per game (simple)
+  const pfPg = teams.map((t) => {
+    const gcount = gp.get(t) || 0;
+    return gcount ? (pfTot.get(t) || 0) / gcount : 0;
+  });
+  const paPg = teams.map((t) => {
+    const gcount = gp.get(t) || 0;
+    return gcount ? (paTot.get(t) || 0) / gcount : 0;
+  });
 
-  // 8) PF/PA per game
-  const { pfPg, paPg } = computePfPaPerGame(games, teams);
-
-  // 9) Build upsert rows
+  // 10) upsert
   const nowIso = new Date().toISOString();
-
   const rows: any[] = teams.map((team, i) => ({
     sport_key: SPORT_KEY,
     canonical: team,
     season: SEASON,
     updated_at: nowIso,
 
-    // Raw NBA Ratings
-    engine_adj_off: round2(engineAdjOff[i]), // OffRtg
-    engine_adj_def: round2(engineAdjDef[i]), // DefRtg
-    engine_power: round2(enginePower[i]), // NetRtg
+    engine_adj_off: round2(engineAdjOff[i]),
+    engine_adj_def: round2(engineAdjDef[i]),
+    engine_power: round2(enginePower[i]),
 
     true_hca: round2(trueHca[i]),
 
@@ -716,27 +737,19 @@ async function main() {
     avg_total_points: round2(avgTotalPoints[i]),
     avg_margin_points: round2(avgMarginPoints[i]),
 
-    pf_points: round2(pfPg.get(team) || 0),
-    pa_points: round2(paPg.get(team) || 0),
+    pf_points: round2(pfPg[i]),
+    pa_points: round2(paPg[i]),
   }));
 
   rows.sort((a, b) => Number(b.engine_power ?? 0) - Number(a.engine_power ?? 0));
   rows.forEach((r, i) => (r.power_rank = i + 1));
 
-  // 10) Upsert into team_ratings
   for (const batch of chunk(rows, 500)) {
     const { error } = await supabase.from("team_ratings").upsert(batch, {
       onConflict: "sport_key,season,canonical",
     });
     if (error) throw error;
   }
-
-  const hcaMin = Math.min(...trueHca);
-  const hcaMax = Math.max(...trueHca);
-  const sigMin = Math.min(...signal);
-  const sigMax = Math.max(...signal);
-  const homeMin = Math.min(...homeGames);
-  const homeMax = Math.max(...homeGames);
 
   console.log(
     JSON.stringify(
@@ -748,16 +761,17 @@ async function main() {
         teams_rated: rows.length,
         games_used: games.length,
         leagueAvgOff100: round2(leagueAvgOff100),
-        poss_assumption: DEFAULT_LEAGUE_AVG_POSS,
+        poss_source: "team_possessions (TeamRankings)",
+        poss_fallback: DEFAULT_POSS_PG_FALLBACK,
         hca: {
           base: HCA_BASE,
           shrink: HCA_SHRINK,
           min: HCA_MIN,
           max: HCA_MAX,
           min_home_games: HCA_MIN_HOME_GAMES,
-          assigned_range: { min: round2(hcaMin), max: round2(hcaMax) },
-          signal_range: { min: round2(sigMin), max: round2(sigMax) },
-          home_games_range: { min: homeMin, max: homeMax },
+          assigned_range: { min: round2(Math.min(...trueHca)), max: round2(Math.max(...trueHca)) },
+          signal_range: { min: round2(Math.min(...signal)), max: round2(Math.max(...signal)) },
+          home_games_range: { min: Math.min(...homeGames), max: Math.max(...homeGames) },
         },
       },
       null,
@@ -770,3 +784,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
