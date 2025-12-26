@@ -2,8 +2,7 @@ name: Daily Ratings Build
 
 on:
   schedule:
-    # 6:10 AM America/Chicago (12:10 UTC) — adjust if you want a different time
-    - cron: "10 12 * * *"
+    - cron: "10 12 * * *" # 6:10 AM America/Chicago (12:10 UTC)
   workflow_dispatch: {}
 
 concurrency:
@@ -13,7 +12,6 @@ concurrency:
 jobs:
   build_ratings:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,8 +25,19 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Build Ratings
+      - name: Build NCAAB Ratings
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: npm run ratings:build
+          SPORT_KEY: basketball_ncaab
+        run: npm run ratings:build:ncaab
+
+      - name: Build NBA Ratings
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SPORT_KEY: basketball_nba
+          NBA_BR_LEAGUE_YEAR: "2025"
+          SEASON: "2024-25"
+        run: npm run ratings:build:nba
+
