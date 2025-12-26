@@ -18,7 +18,7 @@ interface SidebarProps {
   variant?: "desktop" | "mobile";
   onClose?: () => void;
 
-  // ✅ NEW: sport selection state (from App.tsx)
+  // ✅ sport selection state (from App.tsx)
   oddsSportKey: SportKey;
   onPickOddsSport: (k: SportKey) => void;
 
@@ -208,13 +208,10 @@ export function Sidebar({
                     >
                       <span className="text-[13px] font-medium">{ui} Predictions</span>
 
+                      {/* ✅ Removed right-side SELECTED label entirely */}
                       {!enabled ? (
                         <span className="text-[10px] font-semibold" style={{ color: GOLD }}>
                           COMING SOON
-                        </span>
-                      ) : selected ? (
-                        <span className="text-[10px] font-extrabold" style={{ color: GOLD }}>
-                          SELECTED
                         </span>
                       ) : null}
                     </button>
@@ -267,13 +264,10 @@ export function Sidebar({
                     >
                       <span className="text-[13px] font-medium">{ui} Odds</span>
 
+                      {/* ✅ Removed right-side SELECTED label entirely */}
                       {!enabled ? (
                         <span className="text-[10px] font-semibold" style={{ color: GOLD }}>
                           COMING SOON
-                        </span>
-                      ) : selected ? (
-                        <span className="text-[10px] font-extrabold" style={{ color: GOLD }}>
-                          SELECTED
                         </span>
                       ) : null}
                     </button>
