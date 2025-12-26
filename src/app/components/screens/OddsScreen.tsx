@@ -1,4 +1,4 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Desktop web feel + always-show books)
+// screens/OddsScreen.tsx — FULL REWRITE (Desktop web feel + always-show books + Player Props modal)
 // ✅ Filters by sport_key (prop)
 // ✅ Desktop: centered max-width “web” layout (less app-like)
 // ✅ Desktop: books ALWAYS shown (no toggle)
@@ -6,6 +6,8 @@
 // ✅ Date pills ONLY show dates that actually have displayable games (same filtering as list)
 // ✅ Mobile cards keep “Show/Hide Books” toggle (optional)
 // ✅ History modal unchanged behavior (odds-only, line shown in hover tooltip)
+// ✅ NEW: Player Props modal (player_props_snapshot) + prop-type filter (PTS/REB/AST/3PT)
+// ✅ NEW: “Props” button next to “History” (desktop + mobile)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -64,6 +66,25 @@ const BOOK_LOGOS: Record<BookKey, string> = {
 };
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 
+/** snapshot bookmaker strings (from player_props_snapshot.bookmaker) */
+const BOOKMAKER_STR_BY_KEY: Record<BookKey, string> = {
+  dk: "draftkings",
+  fd: "fanduel",
+  mgm: "betmgm",
+  pin: "pinnacle",
+  bol: "betonlineag",
+};
+
+function bookKeyFromBookmaker(raw: string): BookKey | null {
+  const k = String(raw || "").toLowerCase();
+  if (k === "draftkings") return "dk";
+  if (k === "fanduel") return "fd";
+  if (k === "betmgm") return "mgm";
+  if (k === "pinnacle") return "pin";
+  if (k === "betonlineag") return "bol";
+  return null;
+}
+
 /** Desktop layout widths (web-friendly) */
 const COL_MATCHUP = 420;
 const COL_CONSENSUS = 190;
@@ -74,7 +95,7 @@ const BOOK_LOGO_H = 24;
 
 /** Header colors */
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
-const HDR_BOOK_BG = "bg-[#303030]"; // ✅ slightly lighter than #2a2a2a
+const HDR_BOOK_BG = "bg-[#303030]";
 const HDR_TEXT = "text-[#d0d0d0]";
 const HDR_BORDER = "border-[#232323]";
 
@@ -161,7 +182,7 @@ function maxIso(a: string | null, b: string | null) {
 }
 
 /** =========================
- * MAPPING HELPERS
+ * MAPPING HELPERS (odds wide)
  * ========================= */
 
 function pickLogoUrl(row: any): string | null {
@@ -333,20 +354,20 @@ function SegButton({
   );
 }
 
-function Segmented({
-  value,
-  onChange,
-}: {
-  value: Market;
-  onChange: (v: Market) => void;
-}) {
+function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) => void }) {
   return (
     <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>Moneyline</SegButton>
+      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>
+        Moneyline
+      </SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>Spread</SegButton>
+      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>
+        Spread
+      </SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "total"} onClick={() => onChange("total")}>Total</SegButton>
+      <SegButton active={value === "total"} onClick={() => onChange("total")}>
+        Total
+      </SegButton>
     </div>
   );
 }
@@ -417,15 +438,7 @@ function ConsensusValue({ parts }: { parts: CellParts }) {
   );
 }
 
-function MiniTeamRow({
-  team,
-  logoUrl,
-  side,
-}: {
-  team: string;
-  logoUrl: string | null;
-  side: "AWAY" | "HOME";
-}) {
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -706,6 +719,393 @@ function ModalShell({
 }
 
 /** =========================
+ * PLAYER PROPS MODAL
+ * ========================= */
+
+type PropType = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
+
+const PROP_LABEL: Record<PropType, string> = {
+  player_points: "Points",
+  player_rebounds: "Rebounds",
+  player_assists: "Assists",
+  player_threes: "3 Pointers",
+};
+
+type PlayerPropSnapshotRow = {
+  id: number;
+  ts: string;
+  run_id: string | null;
+  sport_key: string;
+  event_id: string | null;
+  commence_time: string | null;
+
+  home_team: string | null;
+  away_team: string | null;
+
+  player_name: string | null;
+  player_id: string | null;
+  team: string | null;
+  opponent: string | null;
+
+  market: string;
+  side: "over" | "under" | string;
+  line: number | null;
+  odds: number | null;
+  bookmaker: string;
+
+  source?: string | null;
+  inserted_at?: string | null;
+};
+
+type PropCell = {
+  line: number | null;
+  over: number | null;
+  under: number | null;
+};
+
+type PlayerPropWide = {
+  player: string;
+  team?: string | null;
+  opponent?: string | null;
+  lineConsensus: number | null;
+  byBook: Record<BookKey, PropCell>;
+};
+
+function initPropCell(): PropCell {
+  return { line: null, over: null, under: null };
+}
+
+function propsMedianLine(rows: PlayerPropSnapshotRow[]) {
+  const nums: number[] = [];
+  for (const r of rows) if (typeof r.line === "number" && Number.isFinite(r.line)) nums.push(r.line);
+  return median(nums);
+}
+
+function PlayerPropsModal({
+  ev,
+  sportKey,
+  onClose,
+}: {
+  ev: EventOdds;
+  sportKey: string;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [propType, setPropType] = useState<PropType>("player_points");
+
+  const [latestTs, setLatestTs] = useState<string | null>(null);
+  const [rows, setRows] = useState<PlayerPropWide[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function fetchRows() {
+      setLoading(true);
+      setErr("");
+      setLatestTs(null);
+      setRows([]);
+
+      // 1) try event_id
+      const q1 = supabase
+        .from("player_props_snapshot")
+        .select(
+          "id,ts,run_id,sport_key,event_id,commence_time,home_team,away_team,player_name,player_id,team,opponent,market,side,line,odds,bookmaker,source,inserted_at"
+        )
+        .eq("sport_key", sportKey)
+        .eq("market", propType)
+        .eq("event_id", ev.eventId)
+        .order("ts", { ascending: false })
+        .limit(5000);
+
+      const r1 = await q1;
+      if (!alive) return;
+
+      let raw = (r1.data ?? []) as PlayerPropSnapshotRow[];
+      let error = r1.error;
+
+      // 2) fallback to team match (either orientation) if no event rows
+      if (!error && (!raw || raw.length === 0)) {
+        const home = ev.home?.team ?? "";
+        const away = ev.away?.team ?? "";
+
+        // If your snapshot stores canonical team strings, this works.
+        // If it stores different labels, you’ll want to map before comparing.
+        const orFilter = [
+          `and(home_team.eq.${home},away_team.eq.${away})`,
+          `and(home_team.eq.${away},away_team.eq.${home})`,
+        ].join(",");
+
+        const r2 = await supabase
+          .from("player_props_snapshot")
+          .select(
+            "id,ts,run_id,sport_key,event_id,commence_time,home_team,away_team,player_name,player_id,team,opponent,market,side,line,odds,bookmaker,source,inserted_at"
+          )
+          .eq("sport_key", sportKey)
+          .eq("market", propType)
+          .or(orFilter)
+          .order("ts", { ascending: false })
+          .limit(5000);
+
+        if (!alive) return;
+        raw = (r2.data ?? []) as PlayerPropSnapshotRow[];
+        error = r2.error;
+      }
+
+      if (error) {
+        setErr(error.message);
+        setLoading(false);
+        return;
+      }
+
+      if (!raw.length) {
+        setLatestTs(null);
+        setRows([]);
+        setLoading(false);
+        return;
+      }
+
+      // latest snapshot for this event/market
+      const newest = raw[0]?.ts ?? null;
+      setLatestTs(newest);
+
+      // only keep rows from newest ts (all books for that run should share ts)
+      const latestOnly = raw.filter((x) => String(x.ts) === String(newest));
+
+      // group -> player_name
+      const byPlayer = new Map<string, PlayerPropSnapshotRow[]>();
+      for (const r of latestOnly) {
+        const name = (r.player_name ?? "").trim();
+        if (!name) continue;
+        const arr = byPlayer.get(name) ?? [];
+        arr.push(r);
+        byPlayer.set(name, arr);
+      }
+
+      const wide: PlayerPropWide[] = Array.from(byPlayer.entries()).map(([player, prs]) => {
+        const byBook: Record<BookKey, PropCell> = {
+          dk: initPropCell(),
+          fd: initPropCell(),
+          mgm: initPropCell(),
+          pin: initPropCell(),
+          bol: initPropCell(),
+        };
+
+        for (const r of prs) {
+          const bk = bookKeyFromBookmaker(r.bookmaker);
+          if (!bk) continue;
+
+          // line may exist on both over/under rows; keep whichever is present
+          if (typeof r.line === "number" && Number.isFinite(r.line)) {
+            byBook[bk].line = r.line;
+          }
+
+          const side = String(r.side || "").toLowerCase();
+          if (side === "over") byBook[bk].over = typeof r.odds === "number" ? r.odds : null;
+          if (side === "under") byBook[bk].under = typeof r.odds === "number" ? r.odds : null;
+        }
+
+        // consensus line: median of all available lines
+        const lineConsensus = propsMedianLine(prs);
+
+        return {
+          player,
+          team: prs[0]?.team ?? null,
+          opponent: prs[0]?.opponent ?? null,
+          lineConsensus,
+          byBook,
+        };
+      });
+
+      // sort by player name
+      wide.sort((a, b) => a.player.localeCompare(b.player));
+
+      setRows(wide);
+      setLoading(false);
+    }
+
+    fetchRows();
+    return () => {
+      alive = false;
+    };
+  }, [ev.eventId, ev.home?.team, ev.away?.team, propType, sportKey]);
+
+  const subtitle = [
+    ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
+    latestTs ? `Snapshot: ${fmtCTDateTime(latestTs)}` : "Snapshot: —",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  function PropTypeSelect() {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-[11px] text-[#9a9a9a] font-extrabold">Prop:</div>
+        <select
+          value={propType}
+          onChange={(e) => setPropType(e.target.value as PropType)}
+          className="bg-black/30 border border-[#2a2a2a] text-white text-xs font-extrabold rounded-lg px-3 py-2"
+        >
+          <option value="player_points">Points</option>
+          <option value="player_rebounds">Rebounds</option>
+          <option value="player_assists">Assists</option>
+          <option value="player_threes">3 Pointers</option>
+        </select>
+      </div>
+    );
+  }
+
+  function PropBookCell({ cell }: { cell: PropCell }) {
+    return (
+      <div className="flex flex-col items-center justify-center leading-tight">
+        <div className="text-[12px] text-white font-extrabold tabular-nums">
+          {cell.line == null ? "—" : cell.line}
+        </div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">
+          O: {cell.over == null ? "—" : cell.over}
+        </div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">
+          U: {cell.under == null ? "—" : cell.under}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <ModalShell title="Player Props" subtitle={subtitle} onClose={onClose}>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <PropTypeSelect />
+        <div className="text-[11px] text-[#808080] font-semibold">
+          {rows.length ? `${rows.length} players · books: DK/FD/MGM/PIN/BOL` : "—"}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-[#808080]">Loading player props…</div>
+      ) : err ? (
+        <div className="text-xs text-red-400">Supabase error: {err}</div>
+      ) : !rows.length ? (
+        <div className="text-xs text-[#808080]">
+          No rows found for <span className="text-white font-extrabold">{PROP_LABEL[propType]}</span> for this event.
+        </div>
+      ) : (
+        <>
+          {/* Desktop/tablet: wide grid */}
+          <div className="hidden sm:block">
+            <div className="overflow-x-auto rounded-xl border border-[#2a2a2a] bg-black/20">
+              <table className="min-w-[980px] w-full">
+                <thead className="sticky top-0 z-10">
+                  <tr className={`border-b ${HDR_BORDER}`}>
+                    <th className={`text-left px-4 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold`}>
+                      Player
+                    </th>
+                    <th className={`text-center px-3 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold border-l ${HDR_BORDER}`}>
+                      Cons Line
+                    </th>
+                    {BOOKS.map((bk, i) => (
+                      <th
+                        key={bk}
+                        className={[
+                          "text-center px-2 py-3",
+                          HDR_BOOK_BG,
+                          "border-b",
+                          HDR_BORDER,
+                          i === 0 ? `border-l ${HDR_BORDER}` : "",
+                        ].join(" ")}
+                      >
+                        <div className="flex items-center justify-center">
+                          <div className="h-8 w-[96px] rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center">
+                            <img
+                              src={BOOK_LOGOS[bk]}
+                              alt={bk}
+                              className="h-5 w-auto object-contain"
+                              loading="lazy"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(bk.toUpperCase());
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.player} className={`border-b ${HDR_BORDER} last:border-b-0 hover:bg-white/5`}>
+                      <td className="px-4 py-3">
+                        <div className="min-w-0">
+                          <div className="text-white font-extrabold text-[13px] truncate">{r.player}</div>
+                          {(r.team || r.opponent) && (
+                            <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
+                              {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className={`px-3 py-3 text-center font-extrabold text-white tabular-nums border-l ${HDR_BORDER}`}>
+                        {r.lineConsensus == null ? "—" : r.lineConsensus}
+                      </td>
+
+                      {BOOKS.map((bk, i) => (
+                        <td key={bk} className={["px-2 py-3 text-center", i === 0 ? `border-l ${HDR_BORDER}` : ""].join(" ")}>
+                          <PropBookCell cell={r.byBook[bk]} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 text-[11px] text-[#808080]">
+              Each book cell shows: <span className="text-white font-bold">Line</span> +{" "}
+              <span className="text-white font-bold">O/U odds</span> (latest snapshot only).
+            </div>
+          </div>
+
+          {/* Mobile: cards */}
+          <div className="sm:hidden space-y-3">
+            {rows.map((r) => (
+              <div key={r.player} className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-white font-extrabold text-[13px] truncate">{r.player}</div>
+                    {(r.team || r.opponent) && (
+                      <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
+                        {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[10px] text-[#808080] font-semibold">Cons</div>
+                    <div className="text-white font-extrabold tabular-nums">{r.lineConsensus == null ? "—" : r.lineConsensus}</div>
+                  </div>
+                </div>
+
+                <div className="p-3 grid grid-cols-2 gap-3">
+                  {BOOKS.map((bk) => (
+                    <div key={bk} className="rounded-lg border border-[#2a2a2a] bg-black/10 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <img src={BOOK_LOGOS[bk]} alt={bk} className="h-4 w-auto object-contain" />
+                        <div className="text-[10px] text-[#808080] font-bold">{bk.toUpperCase()}</div>
+                      </div>
+                      <PropBookCell cell={r.byBook[bk]} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </ModalShell>
+  );
+}
+
+/** =========================
  * HISTORY CHART PAIR (ODDS ONLY)
  * ========================= */
 
@@ -927,9 +1327,12 @@ function LineMovementModal({
       if (error) {
         setErr(error.message);
         setBooks([]);
-        setMlAway([]); setMlHome([]);
-        setSpAway([]); setSpHome([]);
-        setToOver([]); setToUnder([]);
+        setMlAway([]);
+        setMlHome([]);
+        setSpAway([]);
+        setSpHome([]);
+        setToOver([]);
+        setToUnder([]);
         setLoading(false);
         return;
       }
@@ -957,7 +1360,9 @@ function LineMovementModal({
     }
 
     run();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [ev.eventId]);
 
   const subtitle = [
@@ -965,27 +1370,35 @@ function LineMovementModal({
     `Window: last ${hoursBack}h`,
     "Bucket: 1-min",
     "Chart: odds (line in hover)",
-  ].filter(Boolean).join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "ml" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`}
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "ml" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
           onClick={() => setActiveMarket("ml")}
           type="button"
         >
           Moneyline
         </button>
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "spread" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`}
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "spread" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
           onClick={() => setActiveMarket("spread")}
           type="button"
         >
           Spread
         </button>
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "total" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`}
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "total" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
           onClick={() => setActiveMarket("total")}
           type="button"
         >
@@ -1000,37 +1413,13 @@ function LineMovementModal({
       ) : (
         <div className="space-y-4">
           {activeMarket === "ml" && (
-            <HistoryChartPairOddsOnly
-              title="Moneyline (Odds)"
-              uiMarket="ml"
-              books={books}
-              seriesA={mlAway}
-              seriesB={mlHome}
-              panelTitleA="AWAY"
-              panelTitleB="HOME"
-            />
+            <HistoryChartPairOddsOnly title="Moneyline (Odds)" uiMarket="ml" books={books} seriesA={mlAway} seriesB={mlHome} panelTitleA="AWAY" panelTitleB="HOME" />
           )}
           {activeMarket === "spread" && (
-            <HistoryChartPairOddsOnly
-              title="Spread (Odds)"
-              uiMarket="spread"
-              books={books}
-              seriesA={spAway}
-              seriesB={spHome}
-              panelTitleA="AWAY"
-              panelTitleB="HOME"
-            />
+            <HistoryChartPairOddsOnly title="Spread (Odds)" uiMarket="spread" books={books} seriesA={spAway} seriesB={spHome} panelTitleA="AWAY" panelTitleB="HOME" />
           )}
           {activeMarket === "total" && (
-            <HistoryChartPairOddsOnly
-              title="Total (Odds)"
-              uiMarket="total"
-              books={books}
-              seriesA={toOver}
-              seriesB={toUnder}
-              panelTitleA="OVER"
-              panelTitleB="UNDER"
-            />
+            <HistoryChartPairOddsOnly title="Total (Odds)" uiMarket="total" books={books} seriesA={toOver} seriesB={toUnder} panelTitleA="OVER" panelTitleB="UNDER" />
           )}
         </div>
       )}
@@ -1048,12 +1437,14 @@ function EventCardMobile({
   booksOpen,
   onToggleBooks,
   onOpenHistory,
+  onOpenProps,
 }: {
   ev: EventOdds;
   market: Market;
   booksOpen: boolean;
   onToggleBooks: () => void;
   onOpenHistory: (ev: EventOdds) => void;
+  onOpenProps: (ev: EventOdds) => void;
 }) {
   const leftLabel = market === "total" ? "Over" : "Away";
   const rightLabel = market === "total" ? "Under" : "Home";
@@ -1076,7 +1467,7 @@ function EventCardMobile({
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onToggleBooks}
@@ -1092,6 +1483,14 @@ function EventCardMobile({
           >
             History
           </button>
+
+          <button
+            type="button"
+            onClick={() => onOpenProps(ev)}
+            className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+          >
+            Props
+          </button>
         </div>
       </div>
 
@@ -1104,23 +1503,17 @@ function EventCardMobile({
         <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3">
           <div className="flex items-center justify-between mb-2">
             <div className="text-[12px] text-white font-extrabold">Consensus</div>
-            <div className="text-[11px] text-[#808080] font-semibold">
-              {market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}
-            </div>
+            <div className="text-[11px] text-[#808080] font-semibold">{market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}</div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(awayCons)}
-              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(homeCons)}
-              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
             </div>
           </div>
         </div>
@@ -1156,13 +1549,8 @@ function EventCardMobile({
                         </div>
                       </div>
 
-                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(leftPartsByBook(bk))}
-                      </div>
-
-                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(rightPartsByBook(bk))}
-                      </div>
+                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">{renderCellParts(leftPartsByBook(bk))}</div>
+                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">{renderCellParts(rightPartsByBook(bk))}</div>
                     </div>
                   </div>
                 );
@@ -1183,10 +1571,12 @@ function EventTwoRows({
   ev,
   market,
   onOpenHistory,
+  onOpenProps,
 }: {
   ev: EventOdds;
   market: Market;
   onOpenHistory: (ev: EventOdds) => void;
+  onOpenProps: (ev: EventOdds) => void;
 }) {
   const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
   const homeConsensus = consensusPartsForRow(ev, market, "HOME");
@@ -1196,17 +1586,27 @@ function EventTwoRows({
       <tr className="hover:bg-white/5 transition-colors">
         <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[12px] text-[#cfcfcf] font-semibold">
-              {fmtCTTimeOnly(ev.commenceTime)} CT
+            <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onOpenHistory(ev)}
+                className="text-[11px] font-extrabold text-[#d4af37] hover:underline"
+                title="View line movement history"
+              >
+                History
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenProps(ev)}
+                className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+                title="View player props"
+              >
+                Props
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => onOpenHistory(ev)}
-              className="text-[11px] font-extrabold text-[#d4af37] hover:underline"
-              title="View line movement history"
-            >
-              History
-            </button>
           </div>
 
           <div className="space-y-3">
@@ -1234,7 +1634,6 @@ function EventTwoRows({
         <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
       </tr>
 
-      {/* spacer row between games */}
       <tr>
         <td colSpan={7} className="h-2 bg-transparent" />
       </tr>
@@ -1257,6 +1656,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyEvent, setHistoryEvent] = useState<EventOdds | null>(null);
 
+  const [propsOpen, setPropsOpen] = useState(false);
+  const [propsEvent, setPropsEvent] = useState<EventOdds | null>(null);
+
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
 
   function openHistory(ev: EventOdds) {
@@ -1268,13 +1670,22 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     setHistoryEvent(null);
   }
 
+  function openProps(ev: EventOdds) {
+    setPropsEvent(ev);
+    setPropsOpen(true);
+  }
+  function closeProps() {
+    setPropsOpen(false);
+    setPropsEvent(null);
+  }
+
   async function load() {
     setError("");
 
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
-      .eq("sport_key", sportKey) // ✅ critical
+      .eq("sport_key", sportKey)
       .in("side", ["AWAY", "HOME"])
       .order("commence_time", { ascending: true });
 
@@ -1323,7 +1734,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     setLoading(false);
   }
 
-  // initial + refresh (sport-sensitive)
   useEffect(() => {
     setLoading(true);
     load();
@@ -1332,14 +1742,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sportKey]);
 
-  // reset UI when sport changes
   useEffect(() => {
     setSelectedDate("");
     setMobileOpenMap({});
     setMarket("spread");
   }, [sportKey]);
 
-  /** ✅ IMPORTANT: availableDates only includes dates that will actually SHOW games */
   const availableDates = useMemo(() => {
     const todayCt = ctTodayYmd();
     const nowMs = Date.now();
@@ -1349,8 +1757,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (!evDate) continue;
 
-      // same “display rules” as the list:
-      // today => only future games count
       if (evDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (Number.isFinite(startMs) && startMs > nowMs) set.add(evDate);
@@ -1362,7 +1768,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     return Array.from(set).sort();
   }, [allEvents]);
 
-  // choose a valid selectedDate whenever availableDates changes
   useEffect(() => {
     if (!availableDates.length) {
       setSelectedDate("");
@@ -1396,7 +1801,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   }, [allEvents, selectedDate]);
 
   useEffect(() => {
-    // keep mobile toggle state aligned to currently shown games
     setMobileOpenMap((prev) => {
       const next: Record<string, boolean> = {};
       for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false;
@@ -1416,18 +1820,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
   return (
     <div className="w-full">
-      {/* ✅ Desktop web container (more “site” than “app”) */}
       <div className="max-w-[1320px] mx-auto px-4 md:px-8">
-        {/* Top area */}
         <div className="pt-4 md:pt-6">
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
             <div>
-              <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
-                {sportLabel}
-              </h2>
-              <div className="text-xs text-[#8a8a8a] mt-1">
-                {headerLabel} · 5 books · refresh 60s
-              </div>
+              <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
+              <div className="text-xs text-[#8a8a8a] mt-1">{headerLabel} · 5 books · refresh 60s</div>
             </div>
 
             <div className="hidden md:block text-right">
@@ -1439,9 +1837,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
             </div>
           </div>
 
-          {/* Toolbar */}
           <div className="mt-4 flex flex-col gap-3">
-            {/* Date pills (only dates with games) */}
             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
               {availableDates.map((d) => (
                 <button
@@ -1460,19 +1856,15 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 </button>
               ))}
 
-              {!availableDates.length && (
-                <div className="text-xs text-[#808080]">No games available.</div>
-              )}
+              {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
             </div>
 
-            {/* Market */}
             <div className="flex flex-wrap items-center gap-3">
               <Segmented value={market} onChange={setMarket} />
             </div>
           </div>
         </div>
 
-        {/* Content card */}
         <div className="mt-5 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]">
           {/* MOBILE */}
           <div className="md:hidden">
@@ -1492,13 +1884,14 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                     booksOpen={!!mobileOpenMap[ev.eventId]}
                     onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
                     onOpenHistory={openHistory}
+                    onOpenProps={openProps}
                   />
                 ))}
               </div>
             )}
           </div>
 
-          {/* DESKTOP (always books) */}
+          {/* DESKTOP */}
           <div className="hidden md:block">
             {loading ? (
               <div className="p-8 text-sm text-[#808080]">Loading odds…</div>
@@ -1521,26 +1914,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <thead className="sticky top-0 z-20">
                     <tr className={`border-b ${HDR_BORDER}`}>
-                      <th
-                        className={[
-                          "text-left px-4 py-3",
-                          HDR_LEFT_BG,
-                          HDR_TEXT,
-                          "sticky left-0 z-30 text-[13px] font-extrabold",
-                        ].join(" ")}
-                      >
+                      <th className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}>
                         Matchup
                       </th>
 
-                      <th
-                        className={[
-                          "text-center px-3 py-3",
-                          HDR_LEFT_BG,
-                          HDR_TEXT,
-                          "z-20 text-[13px] font-extrabold border-l",
-                          HDR_BORDER,
-                        ].join(" ")}
-                      >
+                      <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}>
                         Consensus
                       </th>
 
@@ -1554,12 +1932,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <tbody>
                     {events.map((ev) => (
-                      <EventTwoRows
-                        key={ev.eventId}
-                        ev={ev}
-                        market={market}
-                        onOpenHistory={openHistory}
-                      />
+                      <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} onOpenProps={openProps} />
                     ))}
                   </tbody>
                 </table>
@@ -1569,13 +1942,15 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         </div>
 
         {/* History modal */}
-        {historyOpen && historyEvent?.eventId && (
-          <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
-        )}
+        {historyOpen && historyEvent?.eventId && <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />}
+
+        {/* Player Props modal */}
+        {propsOpen && propsEvent?.eventId && <PlayerPropsModal ev={propsEvent} sportKey={sportKey} onClose={closeProps} />}
 
         <div className="h-12" />
       </div>
     </div>
   );
 }
+
 
