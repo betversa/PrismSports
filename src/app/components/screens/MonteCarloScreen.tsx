@@ -1,25 +1,16 @@
-// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (Desktop upgraded to match OddsScreen “web” layout)
-// ✅ Desktop uses centered max-width container + “site” feel
-// ✅ Desktop is NO LONGER a 2-col table shell — it renders event blocks in a clean grid list (like OddsScreen card rhythm)
-// ✅ Desktop details toggle per-game (kept), with better spacing + borders
-// ✅ Mobile stays card-based (unchanged behavior, just aligned styling)
-// ✅ No data logic changes (same tables + consensus logic you already have)
+// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.1)
+// ✅ Filters by selected sport (sportKey prop) using new monte_carlo_results.sport_key
+// ✅ Also filters latest run by sport_key
+// ✅ Desktop = OddsScreen-style “web” blocks (no table shell)
+// ✅ Mobile = cards + details toggle
+// ✅ Logos pulled from team_map."Logo URL" and fail-safe rendering
+// ✅ Consensus derived from odds_snapshot (spreads/totals) for displayed event_ids
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import type { SportKey } from "../../App";
 
-/**
- * MONTE CARLO SCREEN — v4.0 (DESKTOP WEB LAYOUT)
- *
- * Desktop upgrades:
- * ✅ Centered max-width container (less “app”, more “web”)
- * ✅ Clean event blocks with consistent spacing + separators
- * ✅ Sticky header removed (not needed now that desktop isn't table-based)
- *
- * Mobile:
- * ✅ Same card layout + details toggle
- */
-
+/** ---------------- Types ---------------- */
 type MonteCarloRun = {
   id: string;
   created_at: string;
@@ -28,6 +19,8 @@ type MonteCarloRun = {
 
 type MonteCarloResultRow = {
   run_id: string;
+  sport_key?: string | null;
+
   event_id: string;
   commence_time: string | null;
 
@@ -58,8 +51,8 @@ type TeamMapLogoRow = {
 type OddsSnapshotRow = {
   ts: string;
   event_id: string;
-  market: string; // "spreads" | "totals"
-  side: string | null; // "home"/"away" | "over"/"under"
+  market: string; // spreads | totals
+  side: string | null; // home/away | over/under
   line: number | null;
   odds: number | null;
   bookmaker: string | null;
@@ -115,7 +108,7 @@ type EventBundle = {
   home: TeamRow;
 };
 
-/** ---------- Side normalization ---------- */
+/** ---------------- Side normalization ---------------- */
 const SIDE_ALIASES = {
   home: new Set(["home", "h", "team1", "t1"]),
   away: new Set(["away", "a", "team2", "t2"]),
@@ -133,7 +126,7 @@ function normalizeSide(raw: string | null): "home" | "away" | "over" | "under" |
   return null;
 }
 
-/** ---------- Formatters ---------- */
+/** ---------------- Formatters ---------------- */
 function formatTs(ts: string) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
@@ -158,7 +151,7 @@ function formatPct(prob01: number | null) {
   return `${(p * 100).toFixed(1)}%`;
 }
 
-/** ---------- numeric helpers ---------- */
+/** ---------------- Numeric helpers ---------------- */
 function pushMap(map: Map<string, number[]>, key: string, v: number) {
   const arr = map.get(key) ?? [];
   arr.push(v);
@@ -187,11 +180,19 @@ function medianOrNull(nums: number[]): number | null {
   return (arr[mid - 1] + arr[mid]) / 2;
 }
 
-/** ---------- UI bits ---------- */
+/** ---------------- UI bits ---------------- */
 function LogoBox({ team, url, size }: { team: string; url: string | null; size: number }) {
+  // If no URL, render a placeholder so layout stays consistent.
   if (!url) {
-    return <div style={{ width: size, height: size }} className="rounded-md bg-white border border-[#e5e5e5]" />;
+    return (
+      <div
+        style={{ width: size, height: size }}
+        className="rounded-md bg-white border border-[#e5e5e5]"
+        aria-label={`${team} logo placeholder`}
+      />
+    );
   }
+
   return (
     <img
       src={url}
@@ -199,7 +200,9 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
       style={{ width: size, height: size }}
       className="rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
       loading="lazy"
+      referrerPolicy="no-referrer"
       onError={(e) => {
+        // Hide broken images but keep spacing via wrapper placeholder behavior in parent row
         (e.currentTarget as HTMLImageElement).style.display = "none";
       }}
     />
@@ -237,7 +240,10 @@ function SummaryLine({
 
   return (
     <div className="flex items-center gap-3 min-w-0">
-      <LogoBox team={team} url={logoUrl} size={logoSize} />
+      {/* Logo + fallback placeholder if img hidden */}
+      <div className="shrink-0">
+        <LogoBox team={team} url={logoUrl} size={logoSize} />
+      </div>
 
       <div className="min-w-0 leading-tight pr-1">
         <div className={["text-white font-extrabold truncate", teamText].join(" ")} title={team}>
@@ -291,7 +297,7 @@ function EventMiniHeader({ timeLabel, variant }: { timeLabel: string; variant: "
   );
 }
 
-/** ---------- Details block ---------- */
+/** ---------------- Details block ---------------- */
 function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
   const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
@@ -370,7 +376,7 @@ function DetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   );
 }
 
-/** ---------- Desktop event block (web style) ---------- */
+/** ---------------- Desktop event block ---------------- */
 function DesktopEventBlock({
   ev,
   open,
@@ -428,8 +434,8 @@ function DesktopEventBlock({
   );
 }
 
-/** ---------- Main Screen ---------- */
-export function MonteCarloScreen() {
+/** ---------------- Main Screen ---------------- */
+export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
   const [run, setRun] = useState<MonteCarloRun | null>(null);
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
@@ -441,11 +447,13 @@ export function MonteCarloScreen() {
   const [loadingConsensus, setLoadingConsensus] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 0) logos
+  /** 0) logos */
   useEffect(() => {
     let alive = true;
+
     (async () => {
       const { data, error } = await supabase.from("team_map").select('canonical,"Logo URL"');
+
       if (!alive) return;
 
       if (error) {
@@ -468,17 +476,21 @@ export function MonteCarloScreen() {
     };
   }, []);
 
-  // 1) latest run
+  /** 1) latest run (FILTERED BY SPORT) */
   useEffect(() => {
     let alive = true;
 
     (async () => {
       setLoadingRun(true);
       setError(null);
+      setRun(null);
+      setResults([]);
+      setConsensusMap(new Map());
 
       const { data, error } = await supabase
         .from("monte_carlo_runs")
         .select("id, created_at, sport_key")
+        .eq("sport_key", sportKey) // ✅ IMPORTANT
         .order("created_at", { ascending: false })
         .limit(1);
 
@@ -486,9 +498,6 @@ export function MonteCarloScreen() {
 
       if (error) {
         setError(error.message);
-        setRun(null);
-        setResults([]);
-        setConsensusMap(new Map());
         setLoadingRun(false);
         return;
       }
@@ -500,9 +509,9 @@ export function MonteCarloScreen() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [sportKey]);
 
-  // 2) results
+  /** 2) results (FILTERED BY RUN + SPORT) */
   useEffect(() => {
     let alive = true;
 
@@ -512,6 +521,7 @@ export function MonteCarloScreen() {
 
       const selectCols = [
         "run_id",
+        "sport_key",
         "event_id",
         "commence_time",
         "home_team",
@@ -532,6 +542,7 @@ export function MonteCarloScreen() {
         .from("monte_carlo_results")
         .select(selectCols)
         .eq("run_id", runId)
+        .eq("sport_key", sportKey) // ✅ IMPORTANT
         .order("commence_time", { ascending: true });
 
       if (!alive) return;
@@ -549,13 +560,14 @@ export function MonteCarloScreen() {
     }
 
     if (run?.id) loadResults(run.id);
+    else setLoadingResults(false);
 
     return () => {
       alive = false;
     };
-  }, [run?.id]);
+  }, [run?.id, sportKey]);
 
-  // 3) consensus
+  /** 3) consensus (spreads/totals) for the event_ids in this sport/run */
   useEffect(() => {
     let alive = true;
 
@@ -585,6 +597,8 @@ export function MonteCarloScreen() {
       }
 
       const rows = (data ?? []) as OddsSnapshotRow[];
+
+      // We’ll take one (latest) per event|market|book|side by iterating newest->oldest and skipping repeats.
       const seen = new Set<string>();
 
       const spreadHomeLines: Map<string, number[]> = new Map();
@@ -655,14 +669,14 @@ export function MonteCarloScreen() {
     }
 
     const ids = Array.from(new Set(results.map((r) => r.event_id).filter(Boolean)));
-    if (ids.length) loadConsensus(ids);
+    loadConsensus(ids);
 
     return () => {
       alive = false;
     };
   }, [results]);
 
-  // 4) build bundles
+  /** 4) build bundles for rendering */
   const events: EventBundle[] = useMemo(() => {
     const out: EventBundle[] = [];
 
@@ -686,8 +700,8 @@ export function MonteCarloScreen() {
       const pOver = numOrNullable(r.over_prob);
       const pUnder = numOrNullable(r.under_prob);
 
-      const pHomeWin = numOrNullable((r as any).home_win_prob);
-      const pAwayWin = numOrNullable((r as any).away_win_prob);
+      const pHomeWin = numOrNullable(r.home_win_prob);
+      const pAwayWin = numOrNullable(r.away_win_prob);
 
       const finalHomeWin = pHomeWin ?? (pAwayWin != null ? 1 - pAwayWin : null);
       const finalAwayWin = pAwayWin ?? (finalHomeWin != null ? 1 - finalHomeWin : null);
@@ -766,7 +780,7 @@ export function MonteCarloScreen() {
     return out;
   }, [results, logoMap, consensusMap]);
 
-  // keep open state aligned
+  /** Keep open state aligned when event list changes */
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
@@ -779,21 +793,20 @@ export function MonteCarloScreen() {
 
   return (
     <div className="w-full">
-      {/* ✅ Desktop web container */}
       <div className="max-w-[1320px] mx-auto px-4 md:px-8">
         {/* Header */}
         <div className="pt-4 md:pt-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
             <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">Monte Carlo</h2>
             <div className="text-xs text-[#8a8a8a] mt-1">
-              Latest simulation snapshot
+              Sport: <span className="text-white font-extrabold">{sportKey}</span>
               {run?.created_at ? <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span> : null}
               {loadingConsensus ? <span className="ml-2 text-[#5a5a5a]">· Loading consensus…</span> : null}
             </div>
           </div>
 
           <div className="hidden md:block text-right">
-            <div className="text-[10px] text-[#6a6a6a] font-semibold">Rows</div>
+            <div className="text-[10px] text-[#6a6a6a] font-semibold">Games</div>
             <div className="text-xs text-white">
               <span className="font-extrabold tabular-nums">{events.length}</span>
             </div>
@@ -806,7 +819,6 @@ export function MonteCarloScreen() {
           </div>
         ) : null}
 
-        {/* Content */}
         <div className="mt-5 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]">
           {/* MOBILE */}
           <div className="md:hidden">
@@ -865,7 +877,7 @@ export function MonteCarloScreen() {
             )}
           </div>
 
-          {/* DESKTOP (web blocks) */}
+          {/* DESKTOP */}
           <div className="hidden md:block">
             {loading ? (
               <div className="p-8 text-sm text-[#808080]">Loading Monte Carlo results…</div>
@@ -873,7 +885,6 @@ export function MonteCarloScreen() {
               <div className="p-8 text-sm text-[#808080]">No Monte Carlo rows found for latest run.</div>
             ) : (
               <div className="p-6">
-                {/* Desktop list — slightly tighter than cards, still “web” */}
                 <div className="space-y-5">
                   {events.map((ev) => (
                     <DesktopEventBlock
@@ -894,3 +905,4 @@ export function MonteCarloScreen() {
     </div>
   );
 }
+
