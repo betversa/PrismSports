@@ -116,7 +116,6 @@ async function loadTeamMap(
       [
         "canonical",
         `"SR_School"`,
-        `"BasketballReference"`,
         `"ESPN_Long"`,
         `"The Odds API"`,
         `"KenPom"`,
@@ -138,7 +137,6 @@ async function loadTeamMap(
       canonical,
       r["TR"],
       r["SR_School"],
-      r["BasketballReference"],
       r["ESPN_Long"],
       r["The Odds API"],
       r["KenPom"],
