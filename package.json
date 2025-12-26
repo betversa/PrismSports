@@ -9,7 +9,8 @@
     "odds:load": "tsx scripts/oddsLoader.ts",
     "ratings:build": "tsx scripts/ratingsBuilder.ts",
     "ratings:build:ncaab": "tsx scripts/ratingsBuilder.ts",
-    "ratings:build:nba": "tsx scripts/ratingsBuilder_nba.ts"
+    "ratings:build:nba": "tsx scripts/ratingsBuilder_nba.ts",
+    "games:load:br:nba": "tsx scripts/basketballRefGamesLoader_nba.ts"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
