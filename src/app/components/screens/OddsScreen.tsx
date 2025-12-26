@@ -1,7 +1,10 @@
-// screens/OddsScreen.tsx — Desktop Web Layout Rewrite (keeps mobile cards + history modal)
+// screens/OddsScreen.tsx — FULL REWRITE (Desktop web-first, mobile cards)
+// ✅ Desktop: ALWAYS shows books (no toggle)
+// ✅ Book headers slightly lighter
 // ✅ Filters by sport_key (prop)
-// ✅ Desktop: max-width centered container + web-style toolbar + cleaner table card
-// ✅ History modal unchanged behavior (odds-only, line in hover tooltip)
+// ✅ Keeps history modal behavior (odds-only, line shown in hover tooltip)
+// ✅ Keeps mobile: cards w/ per-game "Show Books" toggle
+// ✅ Cleaner desktop layout: centered container, web toolbar, sticky headers + matchup col
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -31,12 +34,11 @@ type SideOdds = {
   side: "AWAY" | "HOME";
   team: string;
   logoUrl: string | null;
-
-  ml: { dk: number | null; fd: number | null; mgm: number | null; pin: number | null; bol: number | null };
-  spread: { dk: SpreadCell; fd: SpreadCell; mgm: SpreadCell; pin: SpreadCell; bol: SpreadCell };
-  total: { dk: TotalCell; fd: TotalCell; mgm: TotalCell; pin: TotalCell; bol: TotalCell };
-
   updatedAt: string | null;
+
+  ml: Record<BookKey, number | null>;
+  spread: Record<BookKey, SpreadCell>;
+  total: Record<BookKey, TotalCell>;
 };
 
 type EventOdds = {
@@ -50,7 +52,6 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos */
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -60,7 +61,7 @@ const BOOK_LOGOS: Record<BookKey, string> = {
 };
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 
-/** Desktop layout widths (web-friendly) */
+/** Desktop layout widths */
 const COL_MATCHUP = 380;
 const COL_CONSENSUS = 180;
 const COL_BOOK = 120;
@@ -70,11 +71,10 @@ const BOOK_LOGO_H = 24;
 
 /** Header colors */
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
-const HDR_BOOK_BG = "bg-[#2a2a2a]";
+const HDR_BOOK_BG = "bg-[#303030]"; // ✅ slightly lighter than before
 const HDR_TEXT = "text-[#d0d0d0]";
 const HDR_BORDER = "border-[#232323]";
 
-/** Subtle glow for header logos */
 const BOOK_GLOW =
   "drop-shadow(0 1px 0 rgba(0,0,0,0.55)) drop-shadow(0 0 8px rgba(255,255,255,0.10)) drop-shadow(0 0 10px rgba(212,175,55,0.16))";
 
@@ -160,7 +160,7 @@ function pickLogoUrl(row: any): string | null {
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? null;
 }
 function pickUpdatedAt(row: any): string | null {
-  return row.updated_at ?? row.last_updated ?? row.updatedAt ?? null;
+  return row.updated_at ?? row.last_updated ?? row.updatedAt ?? row.last_updated_ct ?? null;
 }
 
 function mapWideRowToSideOdds(row: any): SideOdds {
@@ -187,11 +187,31 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
-      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
-      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
-      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
-      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
+      dk: {
+        line: row.dk_total_line ?? null,
+        over: row.dk_total_over_odds ?? null,
+        under: row.dk_total_under_odds ?? null,
+      },
+      fd: {
+        line: row.fd_total_line ?? null,
+        over: row.fd_total_over_odds ?? null,
+        under: row.fd_total_under_odds ?? null,
+      },
+      mgm: {
+        line: row.mgm_total_line ?? null,
+        over: row.mgm_total_over_odds ?? null,
+        under: row.mgm_total_under_odds ?? null,
+      },
+      pin: {
+        line: row.pin_total_line ?? null,
+        over: row.pin_total_over_odds ?? null,
+        under: row.pin_total_under_odds ?? null,
+      },
+      bol: {
+        line: row.bol_total_line ?? null,
+        over: row.bol_total_over_odds ?? null,
+        under: row.bol_total_under_odds ?? null,
+      },
     },
   };
 }
@@ -216,6 +236,7 @@ function cellLineOdds(line: number | null, odds: number | null): CellParts {
   if (line == null) return { top: "—" };
   return { top: String(line), bottom: odds == null ? "—" : `(${odds})` };
 }
+
 function renderCellParts(parts: CellParts) {
   return (
     <div className="flex flex-col items-center justify-center leading-tight">
@@ -231,8 +252,7 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   if (market === "ml") {
     const odds: number[] = [];
     if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
-    const mOdds = median(odds);
-    return cellMl(mOdds == null ? null : mOdds);
+    return cellMl(median(odds));
   }
 
   if (market === "spread") {
@@ -246,9 +266,7 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
         if (typeof o === "number") odds.push(o);
       }
     }
-    const mLine = median(lines);
-    const mOdds = median(odds);
-    return cellLineOdds(mLine == null ? null : mLine, mOdds == null ? null : mOdds);
+    return cellLineOdds(median(lines), median(odds));
   }
 
   // total: AWAY treated as Over, HOME treated as Under
@@ -275,12 +293,12 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   const mOver = median(overOdds);
   const mUnder = median(underOdds);
 
-  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
-  return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
+  if (side === "AWAY") return cellLineOdds(mLine, mOver);
+  return cellLineOdds(mLine, mUnder);
 }
 
 /** =========================
- * HEADER FALLBACK
+ * HEADER FALLBACK PILL
  * ========================= */
 
 function headerFallbackPillDataUri(label: string) {
@@ -296,7 +314,7 @@ function headerFallbackPillDataUri(label: string) {
 }
 
 /** =========================
- * SMALL UI HELPERS (web toolbar)
+ * SMALL UI HELPERS
  * ========================= */
 
 function SegButton({
@@ -315,7 +333,9 @@ function SegButton({
       className={[
         "px-3 py-1.5 text-xs font-extrabold transition-colors",
         "border border-[#2a2a2a]",
-        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -323,48 +343,21 @@ function SegButton({
   );
 }
 
-function Segmented({
-  value,
-  onChange,
-}: {
-  value: Market;
-  onChange: (v: Market) => void;
-}) {
+function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) => void }) {
   return (
     <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>Moneyline</SegButton>
+      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>
+        Moneyline
+      </SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>Spread</SegButton>
+      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>
+        Spread
+      </SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "total"} onClick={() => onChange("total")}>Total</SegButton>
+      <SegButton active={value === "total"} onClick={() => onChange("total")}>
+        Total
+      </SegButton>
     </div>
-  );
-}
-
-function TogglePill({
-  active,
-  onClick,
-  labelOn,
-  labelOff,
-}: {
-  active: boolean;
-  onClick: () => void;
-  labelOn: string;
-  labelOff: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors",
-        active
-          ? "bg-[#171717] text-white border-[#d4af37]/60"
-          : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]",
-      ].join(" ")}
-    >
-      {active ? labelOn : labelOff}
-    </button>
   );
 }
 
@@ -415,7 +408,12 @@ function BookHeader({
 
 function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
   return (
-    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", borderLeft ? `border-l ${HDR_BORDER}` : ""].join(" ")}>
+    <td
+      className={[
+        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
+        borderLeft ? `border-l ${HDR_BORDER}` : "",
+      ].join(" ")}
+    >
       {renderCellParts(parts)}
     </td>
   );
@@ -466,33 +464,25 @@ function MiniTeamRow({
  * CELL GETTERS
  * ========================= */
 
-function cellMlParts(odds: number | null): CellParts {
-  return { top: odds == null ? "—" : String(odds) };
-}
-function cellLineOddsParts(line: number | null, odds: number | null): CellParts {
-  if (line == null) return { top: "—" };
-  return { top: String(line), bottom: odds == null ? "—" : `(${odds})` };
-}
-
 function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
   if (!src) return { top: "—" };
 
-  if (market === "ml") return cellMlParts(src.ml[book] ?? null);
+  if (market === "ml") return cellMl(src.ml[book] ?? null);
 
   if (market === "spread") {
     const c = src.spread[book];
-    return cellLineOddsParts(c?.line ?? null, c?.odds ?? null);
+    return cellLineOdds(c?.line ?? null, c?.odds ?? null);
   }
 
   // total: AWAY is Over, HOME is Under
   const t = src.total[book];
   const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
-  return cellLineOddsParts(t?.line ?? null, odds);
+  return cellLineOdds(t?.line ?? null, odds);
 }
 
 /** =========================
- * HISTORY / CHARTS (unchanged)
+ * HISTORY / CHARTS (UNCHANGED)
  * ========================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
@@ -741,13 +731,10 @@ function HistoryChartPairOddsOnly({
   const isMobile = useIsMobile();
   const chartHeight = isMobile ? 420 : 520;
 
-  const leftTopLabel =
-    uiMarket === "ml" ? "Moneyline Odds" : uiMarket === "spread" ? "Spread Odds" : "Total Odds";
+  const leftTopLabel = uiMarket === "ml" ? "Moneyline Odds" : uiMarket === "spread" ? "Spread Odds" : "Total Odds";
   const rightTopLabel = "Market Width (Prob)";
 
-  const margin = isMobile
-    ? { top: 8, right: 14, left: 36, bottom: 14 }
-    : { top: 8, right: 16, left: 38, bottom: 16 };
+  const margin = isMobile ? { top: 8, right: 14, left: 36, bottom: 14 } : { top: 8, right: 16, left: 38, bottom: 16 };
 
   const legendWrapperStyle = {
     fontSize: isMobile ? 10 : 11,
@@ -805,11 +792,7 @@ function HistoryChartPairOddsOnly({
 
                         const pretty = series.map((s) => {
                           const ln = row?.[`${s.key}__line`];
-                          return {
-                            book: s.key,
-                            odds: s.val,
-                            line: typeof ln === "number" ? ln : null,
-                          };
+                          return { book: s.key, odds: s.val, line: typeof ln === "number" ? ln : null };
                         });
 
                         return (
@@ -989,9 +972,33 @@ function LineMovementModal({
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <button className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "ml" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`} onClick={() => setActiveMarket("ml")} type="button">Moneyline</button>
-        <button className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "spread" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`} onClick={() => setActiveMarket("spread")} type="button">Spread</button>
-        <button className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "total" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`} onClick={() => setActiveMarket("total")} type="button">Total</button>
+        <button
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "ml" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
+          onClick={() => setActiveMarket("ml")}
+          type="button"
+        >
+          Moneyline
+        </button>
+        <button
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "spread" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
+          onClick={() => setActiveMarket("spread")}
+          type="button"
+        >
+          Spread
+        </button>
+        <button
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "total" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
+          onClick={() => setActiveMarket("total")}
+          type="button"
+        >
+          Total
+        </button>
       </div>
 
       {loading ? (
@@ -1001,13 +1008,37 @@ function LineMovementModal({
       ) : (
         <div className="space-y-4">
           {activeMarket === "ml" && (
-            <HistoryChartPairOddsOnly title="Moneyline (Odds)" uiMarket="ml" books={books} seriesA={mlAway} seriesB={mlHome} panelTitleA="AWAY" panelTitleB="HOME" />
+            <HistoryChartPairOddsOnly
+              title="Moneyline (Odds)"
+              uiMarket="ml"
+              books={books}
+              seriesA={mlAway}
+              seriesB={mlHome}
+              panelTitleA="AWAY"
+              panelTitleB="HOME"
+            />
           )}
           {activeMarket === "spread" && (
-            <HistoryChartPairOddsOnly title="Spread (Odds)" uiMarket="spread" books={books} seriesA={spAway} seriesB={spHome} panelTitleA="AWAY" panelTitleB="HOME" />
+            <HistoryChartPairOddsOnly
+              title="Spread (Odds)"
+              uiMarket="spread"
+              books={books}
+              seriesA={spAway}
+              seriesB={spHome}
+              panelTitleA="AWAY"
+              panelTitleB="HOME"
+            />
           )}
           {activeMarket === "total" && (
-            <HistoryChartPairOddsOnly title="Total (Odds)" uiMarket="total" books={books} seriesA={toOver} seriesB={toUnder} panelTitleA="OVER" panelTitleB="UNDER" />
+            <HistoryChartPairOddsOnly
+              title="Total (Odds)"
+              uiMarket="total"
+              books={books}
+              seriesA={toOver}
+              seriesB={toUnder}
+              panelTitleA="OVER"
+              panelTitleB="UNDER"
+            />
           )}
         </div>
       )}
@@ -1016,7 +1047,7 @@ function LineMovementModal({
 }
 
 /** =========================
- * MOBILE CARD (keep yours minimal)
+ * MOBILE CARD
  * ========================= */
 
 function EventCardMobile({
@@ -1153,18 +1184,16 @@ function EventCardMobile({
 }
 
 /** =========================
- * DESKTOP ROWS (web-style)
+ * DESKTOP ROWS (ALWAYS BOOKS)
  * ========================= */
 
-function EventTwoRows({
+function EventTwoRowsDesktop({
   ev,
   market,
-  showBooks,
   onOpenHistory,
 }: {
   ev: EventOdds;
   market: Market;
-  showBooks: boolean;
   onOpenHistory: (ev: EventOdds) => void;
 }) {
   const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
@@ -1175,9 +1204,7 @@ function EventTwoRows({
       <tr className="hover:bg-white/5 transition-colors">
         <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[12px] text-[#cfcfcf] font-semibold">
-              {fmtCTTimeOnly(ev.commenceTime)} CT
-            </div>
+            <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
             <button
               type="button"
               onClick={() => onOpenHistory(ev)}
@@ -1196,34 +1223,26 @@ function EventTwoRows({
 
         <ConsensusValue parts={awayConsensus} />
 
-        {showBooks && (
-          <>
-            <BookValue parts={partsForBookSide(ev, market, "AWAY", "dk")} borderLeft />
-            <BookValue parts={partsForBookSide(ev, market, "AWAY", "fd")} />
-            <BookValue parts={partsForBookSide(ev, market, "AWAY", "mgm")} />
-            <BookValue parts={partsForBookSide(ev, market, "AWAY", "pin")} />
-            <BookValue parts={partsForBookSide(ev, market, "AWAY", "bol")} />
-          </>
-        )}
+        <BookValue parts={partsForBookSide(ev, market, "AWAY", "dk")} borderLeft />
+        <BookValue parts={partsForBookSide(ev, market, "AWAY", "fd")} />
+        <BookValue parts={partsForBookSide(ev, market, "AWAY", "mgm")} />
+        <BookValue parts={partsForBookSide(ev, market, "AWAY", "pin")} />
+        <BookValue parts={partsForBookSide(ev, market, "AWAY", "bol")} />
       </tr>
 
       <tr className={["hover:bg-white/5 transition-colors", `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue parts={homeConsensus} />
 
-        {showBooks && (
-          <>
-            <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
-            <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
-            <BookValue parts={partsForBookSide(ev, market, "HOME", "mgm")} />
-            <BookValue parts={partsForBookSide(ev, market, "HOME", "pin")} />
-            <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
-          </>
-        )}
+        <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
+        <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
+        <BookValue parts={partsForBookSide(ev, market, "HOME", "mgm")} />
+        <BookValue parts={partsForBookSide(ev, market, "HOME", "pin")} />
+        <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
       </tr>
 
-      {/* subtle spacer row between games (web feel) */}
+      {/* subtle spacer row between games */}
       <tr>
-        <td colSpan={showBooks ? 7 : 2} className="h-2 bg-transparent" />
+        <td colSpan={7} className="h-2 bg-transparent" />
       </tr>
     </>
   );
@@ -1244,7 +1263,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyEvent, setHistoryEvent] = useState<EventOdds | null>(null);
 
-  const [showBooksDesktop, setShowBooksDesktop] = useState(false);
+  // ✅ Mobile only: per-card open/close
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
 
   function openHistory(ev: EventOdds) {
@@ -1262,7 +1281,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
-      .eq("sport_key", sportKey) // ✅ critical
+      .eq("sport_key", sportKey)
       .in("side", ["AWAY", "HOME"])
       .order("commence_time", { ascending: true });
 
@@ -1324,7 +1343,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   useEffect(() => {
     setSelectedDate("");
     setMobileOpenMap({});
-    setShowBooksDesktop(false);
     setMarket("spread");
   }, [sportKey]);
 
@@ -1356,6 +1374,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
+      // Today: show only future games
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -1381,7 +1400,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
   return (
     <div className="w-full">
-      {/* ✅ Web container */}
       <div className="max-w-[1200px] mx-auto px-4 md:px-6">
         {/* Page header */}
         <div className="flex items-start justify-between gap-6 pt-2">
@@ -1403,7 +1421,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
         {/* Toolbar */}
         <div className="mt-4 flex flex-col gap-3">
-          {/* Date pills */}
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
             {availableDates.map((d) => (
               <button
@@ -1423,16 +1440,8 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
             ))}
           </div>
 
-          {/* Market + books */}
           <div className="flex flex-wrap items-center gap-3">
             <Segmented value={market} onChange={setMarket} />
-
-            <TogglePill
-              active={showBooksDesktop}
-              onClick={() => setShowBooksDesktop((v) => !v)}
-              labelOn="Hide Books"
-              labelOff="Show Books"
-            />
           </div>
         </div>
 
@@ -1476,15 +1485,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                   <colgroup>
                     <col style={{ width: COL_MATCHUP }} />
                     <col style={{ width: COL_CONSENSUS }} />
-                    {showBooksDesktop && (
-                      <>
-                        <col style={{ width: COL_BOOK }} />
-                        <col style={{ width: COL_BOOK }} />
-                        <col style={{ width: COL_BOOK }} />
-                        <col style={{ width: COL_BOOK }} />
-                        <col style={{ width: COL_BOOK }} />
-                      </>
-                    )}
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
+                    <col style={{ width: COL_BOOK }} />
                   </colgroup>
 
                   <thead className="sticky top-0 z-20">
@@ -1497,27 +1502,17 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         Consensus
                       </th>
 
-                      {showBooksDesktop && (
-                        <>
-                          <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
-                          <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
-                          <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
-                          <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" fallbackLabel="PIN" />
-                          <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" fallbackLabel="BOL" />
-                        </>
-                      )}
+                      <BookHeader src={BOOK_LOGOS.dk} alt="DraftKings" fallbackLabel="DK" borderLeft />
+                      <BookHeader src={BOOK_LOGOS.fd} alt="FanDuel" fallbackLabel="FD" />
+                      <BookHeader src={BOOK_LOGOS.mgm} alt="BetMGM" fallbackLabel="MGM" />
+                      <BookHeader src={BOOK_LOGOS.pin} alt="Pinnacle" fallbackLabel="PIN" />
+                      <BookHeader src={BOOK_LOGOS.bol} alt="BetOnline" fallbackLabel="BOL" />
                     </tr>
                   </thead>
 
                   <tbody>
                     {events.map((ev) => (
-                      <EventTwoRows
-                        key={ev.eventId}
-                        ev={ev}
-                        market={market}
-                        showBooks={showBooksDesktop}
-                        onOpenHistory={openHistory}
-                      />
+                      <EventTwoRowsDesktop key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} />
                     ))}
                   </tbody>
                 </table>
@@ -1531,11 +1526,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
         )}
 
-        {/* bottom padding so it breathes on desktop */}
         <div className="h-10" />
       </div>
     </div>
   );
 }
-
 
