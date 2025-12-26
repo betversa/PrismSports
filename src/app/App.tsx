@@ -1,4 +1,4 @@
-// App.tsx
+// App.tsx — FULL REWRITE (fixes Predictions sport selector + consistent behavior)
 import { useMemo, useState, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
@@ -46,6 +46,10 @@ function ctYmd(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
+function isPredScreen(s: Screen) {
+  return s === "model" || s === "monte-carlo";
+}
+
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("overview");
   const [selectedDate, setSelectedDate] = useState<string>(() => ctYmd(new Date()));
@@ -68,15 +72,41 @@ export default function App() {
     };
   }, [sidebarOpen]);
 
+  // --- Sport pick handlers (IMPORTANT: do NOT force wrong screen) ---
+  const handlePickOddsSport = (k: SportKey) => {
+    setOddsSportKey(k);
+
+    // If you're on an Odds-related page already, keep you there.
+    // If you're on a prediction screen, don't hijack navigation.
+    if (activeScreen === "odds") return;
+
+    // If user is on Overview/Results/etc and picks Odds sport from header,
+    // it's reasonable to take them to Odds (same behavior you had before).
+    if (!isPredScreen(activeScreen)) setActiveScreen("odds");
+  };
+
+  const handlePickPredSport = (k: SportKey) => {
+    setPredSportKey(k);
+
+    // If you're already on a prediction screen, stay on it (Model stays Model)
+    if (isPredScreen(activeScreen)) return;
+
+    // If user is on Overview/Odds/etc and picks Predictions sport, take them to Monte Carlo
+    // (the main "predictions" landing page).
+    setActiveScreen("monte-carlo");
+  };
+
   const screens = useMemo<Record<Screen, JSX.Element>>(
     () => ({
       overview: <OverviewScreen />,
-      model: <ModelScreen selectedDate={selectedDate} />,
 
-      // ✅ pass sport into Predictions if desired
+      // ✅ FIX: ModelScreen MUST receive the predSportKey
+      model: <ModelScreen selectedDate={selectedDate} sportKey={predSportKey} />,
+
+      // ✅ Predictions sport already wired here
       "monte-carlo": <MonteCarloScreen sportKey={predSportKey} />,
 
-      // ✅ THIS is the line you asked about
+      // ✅ Odds sport wired here
       odds: <OddsScreen sportKey={oddsSportKey} />,
 
       results: <ResultsScreen />,
@@ -106,12 +136,12 @@ export default function App() {
               }}
               variant="mobile"
               onClose={() => setSidebarOpen(false)}
-
-              // ✅ add these props to Sidebar (so it can change the selected sport)
+              selectedDate={selectedDate}
+              onPickDate={setSelectedDate}
               oddsSportKey={oddsSportKey}
-              onPickOddsSport={(k: SportKey) => setOddsSportKey(k)}
+              onPickOddsSport={handlePickOddsSport}
               predSportKey={predSportKey}
-              onPickPredSport={(k: SportKey) => setPredSportKey(k)}
+              onPickPredSport={handlePickPredSport}
             />
           </div>
         </div>
@@ -126,18 +156,12 @@ export default function App() {
         }}
         activeScreen={activeScreen}
         onHeightChange={(px) => setHeaderH(Math.ceil(px))}
-
-        // ✅ add these props to Header (so dropdown selection sets the sport)
+        selectedDate={selectedDate}
+        onPickDate={setSelectedDate}
         oddsSportKey={oddsSportKey}
-        onPickOddsSport={(k: SportKey) => {
-          setOddsSportKey(k);
-          setActiveScreen("odds");
-        }}
+        onPickOddsSport={handlePickOddsSport}
         predSportKey={predSportKey}
-        onPickPredSport={(k: SportKey) => {
-          setPredSportKey(k);
-          setActiveScreen("monte-carlo");
-        }}
+        onPickPredSport={handlePickPredSport}
       />
 
       {/* Main Content scroll container */}
@@ -147,4 +171,3 @@ export default function App() {
     </div>
   );
 }
-
