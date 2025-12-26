@@ -1,19 +1,24 @@
 /**
  * teamPossessionsLoader.ts — TeamRankings possessions-per-game → Supabase team_possessions
- *
+ * ---------------------------------------------------------------------------------------
  * NBA:
  *   https://www.teamrankings.com/nba/stat/possessions-per-game
  * NCAAB:
  *   https://www.teamrankings.com/ncaa-basketball/stat/possessions-per-game
  *
- * Writes:
+ * Writes to:
  *   public.team_possessions:
- *     sport_key, season, canonical,
- *     "2025", "Last 3", "Last 1", "Home", "Away", "2024", updated_at
+ *     sport_key, season, canonical, updated_at,
+ *     "2025", "Last 3", "Last 1", "Home", "Away", "2024"
  *
- * Notes:
- * - TeamRankings may block aggressive scraping; we use headers + retries.
- * - Mapping uses public.team_map; add/adjust columns in the SELECT as needed.
+ * Key behaviors:
+ *  ✅ Uses team_map."TR" as the primary mapping (TeamRankings → canonical)
+ *  ✅ Resets (deletes) rows for (sport_key, season) at start of every run
+ *  ✅ Dedupes within the same run (prevents Postgres 21000 upsert error)
+ *  ✅ Logs missing team mappings
+ *
+ * Required constraint:
+ *  - PK/unique on (sport_key, season, canonical) in public.team_possessions
  */
 
 import "dotenv/config";
@@ -22,8 +27,8 @@ import { createClient } from "@supabase/supabase-js";
 /* =========================
    CONFIG
 ========================= */
-const SPORT_KEY = process.env.SPORT_KEY || "basketball_ncaab"; // "basketball_nba" or "basketball_ncaab"
-const SEASON = process.env.SEASON || "2025-26"; // store in season column (your choice)
+const SPORT_KEY = process.env.SPORT_KEY || "basketball_ncaab"; // basketball_ncaab | basketball_nba
+const SEASON = process.env.SEASON || "2025-26";
 const MAX_TRIES = Number(process.env.MAX_TRIES || "4");
 
 const URL_BY_SPORT: Record<string, string> = {
@@ -31,9 +36,13 @@ const URL_BY_SPORT: Record<string, string> = {
   basketball_ncaab: "https://www.teamrankings.com/ncaa-basketball/stat/possessions-per-game",
 };
 
-function targetUrl() {
+function targetUrl(): string {
   const url = URL_BY_SPORT[SPORT_KEY];
-  if (!url) throw new Error(`Unsupported SPORT_KEY=${SPORT_KEY}. Expected basketball_nba or basketball_ncaab.`);
+  if (!url) {
+    throw new Error(
+      `Unsupported SPORT_KEY=${SPORT_KEY}. Expected one of: ${Object.keys(URL_BY_SPORT).join(", ")}`
+    );
+  }
   return url;
 }
 
@@ -103,64 +112,44 @@ async function fetchHtmlWithRetries(url: string, maxTries = 4): Promise<string> 
 }
 
 /* =========================
-   TEAM MAP LOADER
-   Build a lookup from many possible team_map columns -> canonical
+   LOAD TEAM MAP (TR → canonical)
+   - Uses team_map."TR" as TeamRankings mapping key
 ========================= */
-async function loadTeamMap(
+async function loadTeamMapTR(
   supabase: ReturnType<typeof createClient>
 ): Promise<Map<string, string>> {
-  // Add/remove columns as your team_map evolves.
   const { data, error } = await supabase
     .from("team_map")
-    .select(
-      [
-        "canonical",
-        `"SR_School"`,
-        `"ESPN_Long"`,
-        `"The Odds API"`,
-        `"KenPom"`,
-        `"Elo"`,
-        `"TR"`, // if you add this column later, it will be used automatically
-      ].join(",")
-    )
+    .select('canonical,"TR"')
     .not("canonical", "is", null);
 
   if (error) throw error;
 
-  const map = new Map<string, string>();
+  const nameToCanon = new Map<string, string>();
 
   for (const r of (data || []) as any[]) {
     const canonical = String(r.canonical || "").trim();
     if (!canonical) continue;
 
-    const candidates: string[] = [
-      canonical,
-      r["TR"],
-      r["SR_School"],
-      r["ESPN_Long"],
-      r["The Odds API"],
-      r["KenPom"],
-      r["Elo"],
-    ]
-      .map((x) => String(x || "").trim())
-      .filter(Boolean);
-
-    for (const name of candidates) {
-      map.set(normalizeKey(name), canonical);
+    const tr = String(r["TR"] || "").trim();
+    if (tr) {
+      // If TR duplicates exist, later rows overwrite earlier ones; we'll dedupe at insert time anyway.
+      nameToCanon.set(normalizeKey(tr), canonical);
     }
   }
 
-  if (map.size === 0) throw new Error("team_map produced 0 mappings (check columns + data).");
-  return map;
+  if (nameToCanon.size === 0) {
+    throw new Error('team_map produced 0 mappings. Make sure team_map."TR" is populated.');
+  }
+
+  return nameToCanon;
 }
 
 /* =========================
-   PARSE TEAMRANKINGS TABLE
-   We extract:
-     Team name (anchor text)
-     Then 6 numeric columns:
-       2025, Last 3, Last 1, Home, Away, 2024
-   Your sample row matches this.
+   PARSE TEAMRANKINGS TABLE ROWS
+   Expected columns after Team cell:
+     2025, Last 3, Last 1, Home, Away, 2024
+   We rely on td data-sort values, using the last 6.
 ========================= */
 type TRRow = {
   teamName: string;
@@ -173,30 +162,30 @@ type TRRow = {
 };
 
 function parseTeamRankingsPossessions(html: string): TRRow[] {
-  const rows: TRRow[] = [];
+  const out: TRRow[] = [];
 
-  // Grab all <tr ...>...</tr>
   const trMatches = html.match(/<tr[\s\S]*?<\/tr>/gi) || [];
   for (const tr of trMatches) {
-    // Must contain the team link cell
-    const teamMatch = tr.match(/<td[^>]*data-sort="[^"]*"[^>]*>\s*<a[^>]*>([^<]+)<\/a>\s*<\/td>/i);
+    // Team name is in the <a> within the team column <td ...><a>TEAM</a></td>
+    const teamMatch = tr.match(
+      /<td[^>]*class="text-left nowrap"[^>]*>[\s\S]*?<a[^>]*>([^<]+)<\/a>/i
+    );
     if (!teamMatch?.[1]) continue;
 
     const teamName = teamMatch[1].trim();
 
-    // Grab all td data-sort numeric values for the row
-    // Expect pattern: rank td then team td then 6 numeric tds.
-    const tdSorts = Array.from(tr.matchAll(/<td[^>]*data-sort="([^"]+)"[^>]*>/gi)).map((m) => m[1]);
+    // Collect all data-sort values
+    const tdSorts = Array.from(tr.matchAll(/<td[^>]*data-sort="([^"]+)"[^>]*>/gi)).map(
+      (m) => m[1]
+    );
 
-    // tdSorts includes rank and team and numbers; we want the LAST 6 numeric fields
-    // TeamRankings pages are consistent: Rank, Team, 2025, Last 3, Last 1, Home, Away, 2024
-    // We'll parse from the end to be robust.
+    // We expect at least: rank + team + 6 numbers = 8 tds with data-sort
     if (tdSorts.length < 8) continue;
 
     const tail = tdSorts.slice(-6);
     const [s2025, sLast3, sLast1, sHome, sAway, s2024] = tail;
 
-    rows.push({
+    out.push({
       teamName,
       v2025: toNum(s2025),
       last3: toNum(sLast3),
@@ -207,20 +196,63 @@ function parseTeamRankingsPossessions(html: string): TRRow[] {
     });
   }
 
-  // De-dupe by teamName just in case
+  // Dedup by TeamRankings teamName just in case
   const seen = new Set<string>();
-  const out: TRRow[] = [];
-  for (const r of rows) {
+  const dedup: TRRow[] = [];
+  for (const r of out) {
     const k = normalizeKey(r.teamName);
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push(r);
+    dedup.push(r);
   }
 
-  if (!out.length) {
-    throw new Error("Parsed 0 rows from TeamRankings HTML (page layout may have changed or blocked).");
+  if (!dedup.length) {
+    throw new Error("Parsed 0 rows from TeamRankings (layout changed or request blocked).");
   }
-  return out;
+
+  return dedup;
+}
+
+/* =========================
+   RESET TABLE SLICE
+========================= */
+async function resetSportSeason(
+  supabase: ReturnType<typeof createClient>,
+  sportKey: string,
+  season: string
+) {
+  const { error } = await supabase
+    .from("team_possessions")
+    .delete()
+    .eq("sport_key", sportKey)
+    .eq("season", season);
+
+  if (error) throw error;
+}
+
+/* =========================
+   BUILD + DEDUPE UPSERT ROWS
+========================= */
+function dedupeByConflictKey(rows: any[]) {
+  const byKey = new Map<string, any>();
+
+  const fields = ["2025", "Last 3", "Last 1", "Home", "Away", "2024"];
+
+  const score = (r: any) =>
+    fields.reduce((s, f) => s + (r?.[f] === null || r?.[f] === undefined ? 0 : 1), 0);
+
+  for (const row of rows) {
+    const key = `${row.sport_key}||${row.season}||${row.canonical}`;
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, row);
+      continue;
+    }
+    // Keep the row with more populated values; tie -> keep latest
+    if (score(row) >= score(prev)) byKey.set(key, row);
+  }
+
+  return Array.from(byKey.values());
 }
 
 /* =========================
@@ -240,23 +272,25 @@ async function main() {
 
   const url = targetUrl();
 
-  // 1) Load mappings
-  const nameToCanon = await loadTeamMap(supabase);
+  // 1) Load TeamRankings → canonical mapping
+  const trToCanon = await loadTeamMapTR(supabase);
 
-  // 2) Fetch page
+  // 2) Fetch HTML
   const html = await fetchHtmlWithRetries(url, MAX_TRIES);
 
   // 3) Parse rows
   const parsed = parseTeamRankingsPossessions(html);
 
-  // 4) Map to canonical + build upsert rows
-  const nowIso = new Date().toISOString();
+  // 4) Reset existing rows for this sport+season
+  await resetSportSeason(supabase, SPORT_KEY, SEASON);
 
+  // 5) Build upserts
+  const nowIso = new Date().toISOString();
   const upserts: any[] = [];
   const missing: string[] = [];
 
   for (const r of parsed) {
-    const canon = nameToCanon.get(normalizeKey(r.teamName));
+    const canon = trToCanon.get(normalizeKey(r.teamName));
     if (!canon) {
       missing.push(r.teamName);
       continue;
@@ -268,7 +302,6 @@ async function main() {
       canonical: canon,
       updated_at: nowIso,
 
-      // quoted columns in Postgres must be referenced by exact string keys
       "2025": r.v2025,
       "Last 3": r.last3,
       "Last 1": r.last1,
@@ -280,12 +313,17 @@ async function main() {
 
   if (!upserts.length) {
     throw new Error(
-      `0 mapped rows after canonicalization. Missing examples: ${missing.slice(0, 10).join(", ")}`
+      `0 mapped rows after canonicalization. Missing examples: ${missing.slice(0, 15).join(", ")}`
     );
   }
 
-  // 5) Upsert
-  const { error } = await supabase.from("team_possessions").upsert(upserts, {
+  // 6) Dedup within the same run (prevents Postgres 21000 in upsert)
+  const deduped = dedupeByConflictKey(upserts);
+  const dedupedN = deduped.length;
+  const dropped = upserts.length - dedupedN;
+
+  // 7) Upsert
+  const { error } = await supabase.from("team_possessions").upsert(deduped, {
     onConflict: "sport_key,season,canonical",
   });
   if (error) throw error;
@@ -298,7 +336,9 @@ async function main() {
         season: SEASON,
         source_url: url,
         rows_parsed: parsed.length,
-        rows_upserted: upserts.length,
+        rows_mapped: upserts.length,
+        rows_deduped: dedupedN,
+        deduped_dropped: dropped,
         missing_count: missing.length,
         missing_sample: missing.slice(0, 25),
       },
