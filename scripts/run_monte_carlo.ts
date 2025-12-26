@@ -1,16 +1,22 @@
 /**
- * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v4: Pace-Aware)
- * --------------------------------------------------------------
+ * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v5: Baseline-Safe + Pace-Aware)
+ * -----------------------------------------------------------------------------
  * Snapshot tables:
  *   ✅ monte_carlo_results: one row per (sport_key, event_id), overwritten each run
  *   ✅ monte_carlo_runs: history (one row per run)
  *   ✅ ev_plays: cleared per sport each run, then rebuilt
  *
- * NEW in v4:
- *   ✅ Incorporates TeamRankings possessions via public.team_possessions
- *   ✅ Uses engine_adj_off / engine_adj_def (per-100) to build points
- *   ✅ Converts per-100 expectations + sigmas to per-game via pace/100
- *   ✅ Pace = composite of 2025, Last 3, Last 1, Home/Away (weighted, auto-renorm if missing)
+ * FIXES in v5 (the issues you described):
+ *   ✅ Removes the hard-coded "100 baseline" assumption that explodes NBA totals
+ *      - Uses a baseline-free blend that works for BOTH:
+ *          * NBA (raw OffRtg/DefRtg like 112/113)
+ *          * NCAAB (100-centered opponent-adjusted ratings)
+ *
+ *   ✅ Pace is treated as POSSESSIONS PER GAME (per team), not "per 100"
+ *      - We still convert per-100 ratings to per-game via (paceGame / 100)
+ *
+ *   ✅ Sport-specific pace sanity clamps
+ *      - Prevents scrape glitches from turning into 275+ totals
  */
 
 import "dotenv/config";
@@ -36,13 +42,13 @@ type EventRow = {
 type TeamRatingRow = {
   canonical: string;
 
-  // ✅ per-100 ratings
-  engine_adj_off: number | null; // ~100 baseline
-  engine_adj_def: number | null; // ~100 baseline (lower = better defense)
+  // per-100 ratings
+  engine_adj_off: number | null;
+  engine_adj_def: number | null;
 
-  true_hca: number | null; // points (per game)
+  true_hca: number | null; // points per game
   sigma_margin_100: number | null; // per-100
-  sigma_total_100: number | null;  // per-100
+  sigma_total_100: number | null; // per-100
 };
 
 type MarketKey = "h2h" | "spreads" | "totals";
@@ -148,16 +154,13 @@ const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
   process.env.SUPABASE_KEY!;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   throw new Error("[MC] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (preferred).");
 }
 
-const SPORT_KEYS = (process.env.SPORT_KEYS ||
-  process.env.SPORT_KEY ||
-  "basketball_ncaab,basketball_nba")
+const SPORT_KEYS = (process.env.SPORT_KEYS || process.env.SPORT_KEY || "basketball_ncaab,basketball_nba")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -168,13 +171,12 @@ const POSS_SEASON = process.env.POSS_SEASON || SEASON;
 const SIMS = Number(process.env.MC_SIMS ?? "10000");
 const START_GRACE_MINUTES = Number(process.env.MC_START_GRACE_MINUTES ?? "0");
 
-// Floors (these are PER-GAME after pace scaling in v4)
+// Floors (PER-GAME after pace scaling)
 const SIGMA_MARGIN_FLOOR_GAME = Number(process.env.SIGMA_MARGIN_FLOOR ?? "8");
 const SIGMA_TOTAL_FLOOR_GAME = Number(process.env.SIGMA_TOTAL_FLOOR ?? "13.5");
 
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
-const MARGIN_HOME_WIN_NEGATIVE =
-  (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
+const MARGIN_HOME_WIN_NEGATIVE = (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
 const EPS = Number(process.env.MC_PUSH_EPS ?? "1e-9");
 
 const SHARP_BOOKS = (process.env.EV_SHARP_BOOKS || "pinnacle,betonlineag,betonline")
@@ -201,6 +203,13 @@ const PACE_W_2025 = Number(process.env.PACE_W_2025 ?? "0.60");
 const PACE_W_LAST3 = Number(process.env.PACE_W_LAST3 ?? "0.20");
 const PACE_W_LAST1 = Number(process.env.PACE_W_LAST1 ?? "0.10");
 const PACE_W_SPLIT = Number(process.env.PACE_W_SPLIT ?? "0.10");
+
+/**
+ * Rating blend weights (baseline-free).
+ * Default = 50/50, you can tune per sport if you want.
+ */
+const PTS_BLEND_WEIGHT_OFF = Number(process.env.PTS_BLEND_WEIGHT_OFF ?? "0.50"); // 0..1
+const PTS_BLEND_WEIGHT_DEF = 1 - PTS_BLEND_WEIGHT_OFF;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
@@ -288,7 +297,9 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     if (!homeR || !awayR) {
       skipped.push({
         event_id: e.event_id,
-        reason: `missing team_ratings(${sportKey}) for ${!homeR ? home : ""}${!homeR && !awayR ? " & " : ""}${!awayR ? away : ""}`,
+        reason: `missing team_ratings(${sportKey}) for ${!homeR ? home : ""}${!homeR && !awayR ? " & " : ""}${
+          !awayR ? away : ""
+        }`,
       });
       continue;
     }
@@ -296,12 +307,12 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const homeP = possMap.get(home) ?? null;
     const awayP = possMap.get(away) ?? null;
 
-    // Pace composite (per team, matchup-context)
-    const paceHome = computeTeamPace(homeP, "home");
-    const paceAway = computeTeamPace(awayP, "away");
+    // Pace composite (possessions per game)
+    const paceHome = computeTeamPace(sportKey, homeP, "home");
+    const paceAway = computeTeamPace(sportKey, awayP, "away");
     const paceGame = averageNonNull([paceHome, paceAway]) ?? defaultPaceForSport(sportKey);
 
-    const input = buildInputsPaceAware(homeR, awayR, paceGame);
+    const input = buildInputsPaceAware(sportKey, homeR, awayR, paceGame);
 
     const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
@@ -324,15 +335,20 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           home,
           away,
 
-          pace_home: paceHome,
-          pace_away: paceAway,
-          pace_game: paceGame,
+          pace_home_poss_per_game: paceHome,
+          pace_away_poss_per_game: paceAway,
+          pace_game_poss_per_game: paceGame,
 
-          home_engine_adj_off_100: num(homeR.engine_adj_off, 100),
-          home_engine_adj_def_100: num(homeR.engine_adj_def, 100),
-          away_engine_adj_off_100: num(awayR.engine_adj_off, 100),
-          away_engine_adj_def_100: num(awayR.engine_adj_def, 100),
+          home_engine_adj_off_100: num(homeR.engine_adj_off, 0),
+          home_engine_adj_def_100: num(homeR.engine_adj_def, 0),
+          away_engine_adj_off_100: num(awayR.engine_adj_off, 0),
+          away_engine_adj_def_100: num(awayR.engine_adj_def, 0),
           home_true_hca_pts: num(homeR.true_hca, 0),
+
+          model: {
+            pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
+            pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
+          },
 
           margin_mean_pts: input.marginMean,
           total_mean_pts: input.totalMean,
@@ -426,6 +442,15 @@ function buildRunConfig(sportKey: string) {
       w_split: PACE_W_SPLIT,
     },
 
+    pace_clamp: paceClampForSport(sportKey),
+
+    rating_model: {
+      baseline_assumption: "NONE (baseline-free blend)",
+      pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
+      pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
+      per100_to_game: "paceGame/100",
+    },
+
     margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
     push_eps: EPS,
     start_grace_minutes: START_GRACE_MINUTES,
@@ -447,10 +472,20 @@ function buildRunConfig(sportKey: string) {
 }
 
 /* =========================================================
-   POSSESSIONS
+   POSSESSIONS (possessions per game)
 ========================================================= */
 
-function computeTeamPace(p: PossRow | null, homeAway: "home" | "away"): number | null {
+function paceClampForSport(sportKey: string): { lo: number; hi: number } {
+  // tighter clamps reduce risk of "scrape glitch => insane totals"
+  if (sportKey === "basketball_nba") return { lo: 85, hi: 110 };
+  return { lo: 60, hi: 80 }; // NCAAB typical range
+}
+
+function computeTeamPace(
+  sportKey: string,
+  p: PossRow | null,
+  homeAway: "home" | "away"
+): number | null {
   if (!p) return null;
 
   const v2025 = toNullNum((p as any)["2025"]);
@@ -465,7 +500,6 @@ function computeTeamPace(p: PossRow | null, homeAway: "home" | "away"): number |
     { v: split, w: PACE_W_SPLIT },
   ];
 
-  // renormalize weights for available components
   const avail = parts.filter((x) => x.v != null && Number.isFinite(x.v!));
   if (!avail.length) return null;
 
@@ -475,14 +509,13 @@ function computeTeamPace(p: PossRow | null, homeAway: "home" | "away"): number |
   let pace = 0;
   for (const x of avail) pace += (x.w / wSum) * (x.v as number);
 
-  // sanity clamp (prevents insane values if scrape glitch)
-  return clamp(pace, 55, 115);
+  const { lo, hi } = paceClampForSport(sportKey);
+  return clamp(pace, lo, hi);
 }
 
 function defaultPaceForSport(sportKey: string) {
-  // reasonable fallbacks if possessions missing
   if (sportKey === "basketball_nba") return 99;
-  return 70; // NCAAB typical range ~66-72
+  return 70;
 }
 
 function averageNonNull(arr: Array<number | null | undefined>): number | null {
@@ -492,7 +525,154 @@ function averageNonNull(arr: Array<number | null | undefined>): number | null {
 }
 
 /* =========================================================
-   EV PIPELINE (PER SPORT) — unchanged logic
+   MODEL (PACE-AWARE, BASELINE-FREE)
+========================================================= */
+
+/**
+ * Baseline-free per-100 point expectation:
+ *
+ * Instead of assuming a universal "100" baseline (which breaks NBA raw OffRtg/DefRtg),
+ * we blend offense and opponent defense directly into a per-100 expected scoring rate.
+ *
+ *   home_pp100 = w*home_off100 + (1-w)*away_def100
+ *   away_pp100 = w*away_off100 + (1-w)*home_def100
+ *
+ * Then convert per-100 -> per-game:
+ *   pts = pp100 * (paceGame / 100)
+ *
+ * This behaves well for BOTH:
+ * - NBA (OffRtg/DefRtg are already on the correct scoring scale)
+ * - NCAAB (100-centered adj ratings: offense >100 and defense <100 still translate correctly)
+ */
+function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
+  const homeOff100 = num(home.engine_adj_off, 0);
+  const homeDef100 = num(home.engine_adj_def, 0);
+  const awayOff100 = num(away.engine_adj_off, 0);
+  const awayDef100 = num(away.engine_adj_def, 0);
+
+  // Defensive sanity fallback (if any row is missing/0 due to bad upstream data)
+  // - For NCAAB adj ratings, ~100 is typical center.
+  // - For NBA raw ratings, ~112 is typical.
+  const defFallback = sportKey === "basketball_nba" ? 112 : 100;
+
+  const homeOff = homeOff100 > 0 ? homeOff100 : (sportKey === "basketball_nba" ? 112 : 100);
+  const awayOff = awayOff100 > 0 ? awayOff100 : (sportKey === "basketball_nba" ? 112 : 100);
+  const homeDef = homeDef100 > 0 ? homeDef100 : defFallback;
+  const awayDef = awayDef100 > 0 ? awayDef100 : defFallback;
+
+  const wOff = clamp01(PTS_BLEND_WEIGHT_OFF);
+  const wDef = 1 - wOff;
+
+  const homePts100 = wOff * homeOff + wDef * awayDef;
+  const awayPts100 = wOff * awayOff + wDef * homeDef;
+
+  const paceFactor = paceGame / 100;
+
+  const homePts = homePts100 * paceFactor;
+  const awayPts = awayPts100 * paceFactor;
+
+  const baseMargin = homePts - awayPts;
+  const hcaPts = num(home.true_hca, 0);
+
+  const marginMean = baseMargin + hcaPts;
+  const totalMean = Math.max(0, homePts + awayPts);
+
+  const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
+  const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
+
+  const sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMargin100 * paceFactor);
+  const sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotal100 * paceFactor);
+
+  return { marginMean, totalMean, sigmaMarginGame, sigmaTotalGame };
+}
+
+/* =========================================================
+   SIMULATION
+========================================================= */
+
+function simulateGameWithProbs(
+  sims: number,
+  input: ReturnType<typeof buildInputsPaceAware>,
+  opts: {
+    spreadLineHome: number | null;
+    totalLine: number | null;
+    eps: number;
+    marginHomeWinNegativeStore: boolean;
+  }
+) {
+  let sumM = 0;
+  let sumT = 0;
+
+  let homeWins = 0;
+  let awayWins = 0;
+
+  let homeCovers = 0;
+  let coverPushes = 0;
+
+  let overs = 0;
+  let totalPushes = 0;
+
+  const { spreadLineHome, totalLine, eps } = opts;
+
+  for (let i = 0; i < sims; i++) {
+    const m = input.marginMean + randn() * input.sigmaMarginGame;
+    const t = Math.max(0, input.totalMean + randn() * input.sigmaTotalGame);
+
+    sumM += m;
+    sumT += t;
+
+    if (m > 0) homeWins++;
+    else if (m < 0) awayWins++;
+
+    if (spreadLineHome != null) {
+      const v = m + spreadLineHome;
+      if (v > eps) homeCovers++;
+      else if (Math.abs(v) <= eps) coverPushes++;
+    }
+
+    if (totalLine != null) {
+      const dv = t - totalLine;
+      if (dv > eps) overs++;
+      else if (Math.abs(dv) <= eps) totalPushes++;
+    }
+  }
+
+  const projectedMarginHome_model = sumM / sims;
+  const projectedTotal = sumT / sims;
+
+  const projectedMarginHome_stored = opts.marginHomeWinNegativeStore ? -projectedMarginHome_model : projectedMarginHome_model;
+
+  const homeWinProb = homeWins / sims;
+  const awayWinProb = awayWins / sims;
+
+  const homeCoverProb = spreadLineHome == null ? null : homeCovers / sims;
+  const coverPushProb = spreadLineHome == null ? null : coverPushes / sims;
+  const awayCoverProb = spreadLineHome == null ? null : 1 - (homeCoverProb ?? 0) - (coverPushProb ?? 0);
+
+  const overProb = totalLine == null ? null : overs / sims;
+  const totalPushProb = totalLine == null ? null : totalPushes / sims;
+  const underProb = totalLine == null ? null : 1 - (overProb ?? 0) - (totalPushProb ?? 0);
+
+  return {
+    projectedMarginHome_model: round2(projectedMarginHome_model),
+    projectedMarginHome_stored: round2(projectedMarginHome_stored),
+    projectedTotal: round2(projectedTotal),
+
+    homeWinProb,
+    awayWinProb,
+
+    homeCoverProb,
+    coverPushProb,
+    awayCoverProb,
+
+    overProb,
+    totalPushProb,
+    underProb,
+  };
+}
+
+/* =========================================================
+   EV PIPELINE (PER SPORT)
 ========================================================= */
 
 async function rebuildEvPlaysForSport(
@@ -520,14 +700,9 @@ async function rebuildEvPlaysForSport(
 
     for (const market of markets) {
       const sides: SideKey[] =
-        market === "h2h"
-          ? ["home", "away"]
-          : market === "spreads"
-          ? ["home", "away"]
-          : ["over", "under"];
+        market === "h2h" ? ["home", "away"] : market === "spreads" ? ["home", "away"] : ["over", "under"];
 
-      const refLine =
-        market === "spreads" ? mc.spread_line_home : market === "totals" ? mc.total_line : null;
+      const refLine = market === "spreads" ? mc.spread_line_home : market === "totals" ? mc.total_line : null;
 
       for (const side of sides) {
         const mcProb = getMcProbForMarket(mc, market, side);
@@ -552,13 +727,7 @@ async function rebuildEvPlaysForSport(
             const offerLine = toNullNum(offer.line);
             if (offerLine == null) continue;
 
-            const expected =
-              market === "spreads"
-                ? side === "home"
-                  ? refLine
-                  : -refLine
-                : refLine;
-
+            const expected = market === "spreads" ? (side === "home" ? refLine : -refLine) : refLine;
             if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
           }
 
@@ -794,11 +963,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
 ========================================================= */
 
 async function createMonteCarloRun(payload: MonteCarloRunInsert): Promise<string> {
-  const { data, error } = await supabase
-    .from("monte_carlo_runs")
-    .insert(payload)
-    .select("id")
-    .single();
+  const { data, error } = await supabase.from("monte_carlo_runs").insert(payload).select("id").single();
   if (error) throw new Error(`[MC] Failed to insert monte_carlo_runs: ${error.message}`);
   if (!data?.id) throw new Error("[MC] Failed to create monte_carlo_runs row (no id).");
   return data.id as string;
@@ -814,9 +979,7 @@ async function upsertMonteCarloResultsSnapshot(rows: MonteCarloResultUpsert[]) {
   for (let i = 0; i < rows.length; i += chunkSize) {
     const batch = rows.slice(i, i + chunkSize);
 
-    const { error } = await supabase
-      .from("monte_carlo_results")
-      .upsert(batch, { onConflict: "sport_key,event_id" });
+    const { error } = await supabase.from("monte_carlo_results").upsert(batch, { onConflict: "sport_key,event_id" });
 
     if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results snapshot: ${error.message}`);
   }
@@ -849,8 +1012,7 @@ function getMcProbForMarket(mc: MonteCarloResultUpsert, market: MarketKey, side:
 }
 
 function oppositeSide(market: MarketKey, side: SideKey): SideKey | null {
-  if (market === "h2h" || market === "spreads")
-    return side === "home" ? "away" : side === "away" ? "home" : null;
+  if (market === "h2h" || market === "spreads") return side === "home" ? "away" : side === "away" ? "home" : null;
   if (market === "totals") return side === "over" ? "under" : side === "under" ? "over" : null;
   return null;
 }
@@ -933,135 +1095,6 @@ function confidenceTier(score: number): string {
 }
 
 /* =========================================================
-   MODEL (PACE-AWARE)
-========================================================= */
-
-/**
- * Core idea:
- * - engine_adj_off / engine_adj_def are per-100
- * - Expected per-100 points:
- *     home_pp100 = home_off + (away_def - 100)
- *     away_pp100 = away_off + (home_def - 100)
- *   (good defense: def < 100 -> reduces opponent points)
- *
- * - Convert to per-game using paceGame/100.
- * - Margin = (home_pts - away_pts) + true_hca
- * - Total = home_pts + away_pts
- * - Sigmas per game = sigma_100 * paceGame/100, then apply floors
- */
-function buildInputsPaceAware(home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
-  const homeOff100 = num(home.engine_adj_off, 100);
-  const homeDef100 = num(home.engine_adj_def, 100);
-  const awayOff100 = num(away.engine_adj_off, 100);
-  const awayDef100 = num(away.engine_adj_def, 100);
-
-  const homePts100 = homeOff100 + (awayDef100 - 100);
-  const awayPts100 = awayOff100 + (homeDef100 - 100);
-
-  const paceFactor = paceGame / 100;
-
-  const homePts = homePts100 * paceFactor;
-  const awayPts = awayPts100 * paceFactor;
-
-  const baseMargin = homePts - awayPts;
-  const hcaPts = num(home.true_hca, 0);
-
-  const marginMean = baseMargin + hcaPts;
-  const totalMean = Math.max(0, homePts + awayPts);
-
-  const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
-  const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
-
-  const sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMargin100 * paceFactor);
-  const sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotal100 * paceFactor);
-
-  return { marginMean, totalMean, sigmaMarginGame, sigmaTotalGame };
-}
-
-function simulateGameWithProbs(
-  sims: number,
-  input: ReturnType<typeof buildInputsPaceAware>,
-  opts: {
-    spreadLineHome: number | null;
-    totalLine: number | null;
-    eps: number;
-    marginHomeWinNegativeStore: boolean;
-  }
-) {
-  let sumM = 0;
-  let sumT = 0;
-
-  let homeWins = 0;
-  let awayWins = 0;
-
-  let homeCovers = 0;
-  let coverPushes = 0;
-
-  let overs = 0;
-  let totalPushes = 0;
-
-  const { spreadLineHome, totalLine, eps } = opts;
-
-  for (let i = 0; i < sims; i++) {
-    const m = input.marginMean + randn() * input.sigmaMarginGame;
-    const t = Math.max(0, input.totalMean + randn() * input.sigmaTotalGame);
-
-    sumM += m;
-    sumT += t;
-
-    if (m > 0) homeWins++;
-    else if (m < 0) awayWins++;
-
-    if (spreadLineHome != null) {
-      const v = m + spreadLineHome;
-      if (v > eps) homeCovers++;
-      else if (Math.abs(v) <= eps) coverPushes++;
-    }
-
-    if (totalLine != null) {
-      const dv = t - totalLine;
-      if (dv > eps) overs++;
-      else if (Math.abs(dv) <= eps) totalPushes++;
-    }
-  }
-
-  const projectedMarginHome_model = sumM / sims;
-  const projectedTotal = sumT / sims;
-
-  const projectedMarginHome_stored = opts.marginHomeWinNegativeStore
-    ? -projectedMarginHome_model
-    : projectedMarginHome_model;
-
-  const homeWinProb = homeWins / sims;
-  const awayWinProb = awayWins / sims;
-
-  const homeCoverProb = spreadLineHome == null ? null : homeCovers / sims;
-  const coverPushProb = spreadLineHome == null ? null : coverPushes / sims;
-  const awayCoverProb = spreadLineHome == null ? null : 1 - (homeCoverProb ?? 0) - (coverPushProb ?? 0);
-
-  const overProb = totalLine == null ? null : overs / sims;
-  const totalPushProb = totalLine == null ? null : totalPushes / sims;
-  const underProb = totalLine == null ? null : 1 - (overProb ?? 0) - (totalPushProb ?? 0);
-
-  return {
-    projectedMarginHome_model: round2(projectedMarginHome_model),
-    projectedMarginHome_stored: round2(projectedMarginHome_stored),
-    projectedTotal: round2(projectedTotal),
-
-    homeWinProb,
-    awayWinProb,
-
-    homeCoverProb,
-    coverPushProb,
-    awayCoverProb,
-
-    overProb,
-    totalPushProb,
-    underProb,
-  };
-}
-
-/* =========================================================
    ODDS + EV MATH
 ========================================================= */
 
@@ -1134,7 +1167,8 @@ function nearlyEqual(a: number, b: number, tol: number) {
 
 // Box–Muller
 function randn() {
-  let u = 0, v = 0;
+  let u = 0,
+    v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
@@ -1148,4 +1182,5 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
 
