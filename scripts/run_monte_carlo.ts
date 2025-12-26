@@ -1,22 +1,20 @@
 /**
- * run_monte_carlo.ts (MULTI-SPORT — FULL REWRITE v2)
+ * run_monte_carlo.ts (MULTI-SPORT — FULL REWRITE v3: SNAPSHOT RESULTS)
  * ------------------------------------------------------------
- * Runs Monte Carlo + EV pipeline for multiple sports in one run.
+ * Goal: monte_carlo_results is a TRUE snapshot table:
+ *   ✅ one row per (sport_key, event_id)
+ *   ✅ overwritten each run (no duplicates)
  *
- * ✅ Multi-sport: SPORT_KEYS=basketball_ncaab,basketball_nba,...
- * ✅ Uses events.sport_key to fetch upcoming events per sport
- * ✅ Uses team_ratings.sport_key filter (critical)
- * ✅ Writes:
- *    - monte_carlo_runs (sport_key)
- *    - monte_carlo_results (sport_key ✅ NEW)
- *    - ev_plays (sport_key)
- * ✅ Clears:
- *    - monte_carlo_results per sport+event_ids (fresh snapshot)
- *    - ev_plays per sport (RPC preferred, fallback delete)
+ * History stays in:
+ *   ✅ monte_carlo_runs (one row per run)
  *
- * Notes:
- * - This script assumes monte_carlo_results has a sport_key column (text)
- * - UI can safely filter monte_carlo_results by sport_key now.
+ * EV stays per run, but also cleared per sport each run:
+ *   ✅ ev_plays (sport_key filter)
+ *
+ * REQUIRED DB SETUP (do this once in Supabase):
+ *   1) Ensure monte_carlo_results has sport_key column (text) ✅ you added
+ *   2) Ensure UNIQUE(sport_key, event_id) on monte_carlo_results
+ *      - then this script uses upsert(... onConflict: "sport_key,event_id")
  */
 
 import "dotenv/config";
@@ -72,10 +70,12 @@ type MonteCarloRunInsert = {
 };
 
 type MonteCarloResultUpsert = {
-  sport_key: string; // ✅ IMPORTANT (new)
-
-  run_id: string;
+  // ✅ snapshot identity
+  sport_key: string;
   event_id: string;
+
+  // ✅ points back to latest run that produced this snapshot row
+  run_id: string;
 
   commence_time: string | null;
   matchup: string | null;
@@ -144,6 +144,7 @@ const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
   process.env.SUPABASE_KEY!;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -227,13 +228,20 @@ async function runForSport(sportKey: string, startCutoff: Date) {
 
   const eventIds = events.map((e) => e.event_id);
 
-  // 2) Clear MC results ONLY for this sport + these events (fresh snapshot)
-  await clearMonteCarloResultsForSportEvents(sportKey, eventIds);
+  // 2) Create run row (history)
+  const runId = await createMonteCarloRun({
+    sport_key: sportKey,
+    config: buildRunConfig(sportKey),
+  });
 
-  // 3) Consensus lines from odds_snapshot
+  // 3) Clear snapshot rows for this sport (hard reset of current slate)
+  //    This guarantees there are never “extra” games lingering.
+  await clearMonteCarloResultsForSport(sportKey);
+
+  // 4) Consensus lines from odds_snapshot
   const lineMap = await fetchConsensusLinesFromOddsSnapshot(eventIds);
 
-  // 4) Ratings for this sport only
+  // 5) Ratings for this sport only
   const teamSet = new Set<string>();
   for (const e of events) {
     if (e.canon_home_team) teamSet.add(e.canon_home_team);
@@ -244,35 +252,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   const ratingMap = new Map<string, TeamRatingRow>();
   for (const r of ratings) ratingMap.set(r.canonical, r);
 
-  // 5) Create run row
-  const runId = await createMonteCarloRun({
-    sport_key: sportKey,
-    config: {
-      sims: SIMS,
-      sigma_margin_floor: SIGMA_MARGIN_FLOOR,
-      sigma_total_floor: SIGMA_TOTAL_FLOOR,
-      total_fallback_mode: TOTAL_FALLBACK_MODE,
-      margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
-      push_eps: EPS,
-      start_grace_minutes: START_GRACE_MINUTES,
-
-      line_source: "consensus(avg latest-per-book from odds_snapshot)",
-      generated_at: new Date().toISOString(),
-
-      quantum_sharp_weight: QUANTUM_SHARP_WEIGHT,
-      quantum_mc_weight: QUANTUM_MC_WEIGHT,
-      kelly_multiplier: KELLY_MULTIPLIER,
-
-      ev_soft_books: SOFT_BOOKS,
-      ev_sharp_books: SHARP_BOOKS,
-
-      min_ev_pct: MIN_EV_PCT,
-      line_tol: LINE_TOL,
-      write_trace: WRITE_TRACE,
-    },
-  });
-
-  // 6) Simulate games
+  // 6) Simulate games -> build snapshot rows
   const results: MonteCarloResultUpsert[] = [];
   const skipped: { event_id: string; reason: string }[] = [];
 
@@ -339,10 +319,10 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       : null;
 
     results.push({
-      sport_key: sportKey, // ✅ CRITICAL FIX
+      sport_key: sportKey,
+      event_id: e.event_id,
       run_id: runId,
 
-      event_id: e.event_id,
       commence_time: e.commence_time ?? null,
       matchup: e.matchup ?? null,
       home_team: home,
@@ -382,14 +362,47 @@ async function runForSport(sportKey: string, startCutoff: Date) {
 
   if (!results.length) {
     console.log(`[MC] (${sportKey}) No results to upsert. Done.`);
+    // Still clear EV plays for sport so UI doesn't show stale EV.
+    await clearEvPlaysForSport(sportKey);
     return;
   }
 
-  await upsertMonteCarloResults(results);
-  console.log(`[MC] (${sportKey}) Upserted ${results.length} rows (run_id=${runId}).`);
+  // 7) Upsert snapshot rows
+  await upsertMonteCarloResultsSnapshot(results);
+  console.log(`[MC] (${sportKey}) Snapshot upserted ${results.length} rows (run_id=${runId}).`);
 
-  // 7) EV snapshot per sport
+  // 8) Rebuild EV per sport
   await rebuildEvPlaysForSport(sportKey, runId, results, eventIds);
+}
+
+/* =========================================================
+   RUN CONFIG
+========================================================= */
+
+function buildRunConfig(sportKey: string) {
+  return {
+    sport_key: sportKey,
+    sims: SIMS,
+    sigma_margin_floor: SIGMA_MARGIN_FLOOR,
+    sigma_total_floor: SIGMA_TOTAL_FLOOR,
+    total_fallback_mode: TOTAL_FALLBACK_MODE,
+    margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
+    push_eps: EPS,
+    start_grace_minutes: START_GRACE_MINUTES,
+    line_source: "consensus(avg latest-per-book from odds_snapshot)",
+    generated_at: new Date().toISOString(),
+
+    quantum_sharp_weight: QUANTUM_SHARP_WEIGHT,
+    quantum_mc_weight: QUANTUM_MC_WEIGHT,
+    kelly_multiplier: KELLY_MULTIPLIER,
+
+    ev_soft_books: SOFT_BOOKS,
+    ev_sharp_books: SHARP_BOOKS,
+
+    min_ev_pct: MIN_EV_PCT,
+    line_tol: LINE_TOL,
+    write_trace: WRITE_TRACE,
+  };
 }
 
 /* =========================================================
@@ -485,6 +498,7 @@ async function rebuildEvPlaysForSport(
 
           inserts.push({
             sport_key: sportKey,
+
             run_id: runId,
             event_id: eid,
             commence_time: mc.commence_time,
@@ -549,7 +563,7 @@ async function fetchFutureEvents(startCutoff: Date, sportKey: string): Promise<E
   const out: EventRow[] = [];
 
   for (const row of data ?? []) {
-    const eid = (row as any).event_id;
+    const eid = String((row as any).event_id || "");
     if (!eid) continue;
     if (seen.has(eid)) continue;
     seen.add(eid);
@@ -602,7 +616,7 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
   const m = new Map<string, OddsSnapshotRow>();
   for (const r of rows) {
     const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
-    if (m.has(k)) continue; // rows are newest->oldest already
+    if (m.has(k)) continue; // newest first
     m.set(k, r);
   }
   return m;
@@ -653,7 +667,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     buckets.set(k2, arr);
   }
 
-  // Consensus = mean of latest-per-book lines
+  // Consensus = mean latest-per-book lines
   for (const [k2, arr] of buckets.entries()) out.set(k2, mean(arr));
 
   // Repairs
@@ -681,35 +695,22 @@ async function createMonteCarloRun(payload: MonteCarloRunInsert): Promise<string
   return data.id as string;
 }
 
-async function clearMonteCarloResultsForSportEvents(sportKey: string, eventIds: string[]) {
-  if (!eventIds.length) return;
-
-  const chunkSize = 500;
-  for (let i = 0; i < eventIds.length; i += chunkSize) {
-    const batch = eventIds.slice(i, i + chunkSize);
-
-    // ✅ Now that results have sport_key, clear precisely.
-    const { error } = await supabase
-      .from("monte_carlo_results")
-      .delete()
-      .eq("sport_key", sportKey)
-      .in("event_id", batch);
-
-    if (error) throw new Error(`[MC] Failed to clear monte_carlo_results (${sportKey}): ${error.message}`);
-  }
+async function clearMonteCarloResultsForSport(sportKey: string) {
+  const { error } = await supabase.from("monte_carlo_results").delete().eq("sport_key", sportKey);
+  if (error) throw new Error(`[MC] Failed to clear monte_carlo_results for sport (${sportKey}): ${error.message}`);
 }
 
-async function upsertMonteCarloResults(rows: MonteCarloResultUpsert[]) {
+async function upsertMonteCarloResultsSnapshot(rows: MonteCarloResultUpsert[]) {
   const chunkSize = 500;
   for (let i = 0; i < rows.length; i += chunkSize) {
     const batch = rows.slice(i, i + chunkSize);
 
-    // Keep your existing conflict target unless you changed constraints.
+    // ✅ SNAPSHOT uniqueness: ONE row per (sport_key, event_id)
     const { error } = await supabase
       .from("monte_carlo_results")
-      .upsert(batch, { onConflict: "run_id,event_id" });
+      .upsert(batch, { onConflict: "sport_key,event_id" });
 
-    if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results: ${error.message}`);
+    if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results snapshot: ${error.message}`);
   }
 }
 
@@ -742,8 +743,7 @@ function getMcProbForMarket(mc: MonteCarloResultUpsert, market: MarketKey, side:
 }
 
 function oppositeSide(market: MarketKey, side: SideKey): SideKey | null {
-  if (market === "h2h" || market === "spreads")
-    return side === "home" ? "away" : side === "away" ? "home" : null;
+  if (market === "h2h" || market === "spreads") return side === "home" ? "away" : side === "away" ? "home" : null;
   if (market === "totals") return side === "over" ? "under" : side === "under" ? "over" : null;
   return null;
 }
@@ -867,7 +867,6 @@ function buildInputs(home: TeamRatingRow, away: TeamRatingRow) {
   const awayPower = num(away.engine_power, 0);
   const homeHca = num(home.true_hca, 0);
 
-  // marginMean is "home - away" in model space
   const marginMean = homePower - awayPower + homeHca;
 
   const homeAvgTotal = toNullNum(home.avg_total_points);
@@ -962,7 +961,6 @@ function simulateGameWithProbs(
   const projectedMarginHome_model = sumM / sims;
   const projectedTotal = sumT / sims;
 
-  // Store convention can flip sign for UI consistency
   const projectedMarginHome_stored = opts.marginHomeWinNegativeStore
     ? -projectedMarginHome_model
     : projectedMarginHome_model;
@@ -1051,3 +1049,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
