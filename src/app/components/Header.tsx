@@ -158,7 +158,7 @@ function HoverDropdown({
           />
           <div className="relative">
             {SPORTS.map((sport) => {
-              const enabled = sport === "NCAAB";
+              const enabled = sport === "NCAAB" || sport === "NBA";
               const title = `${sport} ${suffix}`;
 
               return (
