@@ -20,6 +20,15 @@ export type Screen =
   | "calibration"
   | "settings";
 
+// ✅ match your DB / Odds API sport keys
+export type SportKey =
+  | "basketball_ncaab"
+  | "basketball_nba"
+  | "football_ncaaf"
+  | "football_nfl"
+  | "icehockey_nhl"
+  | "baseball_mlb";
+
 const CT_TZ = "America/Chicago";
 
 // YYYY-MM-DD in Central Time
@@ -41,6 +50,10 @@ export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("overview");
   const [selectedDate, setSelectedDate] = useState<string>(() => ctYmd(new Date()));
 
+  // ✅ Separate sport selectors (Odds vs Predictions)
+  const [oddsSportKey, setOddsSportKey] = useState<SportKey>("basketball_ncaab");
+  const [predSportKey, setPredSportKey] = useState<SportKey>("basketball_ncaab");
+
   // Mobile drawer state
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -59,17 +72,21 @@ export default function App() {
     () => ({
       overview: <OverviewScreen />,
       model: <ModelScreen selectedDate={selectedDate} />,
-      "monte-carlo": <MonteCarloScreen />,
-      odds: <OddsScreen />,
+
+      // ✅ pass sport into Predictions if desired
+      "monte-carlo": <MonteCarloScreen sportKey={predSportKey} />,
+
+      // ✅ THIS is the line you asked about
+      odds: <OddsScreen sportKey={oddsSportKey} />,
+
       results: <ResultsScreen />,
       calibration: <CalibrationScreen />,
       settings: <SettingsScreen />,
     }),
-    [selectedDate]
+    [selectedDate, oddsSportKey, predSportKey]
   );
 
   return (
-    // ✅ Do NOT overflow-hidden the whole app. Let the main area scroll.
     <div className="min-h-screen bg-[#0a0a0a]">
       {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
@@ -89,6 +106,12 @@ export default function App() {
               }}
               variant="mobile"
               onClose={() => setSidebarOpen(false)}
+
+              // ✅ add these props to Sidebar (so it can change the selected sport)
+              oddsSportKey={oddsSportKey}
+              onPickOddsSport={(k: SportKey) => setOddsSportKey(k)}
+              predSportKey={predSportKey}
+              onPickPredSport={(k: SportKey) => setPredSportKey(k)}
             />
           </div>
         </div>
@@ -103,18 +126,25 @@ export default function App() {
         }}
         activeScreen={activeScreen}
         onHeightChange={(px) => setHeaderH(Math.ceil(px))}
+
+        // ✅ add these props to Header (so dropdown selection sets the sport)
+        oddsSportKey={oddsSportKey}
+        onPickOddsSport={(k: SportKey) => {
+          setOddsSportKey(k);
+          setActiveScreen("odds");
+        }}
+        predSportKey={predSportKey}
+        onPickPredSport={(k: SportKey) => {
+          setPredSportKey(k);
+          setActiveScreen("monte-carlo");
+        }}
       />
 
-      {/* ✅ Main Content becomes the scroll container */}
-      <div
-        className="h-screen overflow-y-auto overflow-x-hidden"
-        style={{ paddingTop: headerH }}
-      >
-        {/* ✅ Remove overflow-hidden here so normal pages can scroll */}
-        <div className="p-3 md:p-6 pb-12">
-          {screens[activeScreen]}
-        </div>
+      {/* Main Content scroll container */}
+      <div className="h-screen overflow-y-auto overflow-x-hidden" style={{ paddingTop: headerH }}>
+        <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
       </div>
     </div>
   );
 }
+
