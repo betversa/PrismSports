@@ -121,7 +121,7 @@ async function loadTeamMap(
         `"The Odds API"`,
         `"KenPom"`,
         `"Elo"`,
-        `"TeamRankings"`, // if you add this column later, it will be used automatically
+        `"TR"`, // if you add this column later, it will be used automatically
       ].join(",")
     )
     .not("canonical", "is", null);
@@ -136,7 +136,7 @@ async function loadTeamMap(
 
     const candidates: string[] = [
       canonical,
-      r["TeamRankings"],
+      r["TR"],
       r["SR_School"],
       r["BasketballReference"],
       r["ESPN_Long"],
