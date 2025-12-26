@@ -1,10 +1,12 @@
-// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.2)
-// ✅ Filters by selected sport (sportKey prop) using monte_carlo_runs.sport_key + monte_carlo_results.sport_key
-// ✅ Robust logo + abbreviation mapping from team_map (canonical, Abbreviation, "Logo URL")
-// ✅ Normalized key matching (fixes “some logos missing”)
-// ✅ Desktop: details (Proj Margin/Total + Cons Spread/Total) lives INLINE beside Proj Score (fills dead space)
-// ✅ Mobile: cards + collapsible details, Away/Home headers use team abbreviations (from team_map)
+// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.3)
+// ✅ Mobile stays EXACTLY like v4.2 (cards + collapsible details w/ abbr headers)
+// ✅ Desktop: NO details box anymore
+//    - Adds 4 extra right-side metric columns next to Proj Score / Win%:
+//      Proj Margin | Proj Total | Cons Spread | Cons Total
+//    - Each team row shows its values aligned under those headers (fills dead space)
+// ✅ Logos + abbreviations mapped robustly from team_map (canonical, Abbreviation, "Logo URL")
 // ✅ Consensus derived from odds_snapshot (spreads/totals) for displayed event_ids
+// ✅ Filters by selected sport (sportKey prop) using monte_carlo_runs.sport_key + monte_carlo_results.sport_key
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -27,7 +29,7 @@ type MonteCarloResultRow = {
   home_team: string | null;
   away_team: string | null;
 
-  projected_margin_home: number | null; // stored convention (may be negative for home better depending on your pipeline)
+  projected_margin_home: number | null;
   projected_total: number | null;
 
   projected_home_points: number | null;
@@ -52,8 +54,8 @@ type TeamMapRow = {
 type OddsSnapshotRow = {
   ts: string;
   event_id: string;
-  market: string; // spreads | totals
-  side: string | null; // home/away | over/under (or variants)
+  market: string;
+  side: string | null;
   line: number | null;
   odds: number | null;
   bookmaker: string | null;
@@ -80,12 +82,12 @@ type TeamRow = {
 
   side: SideKey;
   teamName: string;
-  teamAbbr: string; // from team_map
+  teamAbbr: string;
   logoUrl: string | null;
 
   projPoints: number;
 
-  projMarginTeam: number; // margin for THIS team
+  projMarginTeam: number;
   coverProbTeam: number | null;
 
   projTotal: number;
@@ -195,6 +197,17 @@ function medianOrNull(nums: number[]): number | null {
   return (arr[mid - 1] + arr[mid]) / 2;
 }
 
+function fmtSigned1(x: number | null) {
+  if (x == null || !Number.isFinite(x)) return "—";
+  const v = Math.round(x * 10) / 10;
+  return `${v > 0 ? "+" : ""}${v.toFixed(1)}`;
+}
+
+function fmtOU(line: number | null, kind: "o" | "u") {
+  if (line == null || !Number.isFinite(line)) return "—";
+  return `${kind}${(Math.round(line * 10) / 10).toFixed(1)}`;
+}
+
 /** ---------------- Logo component (robust fallback) ---------------- */
 function LogoBox({ team, url, size }: { team: string; url: string | null; size: number }) {
   const [ok, setOk] = React.useState(true);
@@ -222,188 +235,10 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
   );
 }
 
-/** ---------------- Desktop row pieces ---------------- */
-const SCORE_COL_W = 62;
-const WIN_COL_W = 62;
+/** =========================================================
+    MOBILE (UNCHANGED from v4.2 behavior)
+========================================================= */
 
-function TeamLineDesktop({
-  team,
-  abbr,
-  sideLabel,
-  logoUrl,
-  score,
-  winProb,
-  isWinner,
-}: {
-  team: string;
-  abbr: string;
-  sideLabel: "AWAY" | "HOME";
-  logoUrl: string | null;
-  score: number;
-  winProb: number | null;
-  isWinner: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-3 min-w-0">
-      <LogoBox team={team} url={logoUrl} size={44} />
-
-      <div className="min-w-0 leading-tight">
-        <div className="text-[13px] text-white font-extrabold truncate" title={team}>
-          {team}
-        </div>
-        <div className="text-[10px] text-[#7a7a7a] font-semibold">
-          {sideLabel} · {abbr}
-        </div>
-      </div>
-
-      <div className="ml-auto flex items-baseline tabular-nums shrink-0 gap-3">
-        <div
-          className={[
-            "text-right font-extrabold text-[16px]",
-            isWinner ? "text-green-400" : "text-white",
-          ].join(" ")}
-          style={{ width: SCORE_COL_W }}
-        >
-          {score.toFixed(1)}
-        </div>
-        <div className="text-right font-bold text-[12px] text-[#bdbdbd]" style={{ width: WIN_COL_W }}>
-          {formatPct(winProb)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MetricRow({
-  label,
-  away,
-  home,
-  awayHdr,
-  homeHdr,
-}: {
-  label: string;
-  away: React.ReactNode;
-  home: React.ReactNode;
-  awayHdr: string;
-  homeHdr: string;
-}) {
-  return (
-    <div className="grid grid-cols-[86px_1fr_1fr] gap-3 items-center py-2 border-b border-[#141414] last:border-b-0">
-      <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
-      <div className="text-right">
-        <div className="text-[9px] text-[#6f6f6f] font-extrabold uppercase tracking-wide">{awayHdr}</div>
-        <div className="text-[12px] text-white font-bold tabular-nums">{away}</div>
-      </div>
-      <div className="text-right">
-        <div className="text-[9px] text-[#6f6f6f] font-extrabold uppercase tracking-wide">{homeHdr}</div>
-        <div className="text-[12px] text-white font-bold tabular-nums">{home}</div>
-      </div>
-    </div>
-  );
-}
-
-function DesktopInlineDetails({
-  away,
-  home,
-}: {
-  away: TeamRow;
-  home: TeamRow;
-}) {
-  const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
-  const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
-
-  const projTotalOver =
-    away.projTotal ? `o${away.projTotal.toFixed(1)}` : "—";
-  const projTotalUnder =
-    home.projTotal ? `u${home.projTotal.toFixed(1)}` : "—";
-
-  const consSpreadAway =
-    away.consSpreadLineTeam == null
-      ? "—"
-      : `${away.consSpreadLineTeam > 0 ? "+" : ""}${away.consSpreadLineTeam.toFixed(1)} (${formatAmerican(
-          away.consSpreadOddsTeam
-        )})`;
-
-  const consSpreadHome =
-    home.consSpreadLineTeam == null
-      ? "—"
-      : `${home.consSpreadLineTeam > 0 ? "+" : ""}${home.consSpreadLineTeam.toFixed(1)} (${formatAmerican(
-          home.consSpreadOddsTeam
-        )})`;
-
-  const consTotalOver =
-    away.consTotalLine == null
-      ? "—"
-      : `o${away.consTotalLine.toFixed(1)} (${formatAmerican(away.consTotalOverOdds)})`;
-
-  const consTotalUnder =
-    home.consTotalLine == null
-      ? "—"
-      : `u${home.consTotalLine.toFixed(1)} (${formatAmerican(home.consTotalUnderOdds)})`;
-
-  return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
-      <div className="px-4 py-3 border-b border-[#141414]">
-        <div className="text-[11px] text-white font-extrabold">Details</div>
-      </div>
-      <div className="px-4 py-2">
-        <MetricRow
-          label="Proj Margin"
-          away={
-            <>
-              {projMarginAway}{" "}
-              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(away.coverProbTeam)})</span>
-            </>
-          }
-          home={
-            <>
-              {projMarginHome}{" "}
-              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(home.coverProbTeam)})</span>
-            </>
-          }
-          awayHdr={away.teamAbbr}
-          homeHdr={home.teamAbbr}
-        />
-
-        <MetricRow
-          label="Proj Total"
-          away={
-            <>
-              {projTotalOver}{" "}
-              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(away.overProb)})</span>
-            </>
-          }
-          home={
-            <>
-              {projTotalUnder}{" "}
-              <span className="text-[#808080] font-semibold text-[11px]">({formatPct(home.underProb)})</span>
-            </>
-          }
-          awayHdr={`O (${away.teamAbbr})`}
-          homeHdr={`U (${home.teamAbbr})`}
-        />
-
-        <MetricRow
-          label="Cons Spread"
-          away={consSpreadAway}
-          home={consSpreadHome}
-          awayHdr={away.teamAbbr}
-          homeHdr={home.teamAbbr}
-        />
-
-        <MetricRow
-          label="Cons Total"
-          away={consTotalOver}
-          home={consTotalUnder}
-          awayHdr="OVER"
-          homeHdr="UNDER"
-        />
-      </div>
-    </div>
-  );
-}
-
-/** ---------------- Mobile details block (abbr headers) ---------------- */
 function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   const projMarginAway = `${away.projMarginTeam > 0 ? "+" : ""}${away.projMarginTeam.toFixed(1)}`;
   const projMarginHome = `${home.projMarginTeam > 0 ? "+" : ""}${home.projMarginTeam.toFixed(1)}`;
@@ -486,7 +321,151 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   );
 }
 
-/** ---------------- Desktop Event Block (inline details) ---------------- */
+/** =========================================================
+    DESKTOP (NEW: headers + inline columns, NO details area)
+========================================================= */
+
+const DESK_COLS = {
+  score: 64,
+  win: 64,
+  pm: 96, // proj margin
+  pt: 110, // proj total
+  cs: 120, // cons spread
+  ct: 120, // cons total
+};
+
+function DesktopHeaderRow() {
+  const hdr = "text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a]";
+  return (
+    <div className="flex items-end justify-between gap-4">
+      <div className="min-w-0">
+        <div className={hdr}>Matchup</div>
+        <div className="text-[12px] text-[#cfcfcf] font-extrabold truncate"> </div>
+      </div>
+
+      <div className="ml-auto flex items-end gap-3 tabular-nums shrink-0">
+        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.score }}>
+          Proj Score
+        </div>
+        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.win }}>
+          Win%
+        </div>
+        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pm }}>
+          Proj Margin
+        </div>
+        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pt }}>
+          Proj Total
+        </div>
+        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.cs }}>
+          Cons Spread
+        </div>
+        <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.ct }}>
+          Cons Total
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DesktopTeamRow({
+  row,
+  variant,
+}: {
+  row: TeamRow;
+  variant: "AWAY" | "HOME";
+}) {
+  // Per-team display values
+  const projMarginCell = (
+    <>
+      {fmtSigned1(row.projMarginTeam)}{" "}
+      <span className="text-[#808080] font-semibold text-[11px]">({formatPct(row.coverProbTeam)})</span>
+    </>
+  );
+
+  const projTotalCell =
+    variant === "AWAY" ? (
+      <>
+        {fmtOU(row.projTotal, "o")}{" "}
+        <span className="text-[#808080] font-semibold text-[11px]">({formatPct(row.overProb)})</span>
+      </>
+    ) : (
+      <>
+        {fmtOU(row.projTotal, "u")}{" "}
+        <span className="text-[#808080] font-semibold text-[11px]">({formatPct(row.underProb)})</span>
+      </>
+    );
+
+  const consSpreadCell =
+    row.consSpreadLineTeam == null ? (
+      "—"
+    ) : (
+      <>
+        {fmtSigned1(row.consSpreadLineTeam)}{" "}
+        <span className="text-[#808080] font-semibold text-[11px]">({formatAmerican(row.consSpreadOddsTeam)})</span>
+      </>
+    );
+
+  const consTotalCell =
+    row.consTotalLine == null ? (
+      "—"
+    ) : (
+      <>
+        {variant === "AWAY" ? "o" : "u"}
+        {row.consTotalLine.toFixed(1)}{" "}
+        <span className="text-[#808080] font-semibold text-[11px]">
+          ({formatAmerican(variant === "AWAY" ? row.consTotalOverOdds : row.consTotalUnderOdds)})
+        </span>
+      </>
+    );
+
+  return (
+    <div className="flex items-center gap-3 min-w-0">
+      <LogoBox team={row.teamName} url={row.logoUrl} size={44} />
+
+      <div className="min-w-0 leading-tight">
+        <div className="text-[13px] text-white font-extrabold truncate" title={row.teamName}>
+          {row.teamName}
+        </div>
+        <div className="text-[10px] text-[#7a7a7a] font-semibold">
+          {variant} · {row.teamAbbr}
+        </div>
+      </div>
+
+      <div className="ml-auto flex items-baseline gap-3 tabular-nums shrink-0">
+        <div
+          className={[
+            "text-right font-extrabold text-[16px]",
+            row.isProjectedWinner ? "text-green-400" : "text-white",
+          ].join(" ")}
+          style={{ width: DESK_COLS.score }}
+        >
+          {row.projPoints.toFixed(1)}
+        </div>
+
+        <div className="text-right font-bold text-[12px] text-[#bdbdbd]" style={{ width: DESK_COLS.win }}>
+          {formatPct(row.winProbTeam)}
+        </div>
+
+        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.pm }}>
+          {projMarginCell}
+        </div>
+
+        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.pt }}>
+          {projTotalCell}
+        </div>
+
+        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.cs }}>
+          {consSpreadCell}
+        </div>
+
+        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.ct }}>
+          {consTotalCell}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DesktopEventBlock({ ev }: { ev: EventBundle }) {
   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
 
@@ -499,41 +478,16 @@ function DesktopEventBlock({ ev }: { ev: EventBundle }) {
             <div className="text-[12px] text-[#cfcfcf] font-extrabold truncate">{timeLabel}</div>
           </div>
 
-          <div className="flex items-end tabular-nums gap-3 shrink-0">
-            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right" style={{ width: SCORE_COL_W }}>
-              Proj Score
-            </div>
-            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a] text-right" style={{ width: WIN_COL_W }}>
-              Win%
-            </div>
+          {/* headers aligned to columns */}
+          <div className="ml-auto">
+            <DesktopHeaderRow />
           </div>
         </div>
       </div>
 
-      {/* two-column desktop body: left teams, right inline details */}
-      <div className="p-5 grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-4">
-        <div className="space-y-3">
-          <TeamLineDesktop
-            team={ev.away.teamName}
-            abbr={ev.away.teamAbbr}
-            sideLabel="AWAY"
-            logoUrl={ev.away.logoUrl}
-            score={ev.away.projPoints}
-            winProb={ev.away.winProbTeam}
-            isWinner={ev.away.isProjectedWinner}
-          />
-          <TeamLineDesktop
-            team={ev.home.teamName}
-            abbr={ev.home.teamAbbr}
-            sideLabel="HOME"
-            logoUrl={ev.home.logoUrl}
-            score={ev.home.projPoints}
-            winProb={ev.home.winProbTeam}
-            isWinner={ev.home.isProjectedWinner}
-          />
-        </div>
-
-        <DesktopInlineDetails away={ev.away} home={ev.home} />
+      <div className="px-5 py-4 space-y-3">
+        <DesktopTeamRow row={ev.away} variant="AWAY" />
+        <DesktopTeamRow row={ev.home} variant="HOME" />
       </div>
     </div>
   );
@@ -558,9 +512,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     let alive = true;
 
     (async () => {
-      const { data, error } = await supabase
-        .from("team_map")
-        .select('canonical,"Logo URL","Abbreviation"');
+      const { data, error } = await supabase.from("team_map").select('canonical,"Logo URL","Abbreviation"');
 
       if (!alive) return;
 
@@ -947,7 +899,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
         ) : null}
 
         <div className="mt-5 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]">
-          {/* MOBILE */}
+          {/* MOBILE (UNCHANGED behavior) */}
           <div className="md:hidden">
             {loading ? (
               <div className="p-4 text-xs text-[#808080]">Loading Monte Carlo results…</div>
@@ -987,7 +939,12 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                             </div>
                           </div>
                           <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
-                            <div className={["font-extrabold text-[13px]", ev.away.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+                            <div
+                              className={[
+                                "font-extrabold text-[13px]",
+                                ev.away.isProjectedWinner ? "text-green-400" : "text-white",
+                              ].join(" ")}
+                            >
                               {ev.away.projPoints.toFixed(1)}
                             </div>
                             <div className="font-bold text-[10px] text-[#bdbdbd]">{formatPct(ev.away.winProbTeam)}</div>
@@ -1006,7 +963,12 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                             </div>
                           </div>
                           <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
-                            <div className={["font-extrabold text-[13px]", ev.home.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+                            <div
+                              className={[
+                                "font-extrabold text-[13px]",
+                                ev.home.isProjectedWinner ? "text-green-400" : "text-white",
+                              ].join(" ")}
+                            >
                               {ev.home.projPoints.toFixed(1)}
                             </div>
                             <div className="font-bold text-[10px] text-[#bdbdbd]">{formatPct(ev.home.winProbTeam)}</div>
@@ -1022,7 +984,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
             )}
           </div>
 
-          {/* DESKTOP */}
+          {/* DESKTOP (NO DETAILS AREA, columns inline) */}
           <div className="hidden md:block">
             {loading ? (
               <div className="p-8 text-sm text-[#808080]">Loading Monte Carlo results…</div>
@@ -1045,3 +1007,4 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
     </div>
   );
 }
+
