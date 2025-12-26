@@ -1,0 +1,35 @@
+name: Load BR NBA Games -> Supabase
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs daily at 6:10 AM Chicago time (12:10 UTC during CST; close enough year-round)
+    - cron: "10 12 * * *"
+
+jobs:
+  load-br-nba-games:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run BR NBA games loader
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+          # Season config (edit if needed)
+          BR_NBA_SEASON_END_YEAR: "2026"
+          BR_NBA_SEASON: "2025-26"
+        run: npm run games:load:br:nba
