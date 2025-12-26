@@ -1,30 +1,13 @@
-// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE v4.2
-// ✅ Desktop: NO separate “Details” section. All metrics are inline inside the same event block.
-// ✅ Mobile: keeps card layout + toggle, but uses team abbreviations (team_map.abbreviation) instead of AWAY/HOME labels.
-// ✅ Logo reliability fix:
-//    - Use normalized lookup keys so team_map + results match even if spacing/case differs
-//    - Don’t permanently hide <img> on error; show a clean fallback tile instead
+// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE v4.3
+// ✅ Fixes logo regression by matching OddsScreen behavior:
+//    - Build team lookup maps with BOTH exact canonical + normalized keys
+//    - Lookup tries: exact -> normalized -> cleaned
+//    - Never "hide" the <img>; instead swap to a fallback tile when it errors
+// ✅ Mobile “details” header now ALWAYS uses team abbreviation (or derived fallback) — not Away/Home
+// ✅ Desktop: no separate “Details section” — metrics are inline under team rows (same block)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-
-/**
- * MONTE CARLO SCREEN — v4.2 (INLINE METRICS)
- *
- * Desktop:
- * ✅ Centered container, web feel
- * ✅ Event blocks like OddsScreen rhythm
- * ✅ ALWAYS inline all details under the team rows (no separate Details panel / toggle)
- *
- * Mobile:
- * ✅ Card layout + toggle
- * ✅ Side label uses team abbreviation instead of AWAY/HOME
- * ✅ Inline metrics shown when expanded (still no separate Details box)
- *
- * Logos:
- * ✅ normalized key map (fixes mismatch / blanks)
- * ✅ fallback tile on image error (no “logos disappear” bug)
- */
 
 type MonteCarloRun = {
   id: string;
@@ -65,8 +48,8 @@ type TeamMapRow = {
 type OddsSnapshotRow = {
   ts: string;
   event_id: string;
-  market: string; // "spreads" | "totals"
-  side: string | null; // "home"/"away" | "over"/"under"
+  market: string;
+  side: string | null;
   line: number | null;
   odds: number | null;
   bookmaker: string | null;
@@ -93,8 +76,9 @@ type TeamRow = {
 
   side: SideKey;
   teamName: string;
+
   logoUrl: string | null;
-  abbr: string | null;
+  abbr: string; // always non-empty (fallback derived)
 
   projPoints: number;
   projMarginTeam: number;
@@ -123,9 +107,21 @@ type EventBundle = {
   home: TeamRow;
 };
 
-/** ---------- key normalization (logo/abbr map reliability) ---------- */
-function keyOf(s: string | null | undefined) {
+/** ---------- key helpers (logo/abbr map reliability) ---------- */
+function normKey(s: string | null | undefined) {
   return (s ?? "").toString().trim().toLowerCase().replace(/\s+/g, " ");
+}
+function cleanKey(s: string | null | undefined) {
+  // drop punctuation that sometimes differs between feeds
+  return normKey(s).replace(/[^a-z0-9 ]/g, "");
+}
+function deriveAbbr(team: string) {
+  const t = (team ?? "").trim();
+  if (!t) return "—";
+  // Prefer last “word” if it looks like a mascot name; otherwise first 3 letters of full
+  const words = t.split(/\s+/).filter(Boolean);
+  const base = words[0] || t;
+  return base.slice(0, 3).toUpperCase();
 }
 
 /** ---------- Side normalization ---------- */
@@ -152,30 +148,25 @@ function formatTs(ts: string) {
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString();
 }
-
 function formatStartStamp(ts: string) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
-
 function formatAmerican(odds: number) {
   const n = Math.round(Number(odds));
   if (!Number.isFinite(n) || n === 0) return "—";
   return n > 0 ? `+${n}` : `${n}`;
 }
-
 function formatPct(prob01: number | null) {
   const p = Number(prob01);
   if (!Number.isFinite(p)) return "—";
   return `${(p * 100).toFixed(1)}%`;
 }
-
 function fmtLine(x: number | null) {
   if (x == null || !Number.isFinite(Number(x))) return "—";
   const n = Number(x);
-  const s = n > 0 ? "+" : "";
-  return `${s}${n.toFixed(1)}`;
+  return `${n > 0 ? "+" : ""}${n.toFixed(1)}`;
 }
 
 /** ---------- numeric helpers ---------- */
@@ -207,25 +198,16 @@ function medianOrNull(nums: number[]): number | null {
   return (arr[mid - 1] + arr[mid]) / 2;
 }
 
-/** ---------- UI bits ---------- */
-function LogoBox({
-  team,
-  url,
-  size,
-}: {
-  team: string;
-  url: string | null;
-  size: number;
-}) {
+/** ---------- LogoBox (robust) ---------- */
+function LogoBox({ team, url, size }: { team: string; url: string | null; size: number }) {
   const [bad, setBad] = useState(false);
 
-  // if url changes, reset error state
   useEffect(() => {
     setBad(false);
   }, [url]);
 
   const initials = useMemo(() => {
-    const parts = team.split(" ").filter(Boolean);
+    const parts = (team ?? "").split(/\s+/).filter(Boolean);
     const a = parts[0]?.[0] ?? "T";
     const b = parts[1]?.[0] ?? "";
     return (a + b).toUpperCase();
@@ -269,7 +251,7 @@ function TeamLine({
   variant,
 }: {
   team: string;
-  label: string; // desktop: "AWAY"/"HOME", mobile: "DUKE"/"UNC"
+  label: string; // desktop: "AWAY/HOME", mobile: abbreviation
   logoUrl: string | null;
   score: number;
   winProb: number | null;
@@ -344,25 +326,18 @@ function EventHeader({ timeLabel, variant }: { timeLabel: string; variant: "mobi
   );
 }
 
-/** ---------- Inline metrics strip (no “Details” section) ---------- */
+/** ---------- Inline metrics panel (still in same block) ---------- */
 function InlineMetrics({
   away,
   home,
   colA,
   colH,
-  variant,
 }: {
   away: TeamRow;
   home: TeamRow;
-  colA: string; // label for away column (desktop: Away, mobile: DUKE)
-  colH: string; // label for home column (desktop: Home, mobile: UNC)
-  variant: "mobile" | "desktop";
+  colA: string; // for mobile MUST be abbreviation
+  colH: string; // for mobile MUST be abbreviation
 }) {
-  const isMobile = variant === "mobile";
-  const headText = isMobile ? "text-[9px]" : "text-[9px]";
-  const labText = isMobile ? "text-[9px]" : "text-[9px]";
-  const valText = isMobile ? "text-[10px]" : "text-[10px]";
-
   const consSpreadA =
     away.consSpreadLineTeam == null
       ? "—"
@@ -383,9 +358,9 @@ function InlineMetrics({
 
   const Row = (label: string, a: React.ReactNode, h: React.ReactNode) => (
     <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414] last:border-b-0">
-      <div className={["text-[#8a8a8a] font-extrabold uppercase tracking-wide", labText].join(" ")}>{label}</div>
-      <div className={["text-white font-bold tabular-nums text-right", valText].join(" ")}>{a}</div>
-      <div className={["text-white font-bold tabular-nums text-right", valText].join(" ")}>{h}</div>
+      <div className="text-[#8a8a8a] text-[9px] font-extrabold uppercase tracking-wide">{label}</div>
+      <div className="text-white text-[10px] font-bold tabular-nums text-right">{a}</div>
+      <div className="text-white text-[10px] font-bold tabular-nums text-right">{h}</div>
     </div>
   );
 
@@ -394,10 +369,10 @@ function InlineMetrics({
       <div className="px-4 py-2 border-b border-[#141414]">
         <div className="grid grid-cols-3 gap-2 items-center">
           <div />
-          <div className={["text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right truncate", headText].join(" ")}>
+          <div className="text-[#8a8a8a] text-[9px] font-extrabold uppercase tracking-wide text-right truncate">
             {colA}
           </div>
-          <div className={["text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right truncate", headText].join(" ")}>
+          <div className="text-[#8a8a8a] text-[9px] font-extrabold uppercase tracking-wide text-right truncate">
             {colH}
           </div>
         </div>
@@ -435,7 +410,7 @@ function InlineMetrics({
   );
 }
 
-/** ---------- Desktop event block ---------- */
+/** ---------- Desktop event block (no separate details section) ---------- */
 function DesktopEventBlock({ ev }: { ev: EventBundle }) {
   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
 
@@ -467,19 +442,21 @@ function DesktopEventBlock({ ev }: { ev: EventBundle }) {
           />
         </div>
 
-        {/* ✅ Inline metrics (no separate “Details” section) */}
-        <InlineMetrics away={ev.away} home={ev.home} colA="Away" colH="Home" variant="desktop" />
+        {/* Still inline in same block */}
+        <InlineMetrics away={ev.away} home={ev.home} colA="Away" colH="Home" />
       </div>
     </div>
   );
 }
 
-/** ---------- Main Screen ---------- */
 export function MonteCarloScreen() {
   const [run, setRun] = useState<MonteCarloRun | null>(null);
   const [results, setResults] = useState<MonteCarloResultRow[]>([]);
+
+  // IMPORTANT: we store multiple keys so lookup matches OddsScreen even if strings differ slightly
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
+
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
 
@@ -488,11 +465,32 @@ export function MonteCarloScreen() {
   const [loadingConsensus, setLoadingConsensus] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 0) logos + abbreviations (normalized)
+  /** Lookup helpers (try exact -> normalized -> cleaned) */
+  const getLogo = (team: string) => {
+    const exact = team.trim();
+    return (
+      logoMap.get(exact) ??
+      logoMap.get(normKey(exact)) ??
+      logoMap.get(cleanKey(exact)) ??
+      null
+    );
+  };
+  const getAbbr = (team: string) => {
+    const exact = team.trim();
+    return (
+      abbrMap.get(exact) ??
+      abbrMap.get(normKey(exact)) ??
+      abbrMap.get(cleanKey(exact)) ??
+      deriveAbbr(exact)
+    );
+  };
+
+  // 0) team_map: logos + abbreviations
   useEffect(() => {
     let alive = true;
     (async () => {
       const { data, error } = await supabase.from("team_map").select('canonical,abbreviation,"Logo URL"');
+
       if (!alive) return;
 
       if (error) {
@@ -506,14 +504,20 @@ export function MonteCarloScreen() {
       const am = new Map<string, string>();
 
       for (const r of (data ?? []) as TeamMapRow[]) {
-        const canon = (r.canonical ?? "").toString();
-        const k = keyOf(canon);
+        const canonicalRaw = (r.canonical ?? "").toString().trim();
+        if (!canonicalRaw) continue;
 
         const url = (r["Logo URL"] ?? "").toString().trim();
         const abbr = ((r.abbreviation as any) ?? "").toString().trim();
 
-        if (k && url) lm.set(k, url);
-        if (k && abbr) am.set(k, abbr.toUpperCase());
+        const keys = new Set<string>([
+          canonicalRaw, // exact
+          normKey(canonicalRaw), // normalized
+          cleanKey(canonicalRaw), // cleaned
+        ]);
+
+        if (url) for (const k of keys) lm.set(k, url);
+        if (abbr) for (const k of keys) am.set(k, abbr.toUpperCase());
       }
 
       setLogoMap(lm);
@@ -719,7 +723,7 @@ export function MonteCarloScreen() {
     };
   }, [results]);
 
-  // 4) build bundles
+  // 4) bundles
   const events: EventBundle[] = useMemo(() => {
     const out: EventBundle[] = [];
 
@@ -756,17 +760,14 @@ export function MonteCarloScreen() {
       const awayIsWinner = awayPts > homePts;
       const homeIsWinner = homePts > awayPts;
 
-      const awayKey = keyOf(away);
-      const homeKey = keyOf(home);
-
       const awayRow: TeamRow = {
         key: `${r.event_id}-AWAY`,
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
         side: "AWAY",
         teamName: away,
-        logoUrl: logoMap.get(awayKey) ?? null,
-        abbr: abbrMap.get(awayKey) ?? null,
+        logoUrl: getLogo(away),
+        abbr: getAbbr(away),
 
         projPoints: awayPts,
         projMarginTeam: -marginHome,
@@ -794,8 +795,8 @@ export function MonteCarloScreen() {
         commenceTime: r.commence_time ?? null,
         side: "HOME",
         teamName: home,
-        logoUrl: logoMap.get(homeKey) ?? null,
-        abbr: abbrMap.get(homeKey) ?? null,
+        logoUrl: getLogo(home),
+        abbr: getAbbr(home),
 
         projPoints: homePts,
         projMarginTeam: marginHome,
@@ -826,9 +827,9 @@ export function MonteCarloScreen() {
     }
 
     return out;
-  }, [results, logoMap, abbrMap, consensusMap]);
+  }, [results, consensusMap, logoMap, abbrMap]);
 
-  // keep mobile open state aligned
+  // mobile open state
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
@@ -848,9 +849,7 @@ export function MonteCarloScreen() {
             <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">Monte Carlo</h2>
             <div className="text-xs text-[#8a8a8a] mt-1">
               Latest simulation snapshot
-              {run?.created_at ? (
-                <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span>
-              ) : null}
+              {run?.created_at ? <span className="ml-2 text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span> : null}
               {loadingConsensus ? <span className="ml-2 text-[#5a5a5a]">· Loading consensus…</span> : null}
             </div>
           </div>
@@ -883,20 +882,21 @@ export function MonteCarloScreen() {
                   const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
                   const open = !!openMap[ev.eventId];
 
-                  const awayLabel = (ev.away.abbr || "AWAY").toUpperCase();
-                  const homeLabel = (ev.home.abbr || "HOME").toUpperCase();
+                  // ✅ Mobile labels are ALWAYS abbreviations now (with derived fallback)
+                  const awayLabel = ev.away.abbr;
+                  const homeLabel = ev.home.abbr;
 
                   return (
                     <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
-                      <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between">
-                        <div className="min-w-0">
+                      <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
                           <EventHeader timeLabel={timeLabel} variant="mobile" />
                         </div>
 
                         <button
                           type="button"
                           onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                          className="shrink-0 ml-3 text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+                          className="shrink-0 text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
                         >
                           {open ? "Hide" : "More"}
                         </button>
@@ -924,15 +924,7 @@ export function MonteCarloScreen() {
                           />
                         </div>
 
-                        {open ? (
-                          <InlineMetrics
-                            away={ev.away}
-                            home={ev.home}
-                            colA={awayLabel}
-                            colH={homeLabel}
-                            variant="mobile"
-                          />
-                        ) : null}
+                        {open ? <InlineMetrics away={ev.away} home={ev.home} colA={awayLabel} colH={homeLabel} /> : null}
                       </div>
                     </div>
                   );
@@ -964,4 +956,3 @@ export function MonteCarloScreen() {
     </div>
   );
 }
-
