@@ -1,10 +1,11 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Desktop web-first, mobile cards)
-// ✅ Desktop: ALWAYS shows books (no toggle)
-// ✅ Book headers slightly lighter
+// screens/OddsScreen.tsx — FULL REWRITE (Desktop web feel + always-show books)
 // ✅ Filters by sport_key (prop)
-// ✅ Keeps history modal behavior (odds-only, line shown in hover tooltip)
-// ✅ Keeps mobile: cards w/ per-game "Show Books" toggle
-// ✅ Cleaner desktop layout: centered container, web toolbar, sticky headers + matchup col
+// ✅ Desktop: centered max-width “web” layout (less app-like)
+// ✅ Desktop: books ALWAYS shown (no toggle)
+// ✅ Book header bg slightly lighter
+// ✅ Date pills ONLY show dates that actually have displayable games (same filtering as list)
+// ✅ Mobile cards keep “Show/Hide Books” toggle (optional)
+// ✅ History modal unchanged behavior (odds-only, line shown in hover tooltip)
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -34,11 +35,12 @@ type SideOdds = {
   side: "AWAY" | "HOME";
   team: string;
   logoUrl: string | null;
-  updatedAt: string | null;
 
   ml: Record<BookKey, number | null>;
   spread: Record<BookKey, SpreadCell>;
   total: Record<BookKey, TotalCell>;
+
+  updatedAt: string | null;
 };
 
 type EventOdds = {
@@ -52,6 +54,7 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
+/** Public folder book logos */
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -61,20 +64,21 @@ const BOOK_LOGOS: Record<BookKey, string> = {
 };
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 
-/** Desktop layout widths */
-const COL_MATCHUP = 380;
-const COL_CONSENSUS = 180;
-const COL_BOOK = 120;
+/** Desktop layout widths (web-friendly) */
+const COL_MATCHUP = 420;
+const COL_CONSENSUS = 190;
+const COL_BOOK = 122;
 
 const BOOK_LOGO_W = 92;
 const BOOK_LOGO_H = 24;
 
 /** Header colors */
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
-const HDR_BOOK_BG = "bg-[#303030]"; // ✅ slightly lighter than before
+const HDR_BOOK_BG = "bg-[#303030]"; // ✅ slightly lighter than #2a2a2a
 const HDR_TEXT = "text-[#d0d0d0]";
 const HDR_BORDER = "border-[#232323]";
 
+/** Subtle glow for header logos */
 const BOOK_GLOW =
   "drop-shadow(0 1px 0 rgba(0,0,0,0.55)) drop-shadow(0 0 8px rgba(255,255,255,0.10)) drop-shadow(0 0 10px rgba(212,175,55,0.16))";
 
@@ -97,7 +101,11 @@ function fmtCTTimeOnly(iso: string | null | undefined) {
   if (!n) return "—";
   const d = new Date(n);
   if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat("en-US", { timeZone: CT_TZ, hour: "numeric", minute: "2-digit" }).format(d);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
 }
 
 function fmtCTDateTime(iso: string | null | undefined) {
@@ -187,31 +195,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: {
-        line: row.dk_total_line ?? null,
-        over: row.dk_total_over_odds ?? null,
-        under: row.dk_total_under_odds ?? null,
-      },
-      fd: {
-        line: row.fd_total_line ?? null,
-        over: row.fd_total_over_odds ?? null,
-        under: row.fd_total_under_odds ?? null,
-      },
-      mgm: {
-        line: row.mgm_total_line ?? null,
-        over: row.mgm_total_over_odds ?? null,
-        under: row.mgm_total_under_odds ?? null,
-      },
-      pin: {
-        line: row.pin_total_line ?? null,
-        over: row.pin_total_over_odds ?? null,
-        under: row.pin_total_under_odds ?? null,
-      },
-      bol: {
-        line: row.bol_total_line ?? null,
-        over: row.bol_total_over_odds ?? null,
-        under: row.bol_total_under_odds ?? null,
-      },
+      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
+      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
+      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
+      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
+      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
     },
   };
 }
@@ -236,7 +224,6 @@ function cellLineOdds(line: number | null, odds: number | null): CellParts {
   if (line == null) return { top: "—" };
   return { top: String(line), bottom: odds == null ? "—" : `(${odds})` };
 }
-
 function renderCellParts(parts: CellParts) {
   return (
     <div className="flex flex-col items-center justify-center leading-tight">
@@ -252,7 +239,8 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   if (market === "ml") {
     const odds: number[] = [];
     if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
-    return cellMl(median(odds));
+    const mOdds = median(odds);
+    return cellMl(mOdds == null ? null : mOdds);
   }
 
   if (market === "spread") {
@@ -266,7 +254,9 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
         if (typeof o === "number") odds.push(o);
       }
     }
-    return cellLineOdds(median(lines), median(odds));
+    const mLine = median(lines);
+    const mOdds = median(odds);
+    return cellLineOdds(mLine == null ? null : mLine, mOdds == null ? null : mOdds);
   }
 
   // total: AWAY treated as Over, HOME treated as Under
@@ -293,12 +283,12 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   const mOver = median(overOdds);
   const mUnder = median(underOdds);
 
-  if (side === "AWAY") return cellLineOdds(mLine, mOver);
-  return cellLineOdds(mLine, mUnder);
+  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
+  return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
 }
 
 /** =========================
- * HEADER FALLBACK PILL
+ * HEADER FALLBACK
  * ========================= */
 
 function headerFallbackPillDataUri(label: string) {
@@ -343,20 +333,20 @@ function SegButton({
   );
 }
 
-function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) => void }) {
+function Segmented({
+  value,
+  onChange,
+}: {
+  value: Market;
+  onChange: (v: Market) => void;
+}) {
   return (
     <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>
-        Moneyline
-      </SegButton>
+      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>Moneyline</SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>
-        Spread
-      </SegButton>
+      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>Spread</SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "total"} onClick={() => onChange("total")}>
-        Total
-      </SegButton>
+      <SegButton active={value === "total"} onClick={() => onChange("total")}>Total</SegButton>
     </div>
   );
 }
@@ -464,25 +454,33 @@ function MiniTeamRow({
  * CELL GETTERS
  * ========================= */
 
+function cellMlParts(odds: number | null): CellParts {
+  return { top: odds == null ? "—" : String(odds) };
+}
+function cellLineOddsParts(line: number | null, odds: number | null): CellParts {
+  if (line == null) return { top: "—" };
+  return { top: String(line), bottom: odds == null ? "—" : `(${odds})` };
+}
+
 function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
   if (!src) return { top: "—" };
 
-  if (market === "ml") return cellMl(src.ml[book] ?? null);
+  if (market === "ml") return cellMlParts(src.ml[book] ?? null);
 
   if (market === "spread") {
     const c = src.spread[book];
-    return cellLineOdds(c?.line ?? null, c?.odds ?? null);
+    return cellLineOddsParts(c?.line ?? null, c?.odds ?? null);
   }
 
   // total: AWAY is Over, HOME is Under
   const t = src.total[book];
   const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
-  return cellLineOdds(t?.line ?? null, odds);
+  return cellLineOddsParts(t?.line ?? null, odds);
 }
 
 /** =========================
- * HISTORY / CHARTS (UNCHANGED)
+ * HISTORY / CHARTS (unchanged)
  * ========================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
@@ -973,27 +971,21 @@ function LineMovementModal({
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
-            activeMarket === "ml" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
-          }`}
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "ml" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`}
           onClick={() => setActiveMarket("ml")}
           type="button"
         >
           Moneyline
         </button>
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
-            activeMarket === "spread" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
-          }`}
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "spread" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`}
           onClick={() => setActiveMarket("spread")}
           type="button"
         >
           Spread
         </button>
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
-            activeMarket === "total" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
-          }`}
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${activeMarket === "total" ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"}`}
           onClick={() => setActiveMarket("total")}
           type="button"
         >
@@ -1047,7 +1039,7 @@ function LineMovementModal({
 }
 
 /** =========================
- * MOBILE CARD
+ * MOBILE CARD (keeps your toggle)
  * ========================= */
 
 function EventCardMobile({
@@ -1184,10 +1176,10 @@ function EventCardMobile({
 }
 
 /** =========================
- * DESKTOP ROWS (ALWAYS BOOKS)
+ * DESKTOP ROWS (always books)
  * ========================= */
 
-function EventTwoRowsDesktop({
+function EventTwoRows({
   ev,
   market,
   onOpenHistory,
@@ -1204,7 +1196,9 @@ function EventTwoRowsDesktop({
       <tr className="hover:bg-white/5 transition-colors">
         <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+            <div className="text-[12px] text-[#cfcfcf] font-semibold">
+              {fmtCTTimeOnly(ev.commenceTime)} CT
+            </div>
             <button
               type="button"
               onClick={() => onOpenHistory(ev)}
@@ -1240,7 +1234,7 @@ function EventTwoRowsDesktop({
         <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
       </tr>
 
-      {/* subtle spacer row between games */}
+      {/* spacer row between games */}
       <tr>
         <td colSpan={7} className="h-2 bg-transparent" />
       </tr>
@@ -1263,7 +1257,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyEvent, setHistoryEvent] = useState<EventOdds | null>(null);
 
-  // ✅ Mobile only: per-card open/close
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
 
   function openHistory(ev: EventOdds) {
@@ -1281,7 +1274,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
-      .eq("sport_key", sportKey)
+      .eq("sport_key", sportKey) // ✅ critical
       .in("side", ["AWAY", "HOME"])
       .order("commence_time", { ascending: true });
 
@@ -1330,7 +1323,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     setLoading(false);
   }
 
-  // initial + refresh
+  // initial + refresh (sport-sensitive)
   useEffect(() => {
     setLoading(true);
     load();
@@ -1346,17 +1339,36 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     setMarket("spread");
   }, [sportKey]);
 
+  /** ✅ IMPORTANT: availableDates only includes dates that will actually SHOW games */
   const availableDates = useMemo(() => {
+    const todayCt = ctTodayYmd();
+    const nowMs = Date.now();
     const set = new Set<string>();
+
     for (const ev of allEvents) {
-      const d = ctYmdFromIso(ev.commenceTime);
-      if (d) set.add(d);
+      const evDate = ctYmdFromIso(ev.commenceTime);
+      if (!evDate) continue;
+
+      // same “display rules” as the list:
+      // today => only future games count
+      if (evDate === todayCt) {
+        const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
+        if (Number.isFinite(startMs) && startMs > nowMs) set.add(evDate);
+      } else {
+        set.add(evDate);
+      }
     }
+
     return Array.from(set).sort();
   }, [allEvents]);
 
+  // choose a valid selectedDate whenever availableDates changes
   useEffect(() => {
-    if (!availableDates.length) return;
+    if (!availableDates.length) {
+      setSelectedDate("");
+      return;
+    }
+
     const today = ctTodayYmd();
     setSelectedDate((prev) => {
       if (prev && availableDates.includes(prev)) return prev;
@@ -1374,7 +1386,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
-      // Today: show only future games
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -1384,13 +1395,8 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
   }, [allEvents, selectedDate]);
 
-  const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
-  const sportLabel =
-    sportKey === "basketball_nba" ? "NBA Odds"
-      : sportKey === "basketball_ncaab" ? "NCAAB Odds"
-      : "Odds";
-
   useEffect(() => {
+    // keep mobile toggle state aligned to currently shown games
     setMobileOpenMap((prev) => {
       const next: Record<string, boolean> = {};
       for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false;
@@ -1398,55 +1404,76 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
   }, [events]);
 
+  const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
+  const sportLabel =
+    sportKey === "basketball_nba" ? "NBA Odds"
+      : sportKey === "basketball_ncaab" ? "NCAAB Odds"
+      : sportKey === "football_nfl" ? "NFL Odds"
+      : sportKey === "football_ncaaf" ? "NCAAF Odds"
+      : sportKey === "icehockey_nhl" ? "NHL Odds"
+      : sportKey === "baseball_mlb" ? "MLB Odds"
+      : "Odds";
+
   return (
     <div className="w-full">
-      <div className="max-w-[1200px] mx-auto px-4 md:px-6">
-        {/* Page header */}
-        <div className="flex items-start justify-between gap-6 pt-2">
-          <div>
-            <h2 className="text-[22px] md:text-[26px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
-            <div className="text-xs text-[#8a8a8a] mt-1">
-              {headerLabel} · 5 books · Updated every 60 seconds
+      {/* ✅ Desktop web container (more “site” than “app”) */}
+      <div className="max-w-[1320px] mx-auto px-4 md:px-8">
+        {/* Top area */}
+        <div className="pt-4 md:pt-6">
+          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+            <div>
+              <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
+                {sportLabel}
+              </h2>
+              <div className="text-xs text-[#8a8a8a] mt-1">
+                {headerLabel} · 5 books · refresh 60s
+              </div>
+            </div>
+
+            <div className="hidden md:block text-right">
+              <div className="text-[10px] text-[#6a6a6a] font-semibold">Last Updated (CT)</div>
+              <div className="text-xs text-white flex items-center justify-end gap-2">
+                <span className="font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+              </div>
             </div>
           </div>
 
-          <div className="hidden sm:block text-right">
-            <div className="text-[10px] text-[#6a6a6a] font-semibold">Last Updated (CT)</div>
-            <div className="text-xs text-white flex items-center justify-end gap-2">
-              <span className="font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+          {/* Toolbar */}
+          <div className="mt-4 flex flex-col gap-3">
+            {/* Date pills (only dates with games) */}
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+              {availableDates.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setSelectedDate(d)}
+                  className={[
+                    "px-3 py-1.5 rounded-lg text-xs border transition-colors whitespace-nowrap font-extrabold",
+                    selectedDate === d
+                      ? "bg-[#d4af37] text-black border-[#d4af37]"
+                      : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]",
+                  ].join(" ")}
+                  title={d}
+                  type="button"
+                >
+                  {fmtDateBtn(d)}
+                </button>
+              ))}
+
+              {!availableDates.length && (
+                <div className="text-xs text-[#808080]">No games available.</div>
+              )}
             </div>
-          </div>
-        </div>
 
-        {/* Toolbar */}
-        <div className="mt-4 flex flex-col gap-3">
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-            {availableDates.map((d) => (
-              <button
-                key={d}
-                onClick={() => setSelectedDate(d)}
-                className={[
-                  "px-3 py-1.5 rounded-lg text-xs border transition-colors whitespace-nowrap font-extrabold",
-                  selectedDate === d
-                    ? "bg-[#d4af37] text-black border-[#d4af37]"
-                    : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]",
-                ].join(" ")}
-                title={d}
-                type="button"
-              >
-                {fmtDateBtn(d)}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Segmented value={market} onChange={setMarket} />
+            {/* Market */}
+            <div className="flex flex-wrap items-center gap-3">
+              <Segmented value={market} onChange={setMarket} />
+            </div>
           </div>
         </div>
 
         {/* Content card */}
-        <div className="mt-4 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_12px_40px_rgba(0,0,0,0.35)]">
+        <div className="mt-5 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]">
           {/* MOBILE */}
           <div className="md:hidden">
             {loading ? (
@@ -1471,14 +1498,14 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
             )}
           </div>
 
-          {/* DESKTOP */}
+          {/* DESKTOP (always books) */}
           <div className="hidden md:block">
             {loading ? (
-              <div className="p-6 text-sm text-[#808080]">Loading odds…</div>
+              <div className="p-8 text-sm text-[#808080]">Loading odds…</div>
             ) : error ? (
-              <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
+              <div className="p-8 text-sm text-red-400">Supabase error: {error}</div>
             ) : !events.length ? (
-              <div className="p-6 text-sm text-[#808080]">No games for {selectedDate || "—"}.</div>
+              <div className="p-8 text-sm text-[#808080]">No games for {selectedDate || "—"}.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full table-fixed">
@@ -1494,11 +1521,26 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <thead className="sticky top-0 z-20">
                     <tr className={`border-b ${HDR_BORDER}`}>
-                      <th className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}>
+                      <th
+                        className={[
+                          "text-left px-4 py-3",
+                          HDR_LEFT_BG,
+                          HDR_TEXT,
+                          "sticky left-0 z-30 text-[13px] font-extrabold",
+                        ].join(" ")}
+                      >
                         Matchup
                       </th>
 
-                      <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}>
+                      <th
+                        className={[
+                          "text-center px-3 py-3",
+                          HDR_LEFT_BG,
+                          HDR_TEXT,
+                          "z-20 text-[13px] font-extrabold border-l",
+                          HDR_BORDER,
+                        ].join(" ")}
+                      >
                         Consensus
                       </th>
 
@@ -1512,7 +1554,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <tbody>
                     {events.map((ev) => (
-                      <EventTwoRowsDesktop key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} />
+                      <EventTwoRows
+                        key={ev.eventId}
+                        ev={ev}
+                        market={market}
+                        onOpenHistory={openHistory}
+                      />
                     ))}
                   </tbody>
                 </table>
@@ -1526,7 +1573,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
         )}
 
-        <div className="h-10" />
+        <div className="h-12" />
       </div>
     </div>
   );
