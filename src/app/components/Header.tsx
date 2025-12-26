@@ -217,13 +217,10 @@ function HoverDropdown({
                 >
                   <span className="text-[14px] font-medium leading-tight">{title}</span>
 
+                  {/* ✅ Removed right-side SELECTED label entirely */}
                   {!enabled ? (
                     <span className="font-semibold text-[11px]" style={{ color: GOLD }}>
                       COMING SOON
-                    </span>
-                  ) : selected ? (
-                    <span className="font-extrabold text-[11px]" style={{ color: GOLD }}>
-                      SELECTED
                     </span>
                   ) : null}
                 </button>
