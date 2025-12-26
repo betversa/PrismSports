@@ -1,6 +1,7 @@
 // components/Header.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
+import type { SportKey } from "../App"; // <-- adjust if your path differs (e.g. "../../App")
 
 type Screen =
   | "overview"
@@ -16,10 +17,17 @@ type HeaderProps = {
   onNavigate?: (screen: Screen) => void;
   activeScreen?: Screen;
   onHeightChange?: (px: number) => void;
+
+  // ✅ drive sport selection from App.tsx
+  oddsSportKey: SportKey;
+  onPickOddsSport: (k: SportKey) => void;
+
+  predSportKey: SportKey;
+  onPickPredSport: (k: SportKey) => void;
 };
 
-type SportKey = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
-const SPORTS: SportKey[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
+type UiSport = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
+const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
 const GOLD = "#d4af37";
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
@@ -27,6 +35,31 @@ const DROPDOWN_CLOSE_DELAY_MS = 240;
 
 // ✅ simple, distinct from dratings
 const TAGLINE = "Sports Models · Projections · Analysis";
+
+/** =========================
+ * SPORT MAPPING
+ * ========================= */
+function uiToDbSport(s: UiSport): SportKey {
+  switch (s) {
+    case "NCAAB":
+      return "basketball_ncaab";
+    case "NBA":
+      return "basketball_nba";
+    case "NCAAF":
+      return "football_ncaaf";
+    case "NFL":
+      return "football_nfl";
+    case "NHL":
+      return "icehockey_nhl";
+    case "MLB":
+      return "baseball_mlb";
+  }
+}
+
+/** Enable only what you have live */
+function isEnabled(db: SportKey) {
+  return db === "basketball_ncaab" || db === "basketball_nba";
+}
 
 function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
   useEffect(() => {
@@ -71,12 +104,14 @@ function HoverDropdown({
   label,
   active,
   suffix,
-  onPick,
+  selectedDbSport,
+  onPickDbSport,
 }: {
   label: "Odds" | "Predictions";
   active?: boolean;
   suffix: "Odds" | "Predictions";
-  onPick: (sport: SportKey) => void;
+  selectedDbSport: SportKey;
+  onPickDbSport: (sportKey: SportKey) => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -157,33 +192,40 @@ function HoverDropdown({
             }}
           />
           <div className="relative">
-            {SPORTS.map((sport) => {
-              const enabled = sport === "NCAAB" || sport === "NBA";
-              const title = `${sport} ${suffix}`;
+            {SPORTS.map((ui) => {
+              const db = uiToDbSport(ui);
+              const enabled = isEnabled(db);
+              const title = `${ui} ${suffix}`;
+              const selected = selectedDbSport === db;
 
               return (
                 <button
-                  key={sport}
+                  key={ui}
                   type="button"
                   disabled={!enabled}
                   onClick={() => {
                     if (!enabled) return;
-                    onPick(sport);
+                    onPickDbSport(db);
                     setOpen(false);
                   }}
                   className={[
                     "w-full text-left px-4 py-3 flex items-center justify-between",
                     "transition-colors border-b border-[#141414] last:border-b-0",
                     enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
+                    selected ? "bg-[#141414]" : "",
                   ].join(" ")}
                 >
                   <span className="text-[14px] font-medium leading-tight">{title}</span>
 
-                  {!enabled && (
+                  {!enabled ? (
                     <span className="font-semibold text-[11px]" style={{ color: GOLD }}>
                       COMING SOON
                     </span>
-                  )}
+                  ) : selected ? (
+                    <span className="font-extrabold text-[11px]" style={{ color: GOLD }}>
+                      SELECTED
+                    </span>
+                  ) : null}
                 </button>
               );
             })}
@@ -194,7 +236,17 @@ function HoverDropdown({
   );
 }
 
-export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }: HeaderProps) {
+export function Header({
+  onOpenMenu,
+  onNavigate,
+  activeScreen,
+  onHeightChange,
+
+  oddsSportKey,
+  onPickOddsSport,
+  predSportKey,
+  onPickPredSport,
+}: HeaderProps) {
   const headerRef = useRef<HTMLElement>(null);
 
   useLayoutEffect(() => {
@@ -256,15 +308,12 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                 draggable={false}
               />
 
-              {/* ✅ Key fix: flex-1 + 2-line wrap on mobile, 1-line truncate on sm+ */}
               <div className="flex-1 min-w-0">
                 <div
                   className={[
                     "text-[#9a9a9a] font-medium tracking-wide leading-snug",
                     "text-[11px] sm:text-[12px] md:text-[12px]",
-                    // Mobile: allow up to 2 lines (no truncation)
                     "line-clamp-2",
-                    // sm+: force single line and truncate for cleanliness
                     "sm:line-clamp-1 sm:truncate",
                   ].join(" ")}
                 >
@@ -279,19 +328,26 @@ export function Header({ onOpenMenu, onNavigate, activeScreen, onHeightChange }:
                 label="Odds"
                 suffix="Odds"
                 active={oddsActive}
-                onPick={(sport) => {
-                  if (sport === "NCAAB") onNavigate?.("odds");
+                selectedDbSport={oddsSportKey}
+                onPickDbSport={(k) => {
+                  onPickOddsSport(k);
+                  onNavigate?.("odds");
                 }}
               />
+
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
                 active={predsActive}
-                onPick={(sport) => {
-                  if (sport === "NCAAB") onNavigate?.("monte-carlo");
+                selectedDbSport={predSportKey}
+                onPickDbSport={(k) => {
+                  onPickPredSport(k);
+                  onNavigate?.("monte-carlo");
                 }}
               />
+
               <div className="h-5 w-px bg-[#2a2a2a]" />
+
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
               <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
               <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
