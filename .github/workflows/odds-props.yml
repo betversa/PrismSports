@@ -1,0 +1,44 @@
+name: Odds Loader (NBA Props)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */2 * * *" # every 2 hours
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run NBA props loader
+        run: npm run odds:load
+        env:
+          # Secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+          # Mode
+          LOADER_MODE: props
+
+          # Force NBA only
+          SPORT_KEYS: basketball_nba
+
+          # Props config
+          PROPS_MARKETS: ${{ vars.PROPS_MARKETS }}  # player_points,player_rebounds,...
+          BOOKMAKERS: ${{ vars.BOOKMAKERS }}
+
+          # Optional safety valve (defaults to 4 if unset)
+          PROPS_CONCURRENCY: 4
