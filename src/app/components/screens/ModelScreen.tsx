@@ -3,11 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
 /**
- * MODEL PICKS (EV PLAYS)
+ * MODEL PICKS (EV PLAYS) — FULL REWRITE
  *
- * ✅ Uses public.ev_plays (no mock data)
- * ✅ One row per +EV play
+ * ✅ Game EV plays from public.ev_plays
+ * ✅ Player prop +EV plays from public.player_prop_ev_latest
  * ✅ Filter: sportsbook (SOFT books only) — default = All
+ * ✅ Optional filter: All / Game Lines / Player Props
  * ✅ Book column uses square logos in /public/books/
  *    - dksquare.png, fdsquare.png, mgmsquare.png
  * ✅ Bet Amount uses Settings:
@@ -20,36 +21,12 @@ import { supabase } from "../../lib/supabaseClient";
  * - Desktop (md+): Table layout
  */
 
-type MarketKey = "h2h" | "spreads" | "totals";
-type SideKey = "home" | "away" | "over" | "under";
+type GameMarketKey = "h2h" | "spreads" | "totals";
+type GameSideKey = "home" | "away" | "over" | "under";
 
-type EvPlayRow = {
-  run_id: string;
-  event_id: string;
-  commence_time: string | null;
-  matchup: string | null;
-
-  team: string | null;
-
-  market: MarketKey;
-  side: SideKey;
-  line: number | null;
-
-  bookmaker: string;
-  book_odds: number;
-
-  quantum_prob: number;
-  quantum_odds: number;
-  ev_pct: number;
-
-  confidence_score: number;
-  confidence_tier: string;
-
-  kelly_fraction: number;
-  bet_fraction: number;
-
-  created_at?: string;
-};
+// Common
+type SoftBookKey = "all" | "draftkings" | "fanduel" | "betmgm";
+type PlayKind = "all" | "game" | "prop";
 
 type AppSettingsRow = {
   id: number;
@@ -57,8 +34,6 @@ type AppSettingsRow = {
   kelly_factor: number | null;
   max_units_per_play?: number | null;
 };
-
-type SoftBookKey = "all" | "draftkings" | "fanduel" | "betmgm";
 
 const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
   { key: "all", label: "All Books" },
@@ -93,22 +68,30 @@ function american(odds: number) {
   return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
 }
 
-function marketLabel(market: MarketKey) {
-  if (market === "h2h") return "Moneyline";
-  if (market === "spreads") return "Spread";
-  return "Total";
+function safeNum(n: any, fallback = 0) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : fallback;
 }
 
-function sideLabelForDisplay(market: MarketKey, side: SideKey) {
-  if (market === "totals") return side === "over" ? "Over" : "Under";
-  return side === "home" ? "Home" : "Away";
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 
-function fmtLine(market: MarketKey, line: number | null) {
-  if (market === "h2h") return "—";
-  if (line == null || !Number.isFinite(line)) return "—";
-  if (market === "spreads") return `${line > 0 ? "+" : ""}${line}`;
-  return `${line}`;
+function formatMoney(n: number) {
+  if (!Number.isFinite(n)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
+}
+
+function calcBetAmount(bankroll: number, betFraction: number, kellyFactor: number) {
+  const b = Math.max(0, safeNum(bankroll, 0));
+  const f = Math.max(0, safeNum(betFraction, 0));
+  const k = clamp(safeNum(kellyFactor, 0), 0, 1);
+  if (!b || !k || !f) return 0;
+  return b * f * k;
 }
 
 function normalizeBookKey(bookmaker: string): SoftBookKey | "other" {
@@ -135,40 +118,267 @@ function bookFallbackLabel(bookmaker: string) {
   return (bookmaker || "BOOK").toUpperCase();
 }
 
-function safeNum(n: any, fallback = 0) {
-  const x = Number(n);
-  return Number.isFinite(x) ? x : fallback;
+/* =========================================================
+   GAME EV PLAYS (public.ev_plays)
+========================================================= */
+
+type EvPlayRow = {
+  run_id: string;
+  event_id: string;
+  commence_time: string | null;
+  matchup: string | null;
+
+  team: string | null;
+
+  market: GameMarketKey;
+  side: GameSideKey;
+  line: number | null;
+
+  bookmaker: string;
+  book_odds: number;
+
+  quantum_prob: number;
+  quantum_odds: number;
+  ev_pct: number;
+
+  confidence_score: number;
+  confidence_tier: string;
+
+  kelly_fraction: number;
+  bet_fraction: number;
+
+  created_at?: string;
+};
+
+function marketLabelGame(market: GameMarketKey) {
+  if (market === "h2h") return "Moneyline";
+  if (market === "spreads") return "Spread";
+  return "Total";
 }
 
-function formatMoney(n: number) {
-  if (!Number.isFinite(n)) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(n);
+function sideLabelForDisplayGame(market: GameMarketKey, side: GameSideKey) {
+  if (market === "totals") return side === "over" ? "Over" : "Under";
+  return side === "home" ? "Home" : "Away";
 }
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+function fmtLineGame(market: GameMarketKey, line: number | null) {
+  if (market === "h2h") return "—";
+  if (line == null || !Number.isFinite(line)) return "—";
+  if (market === "spreads") return `${line > 0 ? "+" : ""}${line}`;
+  return `${line}`;
 }
 
-function calcBetAmount(bankroll: number, betFraction: number, kellyFactor: number) {
-  const b = Math.max(0, safeNum(bankroll, 0));
-  const f = Math.max(0, safeNum(betFraction, 0));
-  const k = clamp(safeNum(kellyFactor, 0), 0, 1);
-  if (!b || !k || !f) return 0;
-  return b * f * k;
+/* =========================================================
+   PROP EV PLAYS (public.player_prop_ev_latest)
+   CSV columns (high level):
+   - event_id, commence_time, player_name, position, picture_url
+   - market, side, line
+   - book, odds
+   - p_quantum, quantum_fair_odds
+   - ev_pct, kelly_fraction, score
+   - team, opponent
+========================================================= */
+
+type PlayerPropEvLatestRow = {
+  id: string;
+  run_id: string;
+  created_at: string | null;
+
+  sport_key: string | null;
+  event_id: string;
+  commence_time: string | null;
+
+  team: string | null;
+  opponent: string | null;
+
+  fp_id: number | string | null;
+  player_name: string | null;
+  position: string | null;
+  picture_url: string | null;
+
+  market: string | null; // e.g. player_points, player_rebounds...
+  side: string | null; // over/under (or home/away in weird cases)
+  line: number | null;
+
+  book: string; // draftkings/fanduel/betmgm
+  odds: number; // book odds (american)
+
+  p_quantum: number | null;
+  quantum_fair_odds: number; // fair odds (american)
+
+  ev_pct: number;
+  kelly_fraction: number;
+  score: number;
+};
+
+function propMarketLabel(marketRaw: string | null) {
+  const m = (marketRaw || "").toLowerCase();
+
+  if (m.includes("points_rebounds_assists") || m.includes("pra")) return "PRA";
+  if (m.includes("points_assists") || m.includes("pa")) return "PTS+AST";
+  if (m.includes("points_rebounds") || m.includes("pr")) return "PTS+REB";
+  if (m.includes("rebounds_assists") || m.includes("ra")) return "REB+AST";
+
+  if (m.includes("player_points") || m.endsWith("points")) return "Points";
+  if (m.includes("player_rebounds") || m.endsWith("rebounds")) return "Rebounds";
+  if (m.includes("player_assists") || m.endsWith("assists")) return "Assists";
+  if (m.includes("player_threes") || m.includes("3") || m.includes("threes")) return "3PT";
+
+  return marketRaw ? marketRaw.replaceAll("_", " ") : "Prop";
+}
+
+function propSideLabel(sideRaw: string | null) {
+  const s = (sideRaw || "").toLowerCase();
+  if (s === "over") return "Over";
+  if (s === "under") return "Under";
+  if (s === "home") return "Home";
+  if (s === "away") return "Away";
+  return sideRaw || "—";
+}
+
+function fmtPropLine(line: number | null) {
+  if (line == null || !Number.isFinite(line)) return "—";
+  // props should not show + sign typically
+  const rounded = Math.round(line * 100) / 100;
+  return `${rounded}`;
+}
+
+/* =========================================================
+   Unified row for UI
+========================================================= */
+
+type UnifiedRow = {
+  kind: "game" | "prop";
+
+  // common
+  event_id: string;
+  commence_time: string | null;
+  matchup: string | null;
+
+  bookmaker: string; // normalized string (draftkings/fanduel/betmgm)
+  book_odds: number;
+
+  quantum_odds: number; // fair odds
+  ev_pct: number;
+
+  // bet sizing
+  bet_fraction: number; // always present in unified
+  score: number; // confidence / score
+
+  // game-specific
+  game?: {
+    market: GameMarketKey;
+    side: GameSideKey;
+    line: number | null;
+    team: string | null;
+    confidence_tier?: string;
+  };
+
+  // prop-specific
+  prop?: {
+    market: string | null;
+    side: string | null;
+    line: number | null;
+    player_name: string | null;
+    position: string | null;
+    picture_url: string | null;
+    team: string | null;
+    opponent: string | null;
+  };
+
+  created_at?: string | null;
+};
+
+function toUnifiedFromGame(r: EvPlayRow): UnifiedRow {
+  return {
+    kind: "game",
+    event_id: r.event_id,
+    commence_time: r.commence_time ?? null,
+    matchup: r.matchup ?? null,
+    bookmaker: r.bookmaker,
+    book_odds: safeNum(r.book_odds, NaN),
+    quantum_odds: safeNum(r.quantum_odds, NaN),
+    ev_pct: safeNum(r.ev_pct, 0),
+    bet_fraction: clamp(safeNum(r.bet_fraction, 0), 0, 1),
+    score: safeNum(r.confidence_score, 0),
+    game: {
+      market: r.market,
+      side: r.side,
+      line: r.line ?? null,
+      team: r.team ?? null,
+      confidence_tier: r.confidence_tier,
+    },
+    created_at: r.created_at ?? null,
+  };
+}
+
+function toUnifiedFromProp(r: PlayerPropEvLatestRow): UnifiedRow {
+  return {
+    kind: "prop",
+    event_id: r.event_id,
+    commence_time: r.commence_time ?? null,
+    matchup: formatPropMatchup(r.team, r.opponent),
+    bookmaker: r.book,
+    book_odds: safeNum(r.odds, NaN),
+    quantum_odds: safeNum(r.quantum_fair_odds, NaN),
+    ev_pct: safeNum(r.ev_pct, 0),
+    // Use kelly_fraction as bet_fraction (unless you later add bet_fraction to table)
+    bet_fraction: clamp(safeNum(r.kelly_fraction, 0), 0, 1),
+    // score in this table can be wide; keep display sensible
+    score: clamp(safeNum(r.score, 0), 0, 100),
+    prop: {
+      market: r.market ?? null,
+      side: r.side ?? null,
+      line: r.line ?? null,
+      player_name: r.player_name ?? null,
+      position: r.position ?? null,
+      picture_url: r.picture_url ?? null,
+      team: r.team ?? null,
+      opponent: r.opponent ?? null,
+    },
+    created_at: r.created_at ?? null,
+  };
+}
+
+function formatPropMatchup(team: string | null, opponent: string | null) {
+  const a = (team || "").trim();
+  const b = (opponent || "").trim();
+  if (a && b) return `${a} vs ${b}`;
+  if (a) return a;
+  if (b) return b;
+  return "—";
+}
+
+function sortUnified(a: UnifiedRow, b: UnifiedRow) {
+  // 1) soonest commence_time first (nulls last)
+  const ta = a.commence_time ? new Date(a.commence_time).getTime() : Number.POSITIVE_INFINITY;
+  const tb = b.commence_time ? new Date(b.commence_time).getTime() : Number.POSITIVE_INFINITY;
+  if (ta !== tb) return ta - tb;
+
+  // 2) higher EV first
+  const eva = safeNum(a.ev_pct, 0);
+  const evb = safeNum(b.ev_pct, 0);
+  if (evb !== eva) return evb - eva;
+
+  // 3) props after games? (optional) keep stable
+  if (a.kind !== b.kind) return a.kind === "game" ? -1 : 1;
+
+  return 0;
 }
 
 export function ModelScreen() {
   const [bookFilter, setBookFilter] = useState<SoftBookKey>("all");
+  const [kindFilter, setKindFilter] = useState<PlayKind>("all");
+
   const [loading, setLoading] = useState(true);
-  const [rows, setRows] = useState<EvPlayRow[]>([]);
+
+  const [gameRows, setGameRows] = useState<EvPlayRow[]>([]);
+  const [propRows, setPropRows] = useState<PlayerPropEvLatestRow[]>([]);
+
   const [settings, setSettings] = useState<AppSettingsRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Load EV plays + settings
+  // Load plays + settings
   useEffect(() => {
     let mounted = true;
 
@@ -184,7 +394,42 @@ export function ModelScreen() {
           "run_id,event_id,commence_time,matchup,team,market,side,line,bookmaker,book_odds,quantum_prob,quantum_odds,ev_pct,confidence_score,confidence_tier,kelly_fraction,bet_fraction,created_at"
         )
         .gte("commence_time", nowIso)
+        .gt("ev_pct", 0)
         .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
+        .order("commence_time", { ascending: true })
+        .order("ev_pct", { ascending: false });
+
+      const propsQ = supabase
+        .from("player_prop_ev_latest")
+        .select(
+          [
+            "id",
+            "run_id",
+            "created_at",
+            "sport_key",
+            "event_id",
+            "commence_time",
+            "team",
+            "opponent",
+            "fp_id",
+            "player_name",
+            "position",
+            "picture_url",
+            "market",
+            "side",
+            "line",
+            "book",
+            "odds",
+            "p_quantum",
+            "quantum_fair_odds",
+            "ev_pct",
+            "kelly_fraction",
+            "score",
+          ].join(",")
+        )
+        .gte("commence_time", nowIso)
+        .gt("ev_pct", 0)
+        .in("book", ["draftkings", "fanduel", "betmgm"])
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
@@ -194,25 +439,23 @@ export function ModelScreen() {
         .eq("id", 1)
         .limit(1);
 
-      const [evRes, sRes] = await Promise.all([evQ, settingsQ]);
-
+      const [evRes, propsRes, sRes] = await Promise.all([evQ, propsQ, settingsQ]);
       if (!mounted) return;
 
       if (evRes.error) {
         setError(evRes.error.message);
-        setRows([]);
-        setLoading(false);
-        return;
+        setGameRows([]);
+      } else {
+        setGameRows((evRes.data ?? []) as EvPlayRow[]);
       }
 
-      const evRows = (evRes.data ?? []) as EvPlayRow[];
-
-      const filtered =
-        bookFilter === "all"
-          ? evRows
-          : evRows.filter((r) => normalizeBookKey(r.bookmaker) === bookFilter);
-
-      setRows(filtered);
+      if (propsRes.error) {
+        // don't hard-fail the whole screen if props query fails
+        console.warn("[ModelScreen] player_prop_ev_latest error:", propsRes.error.message);
+        setPropRows([]);
+      } else {
+        setPropRows((propsRes.data ?? []) as PlayerPropEvLatestRow[]);
+      }
 
       if (sRes.error) {
         console.warn("[ModelScreen] app_settings error:", sRes.error.message);
@@ -228,7 +471,7 @@ export function ModelScreen() {
     return () => {
       mounted = false;
     };
-  }, [bookFilter]);
+  }, [bookFilter, kindFilter]); // re-run when filters change (simple + consistent)
 
   // Live-refresh settings
   useEffect(() => {
@@ -252,21 +495,48 @@ export function ModelScreen() {
     };
   }, []);
 
+  const unifiedRows = useMemo(() => {
+    const softBooks = ["draftkings", "fanduel", "betmgm"];
+
+    const gamesU = gameRows
+      .filter((r) => softBooks.includes((r.bookmaker || "").toLowerCase()))
+      .map(toUnifiedFromGame);
+
+    const propsU = propRows
+      .filter((r) => softBooks.includes((r.book || "").toLowerCase()))
+      .map(toUnifiedFromProp);
+
+    let all = [...gamesU, ...propsU];
+
+    // book filter
+    if (bookFilter !== "all") {
+      all = all.filter((r) => normalizeBookKey(r.bookmaker) === bookFilter);
+    }
+
+    // kind filter
+    if (kindFilter !== "all") {
+      all = all.filter((r) => r.kind === kindFilter);
+    }
+
+    return all.sort(sortUnified);
+  }, [gameRows, propRows, bookFilter, kindFilter]);
+
   const updatedText = useMemo(() => {
-    const latest = rows
-      .map((r) => r.created_at)
+    const latest = unifiedRows
+      .map((r) => r.created_at ?? null)
       .filter(Boolean)
       .sort()
       .slice(-1)[0];
+
     if (!latest) return "Updated —";
-    const d = new Date(latest);
+    const d = new Date(latest as string);
     const t = d.toLocaleTimeString("en-US", {
       timeZone: "America/Chicago",
       hour: "numeric",
       minute: "2-digit",
     });
     return `Updated ${t} CT`;
-  }, [rows]);
+  }, [unifiedRows]);
 
   const bankroll = safeNum(settings?.bankroll, 0);
   const kellyFactor = clamp(safeNum(settings?.kelly_factor, 0), 0, 1);
@@ -274,8 +544,14 @@ export function ModelScreen() {
 
   const totalBetDollars = useMemo(() => {
     if (!settingsReady) return 0;
-    return rows.reduce((sum, r) => sum + calcBetAmount(bankroll, r.bet_fraction, kellyFactor), 0);
-  }, [rows, bankroll, kellyFactor, settingsReady]);
+    return unifiedRows.reduce((sum, r) => sum + calcBetAmount(bankroll, r.bet_fraction, kellyFactor), 0);
+  }, [unifiedRows, bankroll, kellyFactor, settingsReady]);
+
+  const counts = useMemo(() => {
+    const game = unifiedRows.filter((r) => r.kind === "game").length;
+    const prop = unifiedRows.filter((r) => r.kind === "prop").length;
+    return { total: unifiedRows.length, game, prop };
+  }, [unifiedRows]);
 
   return (
     <div className="space-y-4">
@@ -284,11 +560,19 @@ export function ModelScreen() {
         <div>
           <h2 className="text-xl text-white mb-1">Model Picks</h2>
           <p className="text-xs text-[#808080]">
-            {rows.length} plays · {updatedText}
+            {counts.total} plays · {counts.game} game · {counts.prop} props · {updatedText}
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
+          {/* kind filter */}
+          <div className="inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
+            <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
+            <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
+            <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
+          </div>
+
+          {/* book filter */}
           <select
             value={bookFilter}
             onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
@@ -327,6 +611,7 @@ export function ModelScreen() {
           Loading EV plays…
         </div>
       )}
+
       {error && (
         <div className="text-xs text-red-400 px-3 py-2 bg-[#0f0f0f] border border-red-900/50 rounded">
           Failed to load ev_plays: {error}
@@ -335,15 +620,15 @@ export function ModelScreen() {
 
       {/* MOBILE: cards */}
       <div className="md:hidden space-y-3">
-        {!loading && !rows.length ? (
+        {!loading && !unifiedRows.length ? (
           <div className="text-xs text-[#808080] px-3 py-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded text-center">
-            No positive EV plays found for this book filter.
+            No positive EV plays found for this filter.
           </div>
         ) : null}
 
-        {rows.map((r) => (
-          <PlayCard
-            key={`${r.event_id}|${r.market}|${r.side}|${r.bookmaker}|${r.line ?? "x"}`}
+        {unifiedRows.map((r) => (
+          <UnifiedPlayCard
+            key={unifiedKey(r)}
             row={r}
             bankroll={bankroll}
             kellyFactor={kellyFactor}
@@ -358,12 +643,12 @@ export function ModelScreen() {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[320px]">
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[340px]">
                   Matchup
                 </th>
 
-                <th className="text-left p-3 text-[#808080] min-w-[110px]">Market</th>
-                <th className="text-left p-3 text-[#808080] min-w-[190px]">Pick</th>
+                <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
+                <th className="text-left p-3 text-[#808080] min-w-[260px]">Pick</th>
                 <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
@@ -396,9 +681,9 @@ export function ModelScreen() {
             </thead>
 
             <tbody className="divide-y divide-[#1a1a1a]">
-              {rows.map((r) => (
-                <PlayRow
-                  key={`${r.event_id}|${r.market}|${r.side}|${r.bookmaker}|${r.line ?? "x"}`}
+              {unifiedRows.map((r) => (
+                <UnifiedPlayRow
+                  key={unifiedKey(r)}
                   row={r}
                   bankroll={bankroll}
                   kellyFactor={kellyFactor}
@@ -406,10 +691,10 @@ export function ModelScreen() {
                 />
               ))}
 
-              {!loading && !rows.length && (
+              {!loading && !unifiedRows.length && (
                 <tr>
                   <td colSpan={9} className="p-6 text-center text-xs text-[#808080]">
-                    No positive EV plays found for this book filter.
+                    No positive EV plays found for this filter.
                   </td>
                 </tr>
               )}
@@ -422,7 +707,7 @@ export function ModelScreen() {
       <div className="flex flex-wrap items-center gap-6 text-[10px] text-[#606060] pt-2">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded" />
-          <span>Positive EV (ev_plays)</span>
+          <span>Positive EV (game lines + player props)</span>
         </div>
 
         <div>
@@ -441,37 +726,85 @@ export function ModelScreen() {
 }
 
 /* ===========================
-   Desktop row
+   Helpers
 =========================== */
 
-function PlayRow({
+function unifiedKey(r: UnifiedRow) {
+  if (r.kind === "game") {
+    const g = r.game!;
+    return `g|${r.event_id}|${g.market}|${g.side}|${r.bookmaker}|${g.line ?? "x"}`;
+  }
+  const p = r.prop!;
+  return `p|${r.event_id}|${p.market ?? "m"}|${p.side ?? "s"}|${r.bookmaker}|${p.line ?? "x"}|${p.player_name ?? "player"}`;
+}
+
+function KindPill({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "px-2.5 py-1 text-xs transition-colors",
+        active ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
+      ].join(" ")}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+/* ===========================
+   Desktop row (unified)
+=========================== */
+
+function UnifiedPlayRow({
   row,
   bankroll,
   kellyFactor,
   settingsReady,
 }: {
-  row: EvPlayRow;
+  row: UnifiedRow;
   bankroll: number;
   kellyFactor: number;
   settingsReady: boolean;
 }) {
-  const isTotal = row.market === "totals";
-  const pickLabel = isTotal ? row.matchup ?? row.team ?? "Total" : row.team ?? "—";
-  const sideTxt = sideLabelForDisplay(row.market, row.side);
   const logoSrc = bookLogoSrc(row.bookmaker);
 
   const frac = Math.max(0, safeNum(row.bet_fraction, 0));
   const betAmount = settingsReady ? calcBetAmount(bankroll, frac, kellyFactor) : NaN;
 
+  const marketTxt = row.kind === "game" ? marketLabelGame(row.game!.market) : propMarketLabel(row.prop!.market);
+  const sideTxt =
+    row.kind === "game"
+      ? sideLabelForDisplayGame(row.game!.market, row.game!.side)
+      : propSideLabel(row.prop!.side);
+
+  const lineTxt =
+    row.kind === "game" ? fmtLineGame(row.game!.market, row.game!.line) : fmtPropLine(row.prop!.line);
+
+  const pickNode =
+    row.kind === "game" ? (
+      <div className="text-white">
+        {row.game!.market === "totals" ? row.matchup ?? row.game!.team ?? "Total" : row.game!.team ?? "—"}
+      </div>
+    ) : (
+      <PropPickInline prop={row.prop!} />
+    );
+
   return (
     <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
-      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[320px]">
+      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[340px]">
         <div className="text-white">
           {row.matchup ?? "—"}
           <span className="text-[#606060]"> · </span>
           <span className="text-[#b0b0b0]">{fmtDateCentral(row.commence_time)}</span>
           <span className="text-[#606060]"> </span>
           <span className="text-[#b0b0b0]">{fmtTimeCentral(row.commence_time)}</span>
+          {row.kind === "prop" ? (
+            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+              PROP
+            </span>
+          ) : null}
         </div>
         <div className="text-[10px] text-[#606060] mt-0.5">
           Event: <span className="text-[#404040]">{row.event_id}</span>
@@ -479,16 +812,14 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-left">
-        <div className="text-white">{marketLabel(row.market)}</div>
+        <div className="text-white">{marketTxt}</div>
         <div className="text-[10px] text-[#606060] mt-0.5">{sideTxt}</div>
       </td>
 
-      <td className="p-3 text-left">
-        <div className="text-white">{pickLabel}</div>
-      </td>
+      <td className="p-3 text-left">{pickNode}</td>
 
       <td className="p-3 text-center">
-        <div className="text-white">{fmtLine(row.market, row.line)}</div>
+        <div className="text-white">{lineTxt}</div>
       </td>
 
       <td className="p-3 text-center">
@@ -521,46 +852,71 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-center">
-        <ScoreValue value={row.confidence_score} tier={row.confidence_tier} />
+        <ScoreValue value={row.score} tier={row.kind === "game" ? row.game?.confidence_tier : undefined} />
       </td>
 
       <td className="p-3 text-center">
-        <BetAmountValue amount={betAmount} frac={frac} bankroll={bankroll} kellyFactor={kellyFactor} ready={settingsReady} />
+        <BetAmountValue
+          amount={betAmount}
+          frac={frac}
+          bankroll={bankroll}
+          kellyFactor={kellyFactor}
+          ready={settingsReady}
+        />
       </td>
     </tr>
   );
 }
 
 /* ===========================
-   Mobile card
+   Mobile card (unified)
 =========================== */
 
-function PlayCard({
+function UnifiedPlayCard({
   row,
   bankroll,
   kellyFactor,
   settingsReady,
 }: {
-  row: EvPlayRow;
+  row: UnifiedRow;
   bankroll: number;
   kellyFactor: number;
   settingsReady: boolean;
 }) {
-  const isTotal = row.market === "totals";
-  const pickLabel = isTotal ? row.matchup ?? row.team ?? "Total" : row.team ?? "—";
-  const sideTxt = sideLabelForDisplay(row.market, row.side);
-
   const frac = Math.max(0, safeNum(row.bet_fraction, 0));
   const betAmount = settingsReady ? calcBetAmount(bankroll, frac, kellyFactor) : 0;
 
+  const marketTxt = row.kind === "game" ? marketLabelGame(row.game!.market) : propMarketLabel(row.prop!.market);
+  const sideTxt =
+    row.kind === "game"
+      ? sideLabelForDisplayGame(row.game!.market, row.game!.side)
+      : propSideLabel(row.prop!.side);
+
+  const lineTxt =
+    row.kind === "game" ? fmtLineGame(row.game!.market, row.game!.line) : fmtPropLine(row.prop!.line);
+
   const logoSrc = bookLogoSrc(row.bookmaker);
+
+  const pickLine =
+    row.kind === "game"
+      ? row.game!.market === "totals"
+        ? row.matchup ?? row.game!.team ?? "Total"
+        : row.game!.team ?? "—"
+      : row.prop!.player_name ?? "—";
 
   return (
     <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4">
       {/* Top line: matchup + time */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-white text-sm truncate">{row.matchup ?? "—"}</div>
+          <div className="text-white text-sm truncate">
+            {row.matchup ?? "—"}
+            {row.kind === "prop" ? (
+              <span className="ml-2 align-middle inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                PROP
+              </span>
+            ) : null}
+          </div>
           <div className="text-[11px] text-[#808080] mt-1">
             {fmtDateCentral(row.commence_time)} · {fmtTimeCentral(row.commence_time)}
           </div>
@@ -574,23 +930,30 @@ function PlayCard({
         </div>
       </div>
 
-      {/* Middle: pick + market */}
-      <div className="mt-3 grid grid-cols-2 gap-3">
-        <div>
-          <div className="text-[10px] text-[#606060]">Pick</div>
+      {/* Pick */}
+      <div className="mt-3">
+        {row.kind === "prop" ? (
+          <div className="flex items-center gap-3">
+            <PropAvatar url={row.prop!.picture_url} name={row.prop!.player_name ?? ""} />
+            <div className="min-w-0">
+              <div className="text-white text-sm truncate">
+                {row.prop!.player_name ?? "—"}
+                {row.prop!.position ? <span className="text-[#808080]"> · {row.prop!.position}</span> : null}
+              </div>
+              <div className="text-[11px] text-[#808080] mt-0.5 truncate">
+                {propMarketLabel(row.prop!.market)} · {sideTxt} {lineTxt}
+              </div>
+            </div>
+          </div>
+        ) : (
           <div className="text-white text-sm">
-            {pickLabel}{" "}
+            {pickLine}{" "}
             <span className="text-[#808080] text-xs">
-              · {sideTxt}
-              {row.market !== "h2h" ? ` ${fmtLine(row.market, row.line)}` : ""}
+              · {marketTxt} · {sideTxt}
+              {row.game?.market !== "h2h" ? ` ${lineTxt}` : ""}
             </span>
           </div>
-        </div>
-
-        <div className="text-right">
-          <div className="text-[10px] text-[#606060]">Market</div>
-          <div className="text-white text-sm">{marketLabel(row.market)}</div>
-        </div>
+        )}
       </div>
 
       {/* Bottom: odds row */}
@@ -632,7 +995,7 @@ function PlayCard({
       <div className="mt-3 flex items-center justify-between">
         <div className="text-[10px] text-[#606060]">Score</div>
         <div className="text-sm">
-          <ScoreValue value={row.confidence_score} tier={row.confidence_tier} />
+          <ScoreValue value={row.score} tier={row.kind === "game" ? row.game?.confidence_tier : undefined} />
         </div>
       </div>
 
@@ -642,6 +1005,68 @@ function PlayCard({
           {(frac * 100).toFixed(2)}% × {Math.round(kellyFactor * 100)}% × {formatMoney(bankroll)}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/* ===========================
+   Prop pick UI bits
+=========================== */
+
+function PropAvatar({ url, name }: { url: string | null; name: string }) {
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt={name || "Player"}
+        className="h-8 w-8 rounded-full object-cover border border-[#2a2a2a] bg-[#111] shrink-0"
+        draggable={false}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={(e) => {
+          // fallback to initials circle
+          (e.currentTarget as HTMLImageElement).style.display = "none";
+        }}
+      />
+    );
+  }
+
+  const initials = (name || "P")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0]?.toUpperCase())
+    .join("");
+
+  return (
+    <div className="h-8 w-8 rounded-full border border-[#2a2a2a] bg-[#111] text-[#808080] flex items-center justify-center text-[11px] shrink-0">
+      {initials || "P"}
+    </div>
+  );
+}
+
+function PropPickInline({ prop }: { prop: NonNullable<UnifiedRow["prop"]> }) {
+  const name = prop.player_name ?? "—";
+  const pos = prop.position ? prop.position.toUpperCase() : null;
+
+  const meta = [
+    propMarketLabel(prop.market),
+    propSideLabel(prop.side),
+    prop.line != null ? fmtPropLine(prop.line) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <PropAvatar url={prop.picture_url} name={name} />
+      <div className="min-w-0">
+        <div className="text-white truncate">
+          {name}
+          {pos ? <span className="text-[#808080]"> · {pos}</span> : null}
+        </div>
+        <div className="text-[10px] text-[#606060] mt-0.5 truncate">{meta}</div>
+      </div>
     </div>
   );
 }
