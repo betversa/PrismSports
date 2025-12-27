@@ -1,7 +1,7 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3.1: SHARP SIDE FIX)
-// -----------------------------------------------------------------------------------
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3.2: REQUIRE PINNACLE EXACT LINE)
+// -----------------------------------------------------------------------------------------------
 // ✅ Scrapes FantasyPros season / last7 / last15 for: PTS, REB, AST, 3PM, MIN
 // ✅ Uses only those windows to build mean projections + sigma estimate
 // ✅ Uses odds_wide_latest (team, pin_spread_line, pin_total_line) to context-adjust minutes + mu
@@ -12,6 +12,11 @@
 //    - For each soft-book alt line, "translate" sharp *OVER* prob from nearest sharp line to target line
 //      using a distribution anchored by YOUR sigma (Normal for PTS/REB/AST, Poisson for 3PM).
 //    - IMPORTANT: Translation is solved from P(OVER) always, then UNDER = 1 - OVER.
+// ✅ NEW IN v3.2 (YOUR REQUEST):
+//    - ONLY INSERT a play if PINNACLE EXISTS AT THE EXACT SAME LINE for that event/player/market:
+//      * requires BOTH over+under Pinnacle odds at that exact line
+//      * no BetOnline-only plays
+//      * no "translated-only" Pinnacle (nearest line) plays
 // ✅ Outputs to ONE table: public.player_prop_ev_latest (cleared per run by sport_key)
 // ✅ Includes player picture_url
 //
@@ -230,8 +235,7 @@ function normalCdf(x: number, mu: number, sigma: number): number {
     a5 = 1.061405429;
   const erf =
     1 -
-    (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) *
-      Math.exp(-z * z);
+    (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-z * z);
   const sign = z >= 0 ? 1 : -1;
   return 0.5 * (1 + sign * erf);
 }
@@ -450,15 +454,14 @@ function scrapeAvgPage(html: string): Map<number, { base: any; stats: StatPack }
 }
 
 /* =========================================================
-   SHARP BUILD + TRANSLATION (FIXED)
+   SHARP BUILD + TRANSLATION
 ========================================================= */
 
 function idxKey(event_id: string, player_name: string, market_raw: string) {
   return `${event_id}|${normName(player_name)}|${String(market_raw || "").trim()}`;
 }
 
-// FIX: Always translate from p_over at sharpLine.
-// Then for requested side: over = p_over_target, under = 1 - p_over_target.
+// translate from p_over at sharpLine to targetLine, returns p_over(targetLine)
 function translateSharpOverToTarget(opts: {
   marketOut: "points" | "rebounds" | "assists" | "threes";
   targetLine: number;
@@ -475,26 +478,15 @@ function translateSharpOverToTarget(opts: {
         : null;
     if (!sigma) return null;
 
-    // Solve μ from P_over(L0)=p0_over:
-    // p_over(L0)=1-CDF((L0-μ)/σ)=p0_over => CDF((L0-μ)/σ)=1-p0_over
-    // (L0-μ)/σ = invNorm(1-p0_over) => μ = L0 - σ*invNorm(1-p0_over)
     const z = invNorm(1 - p0_over);
     const muSharp = opts.sharpLine - sigma * z;
-
     return pOverNormal(opts.targetLine, muSharp, sigma);
   }
 
-  // threes: infer lambda from p_over at sharpLine, evaluate p_over at targetLine
   const lambda = inferLambdaFromPoissonOver(opts.sharpLine, p0_over);
   if (lambda == null) return null;
   return pOverPoisson(opts.targetLine, lambda);
 }
-
-type SharpAtTargetResult = {
-  p_sharp: number | null; // side-specific prob
-  sharp_books_used: string | null;
-  sharp_line_used: number | null; // (diagnostic only; nearest line from one of the books)
-};
 
 async function main() {
   const supabaseUrl = process.env.SUPABASE_URL!;
@@ -503,7 +495,6 @@ async function main() {
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-  // Node 18+ has crypto.randomUUID
   // @ts-ignore
   const run_id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `run_${Date.now()}`;
 
@@ -511,7 +502,7 @@ async function main() {
   const nowIso = now.toISOString();
 
   /* -------------------------------------------------------
-     1) Get FUTURE events (defines slate)
+     1) FUTURE events (defines slate)
   -------------------------------------------------------- */
   const { data: events, error: evErr } = await supabase
     .from("events")
@@ -539,8 +530,6 @@ async function main() {
 
   /* -------------------------------------------------------
      2) Pull props snapshot for FUTURE events (ALL books!)
-        NOTE: removed player_id/team/opponent columns.
-        Added home_team/away_team for opponent derivation.
   -------------------------------------------------------- */
   const props: PropsRow[] = [];
   const eventIdList = Array.from(allowedEventIds);
@@ -632,9 +621,7 @@ async function main() {
   apply(map15, "15");
 
   /* -------------------------------------------------------
-     4) Team canonicalization:
-        - Baselines: team_map."Abbreviation" -> canonical
-        - Events (home/away from snapshot): best-effort alias map from team_map values
+     4) Team canonicalization
   -------------------------------------------------------- */
   const { data: teamMapRows, error: tmErr } = await supabase
     .from("team_map")
@@ -650,14 +637,11 @@ async function main() {
     const canon = (r as any).canonical?.toString().trim();
     if (!canon) continue;
 
-    // canonical self
     aliasToCanon.set(normalizeTeamKey(canon), canon);
 
-    // abbreviations for baselines
     const abbr = (r as any)["Abbreviation"]?.toString().trim();
     if (abbr) abbrToCanon.set(abbr, canon);
 
-    // alias columns for event strings
     for (const v of Object.values(r as any)) {
       if (typeof v === "string" && v.trim()) aliasToCanon.set(normalizeTeamKey(v), canon);
     }
@@ -699,9 +683,14 @@ async function main() {
 
   /* -------------------------------------------------------
      6) Build SHARP no-vig index (Pinnacle + BetOnlineAG)
-        key = event|player|marketRaw => list of lines per book
+        AND build a STRICT Pinnacle EXACT-LINE presence index
   -------------------------------------------------------- */
+
+  // sharpIndex: event|player|marketRaw -> list of no-vig lines per book
   const sharpIndex = new Map<string, SharpNoVigLine[]>();
+
+  // exactPinPairs: (event|player|marketRaw|line) -> { over, under }
+  const exactPinPairs = new Map<string, { over: number; under: number }>();
 
   // (event|player|market|book|line) -> {over, under}
   const sharpPairs = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
@@ -715,15 +704,26 @@ async function main() {
     const odds = toNum(r.odds);
     if (!side || line == null || odds == null) continue;
 
-    const k = `${idxKey(r.event_id, r.player_name, r.market)}|${book}|${line}`;
-    const cur = sharpPairs.get(k) ?? { book, line };
+    const base = idxKey(r.event_id, r.player_name, r.market);
 
+    // Strict Pinnacle exact-line presence tracking
+    if (book === "pinnacle") {
+      const kPin = `${base}|${line}`;
+      const cur = exactPinPairs.get(kPin) ?? { over: NaN, under: NaN };
+      if (side === "over") cur.over = odds;
+      if (side === "under") cur.under = odds;
+      exactPinPairs.set(kPin, cur);
+    }
+
+    // General sharp pairing for no-vig build (pin + bol)
+    const k = `${base}|${book}|${line}`;
+    const cur = sharpPairs.get(k) ?? { book, line };
     if (side === "over") cur.over = odds;
     if (side === "under") cur.under = odds;
-
     sharpPairs.set(k, cur);
   }
 
+  // Build no-vig sharpIndex
   for (const [k, v] of sharpPairs.entries()) {
     if (v.over == null || v.under == null) continue;
 
@@ -773,59 +773,14 @@ async function main() {
     return best;
   }
 
-  // FIXED: infer/translate using p_over only; then side-split at the end.
-  function getTranslatedSharpP(opts: {
-    event_id: string;
-    player_name: string;
-    marketRaw: string;
-    marketOut: "points" | "rebounds" | "assists" | "threes";
-    side: "over" | "under";
-    targetLine: number;
-    sigmaAnchor: number | null; // for pts/reb/ast translation
-  }): SharpAtTargetResult {
-    const arr = sharpIndex.get(idxKey(opts.event_id, opts.player_name, opts.marketRaw));
-    if (!arr || arr.length === 0) return { p_sharp: null, sharp_books_used: null, sharp_line_used: null };
-
-    const pin = nearestSharpLine(arr, "pinnacle", opts.targetLine);
-    const bol = nearestSharpLine(arr, "betonlineag", opts.targetLine);
-
-    const translateFrom = (x: SharpNoVigLine | null) => {
-      if (!x) return null;
-      const pOverTarget = translateSharpOverToTarget({
-        marketOut: opts.marketOut,
-        targetLine: opts.targetLine,
-        sharpLine: x.line,
-        pOverAtSharpLine: x.p_over, // ALWAYS p_over here
-        sigmaAnchor: opts.sigmaAnchor,
-      });
-      if (pOverTarget == null) return null;
-      return opts.side === "over" ? pOverTarget : 1 - pOverTarget;
-    };
-
-    const pPin = translateFrom(pin);
-    const pBol = translateFrom(bol);
-
-    if (pPin != null && pBol != null) {
-      return {
-        p_sharp: clamp((pPin + pBol) / 2, 0, 1),
-        sharp_books_used: "pinnacle+betonlineag",
-        sharp_line_used: pin?.line ?? bol?.line ?? null,
-      };
-    }
-    if (pPin != null) {
-      return { p_sharp: clamp(pPin, 0, 1), sharp_books_used: "pinnacle", sharp_line_used: pin?.line ?? null };
-    }
-    if (pBol != null) {
-      return { p_sharp: clamp(pBol, 0, 1), sharp_books_used: "betonlineag", sharp_line_used: bol?.line ?? null };
-    }
-    return { p_sharp: null, sharp_books_used: null, sharp_line_used: null };
-  }
-
   /* -------------------------------------------------------
      7) Build final EV rows (SOFT books only)
+        NEW RULE: Require Pinnacle BOTH SIDES at EXACT SAME LINE
   -------------------------------------------------------- */
   const out: any[] = [];
   const created_at = new Date().toISOString();
+
+  let dropped_no_pin_exact = 0;
 
   for (const r of props) {
     const eid = String(r.event_id || "");
@@ -862,6 +817,19 @@ async function main() {
     const line = toNum(r.line);
     const odds = toNum(r.odds);
     if (line == null || odds == null) continue;
+
+    // ✅ STRICT PINNACLE PRESENCE CHECK (exact same line, both sides)
+    const pinKey = `${idxKey(r.event_id, r.player_name, r.market)}|${line}`;
+    const pinPair = exactPinPairs.get(pinKey);
+    const hasPinExact =
+      pinPair &&
+      Number.isFinite(pinPair.over) &&
+      Number.isFinite(pinPair.under);
+
+    if (!hasPinExact) {
+      dropped_no_pin_exact++;
+      continue;
+    }
 
     // Opponent (best effort) from snapshot home/away
     const homeCanon = canonTeam(r.home_team);
@@ -939,24 +907,41 @@ async function main() {
 
     if (mu == null || p_model == null) continue;
 
-    // SHARP probability at this line (FIXED side logic)
-    const sharp = getTranslatedSharpP({
-      event_id: r.event_id,
-      player_name: r.player_name,
-      marketRaw: r.market,
+    // ✅ SHARP probability: still computed using the sharpIndex,
+    // but because we REQUIRE pinnacle exact pair at this line, we also require
+    // a pinnacle sharp entry exists (it should, unless your sharpIndex build missed it).
+    const arr = sharpIndex.get(idxKey(r.event_id, r.player_name, r.market));
+    const pin = arr ? nearestSharpLine(arr, "pinnacle", line) : null;
+
+    if (!pin || pin.book !== "pinnacle") {
+      // Extremely rare: pinnacle exists in snapshot but wasn’t paired into sharpIndex.
+      // (Example: duplicate names/market strings mismatch.)
+      dropped_no_pin_exact++;
+      continue;
+    }
+
+    // Translate from Pinnacle (if same line, this is effectively identity)
+    const pOverTarget = translateSharpOverToTarget({
       marketOut,
-      side,
       targetLine: line,
+      sharpLine: pin.line,
+      pOverAtSharpLine: pin.p_over,
       sigmaAnchor: marketOut === "threes" ? null : sigma,
     });
 
-    const p_sharp = sharp.p_sharp;
+    if (pOverTarget == null) {
+      dropped_no_pin_exact++;
+      continue;
+    }
 
-    // Quantum probability
-    const p_quantum =
-      p_sharp != null
-        ? clamp(p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP, 0, 1)
-        : p_model;
+    const p_sharp = side === "over" ? pOverTarget : 1 - pOverTarget;
+
+    // Quantum probability (model + sharp)
+    const p_quantum = clamp(
+      p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP,
+      0,
+      1
+    );
 
     const quantum_fair_odds = impliedProbToAmerican(p_quantum);
     const book_implied_prob = americanToImpliedProb(odds);
@@ -1007,10 +992,6 @@ async function main() {
       ev_pct: ev_pct_val,
       kelly_fraction: kellyFraction(p_quantum, odds),
       score,
-
-      // optional diagnostics if your table has the cols:
-      // sharp_books_used: sharp.sharp_books_used,
-      // sharp_line_used: sharp.sharp_line_used,
     });
   }
 
@@ -1027,8 +1008,7 @@ async function main() {
     if (insErr) throw insErr;
   }
 
-  // Diagnostics: check complement sanity on same (event,player,market,line,book)
-  // (We don't enforce here, just report.)
+  // Diagnostics: check p_sharp fill rate
   let sharpFilled = 0;
   let sharpNull = 0;
 
@@ -1043,6 +1023,7 @@ async function main() {
         ok: true,
         run_id,
         inserted_rows: out.length,
+        dropped_no_pin_exact,
         p_sharp_filled: sharpFilled,
         p_sharp_null: sharpNull,
         sharp_fill_rate: out.length ? Number((sharpFilled / out.length) * 100).toFixed(1) + "%" : "—",
@@ -1057,4 +1038,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
