@@ -6,12 +6,12 @@
 // ✅ Highlights the BEST book for that play
 // ✅ Filters: Play Type (All / Game Lines / Player Props) + Book (All / DK / FD / MGM)
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor with best book’s bet fraction
-// ✅ Details modal shows ODDS HISTORY chart for that exact side (DK/FD/MGM)
-// ✅ FIX: Player prop odds history now matches your real history schema:
-//    - bookmaker (NOT book)
-//    - ts (NOT snapshot_ts)
-//    - market values like player_assists (NOT assists)
-// ✅ Fallback: tries player_props_history first, then player_props_snapshot
+// ✅ NEW: Click any row/card to open a Details modal (offers + sizing + meta)
+// ✅ NEW: Details modal shows ODDS HISTORY chart for that exact side (DK/FD/MGM)
+// ✅ FIX (your issue): Props odds history now matches on *event_id + player_name + market + side (+bookmaker)*
+//    - DOES NOT require line match
+//    - Converts player_prop_ev_latest market (e.g. "assists") -> history market key ("player_assists")
+//    - Uses player_props_history (bookmaker/ts) with fallback to player_props_snapshot (book/snapshot_ts)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -89,11 +89,11 @@ type PlayerPropEvLatestRow = {
   position: string | null;
   picture_url: string | null;
 
-  market: string | null; // stored as: points/rebounds/assists/threes (from your builder)
-  side: string | null;   // over/under
+  market: string | null; // often "assists"/"points"/"rebounds"/"threes"
+  side: string | null;   // "over"/"under"
   line: number | null;
 
-  book: string;          // draftkings/fanduel/betmgm
+  book: string;          // "draftkings"/"fanduel"/"betmgm"
   odds: number;
 
   p_quantum: number | null;
@@ -145,10 +145,11 @@ type AggregatedPlay = {
     position: string | null;
     picture_url: string | null;
 
-    // IMPORTANT: keep both “latest” values and “history-table” values aligned
-    market_latest?: string | null;   // assists
-    market_hist?: string | null;     // player_assists
-    side_raw?: string | null;        // over/under
+    // IMPORTANT: keep the market/side as stored in player_prop_ev_latest
+    // We'll map to history keys during the history query
+    market_raw?: string | null;
+    side_raw?: string | null;
+
     line?: number | null;
     p_quantum?: number | null;
   };
@@ -179,9 +180,11 @@ const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
 /* History tables */
 const GAME_HISTORY_TABLE = "odds_history";
 
-// ✅ Try “history” first, then snapshot as fallback
-const PROP_HISTORY_PRIMARY = "player_props_history";
-const PROP_HISTORY_FALLBACK = "player_props_snapshot";
+// ✅ Primary prop-history table (matches your CSV columns: bookmaker + ts)
+const PROP_HISTORY_TABLE_PRIMARY = "player_props_history";
+
+// ✅ Fallback older snapshot table (some environments still use this)
+const PROP_HISTORY_TABLE_FALLBACK = "player_props_snapshot";
 
 /* =========================================================
    Formatting helpers
@@ -292,10 +295,10 @@ function propMarketLabel(marketRaw: string | null) {
   if (m.includes("points_rebounds") || m.includes("pr")) return "PTS+REB";
   if (m.includes("rebounds_assists") || m.includes("ra")) return "REB+AST";
 
-  if (m.includes("player_points") || m.endsWith("points")) return "Points";
-  if (m.includes("player_rebounds") || m.endsWith("rebounds")) return "Rebounds";
-  if (m.includes("player_assists") || m.endsWith("assists")) return "Assists";
-  if (m.includes("player_threes") || m.includes("threes") || m.includes("3")) return "3PT";
+  if (m.includes("player_points") || m === "points") return "Points";
+  if (m.includes("player_rebounds") || m === "rebounds") return "Rebounds";
+  if (m.includes("player_assists") || m === "assists") return "Assists";
+  if (m.includes("player_threes") || m === "threes" || m.includes("3")) return "3PT";
 
   return marketRaw ? marketRaw.replaceAll("_", " ") : "Prop";
 }
@@ -314,27 +317,6 @@ function fmtPropLine(line: number | null) {
 }
 
 /* =========================================================
-   Market translation for history matching
-========================================================= */
-
-// player_prop_ev_latest.market is stored as: points/rebounds/assists/threes (from builder)
-// history rows market is: player_points/player_rebounds/player_assists/player_threes
-function toPropHistoryMarket(marketLatest: string | null) {
-  const m = (marketLatest || "").toLowerCase().trim();
-  if (!m) return null;
-
-  if (m.startsWith("player_")) return m;
-
-  if (m === "points") return "player_points";
-  if (m === "rebounds") return "player_rebounds";
-  if (m === "assists") return "player_assists";
-  if (m === "threes" || m === "3pt" || m === "3pm") return "player_threes";
-
-  // If you later store raw (player_assists etc), this will still work.
-  return m;
-}
-
-/* =========================================================
    PlayKey builders (how we dedupe)
 ========================================================= */
 
@@ -347,7 +329,8 @@ function gamePlayKey(r: EvPlayRow) {
 
 function propPlayKey(r: PlayerPropEvLatestRow) {
   // Unique per: event + player + market + side + line
-  const pid = r.fp_id != null ? String(r.fp_id) : (r.player_name || "").trim().toLowerCase();
+  const pid =
+    r.fp_id != null ? String(r.fp_id) : (r.player_name || "").trim().toLowerCase();
   const market = (r.market || "").trim().toLowerCase();
   const side = (r.side || "").trim().toLowerCase();
   const line = r.line == null ? "x" : String(r.line);
@@ -355,7 +338,7 @@ function propPlayKey(r: PlayerPropEvLatestRow) {
 }
 
 /* =========================================================
-   Aggregation
+   Aggregation helpers
 ========================================================= */
 
 function chooseBestOffer(
@@ -457,6 +440,42 @@ function collapseHistory(
   return Array.from(map.values()).sort(
     (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime()
   );
+}
+
+/**
+ * ✅ Converts player_prop_ev_latest market values to the history-table market keys.
+ * Examples:
+ *  - "assists" -> "player_assists"
+ *  - "player_assists" -> "player_assists" (already)
+ *  - "points" -> "player_points"
+ *  - "rebounds" -> "player_rebounds"
+ *  - "threes" -> "player_threes"
+ */
+function toPropHistoryMarket(marketRaw: string | null): string | null {
+  const m = (marketRaw || "").trim().toLowerCase();
+  if (!m) return null;
+  if (m.startsWith("player_")) return m;
+
+  if (m === "points") return "player_points";
+  if (m === "rebounds") return "player_rebounds";
+  if (m === "assists") return "player_assists";
+  if (m === "threes" || m === "3pt" || m === "3pm" || m === "3s") return "player_threes";
+
+  // combos
+  if (m === "pra" || m.includes("points_rebounds_assists")) return "player_points_rebounds_assists";
+  if (m === "pa" || m.includes("points_assists")) return "player_points_assists";
+  if (m === "pr" || m.includes("points_rebounds")) return "player_points_rebounds";
+  if (m === "ra" || m.includes("rebounds_assists")) return "player_rebounds_assists";
+
+  // last resort: keep it (in case your history already uses non-player_ keys)
+  return m;
+}
+
+function toOverUnderSide(sideRaw: string | null): "over" | "under" | null {
+  const s = (sideRaw || "").trim().toLowerCase();
+  if (s === "over") return "over";
+  if (s === "under") return "under";
+  return null;
 }
 
 /* =========================================================
@@ -683,8 +702,6 @@ export function ModelScreen() {
       const key = propPlayKey(r);
       const existing = map.get(key);
 
-      const marketHist = toPropHistoryMarket(r.market);
-
       const base: AggregatedPlay =
         existing ??
         ({
@@ -714,9 +731,7 @@ export function ModelScreen() {
             player_name: r.player_name ?? null,
             position: r.position ?? null,
             picture_url: r.picture_url ?? null,
-
-            market_latest: r.market ?? null,
-            market_hist: marketHist,
+            market_raw: r.market ?? null,
             side_raw: r.side ?? null,
             line: r.line ?? null,
             p_quantum: r.p_quantum ?? null,
@@ -792,7 +807,10 @@ export function ModelScreen() {
 
   const totalBetDollars = useMemo(() => {
     if (!settingsReady) return 0;
-    return filtered.reduce((sum, p) => sum + calcBetAmount(bankroll, p.bestBetFraction, kellyFactor), 0);
+    return filtered.reduce(
+      (sum, p) => sum + calcBetAmount(bankroll, p.bestBetFraction, kellyFactor),
+      0
+    );
   }, [filtered, bankroll, kellyFactor, settingsReady]);
 
   const counts = useMemo(() => {
@@ -846,7 +864,10 @@ export function ModelScreen() {
           </div>
 
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Total Bet: <span className="text-[#d4af37]">{totalBetDollars ? formatMoney(totalBetDollars) : "—"}</span>
+            Total Bet:{" "}
+            <span className="text-[#d4af37]">
+              {totalBetDollars ? formatMoney(totalBetDollars) : "—"}
+            </span>
           </div>
         </div>
       </div>
@@ -970,8 +991,8 @@ export function ModelScreen() {
 
         {!settingsReady ? (
           <div className="text-[#808080]">
-            Set <span className="text-white">Bankroll</span> and <span className="text-white">Kelly Factor</span> in
-            Settings to enable bet amounts.
+            Set <span className="text-white">Bankroll</span> and{" "}
+            <span className="text-white">Kelly Factor</span> in Settings to enable bet amounts.
           </div>
         ) : null}
       </div>
@@ -1147,7 +1168,9 @@ function PlayCard({
             <div className="min-w-0">
               <div className="text-white text-sm truncate">
                 {play.pickLabel}
-                {play.propMeta?.position ? <span className="text-[#808080]"> · {play.propMeta.position}</span> : null}
+                {play.propMeta?.position ? (
+                  <span className="text-[#808080]"> · {play.propMeta.position}</span>
+                ) : null}
               </div>
               <div className="text-[11px] text-[#808080] mt-0.5 truncate">
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel}
@@ -1202,7 +1225,8 @@ function PlayCard({
       {/* sizing breakdown */}
       {settingsReady && betAmount > 0 ? (
         <div className="mt-2 text-[10px] text-[#606060] tabular-nums">
-          {(play.bestBetFraction * 100).toFixed(2)}% × {Math.round(kellyFactor * 100)}% × {formatMoney(bankroll)}
+          {(play.bestBetFraction * 100).toFixed(2)}% × {Math.round(kellyFactor * 100)}% ×{" "}
+          {formatMoney(bankroll)}
         </div>
       ) : null}
     </div>
@@ -1366,7 +1390,7 @@ function PlayDetailsModal({
                   </div>
                 </div>
 
-                {/* ✅ Fixed odds history */}
+                {/* ✅ Odds history chart */}
                 <OddsHistoryMiniChart play={play} />
 
                 <div className="text-[10px] text-[#606060]">
@@ -1383,7 +1407,9 @@ function PlayDetailsModal({
                     <div className="mt-2 space-y-1 text-[11px] text-[#d0d0d0]">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[#808080]">Bankroll</span>
-                        <span className="tabular-nums text-white">{bankroll ? formatMoney(bankroll) : "—"}</span>
+                        <span className="tabular-nums text-white">
+                          {bankroll ? formatMoney(bankroll) : "—"}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[#808080]">Kelly Factor</span>
@@ -1391,7 +1417,9 @@ function PlayDetailsModal({
                       </div>
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[#808080]">Best Book Fraction</span>
-                        <span className="tabular-nums text-white">{(play.bestBetFraction * 100).toFixed(2)}%</span>
+                        <span className="tabular-nums text-white">
+                          {(play.bestBetFraction * 100).toFixed(2)}%
+                        </span>
                       </div>
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[#808080]">Best EV</span>
@@ -1458,12 +1486,14 @@ function PlayDetailsModal({
                       <MetaRow k="Opponent" v={play.propMeta?.opponent ?? "—"} />
                       <MetaRow
                         k="Position"
-                        v={play.propMeta?.position ? String(play.propMeta.position).toUpperCase() : "—"}
+                        v={
+                          play.propMeta?.position
+                            ? String(play.propMeta.position).toUpperCase()
+                            : "—"
+                        }
                       />
-                      <MetaRow k="Market (latest)" v={play.propMeta?.market_latest ?? "—"} mono />
-                      <MetaRow k="Market (history)" v={play.propMeta?.market_hist ?? "—"} mono />
-                      <MetaRow k="Side" v={play.propMeta?.side_raw ?? "—"} mono />
-                      <MetaRow k="Line" v={play.propMeta?.line != null ? String(play.propMeta.line) : "—"} mono />
+                      <MetaRow k="Market raw" v={play.propMeta?.market_raw ?? "—"} mono />
+                      <MetaRow k="Side raw" v={play.propMeta?.side_raw ?? "—"} mono />
                       <MetaRow
                         k="p_quantum"
                         v={
@@ -1504,44 +1534,8 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History chart (modal) — FIXED for props
+   Odds History chart (modal) — FIXED FOR PROPS
 ========================================================= */
-
-async function fetchPropHistoryRows(opts: {
-  event_id: string;
-  player_name: string;
-  market_hist: string;
-  side: "over" | "under";
-  line: number;
-}) {
-  // Try primary table first (history), then fallback (snapshot)
-  const tryTable = async (table: string) => {
-    // Your CSV shows: bookmaker + ts + odds + market + side + line + player_name
-    const q = supabase
-      .from(table)
-      .select("event_id,player_name,market,side,line,odds,bookmaker,ts,inserted_at,created_at,run_id")
-      .eq("event_id", opts.event_id)
-      .eq("player_name", opts.player_name)
-      .eq("market", opts.market_hist)
-      .eq("side", opts.side)
-      .eq("line", opts.line)
-      .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
-      .order("ts", { ascending: true });
-
-    return q;
-  };
-
-  // Attempt primary
-  const primary = await tryTable(PROP_HISTORY_PRIMARY);
-  if (!primary.error) return { table: PROP_HISTORY_PRIMARY, data: primary.data ?? [] };
-
-  // If table missing or column mismatch, try fallback
-  const fallback = await tryTable(PROP_HISTORY_FALLBACK);
-  if (!fallback.error) return { table: PROP_HISTORY_FALLBACK, data: fallback.data ?? [] };
-
-  // Return the fallback error (more likely to exist) for debugging
-  return { table: PROP_HISTORY_FALLBACK, data: [] as any[], error: fallback.error ?? primary.error };
-}
 
 function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
   const [rows, setRows] = useState<HistoryPoint[]>([]);
@@ -1585,36 +1579,114 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           }
 
           setRows(collapseHistory(data ?? [], "bookmaker", "odds", "ts", "created_at"));
-        } else {
-          const pm = play.propMeta;
-          if (!pm?.player_name || !pm.market_hist || !pm.side_raw || pm.line == null) {
-            if (mounted) setRows([]);
+          return;
+        }
+
+        // ✅ PROPS: relaxed matching, no line requirement
+        const pm = play.propMeta;
+        const playerName = (pm?.player_name ?? play.pickLabel ?? "").trim();
+        const side = toOverUnderSide(pm?.side_raw ?? play.sideLabel);
+        const historyMarket = toPropHistoryMarket(pm?.market_raw ?? play.marketLabel);
+
+        if (!playerName || !side || !historyMarket) {
+          if (mounted) setRows([]);
+          return;
+        }
+
+        // 1) Primary: player_props_history (bookmaker, ts)
+        {
+          const q1 = supabase
+            .from(PROP_HISTORY_TABLE_PRIMARY)
+            .select(
+              [
+                "event_id",
+                "player_name",
+                "market",
+                "side",
+                "bookmaker",
+                "odds",
+                "ts",
+                "created_at",
+                "snapshot_ts",
+                "inserted_at",
+              ].join(",")
+            )
+            .eq("event_id", play.event_id)
+            .eq("player_name", playerName)
+            .eq("market", historyMarket)
+            .eq("side", side)
+            .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
+            .order("ts", { ascending: true });
+
+          const { data, error } = await q1;
+          if (!mounted) return;
+
+          if (!error && (data?.length ?? 0) > 0) {
+            setRows(
+              collapseHistory(
+                data ?? [],
+                "bookmaker",
+                "odds",
+                "ts",
+                "snapshot_ts",
+                "inserted_at",
+                "created_at"
+              )
+            );
             return;
           }
 
-          const side = String(pm.side_raw).toLowerCase() === "under" ? "under" : "over";
+          if (error) {
+            // not fatal — we’ll fallback
+            console.warn("[OddsHistoryMiniChart] prop primary history error:", error.message);
+          }
+        }
 
-          const res = await fetchPropHistoryRows({
-            event_id: play.event_id,
-            player_name: pm.player_name,
-            market_hist: pm.market_hist,
-            side,
-            line: Number(pm.line),
-          });
+        // 2) Fallback: player_props_snapshot (book, snapshot_ts)
+        {
+          const q2 = supabase
+            .from(PROP_HISTORY_TABLE_FALLBACK)
+            .select(
+              [
+                "event_id",
+                "player_name",
+                "market",
+                "side",
+                "book",
+                "odds",
+                "snapshot_ts",
+                "ts",
+                "created_at",
+                "inserted_at",
+              ].join(",")
+            )
+            .eq("event_id", play.event_id)
+            .eq("player_name", playerName)
+            .eq("market", historyMarket)
+            .eq("side", side)
+            .in("book", ["draftkings", "fanduel", "betmgm"])
+            .order("snapshot_ts", { ascending: true });
 
+          const { data, error } = await q2;
           if (!mounted) return;
 
-          if ((res as any).error) {
-            console.warn(
-              "[OddsHistoryMiniChart] prop history error:",
-              (res as any).error?.message ?? "unknown"
-            );
+          if (error) {
+            console.warn("[OddsHistoryMiniChart] prop fallback history error:", error.message);
             setRows([]);
             return;
           }
 
-          // ✅ Your history uses bookmaker + ts (and inserted_at exists too)
-          setRows(collapseHistory(res.data ?? [], "bookmaker", "odds", "ts", "inserted_at", "created_at"));
+          setRows(
+            collapseHistory(
+              data ?? [],
+              "book",
+              "odds",
+              "snapshot_ts",
+              "ts",
+              "inserted_at",
+              "created_at"
+            )
+          );
         }
       } finally {
         if (mounted) setLoading(false);
@@ -1669,7 +1741,11 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             <Tooltip
               formatter={(v: any) => american(Number(v))}
               labelFormatter={(l) => `CT ${fmtHourMinCT(String(l))}`}
-              contentStyle={{ background: "#0b0b0b", border: "1px solid #2a2a2a", color: "#d0d0d0" }}
+              contentStyle={{
+                background: "#0b0b0b",
+                border: "1px solid #2a2a2a",
+                color: "#d0d0d0",
+              }}
             />
             <Legend />
             <Line type="monotone" dataKey="draftkings" name="DK" dot={false} strokeWidth={2} />
