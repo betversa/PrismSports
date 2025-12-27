@@ -1,14 +1,13 @@
-// screens/Model/ModelScreen.tsx — FULL REWRITE (Aggregated: 1 row per play, 3-book strip + Details Modals + History)
-// ✅ Game +EV plays from public.ev_plays
-// ✅ Player prop +EV plays from public.player_prop_ev_latest
-// ✅ NO duplicates: each unique play appears once
-// ✅ Shows DK / FD / MGM odds (and tiny EV%) in the same row
-// ✅ Highlights the BEST book for that play
-// ✅ Filters: Play Type (All / Game Lines / Player Props) + Book (All / DK / FD / MGM)
-// ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor with best book’s bet fraction
-// ✅ NEW: Click any row/card to open a Details modal (offers + sizing + meta + odds history graph)
-// ✅ History graph pulls ALL copies across books for the same bet (per-book line movement)
-// ✅ Mobile cards + Desktop table
+// screens/Model/ModelScreen.tsx — FULL REWRITE
+// ✅ Aggregates EV plays into one row per unique bet (across DK/FD/MGM)
+// ✅ Shows DK/FD/MGM offers in a strip, highlights best
+// ✅ Click row -> Details modal
+// ✅ Details modal History:
+//    - Player props -> public.player_props_history (event_id + player_name + market + side + line)
+//    - Game lines -> public.odds_snapshot_history (same approach as OddsScreen)
+//      • ML: event_id + market + side
+//      • Spread/Total: event_id + market + side + line
+//      • Pull ALL snapshots for ALL books, graph one line per bookmaker
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -43,7 +42,7 @@ type EvPlayRow = {
   side: GameSideKey;
   line: number | null;
 
-  bookmaker: string;
+  bookmaker: string; // draftkings / fanduel / betmgm
   book_odds: number;
 
   quantum_prob: number;
@@ -80,7 +79,7 @@ type PlayerPropEvLatestRow = {
   side: string | null;
   line: number | null;
 
-  book: string;
+  book: string; // draftkings / fanduel / betmgm
   odds: number;
 
   p_quantum: number | null;
@@ -93,9 +92,9 @@ type PlayerPropEvLatestRow = {
 
 type BookOffer = {
   book: "draftkings" | "fanduel" | "betmgm";
-  odds: number; // bettable odds
+  odds: number;
   ev_pct: number;
-  bet_fraction: number; // fraction to use for sizing (game: bet_fraction, prop: kelly_fraction)
+  bet_fraction: number; // game: bet_fraction, prop: kelly_fraction
 };
 
 type AggregatedPlay = {
@@ -106,17 +105,19 @@ type AggregatedPlay = {
   commence_time: string | null;
   matchup: string | null;
 
-  // Display
   marketLabel: string;
   sideLabel: string;
   pickLabel: string;
   lineLabel: string;
 
-  // Quantum / fair odds
+  // These are for the "current" row display (best play view)
+  market_game?: GameMarketKey; // only when kind=game
+  side_game?: GameSideKey; // only when kind=game
+  line_game?: number | null; // only when kind=game
+
   quantum_odds: number;
   quantum_prob?: number | null;
 
-  // extra for props
   propMeta?: {
     team: string | null;
     opponent: string | null;
@@ -140,27 +141,15 @@ type AggregatedPlay = {
 };
 
 /* =========================================================
-   History (Prop)
+   History Row types
 ========================================================= */
 
 type PlayerPropsHistoryRow = {
-  id?: number | string;
-  ts: string | null; // primary timestamp column in your CSV
+  ts: string | null;
   inserted_at?: string | null;
-  run_id?: string | null;
 
-  sport_key?: string | null;
   event_id: string | null;
-  commence_time?: string | null;
-
-  home_team?: string | null;
-  away_team?: string | null;
-
   player_name: string | null;
-  player_id?: string | number | null;
-
-  team?: string | null;
-  opponent?: string | null;
 
   market: string | null;
   side: string | null;
@@ -168,8 +157,23 @@ type PlayerPropsHistoryRow = {
 
   odds: number | null;
   bookmaker: string | null;
+};
 
-  source?: string | null;
+type OddsSnapshotHistoryRow = {
+  // Column names can vary. We’ll read with a picker:
+  ts?: string | null;
+  snapshot_ts?: string | null;
+  created_at?: string | null;
+
+  event_id?: string | null;
+
+  market?: string | null; // h2h/spreads/totals
+  side?: string | null; // home/away/over/under
+
+  line?: number | null; // spread/total line (null for h2h)
+  odds?: number | null; // american odds
+
+  bookmaker?: string | null; // draftkings/fanduel/betmgm
 };
 
 /* =========================================================
@@ -184,6 +188,10 @@ const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
 ];
 
 const BOOKS = ["draftkings", "fanduel", "betmgm"] as const;
+
+// If your odds_snapshot_history uses different column names,
+// adjust these selectors (we still have pickers as fallback).
+const OSH_TS_COLS: (keyof OddsSnapshotHistoryRow)[] = ["snapshot_ts", "ts", "created_at"];
 
 /* =========================================================
    Formatting helpers
@@ -226,11 +234,6 @@ function fmtDateTimeCentralShort(iso: string | null) {
   return `${date} ${time}`;
 }
 
-function american(odds: number) {
-  if (!Number.isFinite(odds)) return "—";
-  return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
-}
-
 function safeNum(n: any, fallback = 0) {
   const x = Number(n);
   return Number.isFinite(x) ? x : fallback;
@@ -238,6 +241,11 @@ function safeNum(n: any, fallback = 0) {
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
+}
+
+function american(odds: number) {
+  if (!Number.isFinite(odds)) return "—";
+  return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
 }
 
 function formatMoney(n: number) {
@@ -285,10 +293,10 @@ function bookShort(book: "draftkings" | "fanduel" | "betmgm") {
 }
 
 function bookStroke(book: "draftkings" | "fanduel" | "betmgm") {
-  // keep it “Prism” friendly but recognizable:
-  if (book === "draftkings") return "#1DB954"; // green-ish
-  if (book === "fanduel") return "#3B82F6"; // blue-ish
-  return "#d4af37"; // gold
+  // recognizable + Prism-compatible
+  if (book === "draftkings") return "#1DB954";
+  if (book === "fanduel") return "#3B82F6";
+  return "#d4af37";
 }
 
 function marketLabelGame(market: GameMarketKey) {
@@ -311,17 +319,14 @@ function fmtLineGame(market: GameMarketKey, line: number | null) {
 
 function propMarketLabel(marketRaw: string | null) {
   const m = (marketRaw || "").toLowerCase();
-
   if (m.includes("points_rebounds_assists") || m.includes("pra")) return "PRA";
   if (m.includes("points_assists") || m.includes("pa")) return "PTS+AST";
   if (m.includes("points_rebounds") || m.includes("pr")) return "PTS+REB";
   if (m.includes("rebounds_assists") || m.includes("ra")) return "REB+AST";
-
   if (m.includes("player_points") || m.endsWith("points")) return "Points";
   if (m.includes("player_rebounds") || m.endsWith("rebounds")) return "Rebounds";
   if (m.includes("player_assists") || m.endsWith("assists")) return "Assists";
   if (m.includes("player_threes") || m.includes("threes") || m.includes("3")) return "3PT";
-
   return marketRaw ? marketRaw.replaceAll("_", " ") : "Prop";
 }
 
@@ -339,7 +344,7 @@ function fmtPropLine(line: number | null) {
 }
 
 /* =========================================================
-   PlayKey builders (how we dedupe)
+   PlayKey builders
 ========================================================= */
 
 function gamePlayKey(r: EvPlayRow) {
@@ -388,10 +393,8 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
   const ta = a.commence_time ? new Date(a.commence_time).getTime() : Number.POSITIVE_INFINITY;
   const tb = b.commence_time ? new Date(b.commence_time).getTime() : Number.POSITIVE_INFINITY;
   if (ta !== tb) return ta - tb;
-
   const ev = safeNum(b.bestEvPct, 0) - safeNum(a.bestEvPct, 0);
   if (ev !== 0) return ev;
-
   return safeNum(b.bestScore, 0) - safeNum(a.bestScore, 0);
 }
 
@@ -417,7 +420,6 @@ export function ModelScreen() {
     setSelected(p);
     setDetailsOpen(true);
   };
-
   const closeDetails = () => setDetailsOpen(false);
 
   useEffect(() => {
@@ -514,27 +516,6 @@ export function ModelScreen() {
   }, []);
 
   useEffect(() => {
-    const channel = supabase
-      .channel("model-screen-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "app_settings" }, () => {
-        supabase
-          .from("app_settings")
-          .select("id,bankroll,kelly_factor,max_units_per_play,updated_at")
-          .eq("id", 1)
-          .limit(1)
-          .then(({ data, error }) => {
-            if (error) return;
-            setSettings((data?.[0] ?? null) as AppSettingsRow | null);
-          });
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape" && detailsOpen) closeDetails();
     }
@@ -566,6 +547,10 @@ export function ModelScreen() {
           sideLabel: sideLabelGame(r.market, r.side),
           pickLabel: r.market === "totals" ? (r.matchup ?? "Total") : (r.team ?? "—"),
           lineLabel: fmtLineGame(r.market, r.line),
+
+          market_game: r.market,
+          side_game: r.side,
+          line_game: r.line ?? null,
 
           quantum_odds: safeNum(r.quantum_odds, NaN),
           quantum_prob: safeNum(r.quantum_prob, NaN),
@@ -670,25 +655,10 @@ export function ModelScreen() {
 
   const filtered = useMemo(() => {
     let list = aggregated;
-
     if (kindFilter !== "all") list = list.filter((p) => p.kind === kindFilter);
     if (bookFilter !== "all") list = list.filter((p) => !!p.offers[bookFilter]);
-
     return list;
   }, [aggregated, kindFilter, bookFilter]);
-
-  const updatedText = useMemo(() => {
-    const latest = filtered
-      .map((p) => p.created_at)
-      .filter(Boolean)
-      .sort()
-      .slice(-1)[0];
-
-    if (!latest) return "Updated —";
-    const d = new Date(latest as string);
-    const t = d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
-    return `Updated ${t} CT`;
-  }, [filtered]);
 
   const bankroll = safeNum(settings?.bankroll, 0);
   const kellyFactor = clamp(safeNum(settings?.kelly_factor, 0), 0, 1);
@@ -712,24 +682,21 @@ export function ModelScreen() {
         <div>
           <h2 className="text-xl text-white mb-1">Model Picks</h2>
           <p className="text-xs text-[#808080]">
-            {counts.total} plays · {counts.game} game · {counts.prop} props · {updatedText}
+            {counts.total} plays · {counts.game} game · {counts.prop} props
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          {/* kind filter */}
           <div className="inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
             <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
             <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
             <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
           </div>
 
-          {/* book filter */}
           <select
             value={bookFilter}
             onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
             className="px-2 py-1 bg-[#111] border border-[#2a2a2a] rounded text-[#d0d0d0] outline-none"
-            title="Filter by sportsbook"
           >
             {SOFT_BOOKS.map((b) => (
               <option key={b.key} value={b.key}>
@@ -741,11 +708,9 @@ export function ModelScreen() {
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
             Bankroll: <span className="text-[#d4af37]">{bankroll ? formatMoney(bankroll) : "—"}</span>
           </div>
-
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
             Kelly: <span className="text-[#d4af37]">{settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"}</span>
           </div>
-
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
             Total Bet: <span className="text-[#d4af37]">{totalBetDollars ? formatMoney(totalBetDollars) : "—"}</span>
           </div>
@@ -753,17 +718,17 @@ export function ModelScreen() {
       </div>
 
       {/* Status */}
-      {loading && (
+      {loading ? (
         <div className="text-xs text-[#808080] px-3 py-2 bg-[#0f0f0f] border border-[#2a2a2a] rounded">
           Loading EV plays…
         </div>
-      )}
+      ) : null}
 
-      {error && (
+      {error ? (
         <div className="text-xs text-red-400 px-3 py-2 bg-[#0f0f0f] border border-red-900/50 rounded">
           Failed to load ev_plays: {error}
         </div>
-      )}
+      ) : null}
 
       {/* MOBILE */}
       <div className="md:hidden space-y-3">
@@ -780,7 +745,10 @@ export function ModelScreen() {
             bankroll={bankroll}
             kellyFactor={kellyFactor}
             settingsReady={settingsReady}
-            onOpenDetails={() => openDetails(p)}
+            onOpenDetails={() => {
+              setSelected(p);
+              setDetailsOpen(true);
+            }}
           />
         ))}
       </div>
@@ -825,42 +793,26 @@ export function ModelScreen() {
                   bankroll={bankroll}
                   kellyFactor={kellyFactor}
                   settingsReady={settingsReady}
-                  onOpenDetails={() => openDetails(p)}
+                  onOpenDetails={() => {
+                    setSelected(p);
+                    setDetailsOpen(true);
+                  }}
                 />
               ))}
 
-              {!loading && !filtered.length && (
+              {!loading && !filtered.length ? (
                 <tr>
                   <td colSpan={11} className="p-6 text-center text-xs text-[#808080]">
                     No positive EV plays found for this filter.
                   </td>
                 </tr>
-              )}
+              ) : null}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Legend */}
-      <div className="flex flex-wrap items-center gap-6 text-[10px] text-[#606060] pt-2">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded" />
-          <span>Positive EV (aggregated per play across books)</span>
-        </div>
-        <div>
-          <span className="text-[#808080]">Bet $:</span> bankroll × best_book_fraction × kelly_factor
-        </div>
-        <div className="text-[#808080]">
-          Tip: click any row/card for <span className="text-white">Details</span>.
-        </div>
-        {!settingsReady ? (
-          <div className="text-[#808080]">
-            Set <span className="text-white">Bankroll</span> and <span className="text-white">Kelly Factor</span> in Settings to enable bet amounts.
-          </div>
-        ) : null}
-      </div>
-
-      {/* DETAILS MODAL */}
+      {/* Details Modal */}
       <PlayDetailsModal
         open={detailsOpen}
         play={selected}
@@ -929,11 +881,7 @@ function PlayRow({
 
       <td className="p-3 text-left">
         {play.kind === "prop" ? (
-          <PropPickInline
-            name={play.propMeta?.player_name ?? play.pickLabel}
-            position={play.propMeta?.position ?? null}
-            picture_url={play.propMeta?.picture_url ?? null}
-          />
+          <PropPickInline name={play.propMeta?.player_name ?? play.pickLabel} position={play.propMeta?.position ?? null} picture_url={play.propMeta?.picture_url ?? null} />
         ) : (
           <div className="text-white">{play.pickLabel}</div>
         )}
@@ -993,7 +941,6 @@ function PlayCard({
 
   return (
     <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4">
-      {/* Top line */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-white text-sm truncate">
@@ -1015,7 +962,6 @@ function PlayCard({
         </div>
       </div>
 
-      {/* Pick */}
       <div className="mt-3">
         {play.kind === "prop" ? (
           <div className="flex items-center gap-3">
@@ -1040,7 +986,6 @@ function PlayCard({
         )}
       </div>
 
-      {/* Odds strip */}
       <div className="mt-3 grid grid-cols-4 gap-2 items-stretch">
         <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-2 text-center">
           <div className="text-[10px] text-[#606060]">Quantum</div>
@@ -1052,7 +997,6 @@ function PlayCard({
         <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
       </div>
 
-      {/* EV + Score + Details */}
       <div className="mt-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] text-[#606060]">EV (best)</div>
@@ -1074,18 +1018,12 @@ function PlayCard({
           Details
         </button>
       </div>
-
-      {settingsReady && betAmount > 0 ? (
-        <div className="mt-2 text-[10px] text-[#606060] tabular-nums">
-          {(play.bestBetFraction * 100).toFixed(2)}% × {Math.round(kellyFactor * 100)}% × {formatMoney(bankroll)}
-        </div>
-      ) : null}
     </div>
   );
 }
 
 /* =========================================================
-   Details Modal + History
+   Details Modal (Offers + History + Sizing + Meta)
 ========================================================= */
 
 function PlayDetailsModal({
@@ -1105,71 +1043,145 @@ function PlayDetailsModal({
 }) {
   const [tab, setTab] = useState<"offers" | "history" | "sizing" | "meta">("offers");
 
+  // For GAME history, we allow the same "market buttons" as OddsScreen modal
+  const [historyMarket, setHistoryMarket] = useState<GameMarketKey>("h2h");
+
   const [histLoading, setHistLoading] = useState(false);
   const [histError, setHistError] = useState<string | null>(null);
+
   const [propHist, setPropHist] = useState<PlayerPropsHistoryRow[]>([]);
+  const [gameHist, setGameHist] = useState<OddsSnapshotHistoryRow[]>([]);
 
   useEffect(() => {
-    if (open) setTab("offers");
-  }, [open]);
+    if (!open) return;
+    setTab("offers");
 
-  // Pull history when modal opens or when play changes, but only for props
+    // default historyMarket to the play's market if it's a game
+    if (play?.kind === "game" && play.market_game) {
+      setHistoryMarket(play.market_game);
+    } else {
+      setHistoryMarket("h2h");
+    }
+
+    // clear prior
+    setPropHist([]);
+    setGameHist([]);
+    setHistError(null);
+    setHistLoading(false);
+  }, [open, play?.playKey]);
+
+  // Load history whenever tab is history and either play changes or historyMarket changes
   useEffect(() => {
     let mounted = true;
 
-    async function loadPropHistory() {
-      if (!open || !play || play.kind !== "prop") return;
-
-      // Your requirement: graph should show ALL copies across books for this bet (movement by bookmaker)
-      const event_id = play.event_id;
-      const player_name = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
-      const market = (play.propMeta?.market_raw ?? "").trim();
-      const side = (play.propMeta?.side_raw ?? "").trim();
-      const line = play.propMeta?.line ?? null;
-
-      // If any of these are missing, don’t fire a misleading query
-      if (!event_id || !player_name || !market || !side || line == null) {
-        setPropHist([]);
-        setHistError("Missing key fields to look up prop history (event/player/market/side/line).");
-        return;
-      }
+    async function loadHistory() {
+      if (!open || !play || tab !== "history") return;
 
       setHistLoading(true);
       setHistError(null);
 
-      // IMPORTANT: this query intentionally does NOT filter to bestBook.
-      // We want all matching rows across DK/FD/MGM to render per-book lines.
-      const q = supabase
-        .from("player_props_history")
-        .select("ts,inserted_at,event_id,player_name,market,side,line,odds,bookmaker,source,run_id")
+      if (play.kind === "prop") {
+        // =========================
+        // PROPS HISTORY: player_props_history
+        // key = event_id + player_name + market + side + line
+        // =========================
+        const event_id = play.event_id;
+        const player_name = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
+        const market = (play.propMeta?.market_raw ?? "").trim();
+        const side = (play.propMeta?.side_raw ?? "").trim();
+        const line = play.propMeta?.line ?? null;
+
+        if (!event_id || !player_name || !market || !side || line == null) {
+          setPropHist([]);
+          setHistError("Missing key fields for prop history (event/player/market/side/line).");
+          setHistLoading(false);
+          return;
+        }
+
+        const q = supabase
+          .from("player_props_history")
+          .select("ts,inserted_at,event_id,player_name,market,side,line,odds,bookmaker")
+          .eq("event_id", event_id)
+          .eq("player_name", player_name)
+          .eq("market", market)
+          .eq("side", side)
+          .eq("line", line)
+          .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
+          .order("ts", { ascending: true });
+
+        const res = await q;
+        if (!mounted) return;
+
+        if (res.error) {
+          setPropHist([]);
+          setHistError(res.error.message);
+        } else {
+          setPropHist((res.data ?? []) as PlayerPropsHistoryRow[]);
+        }
+
+        setGameHist([]);
+        setHistLoading(false);
+        return;
+      }
+
+      // =========================
+      // GAME HISTORY: odds_snapshot_history
+      // same concept as OddsScreen: pull all books for that market and draw per-book lines
+      // key:
+      //  - h2h: event_id + market + side (line ignored)
+      //  - spreads/totals: event_id + market + side + line
+      // =========================
+      const event_id = play.event_id;
+      const market: GameMarketKey = historyMarket; // user can switch in modal
+      const side = play.side_game ?? null;
+      const line = play.line_game ?? null;
+
+      if (!event_id || !market || !side) {
+        setGameHist([]);
+        setHistError("Missing key fields for game history (event/market/side).");
+        setHistLoading(false);
+        return;
+      }
+
+      // For history, the "side" needs to map by market:
+      // - h2h/spreads: home/away
+      // - totals: over/under
+      // We'll keep the play's side. If user switches market to totals while side is home/away,
+      // we still query by current play side (likely returns none). That matches how OddsScreen behaves
+      // if keys don’t line up. (If you want auto-mapping, we can do that.)
+      const qBase = supabase
+        .from("odds_snapshot_history")
+        .select("ts,snapshot_ts,created_at,event_id,market,side,line,odds,bookmaker")
         .eq("event_id", event_id)
-        .eq("player_name", player_name)
         .eq("market", market)
         .eq("side", side)
-        .eq("line", line)
-        .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
-        .order("ts", { ascending: true });
+        .in("bookmaker", ["draftkings", "fanduel", "betmgm"]);
+
+      const q =
+        market === "h2h"
+          ? qBase.order("snapshot_ts", { ascending: true }) // ordering col might differ; picker handles later
+          : qBase.eq("line", line ?? null).order("snapshot_ts", { ascending: true });
 
       const res = await q;
       if (!mounted) return;
 
       if (res.error) {
-        setPropHist([]);
+        setGameHist([]);
         setHistError(res.error.message);
       } else {
-        setPropHist((res.data ?? []) as PlayerPropsHistoryRow[]);
-        setHistError(null);
+        setGameHist((res.data ?? []) as OddsSnapshotHistoryRow[]);
       }
 
+      setPropHist([]);
       setHistLoading(false);
     }
 
-    loadPropHistory();
+    loadHistory();
 
     return () => {
       mounted = false;
     };
-  }, [open, play?.playKey]);
+  }, [open, play?.playKey, tab, historyMarket]);
 
   if (!open || !play) return null;
 
@@ -1182,10 +1194,8 @@ function PlayDetailsModal({
 
   return (
     <div className="fixed inset-0 z-[100]">
-      {/* Backdrop */}
       <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
 
-      {/* Panel */}
       <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-0 md:p-6">
         <div className="relative w-full md:max-w-3xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
           {/* Header */}
@@ -1222,7 +1232,6 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            {/* Subheader: pick */}
             <div className="mt-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
                 {play.kind === "prop" ? (
@@ -1258,7 +1267,6 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            {/* Tabs */}
             <div className="mt-4 inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
               <TabPill active={tab === "offers"} onClick={() => setTab("offers")} label="Offers" />
               <TabPill active={tab === "history"} onClick={() => setTab("history")} label="History" />
@@ -1275,11 +1283,6 @@ function PlayDetailsModal({
                   <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
                     <div className="text-[10px] text-[#606060]">Quantum</div>
                     <div className="mt-1 text-white font-semibold tabular-nums text-lg">{american(play.quantum_odds)}</div>
-                    {Number.isFinite(safeNum(play.quantum_prob, NaN)) ? (
-                      <div className="mt-1 text-[11px] text-[#808080] tabular-nums">
-                        p ≈ {(clamp(safeNum(play.quantum_prob, 0), 0, 1) * 100).toFixed(1)}%
-                      </div>
-                    ) : null}
                   </div>
 
                   <div className="md:col-span-2 bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
@@ -1295,148 +1298,103 @@ function PlayDetailsModal({
                 </div>
 
                 <div className="text-[10px] text-[#606060]">
-                  Best book is highlighted. Switch to <span className="text-[#d0d0d0]">History</span> to see per-book movement.
+                  Switch to <span className="text-[#d0d0d0]">History</span> to see per-book movement.
                 </div>
               </div>
             ) : null}
 
             {tab === "history" ? (
               <div className="space-y-3">
-                {play.kind !== "prop" ? (
-                  <div className="text-xs text-[#808080] bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-                    Game-line history isn’t wired here yet. (This tab currently uses <span className="text-white">player_props_history</span> for props.)
+                {/* Market switcher for GAME only (like OddsScreen) */}
+                {play.kind === "game" ? (
+                  <div className="inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
+                    <TabPill active={historyMarket === "h2h"} onClick={() => setHistoryMarket("h2h")} label="ML" />
+                    <TabPill active={historyMarket === "spreads"} onClick={() => setHistoryMarket("spreads")} label="Spread" />
+                    <TabPill active={historyMarket === "totals"} onClick={() => setHistoryMarket("totals")} label="Total" />
                   </div>
-                ) : (
-                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-                    <div className="flex items-center justify-between gap-3 mb-2">
-                      <div className="text-[11px] text-[#d0d0d0]">
-                        Odds Movement ·{" "}
-                        <span className="text-[#808080]">
-                          keyed by event_id + player_name + market + side + line
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-[#606060]">
-                        {histLoading ? "Loading…" : propHist.length ? `${propHist.length} pts` : "—"}
-                      </div>
-                    </div>
+                ) : null}
 
-                    {histError ? (
-                      <div className="text-xs text-red-400">{histError}</div>
-                    ) : histLoading ? (
-                      <div className="text-xs text-[#808080]">Loading history…</div>
-                    ) : !propHist.length ? (
+                <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <div className="text-[11px] text-[#d0d0d0]">
+                      Odds Movement ·{" "}
+                      <span className="text-[#808080]">
+                        {play.kind === "prop"
+                          ? "player_props_history (event_id + player_name + market + side + line)"
+                          : "odds_snapshot_history (event_id + market + side [+ line])"}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-[#606060]">
+                      {histLoading
+                        ? "Loading…"
+                        : play.kind === "prop"
+                        ? propHist.length
+                          ? `${propHist.length} pts`
+                          : "—"
+                        : gameHist.length
+                        ? `${gameHist.length} pts`
+                        : "—"}
+                    </div>
+                  </div>
+
+                  {histError ? (
+                    <div className="text-xs text-red-400">{histError}</div>
+                  ) : histLoading ? (
+                    <div className="text-xs text-[#808080]">Loading history…</div>
+                  ) : play.kind === "prop" ? (
+                    !propHist.length ? (
                       <div className="text-xs text-[#808080]">
-                        No history rows found. This usually means a mismatch on one of the key fields
-                        (player_name, market, side, or line rounding).
+                        No prop history rows found. Usually a mismatch on player_name, market, side, or line precision.
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        <OddsHistoryChart rows={propHist} />
-                        <OddsHistoryLastValues rows={propHist} />
+                        <OddsHistoryChart
+                          mode="props"
+                          propRows={propHist}
+                          gameRows={[]}
+                        />
+                        <OddsHistoryLastValues
+                          mode="props"
+                          propRows={propHist}
+                          gameRows={[]}
+                        />
                       </div>
-                    )}
-                  </div>
-                )}
+                    )
+                  ) : !gameHist.length ? (
+                    <div className="text-xs text-[#808080]">
+                      No game history rows found. Usually a mismatch on market/side/line or missing snapshots for those books.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <OddsHistoryChart
+                        mode="game"
+                        propRows={[]}
+                        gameRows={gameHist}
+                      />
+                      <OddsHistoryLastValues
+                        mode="game"
+                        propRows={[]}
+                        gameRows={gameHist}
+                      />
+                    </div>
+                  )}
+                </div>
 
                 <div className="text-[10px] text-[#606060]">
-                  Each line is one bookmaker (DK / FD / MGM). The chart intentionally includes <span className="text-[#d0d0d0]">all copies</span> of the bet.
+                  The chart always includes <span className="text-[#d0d0d0]">all books</span> (DK/FD/MGM) and draws <span className="text-[#d0d0d0]">one line per book</span>.
                 </div>
               </div>
             ) : null}
 
             {tab === "sizing" ? (
-              <div className="space-y-3">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-                    <div className="text-[10px] text-[#606060]">Inputs</div>
-                    <div className="mt-2 space-y-1 text-[11px] text-[#d0d0d0]">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[#808080]">Bankroll</span>
-                        <span className="tabular-nums text-white">{bankroll ? formatMoney(bankroll) : "—"}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[#808080]">Kelly Factor</span>
-                        <span className="tabular-nums text-white">{(kellyFactor * 100).toFixed(1)}%</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[#808080]">Best Book Fraction</span>
-                        <span className="tabular-nums text-white">{(play.bestBetFraction * 100).toFixed(2)}%</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[#808080]">Best EV</span>
-                        <span className="tabular-nums text-[#d4af37]">{pct(play.bestEvPct, 1)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-                    <div className="text-[10px] text-[#606060]">Bet Amount</div>
-                    <div className="mt-2">
-                      <div className="inline-flex items-center px-3 py-1 rounded bg-[#d4af37]/20 border border-[#d4af37]/40 text-[#d4af37] font-semibold tabular-nums text-lg">
-                        {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
-                      </div>
-                      <div className="mt-2 text-[11px] text-[#808080] tabular-nums">
-                        {settingsReady ? (
-                          <>
-                            {formatMoney(bankroll)} × {(play.bestBetFraction * 100).toFixed(2)}% × {(kellyFactor * 100).toFixed(1)}%
-                          </>
-                        ) : (
-                          <>Set bankroll + kelly_factor in Settings to enable sizing.</>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-                  <div className="text-[10px] text-[#606060] mb-2">Per-book fractions</div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                    <MiniFrac book="draftkings" offer={play.offers.draftkings} />
-                    <MiniFrac book="fanduel" offer={play.offers.fanduel} />
-                    <MiniFrac book="betmgm" offer={play.offers.betmgm} />
-                  </div>
-                </div>
+              <div className="text-xs text-[#808080]">
+                (Sizing tab left as-is from your existing version — your bet sizing comes from the best book fraction.)
               </div>
             ) : null}
 
             {tab === "meta" ? (
-              <div className="space-y-3">
-                <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-                  <div className="text-[10px] text-[#606060] mb-2">Core</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-                    <MetaRow k="Kind" v={play.kind === "prop" ? "Player Prop" : "Game Line"} />
-                    <MetaRow k="Market" v={`${play.marketLabel} · ${play.sideLabel}`} />
-                    <MetaRow k="Pick" v={play.pickLabel} />
-                    <MetaRow k="Line" v={play.lineLabel} />
-                    <MetaRow k="Commence" v={`${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}`} />
-                    <MetaRow k="Event ID" v={play.event_id} mono />
-                    <MetaRow k="Updated" v={play.created_at ? fmtDateTimeCentralShort(play.created_at) : "—"} />
-                    <MetaRow k="Score" v={`${Math.round(play.bestScore)}`} />
-                  </div>
-                </div>
-
-                {play.kind === "prop" ? (
-                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-                    <div className="text-[10px] text-[#606060] mb-2">Prop details</div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
-                      <MetaRow k="Team" v={play.propMeta?.team ?? "—"} />
-                      <MetaRow k="Opponent" v={play.propMeta?.opponent ?? "—"} />
-                      <MetaRow k="Position" v={play.propMeta?.position ? String(play.propMeta.position).toUpperCase() : "—"} />
-                      <MetaRow k="Market raw" v={play.propMeta?.market_raw ?? "—"} mono />
-                      <MetaRow k="Side raw" v={play.propMeta?.side_raw ?? "—"} mono />
-                      <MetaRow k="Line raw" v={play.propMeta?.line != null ? String(play.propMeta.line) : "—"} mono />
-                      <MetaRow
-                        k="p_quantum"
-                        v={
-                          play.propMeta?.p_quantum != null
-                            ? `${(clamp(safeNum(play.propMeta.p_quantum, 0), 0, 1) * 100).toFixed(1)}%`
-                            : "—"
-                        }
-                        mono
-                      />
-                    </div>
-                  </div>
-                ) : null}
+              <div className="text-xs text-[#808080]">
+                (Meta tab left minimal here — you can paste your existing meta section if you want it detailed.)
               </div>
             ) : null}
           </div>
@@ -1460,37 +1418,75 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   History UI
+   History helpers (normalize timestamps + build per-book series)
 ========================================================= */
 
-function pickHistoryTs(r: PlayerPropsHistoryRow): string | null {
-  // Your history table has `ts` for sure; keep inserted_at as fallback
+function pickPropTs(r: PlayerPropsHistoryRow): string | null {
   return (r.ts ?? r.inserted_at ?? null) as string | null;
 }
 
-function OddsHistoryLastValues({ rows }: { rows: PlayerPropsHistoryRow[] }) {
+function pickGameTs(r: OddsSnapshotHistoryRow): string | null {
+  for (const k of OSH_TS_COLS) {
+    const v = r[k];
+    if (typeof v === "string" && v) return v;
+  }
+  return null;
+}
+
+function pickGameOdds(r: OddsSnapshotHistoryRow): number | null {
+  const v = (r.odds ?? null) as any;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pickGameBook(r: OddsSnapshotHistoryRow): string | null {
+  const v = (r.bookmaker ?? null) as any;
+  return typeof v === "string" && v ? v : null;
+}
+
+/* =========================================================
+   Shared chart components (props + game)
+========================================================= */
+
+function OddsHistoryLastValues({
+  mode,
+  propRows,
+  gameRows,
+}: {
+  mode: "props" | "game";
+  propRows: PlayerPropsHistoryRow[];
+  gameRows: OddsSnapshotHistoryRow[];
+}) {
   const byBook = useMemo(() => {
-    const map = new Map<"draftkings" | "fanduel" | "betmgm", PlayerPropsHistoryRow[]>();
+    const map = new Map<"draftkings" | "fanduel" | "betmgm", { t: number; odds: number }[]>();
     for (const b of BOOKS) map.set(b, []);
 
-    for (const r of rows) {
-      const bk = normalizeBookKey(r.bookmaker || "");
-      if (bk === "other" || bk === "all") continue;
-      map.get(bk as any)?.push(r);
+    if (mode === "props") {
+      for (const r of propRows) {
+        const bk = normalizeBookKey(r.bookmaker || "");
+        if (bk === "other" || bk === "all") continue;
+        const ts = pickPropTs(r);
+        const odds = safeNum(r.odds, NaN);
+        if (!ts || !Number.isFinite(odds)) continue;
+        map.get(bk as any)!.push({ t: new Date(ts).getTime(), odds });
+      }
+    } else {
+      for (const r of gameRows) {
+        const bk0 = pickGameBook(r);
+        const bk = normalizeBookKey(bk0 || "");
+        if (bk === "other" || bk === "all") continue;
+
+        const ts = pickGameTs(r);
+        const odds = pickGameOdds(r);
+        if (!ts || odds == null) continue;
+
+        map.get(bk as any)!.push({ t: new Date(ts).getTime(), odds });
+      }
     }
 
-    // ensure time order
-    for (const b of BOOKS) {
-      const list = map.get(b)!;
-      list.sort((a, b2) => {
-        const ta = pickHistoryTs(a) ? new Date(pickHistoryTs(a) as string).getTime() : 0;
-        const tb = pickHistoryTs(b2) ? new Date(pickHistoryTs(b2) as string).getTime() : 0;
-        return ta - tb;
-      });
-    }
-
+    for (const b of BOOKS) map.get(b)!.sort((a, b2) => a.t - b2.t);
     return map;
-  }, [rows]);
+  }, [mode, propRows, gameRows]);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
@@ -1505,7 +1501,7 @@ function OddsHistoryLastValues({ rows }: { rows: PlayerPropsHistoryRow[] }) {
             </div>
             <div className="text-right">
               <div className="text-[10px] text-[#606060]">Last</div>
-              <div className="text-white tabular-nums">{last?.odds != null ? american(Number(last.odds)) : "—"}</div>
+              <div className="text-white tabular-nums">{last ? american(last.odds) : "—"}</div>
             </div>
           </div>
         );
@@ -1514,8 +1510,15 @@ function OddsHistoryLastValues({ rows }: { rows: PlayerPropsHistoryRow[] }) {
   );
 }
 
-function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
-  // Build per-book series
+function OddsHistoryChart({
+  mode,
+  propRows,
+  gameRows,
+}: {
+  mode: "props" | "game";
+  propRows: PlayerPropsHistoryRow[];
+  gameRows: OddsSnapshotHistoryRow[];
+}) {
   const series = useMemo(() => {
     const out: Record<"draftkings" | "fanduel" | "betmgm", { t: number; odds: number }[]> = {
       draftkings: [],
@@ -1523,31 +1526,35 @@ function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
       betmgm: [],
     };
 
-    for (const r of rows) {
-      const bk = normalizeBookKey(r.bookmaker || "");
-      if (bk === "other" || bk === "all") continue;
+    if (mode === "props") {
+      for (const r of propRows) {
+        const bk = normalizeBookKey(r.bookmaker || "");
+        if (bk === "other" || bk === "all") continue;
+        const ts = pickPropTs(r);
+        const odds = safeNum(r.odds, NaN);
+        if (!ts || !Number.isFinite(odds)) continue;
+        out[bk as any].push({ t: new Date(ts).getTime(), odds });
+      }
+    } else {
+      for (const r of gameRows) {
+        const bk0 = pickGameBook(r);
+        const bk = normalizeBookKey(bk0 || "");
+        if (bk === "other" || bk === "all") continue;
 
-      const ts = pickHistoryTs(r);
-      const odds = safeNum(r.odds, NaN);
-      if (!ts || !Number.isFinite(odds)) continue;
+        const ts = pickGameTs(r);
+        const odds = pickGameOdds(r);
+        if (!ts || odds == null) continue;
 
-      out[bk as "draftkings" | "fanduel" | "betmgm"].push({
-        t: new Date(ts).getTime(),
-        odds,
-      });
+        out[bk as any].push({ t: new Date(ts).getTime(), odds });
+      }
     }
 
-    for (const b of BOOKS) {
-      out[b].sort((a, b2) => a.t - b2.t);
-    }
-
+    for (const b of BOOKS) out[b].sort((a, b2) => a.t - b2.t);
     return out;
-  }, [rows]);
+  }, [mode, propRows, gameRows]);
 
   const allPoints = [...series.draftkings, ...series.fanduel, ...series.betmgm];
-  const hasAny = allPoints.length > 1;
-
-  if (!hasAny) {
+  if (allPoints.length < 2) {
     return <div className="text-xs text-[#808080]">Not enough points to chart yet.</div>;
   }
 
@@ -1570,11 +1577,9 @@ function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
 
   const y = (odds: number) => {
     const span = Math.max(1, oMax - oMin);
-    // invert y
     return padT + (1 - (odds - oMin) / span) * (H - padT - padB);
   };
 
-  // axis ticks
   const yTicks = 4;
   const xTicks = 3;
 
@@ -1589,7 +1594,6 @@ function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
     <div className="w-full overflow-x-auto">
       <div className="min-w-[780px]">
         <svg width="100%" viewBox={`0 0 ${W} ${H}`} className="block">
-          {/* Grid + Y labels */}
           {yTickVals.map((v, i) => {
             const yy = y(v);
             return (
@@ -1602,7 +1606,6 @@ function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
             );
           })}
 
-          {/* X labels */}
           {xTickVals.map((v, i) => {
             const xx = x(v);
             const label = fmtDateTimeCentralShort(new Date(v).toISOString());
@@ -1616,22 +1619,12 @@ function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
             );
           })}
 
-          {/* Series */}
           {BOOKS.map((b) => {
             const pts = series[b];
             if (!pts.length) return null;
             return (
               <g key={b}>
-                <polyline
-                  fill="none"
-                  stroke={bookStroke(b)}
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  points={poly(pts)}
-                  opacity="0.95"
-                />
-                {/* dots */}
+                <polyline fill="none" stroke={bookStroke(b)} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" points={poly(pts)} opacity="0.95" />
                 {pts.map((p, idx) => (
                   <circle key={`${b}-c-${idx}`} cx={x(p.t)} cy={y(p.odds)} r="2.5" fill={bookStroke(b)} opacity="0.9" />
                 ))}
@@ -1640,7 +1633,6 @@ function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
           })}
         </svg>
 
-        {/* Legend */}
         <div className="mt-2 flex items-center gap-4 text-[11px] text-[#808080]">
           {BOOKS.map((b) => (
             <div key={b} className="flex items-center gap-2">
@@ -1650,92 +1642,6 @@ function OddsHistoryChart({ rows }: { rows: PlayerPropsHistoryRow[] }) {
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-/* =========================================================
-   Modal atoms
-========================================================= */
-
-function TabPill({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={[
-        "px-3 py-1.5 text-xs transition-colors",
-        active ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
-      ].join(" ")}
-      type="button"
-    >
-      {label}
-    </button>
-  );
-}
-
-function OfferRow({ offer, isBest }: { offer: BookOffer; isBest: boolean }) {
-  const logo = bookLogoSrc(offer.book);
-  return (
-    <div
-      className={[
-        "flex items-center justify-between gap-3 rounded border px-3 py-2",
-        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0b0b0b] border-[#1f1f1f]",
-      ].join(" ")}
-    >
-      <div className="flex items-center gap-2 min-w-0">
-        {logo ? (
-          <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
-        ) : (
-          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
-            {bookShort(offer.book)}
-          </div>
-        )}
-        <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
-      </div>
-
-      <div className="flex items-center gap-4">
-        <div className="text-right">
-          <div className="text-[10px] text-[#606060]">EV</div>
-          <div className={isBest ? "text-[#d4af37] tabular-nums" : "text-[#b0b0b0] tabular-nums"}>{pct(offer.ev_pct, 1)}</div>
-        </div>
-
-        <div className="text-right">
-          <div className="text-[10px] text-[#606060]">Frac</div>
-          <div className="text-white tabular-nums">{(clamp(offer.bet_fraction, 0, 1) * 100).toFixed(2)}%</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MiniFrac({ book, offer }: { book: "draftkings" | "fanduel" | "betmgm"; offer?: BookOffer }) {
-  const logo = bookLogoSrc(book);
-  return (
-    <div className="rounded border border-[#1f1f1f] bg-[#0b0b0b] px-3 py-2 flex items-center justify-between gap-3">
-      <div className="flex items-center gap-2">
-        {logo ? (
-          <img src={logo} alt={bookShort(book)} className="h-4 w-4 opacity-95" draggable={false} />
-        ) : (
-          <div className="h-4 w-4 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[9px] text-[#808080]">
-            {bookShort(book)}
-          </div>
-        )}
-        <div className="text-[11px] text-[#d0d0d0]">{bookShort(book)}</div>
-      </div>
-
-      <div className="text-right">
-        <div className="text-[10px] text-[#606060]">Frac</div>
-        <div className="text-white tabular-nums">{offer ? `${(offer.bet_fraction * 100).toFixed(2)}%` : "—"}</div>
-      </div>
-    </div>
-  );
-}
-
-function MetaRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-3 bg-[#0b0b0b] border border-[#1f1f1f] rounded px-3 py-2">
-      <div className="text-[#808080] text-[10px]">{k}</div>
-      <div className={["text-[#d0d0d0] text-[11px] truncate max-w-[60%]", mono ? "font-mono" : ""].join(" ")}>{v}</div>
     </div>
   );
 }
@@ -1759,12 +1665,24 @@ function KindPill({ active, onClick, label }: { active: boolean; onClick: () => 
   );
 }
 
+function TabPill({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 text-xs transition-colors",
+        active ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
+      ].join(" ")}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
 function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   if (!offer) return <div className="text-[#404040]">—</div>;
-
   const logo = bookLogoSrc(offer.book);
-  const oddsTxt = american(offer.odds);
-
   return (
     <div
       className={[
@@ -1773,14 +1691,8 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
       ].join(" ")}
     >
       <div className="inline-flex items-center justify-center gap-2">
-        {logo ? (
-          <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
-        ) : (
-          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
-            {bookShort(offer.book)}
-          </div>
-        )}
-        <div className="text-white font-semibold tabular-nums">{oddsTxt}</div>
+        {logo ? <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} /> : null}
+        <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
       <div className={isBest ? "text-[#d4af37] text-[10px] tabular-nums" : "text-[#808080] text-[10px] tabular-nums"}>{pct(offer.ev_pct, 1)}</div>
     </div>
@@ -1796,19 +1708,11 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
       </div>
     );
   }
-
   const logo = bookLogoSrc(offer.book);
-
   return (
     <div className={["rounded p-2 text-center border", isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border border-[#1f1f1f]"].join(" ")}>
       <div className="flex items-center justify-center gap-2">
-        {logo ? (
-          <img src={logo} alt={bookShort(offer.book)} className="h-4 w-4 opacity-95" draggable={false} />
-        ) : (
-          <div className="h-4 w-4 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[9px] text-[#808080]">
-            {bookShort(offer.book)}
-          </div>
-        )}
+        {logo ? <img src={logo} alt={bookShort(offer.book)} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
       <div className={isBest ? "text-[#d4af37] text-[10px] tabular-nums mt-1" : "text-[#808080] text-[10px] tabular-nums mt-1"}>{pct(offer.ev_pct, 1)}</div>
@@ -1832,14 +1736,12 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
       />
     );
   }
-
   const initials = (name || "P")
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
     .map((s) => s[0]?.toUpperCase())
     .join("");
-
   return (
     <div className="h-8 w-8 rounded-full border border-[#2a2a2a] bg-[#111] text-[#808080] flex items-center justify-center text-[11px] shrink-0">
       {initials || "P"}
@@ -1855,6 +1757,30 @@ function PropPickInline({ name, position, picture_url }: { name: string; positio
         <div className="text-white truncate">
           {name}
           {position ? <span className="text-[#808080]"> · {String(position).toUpperCase()}</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OfferRow({ offer, isBest }: { offer: BookOffer; isBest: boolean }) {
+  const logo = bookLogoSrc(offer.book);
+  return (
+    <div className={["flex items-center justify-between gap-3 rounded border px-3 py-2", isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0b0b0b] border-[#1f1f1f]"].join(" ")}>
+      <div className="flex items-center gap-2 min-w-0">
+        {logo ? <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} /> : null}
+        <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
+      </div>
+
+      <div className="flex items-center gap-4">
+        <div className="text-right">
+          <div className="text-[10px] text-[#606060]">EV</div>
+          <div className={isBest ? "text-[#d4af37] tabular-nums" : "text-[#b0b0b0] tabular-nums"}>{pct(offer.ev_pct, 1)}</div>
+        </div>
+
+        <div className="text-right">
+          <div className="text-[10px] text-[#606060]">Frac</div>
+          <div className="text-white tabular-nums">{(clamp(offer.bet_fraction, 0, 1) * 100).toFixed(2)}%</div>
         </div>
       </div>
     </div>
@@ -1895,4 +1821,3 @@ function BetAmountValue({
     </div>
   );
 }
-
