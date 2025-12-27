@@ -41,8 +41,8 @@ const NBA_AVG_TOTAL = 228;
 const NBA_AVG_TEAM_TOTAL = NBA_AVG_TOTAL / 2;
 
 // quantum blend (if sharp exists)
-const QUANTUM_BLEND_MODEL = 0.7;
-const QUANTUM_BLEND_SHARP = 0.3;
+const QUANTUM_BLEND_MODEL = 0.25;
+const QUANTUM_BLEND_SHARP = 0.75;
 
 // books
 const SHARP_BOOK = "pinnacle";
