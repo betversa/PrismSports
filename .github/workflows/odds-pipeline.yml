@@ -1,0 +1,136 @@
+name: Odds → Props → Monte Carlo → Prop Baselines (Every 10m)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *" # Every 10 minutes
+
+concurrency:
+  group: odds-full-pipeline
+  cancel-in-progress: true
+
+jobs:
+  odds_load_games:
+    name: Odds Loader (Games)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run games odds loader
+        run: npm run odds:load
+        env:
+          # Secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+          # Mode
+          LOADER_MODE: games
+
+          # Vars
+          SPORT_KEYS: ${{ vars.SPORT_KEYS }}        # basketball_ncaab,basketball_nba
+          GAME_MARKETS: ${{ vars.GAME_MARKETS }}    # h2h,spreads,totals
+          BOOKMAKERS: ${{ vars.BOOKMAKERS }}
+
+  odds_load_nba_props:
+    name: Odds Loader (NBA Props)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: odds_load_games
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run NBA props loader
+        run: npm run odds:load
+        env:
+          # Secrets
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+          # Mode
+          LOADER_MODE: props
+
+          # Force NBA only
+          SPORT_KEYS: basketball_nba
+
+          # Props config
+          PROPS_MARKETS: ${{ vars.PROPS_MARKETS }}  # player_points,player_rebounds,...
+          BOOKMAKERS: ${{ vars.BOOKMAKERS }}
+
+          # Optional safety valve (defaults to 4 if unset)
+          PROPS_CONCURRENCY: 4
+
+  monte_carlo:
+    name: Monte Carlo (Supabase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: odds_load_nba_props
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run Monte Carlo
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npx tsx scripts/run_monte_carlo.ts
+
+  nba_props_baselines:
+    name: NBA Props Baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: monte_carlo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Load NBA prop baselines (FantasyPros -> Supabase)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NODE_ENV: production
+        run: npm run nba:props:baselines:load
