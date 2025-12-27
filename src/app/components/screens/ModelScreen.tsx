@@ -8,10 +8,12 @@
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor with best book’s bet fraction
 // ✅ NEW: Click any row/card to open a Details modal (offers + sizing + meta)
 // ✅ NEW: Details modal shows ODDS HISTORY chart for that exact side (DK/FD/MGM)
-// ✅ FIX (your issue): Props odds history now matches on *event_id + player_name + market + side (+bookmaker)*
+// ✅ FIX: Props odds history is resilient:
+//    - Tries strict: event_id + player_name + market + side + bookmaker
+//    - If empty: drops event_id
+//    - If empty: ilike name (handles Jr./spacing)
+//    - Falls back to player_props_snapshot (book/snapshot_ts)
 //    - DOES NOT require line match
-//    - Converts player_prop_ev_latest market (e.g. "assists") -> history market key ("player_assists")
-//    - Uses player_props_history (bookmaker/ts) with fallback to player_props_snapshot (book/snapshot_ts)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -89,11 +91,11 @@ type PlayerPropEvLatestRow = {
   position: string | null;
   picture_url: string | null;
 
-  market: string | null; // often "assists"/"points"/"rebounds"/"threes" or already "player_assists"
-  side: string | null; // "over"/"under"
+  market: string | null; // "assists"/"points"/"rebounds"/"threes" OR already "player_assists" etc
+  side: string | null;   // "over"/"under"
   line: number | null;
 
-  book: string; // "draftkings"/"fanduel"/"betmgm"
+  book: string;          // "draftkings"/"fanduel"/"betmgm"
   odds: number;
 
   p_quantum: number | null;
@@ -106,9 +108,9 @@ type PlayerPropEvLatestRow = {
 
 type BookOffer = {
   book: "draftkings" | "fanduel" | "betmgm";
-  odds: number; // bettable odds
+  odds: number;
   ev_pct: number;
-  bet_fraction: number; // fraction to use for sizing (game: bet_fraction, prop: kelly_fraction)
+  bet_fraction: number; // game: bet_fraction, props: kelly_fraction
 };
 
 type AggregatedPlay = {
@@ -119,17 +121,14 @@ type AggregatedPlay = {
   commence_time: string | null;
   matchup: string | null;
 
-  // Display
   marketLabel: string;
   sideLabel: string;
   pickLabel: string;
   lineLabel: string;
 
-  // Quantum / fair odds
   quantum_odds: number;
   quantum_prob?: number | null;
 
-  // extra for game queries
   gameMeta?: {
     market: GameMarketKey;
     side: GameSideKey;
@@ -137,7 +136,6 @@ type AggregatedPlay = {
     team: string | null;
   };
 
-  // extra for props
   propMeta?: {
     team: string | null;
     opponent: string | null;
@@ -145,7 +143,6 @@ type AggregatedPlay = {
     position: string | null;
     picture_url: string | null;
 
-    // raw (from player_prop_ev_latest)
     market_raw?: string | null;
     side_raw?: string | null;
 
@@ -153,10 +150,8 @@ type AggregatedPlay = {
     p_quantum?: number | null;
   };
 
-  // Books
   offers: Partial<Record<"draftkings" | "fanduel" | "betmgm", BookOffer>>;
 
-  // Derived
   bestBook: "draftkings" | "fanduel" | "betmgm" | null;
   bestEvPct: number;
   bestBetFraction: number;
@@ -176,14 +171,11 @@ const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
   { key: "betmgm", label: "BetMGM" },
 ];
 
-/* History tables */
 const GAME_HISTORY_TABLE = "odds_history";
-
-// ✅ Primary prop-history table (matches your CSV columns: bookmaker + ts)
 const PROP_HISTORY_TABLE_PRIMARY = "player_props_history";
-
-// ✅ Fallback older snapshot table
 const PROP_HISTORY_TABLE_FALLBACK = "player_props_snapshot";
+
+const BOOKS_3 = ["draftkings", "fanduel", "betmgm"] as const;
 
 /* =========================================================
    Formatting helpers
@@ -290,9 +282,9 @@ function propMarketLabel(marketRaw: string | null) {
   const m = (marketRaw || "").toLowerCase();
 
   if (m.includes("points_rebounds_assists") || m.includes("pra")) return "PRA";
-  if (m.includes("points_assists") || m.includes("pa")) return "PTS+AST";
-  if (m.includes("points_rebounds") || m.includes("pr")) return "PTS+REB";
-  if (m.includes("rebounds_assists") || m.includes("ra")) return "REB+AST";
+  if (m.includes("points_assists") || m === "pa") return "PTS+AST";
+  if (m.includes("points_rebounds") || m === "pr") return "PTS+REB";
+  if (m.includes("rebounds_assists") || m === "ra") return "REB+AST";
 
   if (m.includes("player_points") || m === "points") return "Points";
   if (m.includes("player_rebounds") || m === "rebounds") return "Rebounds";
@@ -316,7 +308,7 @@ function fmtPropLine(line: number | null) {
 }
 
 /* =========================================================
-   PlayKey builders (how we dedupe)
+   PlayKey builders (dedupe)
 ========================================================= */
 
 function gamePlayKey(r: EvPlayRow) {
@@ -340,7 +332,7 @@ function propPlayKey(r: PlayerPropEvLatestRow) {
 function chooseBestOffer(
   offers: Partial<Record<"draftkings" | "fanduel" | "betmgm", BookOffer>>
 ) {
-  const list = (["draftkings", "fanduel", "betmgm"] as const)
+  const list = (BOOKS_3 as readonly ("draftkings" | "fanduel" | "betmgm")[])
     .map((b) => (offers[b] ? ({ b, o: offers[b]! }) : null))
     .filter(Boolean) as { b: "draftkings" | "fanduel" | "betmgm"; o: BookOffer }[];
 
@@ -378,7 +370,7 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
 }
 
 /* =========================================================
-   History chart helpers
+   History helpers
 ========================================================= */
 
 type HistoryPoint = {
@@ -435,9 +427,6 @@ function collapseHistory(
   );
 }
 
-/**
- * ✅ Converts player_prop_ev_latest market values to the history-table market keys.
- */
 function toPropHistoryMarket(marketRaw: string | null): string | null {
   const m = (marketRaw || "").trim().toLowerCase();
   if (!m) return null;
@@ -478,7 +467,6 @@ export function ModelScreen() {
   const [settings, setSettings] = useState<AppSettingsRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Details modal state
   const [selected, setSelected] = useState<AggregatedPlay | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -487,11 +475,8 @@ export function ModelScreen() {
     setDetailsOpen(true);
   };
 
-  const closeDetails = () => {
-    setDetailsOpen(false);
-  };
+  const closeDetails = () => setDetailsOpen(false);
 
-  // Load once
   useEffect(() => {
     let mounted = true;
 
@@ -585,7 +570,6 @@ export function ModelScreen() {
     };
   }, []);
 
-  // Live-refresh settings
   useEffect(() => {
     const channel = supabase
       .channel("model-screen-live")
@@ -607,7 +591,6 @@ export function ModelScreen() {
     };
   }, []);
 
-  // Modal ESC close
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape" && detailsOpen) closeDetails();
@@ -1121,7 +1104,6 @@ function PlayCard({
 
   return (
     <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4">
-      {/* Top line */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-white text-sm truncate">
@@ -1145,7 +1127,6 @@ function PlayCard({
         </div>
       </div>
 
-      {/* Pick */}
       <div className="mt-3">
         {play.kind === "prop" ? (
           <div className="flex items-center gap-3">
@@ -1172,7 +1153,6 @@ function PlayCard({
         )}
       </div>
 
-      {/* Odds strip */}
       <div className="mt-3 grid grid-cols-4 gap-2 items-stretch">
         <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-2 text-center">
           <div className="text-[10px] text-[#606060]">Quantum</div>
@@ -1184,7 +1164,6 @@ function PlayCard({
         <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
       </div>
 
-      {/* EV + Score + Details */}
       <div className="mt-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] text-[#606060]">EV (best)</div>
@@ -1207,7 +1186,6 @@ function PlayCard({
         </button>
       </div>
 
-      {/* sizing breakdown */}
       {settingsReady && betAmount > 0 ? (
         <div className="mt-2 text-[10px] text-[#606060] tabular-nums">
           {(play.bestBetFraction * 100).toFixed(2)}% × {Math.round(kellyFactor * 100)}% ×{" "}
@@ -1219,7 +1197,7 @@ function PlayCard({
 }
 
 /* =========================================================
-   Details Modal (Offers + Sizing + Meta + Odds History)
+   Details Modal
 ========================================================= */
 
 function PlayDetailsModal({
@@ -1247,13 +1225,12 @@ function PlayDetailsModal({
 
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
 
-  const offersList = (["draftkings", "fanduel", "betmgm"] as const)
+  const offersList = (BOOKS_3 as readonly ("draftkings" | "fanduel" | "betmgm")[])
     .map((b) => (play.offers[b] ? ({ key: b, offer: play.offers[b]! }) : null))
     .filter(Boolean) as { key: "draftkings" | "fanduel" | "betmgm"; offer: BookOffer }[];
 
   return (
     <div className="fixed inset-0 z-[100]">
-      {/* Backdrop */}
       <button
         type="button"
         onClick={onClose}
@@ -1261,10 +1238,8 @@ function PlayDetailsModal({
         aria-label="Close details modal"
       />
 
-      {/* Panel */}
       <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-0 md:p-6">
         <div className="relative w-full md:max-w-3xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
-          {/* Header */}
           <div className="p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1298,7 +1273,6 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            {/* Subheader: pick */}
             <div className="mt-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
                 {play.kind === "prop" ? (
@@ -1336,7 +1310,6 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            {/* Tabs */}
             <div className="mt-4 inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
               <TabPill active={tab === "offers"} onClick={() => setTab("offers")} label="Offers" />
               <TabPill active={tab === "sizing"} onClick={() => setTab("sizing")} label="Sizing" />
@@ -1344,7 +1317,6 @@ function PlayDetailsModal({
             </div>
           </div>
 
-          {/* Body */}
           <div className="p-4">
             {tab === "offers" ? (
               <div className="space-y-3">
@@ -1375,11 +1347,10 @@ function PlayDetailsModal({
                   </div>
                 </div>
 
-                {/* ✅ Odds history chart */}
                 <OddsHistoryMiniChart play={play} />
 
                 <div className="text-[10px] text-[#606060]">
-                  Best book is highlighted. Tap/click other tabs for sizing + metadata.
+                  Best book is highlighted. Odds History is for the selected side (over/under or home/away).
                 </div>
               </div>
             ) : null}
@@ -1491,7 +1462,6 @@ function PlayDetailsModal({
             ) : null}
           </div>
 
-          {/* Footer */}
           <div className="p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-between">
             <div className="text-[10px] text-[#606060]">
               Best book:{" "}
@@ -1515,7 +1485,7 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History chart (modal) — FIXED FOR PROPS
+   Odds History chart — FIXED + RESILIENT FOR PROPS
 ========================================================= */
 
 function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
@@ -1529,7 +1499,11 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
       if (!play?.event_id) return;
 
       setLoading(true);
+
       try {
+        // -----------------------------
+        // GAME HISTORY (unchanged)
+        // -----------------------------
         if (play.kind === "game") {
           const gm = play.gameMeta;
           if (!gm) {
@@ -1546,7 +1520,6 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
             .order("ts", { ascending: true });
 
-          // game: keep line strict except h2h
           if (gm.market !== "h2h") {
             q = q.eq("line", gm.line);
           }
@@ -1564,111 +1537,125 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           return;
         }
 
-        // ✅ PROPS: relaxed matching, no line requirement
+        // -----------------------------
+        // PROP HISTORY (resilient)
+        // -----------------------------
         const pm = play.propMeta;
-        const playerName = (pm?.player_name ?? play.pickLabel ?? "").trim();
-        const side = toOverUnderSide(pm?.side_raw ?? null);
-        const historyMarket = toPropHistoryMarket(pm?.market_raw ?? null);
 
-        if (!playerName || !side || !historyMarket) {
+        const playerNameRaw = (pm?.player_name ?? play.pickLabel ?? "").trim();
+        const historyMarket = toPropHistoryMarket(pm?.market_raw ?? null);
+        const side = toOverUnderSide(pm?.side_raw ?? null);
+
+        if (!playerNameRaw || !historyMarket || !side) {
           if (mounted) setRows([]);
           return;
         }
 
-        // 1) Primary: player_props_history (bookmaker, ts)
-        {
-          const q1 = supabase
-            .from(PROP_HISTORY_TABLE_PRIMARY)
-            .select(
-              [
-                "event_id",
-                "player_name",
-                "market",
-                "side",
-                "bookmaker",
-                "odds",
-                "ts",
-                "created_at",
-                "snapshot_ts",
-                "inserted_at",
-              ].join(",")
-            )
-            .eq("event_id", play.event_id)
-            .eq("player_name", playerName)
-            .eq("market", historyMarket)
-            .eq("side", side)
-            .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
-            .order("ts", { ascending: true });
+        const BOOKS = ["draftkings", "fanduel", "betmgm"];
 
-          const { data, error } = await q1;
+        const attemptDefs: Array<{
+          name: string;
+          run: () => Promise<{ data: any[] | null; error: any }>;
+          collapse: (data: any[]) => HistoryPoint[];
+        }> = [
+          {
+            name: "primary strict (event_id + eq name)",
+            run: async () =>
+              await supabase
+                .from(PROP_HISTORY_TABLE_PRIMARY)
+                .select("event_id,player_name,market,side,bookmaker,odds,ts,created_at,snapshot_ts,inserted_at")
+                .eq("event_id", play.event_id)
+                .eq("player_name", playerNameRaw)
+                .eq("market", historyMarket)
+                .eq("side", side)
+                .in("bookmaker", BOOKS)
+                .order("ts", { ascending: true }),
+            collapse: (data) =>
+              collapseHistory(data ?? [], "bookmaker", "odds", "ts", "snapshot_ts", "inserted_at", "created_at"),
+          },
+          {
+            name: "primary loose (drop event_id)",
+            run: async () =>
+              await supabase
+                .from(PROP_HISTORY_TABLE_PRIMARY)
+                .select("event_id,player_name,market,side,bookmaker,odds,ts,created_at,snapshot_ts,inserted_at")
+                .eq("player_name", playerNameRaw)
+                .eq("market", historyMarket)
+                .eq("side", side)
+                .in("bookmaker", BOOKS)
+                .order("ts", { ascending: true })
+                .limit(240),
+            collapse: (data) =>
+              collapseHistory(data ?? [], "bookmaker", "odds", "ts", "snapshot_ts", "inserted_at", "created_at"),
+          },
+          {
+            name: "primary ilike (drop event_id)",
+            run: async () => {
+              const pattern = `%${playerNameRaw.replace(/\s+/g, "%")}%`;
+              return await supabase
+                .from(PROP_HISTORY_TABLE_PRIMARY)
+                .select("event_id,player_name,market,side,bookmaker,odds,ts,created_at,snapshot_ts,inserted_at")
+                .ilike("player_name", pattern)
+                .eq("market", historyMarket)
+                .eq("side", side)
+                .in("bookmaker", BOOKS)
+                .order("ts", { ascending: true })
+                .limit(240);
+            },
+            collapse: (data) =>
+              collapseHistory(data ?? [], "bookmaker", "odds", "ts", "snapshot_ts", "inserted_at", "created_at"),
+          },
+          {
+            name: "fallback strict (snapshot table)",
+            run: async () =>
+              await supabase
+                .from(PROP_HISTORY_TABLE_FALLBACK)
+                .select("event_id,player_name,market,side,book,odds,snapshot_ts,ts,created_at,inserted_at")
+                .eq("event_id", play.event_id)
+                .eq("player_name", playerNameRaw)
+                .eq("market", historyMarket)
+                .eq("side", side)
+                .in("book", BOOKS)
+                .order("snapshot_ts", { ascending: true }),
+            collapse: (data) =>
+              collapseHistory(data ?? [], "book", "odds", "snapshot_ts", "ts", "inserted_at", "created_at"),
+          },
+          {
+            name: "fallback loose (drop event_id)",
+            run: async () =>
+              await supabase
+                .from(PROP_HISTORY_TABLE_FALLBACK)
+                .select("event_id,player_name,market,side,book,odds,snapshot_ts,ts,created_at,inserted_at")
+                .eq("player_name", playerNameRaw)
+                .eq("market", historyMarket)
+                .eq("side", side)
+                .in("book", BOOKS)
+                .order("snapshot_ts", { ascending: true })
+                .limit(240),
+            collapse: (data) =>
+              collapseHistory(data ?? [], "book", "odds", "snapshot_ts", "ts", "inserted_at", "created_at"),
+          },
+        ];
+
+        let finalRows: HistoryPoint[] = [];
+        for (const a of attemptDefs) {
+          const { data, error } = await a.run();
           if (!mounted) return;
 
-          if (!error && (data?.length ?? 0) > 0) {
-            setRows(
-              collapseHistory(
-                data ?? [],
-                "bookmaker",
-                "odds",
-                "ts",
-                "snapshot_ts",
-                "inserted_at",
-                "created_at"
-              )
-            );
-            return;
+          if (error) {
+            console.warn("[OddsHistoryMiniChart] props attempt error:", a.name, error.message);
+            continue;
           }
 
-          if (error) {
-            console.warn("[OddsHistoryMiniChart] prop primary history error:", error.message);
+          const d = (data ?? []) as any[];
+          if (d.length) {
+            finalRows = a.collapse(d);
+            break;
           }
         }
 
-        // 2) Fallback: player_props_snapshot (book, snapshot_ts)
-        {
-          const q2 = supabase
-            .from(PROP_HISTORY_TABLE_FALLBACK)
-            .select(
-              [
-                "event_id",
-                "player_name",
-                "market",
-                "side",
-                "book",
-                "odds",
-                "snapshot_ts",
-                "ts",
-                "created_at",
-                "inserted_at",
-              ].join(",")
-            )
-            .eq("event_id", play.event_id)
-            .eq("player_name", playerName)
-            .eq("market", historyMarket)
-            .eq("side", side)
-            .in("book", ["draftkings", "fanduel", "betmgm"])
-            .order("snapshot_ts", { ascending: true });
-
-          const { data, error } = await q2;
-          if (!mounted) return;
-
-          if (error) {
-            console.warn("[OddsHistoryMiniChart] prop fallback history error:", error.message);
-            setRows([]);
-            return;
-          }
-
-          setRows(
-            collapseHistory(
-              data ?? [],
-              "book",
-              "odds",
-              "snapshot_ts",
-              "ts",
-              "inserted_at",
-              "created_at"
-            )
-          );
-        }
+        if (!mounted) return;
+        setRows(finalRows);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -1678,7 +1665,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
     return () => {
       mounted = false;
     };
-  }, [play.playKey]); // re-run when selection changes
+  }, [play.playKey, play.event_id]);
 
   if (loading && !rows.length) {
     return (
@@ -1749,7 +1736,9 @@ function TabPill({ active, onClick, label }: { active: boolean; onClick: () => v
       onClick={onClick}
       className={[
         "px-3 py-1.5 text-xs transition-colors",
-        active ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
+        active
+          ? "bg-[#1a1a1a] text-white"
+          : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
       ].join(" ")}
       type="button"
     >
@@ -2003,3 +1992,4 @@ function BetAmountValue({
     </div>
   );
 }
+
