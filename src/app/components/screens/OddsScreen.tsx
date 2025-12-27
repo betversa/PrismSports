@@ -1,4 +1,5 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Functional + Player Props modal + white-pill book logos)
+// screens/OddsScreen.tsx — FULL REWRITE (Odds + History + Player Props modal w/ headshots + positions)
+// -------------------------------------------------------------------------------------------------
 // ✅ Filters by sport_key
 // ✅ Desktop: centered max-width “web” layout (less app-like)
 // ✅ Desktop: books ALWAYS shown (no toggle)
@@ -6,14 +7,14 @@
 // ✅ Date pills ONLY show dates that actually have displayable games (same filtering as list)
 // ✅ Mobile cards keep “Show/Hide Books” toggle
 // ✅ History modal behavior unchanged (odds-only, line shown in hover tooltip)
-// ✅ Player Props modal:
-//    - ODDS from player_props_snapshot
-//    - POSITION + PICTURE from player_prop_ev_latest
+// ✅ Player Props modal pulls ODDS from player_props_snapshot
+// ✅ Player Props modal pulls POSITION + PICTURE from player_prop_ev_latest
+// ✅ Fix: player_props_snapshot has NO created_at — uses ts (+ inserted_at fallback)
+// ✅ Fix: headshots render reliably (img tag + fallback + no Next/Image restrictions)
 // ✅ Mobile button clutter fixed: Show/Hide Books + single “More” menu (History / Props)
 // ✅ Odds screen defaults to Moneyline (and resets to Moneyline on sport change)
-// ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across rows + props snapshots
+// ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across odds rows + props snapshot ts
 // ✅ FIX: props book logos appear in white pill (readable even if logo is black)
-// ✅ FIX: build error "Expected identifier but found end of file" — ensures proper closing tags
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -29,9 +30,9 @@ import {
   ReferenceLine,
 } from "recharts";
 
-/** =========================
- * TYPES / CONSTANTS
- * ========================= */
+/* =========================================================
+   TYPES / CONSTANTS
+========================================================= */
 
 type Market = "ml" | "spread" | "total";
 type BookKey = "dk" | "fd" | "mgm" | "pin" | "bol";
@@ -72,7 +73,7 @@ const BOOK_LOGOS: Record<BookKey, string> = {
 };
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 
-/** snapshot bookmaker strings */
+/** snapshot bookmaker strings (from player_props_snapshot.bookmaker) */
 const BOOKMAKER_STR_BY_KEY: Record<BookKey, string> = {
   dk: "draftkings",
   fd: "fanduel",
@@ -83,11 +84,11 @@ const BOOKMAKER_STR_BY_KEY: Record<BookKey, string> = {
 
 function bookKeyFromBookmaker(raw: string): BookKey | null {
   const k = String(raw || "").toLowerCase();
-  if (k === "draftkings" || k === "dk") return "dk";
-  if (k === "fanduel" || k === "fd") return "fd";
-  if (k === "betmgm" || k === "mgm") return "mgm";
-  if (k === "pinnacle" || k === "pin") return "pin";
-  if (k === "betonlineag" || k === "bol" || k === "betonline") return "bol";
+  if (k === "draftkings") return "dk";
+  if (k === "fanduel") return "fd";
+  if (k === "betmgm") return "mgm";
+  if (k === "pinnacle") return "pin";
+  if (k === "betonlineag") return "bol";
   return null;
 }
 
@@ -109,9 +110,9 @@ const HDR_BORDER = "border-[#232323]";
 const BOOK_GLOW =
   "drop-shadow(0 1px 0 rgba(0,0,0,0.55)) drop-shadow(0 0 8px rgba(255,255,255,0.10)) drop-shadow(0 0 10px rgba(212,175,55,0.16))";
 
-/** =========================
- * TIME HELPERS
- * ========================= */
+/* =========================================================
+   TIME HELPERS
+========================================================= */
 
 function normalizeIso(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -187,9 +188,9 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-/** =========================
- * MAPPING HELPERS (odds wide)
- * ========================= */
+/* =========================================================
+   MAPPING HELPERS (odds wide)
+========================================================= */
 
 function pickLogoUrl(row: any): string | null {
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? row.logoUrl ?? null;
@@ -204,6 +205,7 @@ function pickUpdatedAt(row: any): string | null {
     row.ts ??
     row.snapshot_ts ??
     row.inserted_at ??
+    row.created_at ??
     null
   );
 }
@@ -261,9 +263,9 @@ function mapWideRowToSideOdds(row: any): SideOdds {
   };
 }
 
-/** =========================
- * CONSENSUS HELPERS
- * ========================= */
+/* =========================================================
+   CONSENSUS HELPERS
+========================================================= */
 
 function median(nums: number[]) {
   const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
@@ -285,25 +287,17 @@ function renderCellParts(parts: CellParts) {
   return (
     <div className="flex flex-col items-center justify-center leading-tight">
       <div className="tabular-nums">{parts.top}</div>
-      {parts.bottom != null ? (
-        <div className="tabular-nums opacity-95">{parts.bottom}</div>
-      ) : null}
+      {parts.bottom != null ? <div className="tabular-nums opacity-95">{parts.bottom}</div> : null}
     </div>
   );
 }
 
-function consensusPartsForRow(
-  ev: EventOdds,
-  market: Market,
-  side: "AWAY" | "HOME"
-): CellParts {
+function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME"): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
 
   if (market === "ml") {
     const odds: number[] = [];
-    if (src)
-      for (const b of BOOKS)
-        if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
+    if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
     const mOdds = median(odds);
     return cellMl(mOdds == null ? null : mOdds);
   }
@@ -348,14 +342,13 @@ function consensusPartsForRow(
   const mOver = median(overOdds);
   const mUnder = median(underOdds);
 
-  if (side === "AWAY")
-    return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
+  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
   return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
 }
 
-/** =========================
- * HEADER FALLBACK + BOOK “PILL”
- * ========================= */
+/* =========================================================
+   HEADER FALLBACK + BOOK “PILL”
+========================================================= */
 
 function headerFallbackPillDataUri(label: string) {
   const svg = `
@@ -385,26 +378,23 @@ function BookLogoPill({
   const pillW = size === "sm" ? "w-[92px]" : "w-[96px]";
 
   return (
-    <div
-      className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`}
-    >
+    <div className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`}>
       <img
         src={src}
         alt={alt}
         className={`${imgH} w-auto object-contain`}
         loading="lazy"
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).src =
-            headerFallbackPillDataUri(fallbackLabel);
+          (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
         }}
       />
     </div>
   );
 }
 
-/** =========================
- * SMALL UI HELPERS
- * ========================= */
+/* =========================================================
+   SMALL UI HELPERS
+========================================================= */
 
 function SegButton({
   active,
@@ -450,9 +440,9 @@ function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) =
   );
 }
 
-/** =========================
- * TABLE CELLS / HEADERS
- * ========================= */
+/* =========================================================
+   TABLE CELLS / HEADERS
+========================================================= */
 
 function BookHeader({
   src,
@@ -478,10 +468,7 @@ function BookHeader({
     >
       <span className="sr-only">{alt}</span>
       <div className="flex items-center justify-center">
-        <div
-          style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }}
-          className="flex items-center justify-center"
-        >
+        <div style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }} className="flex items-center justify-center">
           <img
             src={src}
             alt={alt}
@@ -489,8 +476,7 @@ function BookHeader({
             className="object-contain opacity-95"
             loading="lazy"
             onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src =
-                headerFallbackPillDataUri(fallbackLabel);
+              (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
             }}
           />
         </div>
@@ -514,12 +500,7 @@ function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boole
 
 function ConsensusValue({ parts }: { parts: CellParts }) {
   return (
-    <td
-      className={[
-        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
-        `border-r ${HDR_BORDER}`,
-      ].join(" ")}
-    >
+    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", `border-r ${HDR_BORDER}`].join(" ")}>
       {renderCellParts(parts)}
     </td>
   );
@@ -558,21 +539,15 @@ function MiniTeamRow({
   );
 }
 
-/** =========================
- * CELL GETTERS
- * ========================= */
+/* =========================================================
+   CELL GETTERS
+========================================================= */
 
-function partsForBookSide(
-  ev: EventOdds,
-  market: Market,
-  side: "AWAY" | "HOME",
-  book: BookKey
-): CellParts {
+function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
   if (!src) return { top: "—" };
 
-  if (market === "ml")
-    return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
+  if (market === "ml") return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
 
   if (market === "spread") {
     const c = src.spread[book];
@@ -587,9 +562,9 @@ function partsForBookSide(
   return { top: String(t.line), bottom: odds == null ? "—" : `(${odds})` };
 }
 
-/** =========================
- * HISTORY / CHARTS (ODDS ONLY)
- * ========================= */
+/* =========================================================
+   HISTORY / CHARTS (ODDS ONLY)
+========================================================= */
 
 type HistMarket = "h2h" | "spreads" | "totals";
 type HistSide = "home" | "away" | "over" | "under";
@@ -688,9 +663,7 @@ function buildChartSeriesOddsOnly(rows: HistoryRow[], uiMarket: Market, books: s
     binMap.set(bin, byBook);
   }
 
-  const bins = Array.from(binMap.keys()).sort(
-    (a, b) => new Date(a).getTime() - new Date(b).getTime()
-  );
+  const bins = Array.from(binMap.keys()).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
@@ -764,9 +737,9 @@ function useIsMobile(bp = 640) {
   return isMobile;
 }
 
-/** =========================
- * MODAL SHELL
- * ========================= */
+/* =========================================================
+   MODAL SHELL
+========================================================= */
 
 function ModalShell({
   title,
@@ -798,11 +771,7 @@ function ModalShell({
         <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && (
-              <div className="text-[11px] text-[#808080] mt-0.5 break-words">
-                {subtitle}
-              </div>
-            )}
+            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
           </div>
           <button
             className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
@@ -819,20 +788,15 @@ function ModalShell({
   );
 }
 
-/** =========================
- * PLAYER PROPS MODAL
- * ========================= */
-
-/**
- * IMPORTANT:
- * - ODDS/lines come from player_props_snapshot
- * - Position/Picture come from player_prop_ev_latest
- * - Join by normalized player_name
- */
+/* =========================================================
+   PLAYER PROPS MODAL
+   - ODDS: player_props_snapshot
+   - META: player_prop_ev_latest (position + picture_url)
+========================================================= */
 
 type PropType = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
 
-const PROP_LABEL2: Record<PropType, string> = {
+const PROP_LABEL: Record<PropType, string> = {
   player_points: "Points",
   player_rebounds: "Rebounds",
   player_assists: "Assists",
@@ -841,14 +805,21 @@ const PROP_LABEL2: Record<PropType, string> = {
 
 type PlayerPropsSnapshotRow = {
   id: number;
+  ts: string | null;
+  inserted_at: string | null;
+
+  run_id: string | null;
   sport_key: string;
+
   event_id: string | null;
   commence_time: string | null;
 
-  home_team?: string | null;
-  away_team?: string | null;
+  home_team: string | null;
+  away_team: string | null;
 
   player_name: string | null;
+  player_id: string | null;
+
   team: string | null;
   opponent: string | null;
 
@@ -858,13 +829,16 @@ type PlayerPropsSnapshotRow = {
   odds: number | null;
   bookmaker: string;
 
-  snapshot_ts?: string | null;
-  ts?: string | null;
-  inserted_at?: string | null;
+  source?: string | null;
 };
 
 type PlayerPropEvLatestRow = {
+  sport_key?: string | null;
+  event_id?: string | null;
+
   player_name: string | null;
+  team: string | null;
+
   position: string | null;
   picture_url: string | null;
 };
@@ -877,6 +851,7 @@ type PropCell = {
 
 type PlayerPropWide = {
   player: string;
+
   team?: string | null;
   opponent?: string | null;
 
@@ -893,59 +868,65 @@ function initPropCell(): PropCell {
 
 function propsMedianLine(rows: PlayerPropsSnapshotRow[]) {
   const nums: number[] = [];
-  for (const r of rows)
-    if (typeof r.line === "number" && Number.isFinite(r.line)) nums.push(r.line);
+  for (const r of rows) if (typeof r.line === "number" && Number.isFinite(r.line)) nums.push(r.line);
   return median(nums);
 }
 
-function normPlayerName(s: string) {
-  return String(s || "")
-    .trim()
-    .toLowerCase()
-    .replace(/\./g, "")
-    .replace(/\s+/g, " ");
-}
-
-function playerInitials(name: string) {
-  const parts = String(name || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  const a = parts[0]?.[0] ?? "";
-  const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
-  const ini = (a + b).toUpperCase();
-  return ini || "—";
-}
-
-function playerAvatarFallbackSvgDataUri(initials: string) {
-  const safe = (initials || "—").slice(0, 3);
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-    <defs>
-      <linearGradient id="g" x1="0" x2="1">
-        <stop offset="0" stop-color="#1f1f1f"/>
-        <stop offset="1" stop-color="#2a2a2a"/>
-      </linearGradient>
-    </defs>
-    <rect width="64" height="64" rx="10" fill="url(#g)"/>
-    <text x="32" y="39" font-family="Arial, sans-serif" font-size="20" font-weight="800" text-anchor="middle" fill="#d4af37">${safe}</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
-}
-
-// which timestamp column does player_props_snapshot use?
-// if your table uses snapshot_ts or ts, change SNAP_TS_COL below.
-const SNAP_TS_COL: "snapshot_ts" | "ts" = "ts";
-
+/** player_props_snapshot DOES NOT have created_at. Use ts, fallback inserted_at. */
 function pickSnapTs(r: PlayerPropsSnapshotRow): string | null {
-  // prefer snapshot_ts, then ts, then inserted_at (if you have it)
-  const raw =
-    (r as any).snapshot_ts ??
-    (r as any).ts ??
-    (r as any).inserted_at ??
-    null;
-
+  const raw = r.ts ?? r.inserted_at ?? null;
   return normalizeIso(raw);
+}
+
+function safeNameKey(x: string | null | undefined) {
+  return (x ?? "").trim().toLowerCase();
+}
+
+function PlayerAvatar({
+  url,
+  name,
+  size = 34,
+}: {
+  url: string | null | undefined;
+  name: string;
+  size?: number;
+}) {
+  const [broken, setBroken] = useState(false);
+
+  const initials = useMemo(() => {
+    const parts = (name || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "—";
+    const a = parts[0]?.[0] ?? "";
+    const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
+    return (a + b).toUpperCase();
+  }, [name]);
+
+  if (!url || broken) {
+    return (
+      <div
+        className="rounded-full bg-white/10 border border-[#2a2a2a] flex items-center justify-center text-[11px] font-extrabold text-[#cfcfcf]"
+        style={{ width: size, height: size }}
+        title={name}
+      >
+        {initials}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={url}
+      alt={name}
+      width={size}
+      height={size}
+      className="rounded-full object-cover border border-[#2a2a2a] bg-black/40"
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setBroken(true)}
+      title={name}
+      style={{ width: size, height: size }}
+    />
+  );
 }
 
 function PlayerPropsModal({
@@ -975,74 +956,122 @@ function PlayerPropsModal({
       setLatestTs(null);
       setRows([]);
 
-      // 1) Pull snapshot odds (ODDS SOURCE)
-      const snap = await supabase
+      // ------------------------------
+      // 1) Pull ODDS from player_props_snapshot
+      // ------------------------------
+      const selectCols =
+        "id,ts,inserted_at,run_id,sport_key,event_id,commence_time,home_team,away_team,player_name,player_id,team,opponent,market,side,line,odds,bookmaker,source";
+
+      // Try event_id first
+      const r1 = await supabase
         .from("player_props_snapshot")
-        .select(
-          "id,sport_key,event_id,commence_time,home_team,away_team,player_name,team,opponent,market,side,line,odds,bookmaker,snapshot_ts,ts,inserted_at"
-        )
+        .select(selectCols)
         .eq("sport_key", sportKey)
         .eq("market", propType)
         .eq("event_id", ev.eventId)
-        .order(SNAP_TS_COL, { ascending: false })
+        .order("ts", { ascending: false })
         .limit(5000);
 
       if (!alive) return;
 
-      if (snap.error) {
-        setErr(snap.error.message);
+      let raw = (r1.data ?? []) as PlayerPropsSnapshotRow[];
+      let error = r1.error;
+
+      // Fallback to team match if no event rows
+      if (!error && (!raw || raw.length === 0)) {
+        const home = ev.home?.team ?? "";
+        const away = ev.away?.team ?? "";
+
+        const orFilter = [
+          `and(home_team.eq.${home},away_team.eq.${away})`,
+          `and(home_team.eq.${away},away_team.eq.${home})`,
+        ].join(",");
+
+        const r2 = await supabase
+          .from("player_props_snapshot")
+          .select(selectCols)
+          .eq("sport_key", sportKey)
+          .eq("market", propType)
+          .or(orFilter)
+          .order("ts", { ascending: false })
+          .limit(5000);
+
+        if (!alive) return;
+        raw = (r2.data ?? []) as PlayerPropsSnapshotRow[];
+        error = r2.error;
+      }
+
+      if (error) {
+        setErr(error.message);
         setLoading(false);
         return;
       }
 
-      const raw = (snap.data ?? []) as PlayerPropsSnapshotRow[];
       if (!raw.length) {
+        setLatestTs(null);
+        setRows([]);
         setLoading(false);
         return;
       }
 
-      const newest = pickSnapTs(raw[0]);
+      // ------------------------------
+      // 2) Determine newest snapshot timestamp batch
+      // ------------------------------
+      const newest = pickSnapTs(raw[0]) ?? null;
       setLatestTs(newest);
       if (newest && onLastUpdated) onLastUpdated(newest);
 
-      const latestOnly = newest
-        ? raw.filter((x) => pickSnapTs(x) === newest)
-        : raw;
+      const latestOnly = newest ? raw.filter((x) => pickSnapTs(x) === newest) : raw;
 
-      // build distinct players from snapshot
-      const players = Array.from(
+      // ------------------------------
+      // 3) Build player set for meta lookup
+      // ------------------------------
+      const playersInThisSnap = Array.from(
         new Set(
           latestOnly
             .map((r) => (r.player_name ?? "").trim())
-            .filter(Boolean)
+            .filter((x) => x.length > 0)
         )
       );
 
-      // 2) Pull enrichment (POSITION + PICTURE SOURCE)
-      // NOTE: we join by player_name; if your latest table has duplicates per player, we take first.
-      const enrich = await supabase
-        .from("player_prop_ev_latest")
-        .select("player_name,position,picture_url")
-        .eq("sport_key", sportKey)
-        .eq("event_id", ev.eventId)
-        .in("player_name", players);
+      // ------------------------------
+      // 4) Pull POSITION + PICTURE from player_prop_ev_latest
+      //    - We intentionally ONLY use this table for meta fields.
+      // ------------------------------
+      const metaMap = new Map<string, { position: string | null; pictureUrl: string | null }>();
 
-      if (!alive) return;
+      // Supabase `in()` can accept large lists, but keep it sane if needed.
+      // If you ever exceed 1000 players, chunk it (NBA won’t).
+      if (playersInThisSnap.length) {
+        const metaRes = await supabase
+          .from("player_prop_ev_latest")
+          .select("player_name,position,picture_url,event_id,sport_key")
+          .eq("sport_key", sportKey)
+          .eq("event_id", ev.eventId)
+          .in("player_name", playersInThisSnap);
 
-      if (enrich.error) {
-        setErr(enrich.error.message);
-        setLoading(false);
-        return;
+        if (!alive) return;
+
+        if (metaRes.error) {
+          // do NOT hard fail the modal if meta lookup fails — still show odds
+          // but surface a small warning
+          console.warn("player_prop_ev_latest meta lookup error:", metaRes.error.message);
+        } else {
+          const metaRows = (metaRes.data ?? []) as PlayerPropEvLatestRow[];
+          for (const m of metaRows) {
+            const k = safeNameKey(m.player_name);
+            if (!k) continue;
+            metaMap.set(k, {
+              position: m.position ?? null,
+              pictureUrl: m.picture_url ?? null,
+            });
+          }
+        }
       }
 
-      const emap = new Map<string, { position: string | null; pictureUrl: string | null }>();
-      (enrich.data ?? []).forEach((r: PlayerPropEvLatestRow) => {
-        const k = normPlayerName(r.player_name ?? "");
-        if (!k) return;
-        if (!emap.has(k)) emap.set(k, { position: r.position ?? null, pictureUrl: r.picture_url ?? null });
-      });
-
-      // 3) Wide-format by player
+      // ------------------------------
+      // 5) Wide transform by player (latest snapshot only)
+      // ------------------------------
       const byPlayer = new Map<string, PlayerPropsSnapshotRow[]>();
       for (const r of latestOnly) {
         const name = (r.player_name ?? "").trim();
@@ -1075,16 +1104,17 @@ function PlayerPropsModal({
         }
 
         const lineConsensus = propsMedianLine(prs);
-        const meta = emap.get(normPlayerName(player));
+
+        const meta = metaMap.get(safeNameKey(player));
 
         return {
           player,
           team: prs[0]?.team ?? null,
           opponent: prs[0]?.opponent ?? null,
-          position: meta?.position ?? null,
-          pictureUrl: meta?.pictureUrl ?? null,
           lineConsensus,
           byBook,
+          position: meta?.position ?? null,
+          pictureUrl: meta?.pictureUrl ?? null,
         };
       });
 
@@ -1097,7 +1127,7 @@ function PlayerPropsModal({
     return () => {
       alive = false;
     };
-  }, [ev.eventId, propType, sportKey, onLastUpdated]);
+  }, [ev.eventId, ev.home?.team, ev.away?.team, propType, sportKey, onLastUpdated]);
 
   const subtitle = [
     ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
@@ -1105,83 +1135,6 @@ function PlayerPropsModal({
   ]
     .filter(Boolean)
     .join(" · ");
-
-  function bookMeta(bk: BookKey) {
-    return bk === "dk"
-      ? { alt: "DraftKings", fb: "DK" }
-      : bk === "fd"
-      ? { alt: "FanDuel", fb: "FD" }
-      : bk === "mgm"
-      ? { alt: "BetMGM", fb: "MGM" }
-      : bk === "pin"
-      ? { alt: "Pinnacle", fb: "PIN" }
-      : { alt: "BetOnline", fb: "BOL" };
-  }
-
-  function PropBookCell({ cell }: { cell: PropCell }) {
-    return (
-      <div className="flex flex-col items-center justify-center leading-tight">
-        <div className="text-[12px] text-white font-extrabold tabular-nums">
-          {cell.line == null ? "—" : cell.line}
-        </div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">
-          O: {cell.over == null ? "—" : cell.over}
-        </div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">
-          U: {cell.under == null ? "—" : cell.under}
-        </div>
-      </div>
-    );
-  }
-
-  function PlayerHeaderCell({
-    name,
-    position,
-    pictureUrl,
-    team,
-    opponent,
-  }: {
-    name: string;
-    position?: string | null;
-    pictureUrl?: string | null;
-    team?: string | null;
-    opponent?: string | null;
-  }) {
-    const ini = playerInitials(name);
-    const fallback = playerAvatarFallbackSvgDataUri(ini);
-
-    return (
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="w-10 h-10 rounded-lg overflow-hidden border border-[#2a2a2a] bg-black/30 shrink-0">
-          <img
-            src={pictureUrl || fallback}
-            alt={name}
-            className="w-10 h-10 object-cover"
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = fallback;
-            }}
-          />
-        </div>
-
-        <div className="min-w-0">
-          <div className="text-white font-extrabold text-[13px] truncate">
-            {name}
-            {position ? (
-              <span className="text-[#9a9a9a] font-bold"> · {position}</span>
-            ) : null}
-          </div>
-          {(team || opponent) ? (
-            <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-              {team ?? "—"}{" "}
-              {opponent ? <span className="text-[#6f6f6f]">vs {opponent}</span> : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
 
   function PropTypeSelect() {
     return (
@@ -1201,6 +1154,53 @@ function PlayerPropsModal({
     );
   }
 
+  function PropBookCell({ cell }: { cell: PropCell }) {
+    return (
+      <div className="flex flex-col items-center justify-center leading-tight">
+        <div className="text-[12px] text-white font-extrabold tabular-nums">{cell.line == null ? "—" : cell.line}</div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">O: {cell.over == null ? "—" : cell.over}</div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">U: {cell.under == null ? "—" : cell.under}</div>
+      </div>
+    );
+  }
+
+  function bookMeta(bk: BookKey) {
+    return bk === "dk"
+      ? { alt: "DraftKings", fb: "DK" }
+      : bk === "fd"
+      ? { alt: "FanDuel", fb: "FD" }
+      : bk === "mgm"
+      ? { alt: "BetMGM", fb: "MGM" }
+      : bk === "pin"
+      ? { alt: "Pinnacle", fb: "PIN" }
+      : { alt: "BetOnline", fb: "BOL" };
+  }
+
+  function PlayerCell({ r }: { r: PlayerPropWide }) {
+    return (
+      <div className="flex items-center gap-3 min-w-0">
+        <PlayerAvatar url={r.pictureUrl} name={r.player} size={34} />
+        <div className="min-w-0">
+          <div className="text-white font-extrabold text-[13px] truncate flex items-center gap-2">
+            <span className="truncate">{r.player}</span>
+            {r.position ? (
+              <span className="shrink-0 text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-white/10 border border-[#2a2a2a] text-[#d0d0d0]">
+                {r.position}
+              </span>
+            ) : null}
+          </div>
+
+          {(r.team || r.opponent) && (
+            <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
+              {r.team ?? "—"}{" "}
+              {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ModalShell title="Player Props" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -1216,21 +1216,20 @@ function PlayerPropsModal({
         <div className="text-xs text-red-400">Supabase error: {err}</div>
       ) : !rows.length ? (
         <div className="text-xs text-[#808080]">
-          No rows found for{" "}
-          <span className="text-white font-extrabold">{PROP_LABEL2[propType]}</span>{" "}
-          for this event.
+          No rows found for <span className="text-white font-extrabold">{PROP_LABEL[propType]}</span> for this event.
         </div>
       ) : (
         <>
           {/* Desktop/tablet */}
           <div className="hidden sm:block">
             <div className="overflow-x-auto rounded-xl border border-[#2a2a2a] bg-black/20">
-              <table className="min-w-[1080px] w-full">
+              <table className="min-w-[1040px] w-full">
                 <thead className="sticky top-0 z-10">
                   <tr className={`border-b ${HDR_BORDER}`}>
                     <th className={`text-left px-4 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold`}>
                       Player
                     </th>
+
                     <th
                       className={`text-center px-3 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold border-l ${HDR_BORDER}`}
                     >
@@ -1263,13 +1262,7 @@ function PlayerPropsModal({
                   {rows.map((r) => (
                     <tr key={r.player} className={`border-b ${HDR_BORDER} last:border-b-0 hover:bg-white/5`}>
                       <td className="px-4 py-3">
-                        <PlayerHeaderCell
-                          name={r.player}
-                          position={r.position}
-                          pictureUrl={r.pictureUrl}
-                          team={r.team}
-                          opponent={r.opponent}
-                        />
+                        <PlayerCell r={r} />
                       </td>
 
                       <td className={`px-3 py-3 text-center font-extrabold text-white tabular-nums border-l ${HDR_BORDER}`}>
@@ -1277,7 +1270,10 @@ function PlayerPropsModal({
                       </td>
 
                       {BOOKS.map((bk, i) => (
-                        <td key={bk} className={["px-2 py-3 text-center", i === 0 ? `border-l ${HDR_BORDER}` : ""].join(" ")}>
+                        <td
+                          key={bk}
+                          className={["px-2 py-3 text-center", i === 0 ? `border-l ${HDR_BORDER}` : ""].join(" ")}
+                        >
                           <PropBookCell cell={r.byBook[bk]} />
                         </td>
                       ))}
@@ -1289,7 +1285,8 @@ function PlayerPropsModal({
 
             <div className="mt-3 text-[11px] text-[#808080]">
               Each book cell shows: <span className="text-white font-bold">Line</span> +{" "}
-              <span className="text-white font-bold">O/U odds</span> (latest snapshot only).
+              <span className="text-white font-bold">O/U odds</span> (latest snapshot only). Player headshots + position
+              come from <span className="text-white font-bold">player_prop_ev_latest</span>.
             </div>
           </div>
 
@@ -1298,20 +1295,30 @@ function PlayerPropsModal({
             {rows.map((r) => (
               <div key={r.player} className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
                 <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <PlayerHeaderCell
-                      name={r.player}
-                      position={r.position}
-                      pictureUrl={r.pictureUrl}
-                      team={r.team}
-                      opponent={r.opponent}
-                    />
+                  <div className="min-w-0 flex items-center gap-3">
+                    <PlayerAvatar url={r.pictureUrl} name={r.player} size={34} />
+                    <div className="min-w-0">
+                      <div className="text-white font-extrabold text-[13px] truncate flex items-center gap-2">
+                        <span className="truncate">{r.player}</span>
+                        {r.position ? (
+                          <span className="shrink-0 text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-white/10 border border-[#2a2a2a] text-[#d0d0d0]">
+                            {r.position}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {(r.team || r.opponent) && (
+                        <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
+                          {r.team ?? "—"}{" "}
+                          {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+                        </div>
+                      )}
+                    </div>
                   </div>
+
                   <div className="text-right">
                     <div className="text-[10px] text-[#808080] font-semibold">Cons</div>
-                    <div className="text-white font-extrabold tabular-nums">
-                      {r.lineConsensus == null ? "—" : r.lineConsensus}
-                    </div>
+                    <div className="text-white font-extrabold tabular-nums">{r.lineConsensus == null ? "—" : r.lineConsensus}</div>
                   </div>
                 </div>
 
@@ -1338,9 +1345,9 @@ function PlayerPropsModal({
   );
 }
 
-/** =========================
- * HISTORY CHART PAIR (ODDS ONLY)
- * ========================= */
+/* =========================================================
+   HISTORY CHART PAIR (ODDS ONLY)
+========================================================= */
 
 function HistoryChartPairOddsOnly({
   title,
@@ -1464,7 +1471,7 @@ function HistoryChartPairOddsOnly({
                       }}
                     />
 
-                    <Legend wrapperStyle={legendWrapperStyle} />
+                    <Legend />
 
                     {books.map((b) => (
                       <Line
@@ -1690,9 +1697,9 @@ function LineMovementModal({
   );
 }
 
-/** =========================
- * MOBILE “MORE” MENU (fix clutter)
- * ========================= */
+/* =========================================================
+   MOBILE “MORE” MENU (fix clutter)
+========================================================= */
 
 function useOutsideClose<T extends HTMLElement>(onClose: () => void) {
   const ref = useRef<T | null>(null);
@@ -1751,9 +1758,9 @@ function MobileMoreMenu({ onHistory, onProps }: { onHistory: () => void; onProps
   );
 }
 
-/** =========================
- * MOBILE CARD
- * ========================= */
+/* =========================================================
+   MOBILE CARD
+========================================================= */
 
 function EventCardMobile({
   ev,
@@ -1825,11 +1832,15 @@ function EventCardMobile({
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(awayCons)}
+              </div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(homeCons)}
+              </div>
             </div>
           </div>
         </div>
@@ -1873,9 +1884,9 @@ function EventCardMobile({
   );
 }
 
-/** =========================
- * DESKTOP ROWS (always books)
- * ========================= */
+/* =========================================================
+   DESKTOP ROWS (always books)
+========================================================= */
 
 function EventTwoRows({
   ev,
@@ -1894,10 +1905,7 @@ function EventTwoRows({
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
-        <td
-          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
-          rowSpan={2}
-        >
+        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
@@ -1954,9 +1962,9 @@ function EventTwoRows({
   );
 }
 
-/** =========================
- * SCREEN
- * ========================= */
+/* =========================================================
+   SCREEN
+========================================================= */
 
 export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
@@ -2206,12 +2214,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                     ev={ev}
                     market={market}
                     booksOpen={!!mobileOpenMap[ev.eventId]}
-                    onToggleBooks={() =>
-                      setMobileOpenMap((prev) => ({
-                        ...prev,
-                        [ev.eventId]: !prev[ev.eventId],
-                      }))
-                    }
+                    onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
                     onOpenHistory={openHistory}
                     onOpenProps={openProps}
                   />
@@ -2261,13 +2264,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <tbody>
                     {events.map((ev) => (
-                      <EventTwoRows
-                        key={ev.eventId}
-                        ev={ev}
-                        market={market}
-                        onOpenHistory={openHistory}
-                        onOpenProps={openProps}
-                      />
+                      <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} onOpenProps={openProps} />
                     ))}
                   </tbody>
                 </table>
@@ -2277,9 +2274,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         </div>
 
         {/* History modal */}
-        {historyOpen && historyEvent?.eventId && (
-          <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
-        )}
+        {historyOpen && historyEvent?.eventId && <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />}
 
         {/* Player Props modal */}
         {propsOpen && propsEvent?.eventId && (
