@@ -204,7 +204,6 @@ function pickUpdatedAt(row: any): string | null {
     row.ts ??
     row.snapshot_ts ??
     row.inserted_at ??
-    row.created_at ??
     null
   );
 }
@@ -859,7 +858,6 @@ type PlayerPropsSnapshotRow = {
   odds: number | null;
   bookmaker: string;
 
-  created_at?: string | null;
   snapshot_ts?: string | null;
   ts?: string | null;
   inserted_at?: string | null;
@@ -937,15 +935,15 @@ function playerAvatarFallbackSvgDataUri(initials: string) {
 
 // which timestamp column does player_props_snapshot use?
 // if your table uses snapshot_ts or ts, change SNAP_TS_COL below.
-const SNAP_TS_COL: "created_at" | "snapshot_ts" | "ts" = "created_at";
+const SNAP_TS_COL: "snapshot_ts" | "ts" = "ts";
 
 function pickSnapTs(r: PlayerPropsSnapshotRow): string | null {
+  // prefer snapshot_ts, then ts, then inserted_at (if you have it)
   const raw =
-    SNAP_TS_COL === "created_at"
-      ? r.created_at ?? null
-      : SNAP_TS_COL === "snapshot_ts"
-      ? r.snapshot_ts ?? null
-      : r.ts ?? null;
+    (r as any).snapshot_ts ??
+    (r as any).ts ??
+    (r as any).inserted_at ??
+    null;
 
   return normalizeIso(raw);
 }
@@ -981,7 +979,7 @@ function PlayerPropsModal({
       const snap = await supabase
         .from("player_props_snapshot")
         .select(
-          "id,sport_key,event_id,commence_time,home_team,away_team,player_name,team,opponent,market,side,line,odds,bookmaker,created_at,snapshot_ts,ts,inserted_at"
+          "id,sport_key,event_id,commence_time,home_team,away_team,player_name,team,opponent,market,side,line,odds,bookmaker,snapshot_ts,ts,inserted_at"
         )
         .eq("sport_key", sportKey)
         .eq("market", propType)
