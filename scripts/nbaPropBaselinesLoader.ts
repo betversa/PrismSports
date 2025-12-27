@@ -1,19 +1,17 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3: SHARP LINE TRANSLATION)
-// ----------------------------------------------------------------------------------------
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3.1: SHARP SIDE FIX)
+// -----------------------------------------------------------------------------------
 // ✅ Scrapes FantasyPros season / last7 / last15 for: PTS, REB, AST, 3PM, MIN
 // ✅ Uses only those windows to build mean projections + sigma estimate
 // ✅ Uses odds_wide_latest (team, pin_spread_line, pin_total_line) to context-adjust minutes + mu
-// ✅ Uses player_props_snapshot (your exact schema) for lines/odds/books and event_id/commence_time/opponent
-// ✅ ONLY returns players from FUTURE GAMES:
-//    - event_id must exist in events table
-//    - commence_time must be > now
+// ✅ Uses player_props_snapshot for lines/odds/books and event_id/commence_time/home_team/away_team
+// ✅ ONLY returns players from FUTURE GAMES (event exists + commence_time > now)
 // ✅ SHARP FIX (REAL):
 //    - Builds no-vig probs from Pinnacle and BetOnlineAG (when both sides exist at a sharp line)
-//    - For each soft-book alt line, "translate" sharp prob from nearest sharp line to the target line
+//    - For each soft-book alt line, "translate" sharp *OVER* prob from nearest sharp line to target line
 //      using a distribution anchored by YOUR sigma (Normal for PTS/REB/AST, Poisson for 3PM).
-//    - No more tolerance-gated nulls just because the soft book is on an alternate line.
+//    - IMPORTANT: Translation is solved from P(OVER) always, then UNDER = 1 - OVER.
 // ✅ Outputs to ONE table: public.player_prop_ev_latest (cleared per run by sport_key)
 // ✅ Includes player picture_url
 //
@@ -48,7 +46,6 @@ const QUANTUM_BLEND_SHARP = 0.75;
 // books
 const SOFT_BOOKS = new Set(["draftkings", "fanduel", "betmgm"]);
 const SHARP_BOOKS = ["pinnacle", "betonlineag"] as const;
-
 type SharpBook = (typeof SHARP_BOOKS)[number];
 
 /* =========================================================
@@ -97,19 +94,20 @@ type OddsWide = {
   pin_total_line: number | null;
 };
 
+// NOTE: player_id/team/opponent removed because those are null in your snapshot.
+// We derive opponent from home_team/away_team.
 type PropsRow = {
   sport_key: string;
   event_id: string;
   commence_time: string;
 
+  home_team: string | null;
+  away_team: string | null;
+
   player_name: string;
-  player_id: string | null;
 
-  team: string | null;
-  opponent: string | null;
-
-  market: string; // raw snapshot market (player_points, etc)
-  side: string;   // over/under
+  market: string; // player_points, etc
+  side: string; // over/under
   line: number;
   odds: number;
 
@@ -119,8 +117,8 @@ type PropsRow = {
 type SharpNoVigLine = {
   book: SharpBook;
   line: number;
-  p_over: number;     // no-vig
-  p_under: number;    // no-vig
+  p_over: number; // no-vig over prob
+  p_under: number; // no-vig under prob (= 1 - p_over)
   over_odds: number;
   under_odds: number;
 };
@@ -164,6 +162,16 @@ function normBook(b: any): SharpBook | null {
   if (s === "betonlineag" || s.includes("betonline")) return "betonlineag";
 
   return null;
+}
+
+function normalizeTeamKey(s: string) {
+  return String(s || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\u00a0/g, " ")
+    .replace(/[’‘]/g, "'")
+    .replace(/[^a-z0-9\s&'.-]/g, "")
+    .replace(/\s+/g, " ");
 }
 
 function americanToImpliedProb(odds: number): number {
@@ -232,7 +240,7 @@ function pOverNormal(line: number, mu: number, sigma: number): number {
   return clamp(1 - normalCdf(line, mu, sigma), 0, 1);
 }
 
-// Acklam inverse normal CDF approximation (for translating sharp line -> implied mean)
+// Acklam inverse normal CDF approximation
 function invNorm(p: number): number {
   const pp = clamp(p, 1e-12, 1 - 1e-12);
   const a = [
@@ -312,15 +320,13 @@ function pOverPoisson(line: number, lambda: number): number {
   return clamp(1 - poissonCdf(k, Math.max(lambda, 0.01)), 0, 1);
 }
 
-// Solve lambda so that p_over_poisson(L0, lambda) ~= p0
-function inferLambdaFromPoissonOver(line: number, pOver: number): number | null {
-  const p0 = clamp(pOver, 1e-6, 1 - 1e-6);
+// Solve lambda so that p_over_poisson(L0, lambda) ~= pOver0
+function inferLambdaFromPoissonOver(line: number, pOver0: number): number | null {
+  const p0 = clamp(pOver0, 1e-6, 1 - 1e-6);
 
-  // Reasonable bracket
   let lo = 0.01;
   let hi = Math.max(1, line + 6);
 
-  // Expand hi until pOver(hi) >= p0 (monotone increasing in lambda)
   for (let i = 0; i < 30; i++) {
     const pHi = pOverPoisson(line, hi);
     if (pHi >= p0) break;
@@ -328,7 +334,6 @@ function inferLambdaFromPoissonOver(line: number, pOver: number): number | null 
     if (hi > 200) break;
   }
 
-  // Binary search
   for (let i = 0; i < 40; i++) {
     const mid = (lo + hi) / 2;
     const pm = pOverPoisson(line, mid);
@@ -445,57 +450,51 @@ function scrapeAvgPage(html: string): Map<number, { base: any; stats: StatPack }
 }
 
 /* =========================================================
-   SHARP BUILD + TRANSLATION
+   SHARP BUILD + TRANSLATION (FIXED)
 ========================================================= */
 
 function idxKey(event_id: string, player_name: string, market_raw: string) {
   return `${event_id}|${normName(player_name)}|${String(market_raw || "").trim()}`;
 }
 
-// Convert a sharp no-vig probability at line L0 into an estimated prob at target line Lt,
-// using either:
-//  - Normal(mu, sigmaAnchor) for pts/reb/ast
-//  - Poisson(lambda) for threes
-function translateSharpToTarget(opts: {
+// FIX: Always translate from p_over at sharpLine.
+// Then for requested side: over = p_over_target, under = 1 - p_over_target.
+function translateSharpOverToTarget(opts: {
   marketOut: "points" | "rebounds" | "assists" | "threes";
-  side: "over" | "under";
   targetLine: number;
   sharpLine: number;
-  pSharpAtSharpLine: number; // no-vig at sharpLine
-  sigmaAnchor: number | null; // from model (pts/reb/ast)
+  pOverAtSharpLine: number; // no-vig OVER at sharpLine (always OVER)
+  sigmaAnchor: number | null; // required for normal markets
 }): number | null {
-  const { marketOut, side, targetLine, sharpLine } = opts;
-  const p0 = clamp(opts.pSharpAtSharpLine, 1e-6, 1 - 1e-6);
+  const p0_over = clamp(opts.pOverAtSharpLine, 1e-6, 1 - 1e-6);
 
-  // For PTS/REB/AST: infer implied mean from (sharpLine, p0, sigmaAnchor), then eval at targetLine.
-  if (marketOut !== "threes") {
-    const sigma = opts.sigmaAnchor != null && Number.isFinite(opts.sigmaAnchor) && opts.sigmaAnchor > 0
-      ? opts.sigmaAnchor
-      : null;
-
-    // If we don't have sigma, we can't translate reliably.
+  if (opts.marketOut !== "threes") {
+    const sigma =
+      opts.sigmaAnchor != null && Number.isFinite(opts.sigmaAnchor) && opts.sigmaAnchor > 0
+        ? opts.sigmaAnchor
+        : null;
     if (!sigma) return null;
 
-    // p_over(L0) = p0 => CDF((L0 - mu)/sigma) = 1 - p0
-    // => (L0 - mu)/sigma = invNorm(1 - p0) => mu = L0 - sigma * invNorm(1 - p0)
-    const z = invNorm(1 - p0);
-    const muSharp = sharpLine - sigma * z;
+    // Solve μ from P_over(L0)=p0_over:
+    // p_over(L0)=1-CDF((L0-μ)/σ)=p0_over => CDF((L0-μ)/σ)=1-p0_over
+    // (L0-μ)/σ = invNorm(1-p0_over) => μ = L0 - σ*invNorm(1-p0_over)
+    const z = invNorm(1 - p0_over);
+    const muSharp = opts.sharpLine - sigma * z;
 
-    const pOverAtTarget = pOverNormal(targetLine, muSharp, sigma);
-    return side === "over" ? pOverAtTarget : 1 - pOverAtTarget;
+    return pOverNormal(opts.targetLine, muSharp, sigma);
   }
 
-  // For threes: Poisson translate by inferring lambda from p_over at sharpLine, then evaluate at targetLine.
-  const lambda = inferLambdaFromPoissonOver(sharpLine, p0);
+  // threes: infer lambda from p_over at sharpLine, evaluate p_over at targetLine
+  const lambda = inferLambdaFromPoissonOver(opts.sharpLine, p0_over);
   if (lambda == null) return null;
-
-  const pOverAtTarget = pOverPoisson(targetLine, lambda);
-  return side === "over" ? pOverAtTarget : 1 - pOverAtTarget;
+  return pOverPoisson(opts.targetLine, lambda);
 }
 
-/* =========================================================
-   MAIN
-========================================================= */
+type SharpAtTargetResult = {
+  p_sharp: number | null; // side-specific prob
+  sharp_books_used: string | null;
+  sharp_line_used: number | null; // (diagnostic only; nearest line from one of the books)
+};
 
 async function main() {
   const supabaseUrl = process.env.SUPABASE_URL!;
@@ -504,7 +503,10 @@ async function main() {
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-  const run_id = crypto.randomUUID();
+  // Node 18+ has crypto.randomUUID
+  // @ts-ignore
+  const run_id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `run_${Date.now()}`;
+
   const now = new Date();
   const nowIso = now.toISOString();
 
@@ -537,6 +539,8 @@ async function main() {
 
   /* -------------------------------------------------------
      2) Pull props snapshot for FUTURE events (ALL books!)
+        NOTE: removed player_id/team/opponent columns.
+        Added home_team/away_team for opponent derivation.
   -------------------------------------------------------- */
   const props: PropsRow[] = [];
   const eventIdList = Array.from(allowedEventIds);
@@ -547,7 +551,7 @@ async function main() {
 
     const { data, error } = await supabase
       .from("player_props_snapshot")
-      .select("sport_key,event_id,commence_time,player_name,player_id,team,opponent,market,side,line,odds,bookmaker")
+      .select("sport_key,event_id,commence_time,home_team,away_team,player_name,market,side,line,odds,bookmaker")
       .eq("sport_key", SPORT_KEY)
       .in("event_id", chunk)
       .gt("commence_time", nowIso);
@@ -628,16 +632,35 @@ async function main() {
   apply(map15, "15");
 
   /* -------------------------------------------------------
-     4) Canonicalize team via team_map."Abbreviation" -> canonical
+     4) Team canonicalization:
+        - Baselines: team_map."Abbreviation" -> canonical
+        - Events (home/away from snapshot): best-effort alias map from team_map values
   -------------------------------------------------------- */
-  const { data: teamMapRows, error: tmErr } = await supabase.from("team_map").select('"Abbreviation", canonical').limit(2000);
+  const { data: teamMapRows, error: tmErr } = await supabase
+    .from("team_map")
+    .select('canonical,"Abbreviation","The Odds API","ESPN_Long","SR_School","SR_School_Short","KenPom","Elo"')
+    .limit(4000);
+
   if (tmErr) throw tmErr;
 
   const abbrToCanon = new Map<string, string>();
+  const aliasToCanon = new Map<string, string>();
+
   for (const r of teamMapRows || []) {
-    const abbr = (r as any)["Abbreviation"]?.toString().trim();
     const canon = (r as any).canonical?.toString().trim();
-    if (abbr && canon) abbrToCanon.set(abbr, canon);
+    if (!canon) continue;
+
+    // canonical self
+    aliasToCanon.set(normalizeTeamKey(canon), canon);
+
+    // abbreviations for baselines
+    const abbr = (r as any)["Abbreviation"]?.toString().trim();
+    if (abbr) abbrToCanon.set(abbr, canon);
+
+    // alias columns for event strings
+    for (const v of Object.values(r as any)) {
+      if (typeof v === "string" && v.trim()) aliasToCanon.set(normalizeTeamKey(v), canon);
+    }
   }
 
   for (const b of baselines.values()) {
@@ -647,6 +670,11 @@ async function main() {
 
   const baselineByName = new Map<string, PlayerBaseline>();
   for (const b of baselines.values()) baselineByName.set(normName(b.player_name), b);
+
+  const canonTeam = (s: string | null) => {
+    if (!s) return null;
+    return aliasToCanon.get(normalizeTeamKey(s)) ?? s;
+  };
 
   /* -------------------------------------------------------
      5) Pull odds_wide_latest context
@@ -704,14 +732,17 @@ async function main() {
     const denom = pO + pU;
     if (denom <= 0) continue;
 
+    const pOverNoVig = pO / denom;
+    const pUnderNoVig = pU / denom;
+
     const baseKey = k.split("|").slice(0, 3).join("|"); // event|player|marketRaw
     const arr = sharpIndex.get(baseKey) ?? [];
 
     arr.push({
       book: v.book,
       line: v.line,
-      p_over: pO / denom,
-      p_under: pU / denom,
+      p_over: pOverNoVig,
+      p_under: pUnderNoVig,
       over_odds: v.over,
       under_odds: v.under,
     });
@@ -742,7 +773,7 @@ async function main() {
     return best;
   }
 
-  // Get p_sharp at the SOFT line by translating from nearest sharp line
+  // FIXED: infer/translate using p_over only; then side-split at the end.
   function getTranslatedSharpP(opts: {
     event_id: string;
     player_name: string;
@@ -751,44 +782,28 @@ async function main() {
     side: "over" | "under";
     targetLine: number;
     sigmaAnchor: number | null; // for pts/reb/ast translation
-  }): { p_sharp: number | null; sharp_books_used: string | null; sharp_line_used: number | null } {
+  }): SharpAtTargetResult {
     const arr = sharpIndex.get(idxKey(opts.event_id, opts.player_name, opts.marketRaw));
     if (!arr || arr.length === 0) return { p_sharp: null, sharp_books_used: null, sharp_line_used: null };
 
     const pin = nearestSharpLine(arr, "pinnacle", opts.targetLine);
     const bol = nearestSharpLine(arr, "betonlineag", opts.targetLine);
 
-    const pickP = (x: SharpNoVigLine | null) => {
+    const translateFrom = (x: SharpNoVigLine | null) => {
       if (!x) return null;
-      return opts.side === "over" ? x.p_over : x.p_under;
+      const pOverTarget = translateSharpOverToTarget({
+        marketOut: opts.marketOut,
+        targetLine: opts.targetLine,
+        sharpLine: x.line,
+        pOverAtSharpLine: x.p_over, // ALWAYS p_over here
+        sigmaAnchor: opts.sigmaAnchor,
+      });
+      if (pOverTarget == null) return null;
+      return opts.side === "over" ? pOverTarget : 1 - pOverTarget;
     };
 
-    const pPin0 = pickP(pin);
-    const pBol0 = pickP(bol);
-
-    const pPin =
-      pPin0 != null && pin
-        ? translateSharpToTarget({
-            marketOut: opts.marketOut,
-            side: opts.side,
-            targetLine: opts.targetLine,
-            sharpLine: pin.line,
-            pSharpAtSharpLine: pPin0,
-            sigmaAnchor: opts.sigmaAnchor,
-          })
-        : null;
-
-    const pBol =
-      pBol0 != null && bol
-        ? translateSharpToTarget({
-            marketOut: opts.marketOut,
-            side: opts.side,
-            targetLine: opts.targetLine,
-            sharpLine: bol.line,
-            pSharpAtSharpLine: pBol0,
-            sigmaAnchor: opts.sigmaAnchor,
-          })
-        : null;
+    const pPin = translateFrom(pin);
+    const pBol = translateFrom(bol);
 
     if (pPin != null && pBol != null) {
       return {
@@ -797,15 +812,12 @@ async function main() {
         sharp_line_used: pin?.line ?? bol?.line ?? null,
       };
     }
-
     if (pPin != null) {
       return { p_sharp: clamp(pPin, 0, 1), sharp_books_used: "pinnacle", sharp_line_used: pin?.line ?? null };
     }
-
     if (pBol != null) {
       return { p_sharp: clamp(pBol, 0, 1), sharp_books_used: "betonlineag", sharp_line_used: bol?.line ?? null };
     }
-
     return { p_sharp: null, sharp_books_used: null, sharp_line_used: null };
   }
 
@@ -813,6 +825,7 @@ async function main() {
      7) Build final EV rows (SOFT books only)
   -------------------------------------------------------- */
   const out: any[] = [];
+  const created_at = new Date().toISOString();
 
   for (const r of props) {
     const eid = String(r.event_id || "");
@@ -849,6 +862,18 @@ async function main() {
     const line = toNum(r.line);
     const odds = toNum(r.odds);
     if (line == null || odds == null) continue;
+
+    // Opponent (best effort) from snapshot home/away
+    const homeCanon = canonTeam(r.home_team);
+    const awayCanon = canonTeam(r.away_team);
+    const opponent =
+      homeCanon && awayCanon
+        ? base.canonical === homeCanon
+          ? awayCanon
+          : base.canonical === awayCanon
+          ? homeCanon
+          : null
+        : null;
 
     // Context from odds_wide_latest
     const ow = teamToOdds.get(base.canonical);
@@ -914,7 +939,7 @@ async function main() {
 
     if (mu == null || p_model == null) continue;
 
-    // SHARP probability at *this* line (translated from nearest sharp line)
+    // SHARP probability at this line (FIXED side logic)
     const sharp = getTranslatedSharpP({
       event_id: r.event_id,
       player_name: r.player_name,
@@ -922,7 +947,7 @@ async function main() {
       marketOut,
       side,
       targetLine: line,
-      sigmaAnchor: marketOut === "threes" ? null : sigma, // sigma anchors translation for Normal markets
+      sigmaAnchor: marketOut === "threes" ? null : sigma,
     });
 
     const p_sharp = sharp.p_sharp;
@@ -942,13 +967,13 @@ async function main() {
 
     out.push({
       run_id,
-      created_at: nowIso,
+      created_at,
       sport_key: SPORT_KEY,
 
       event_id: r.event_id,
       commence_time: r.commence_time,
       team: base.canonical,
-      opponent: r.opponent ?? null,
+      opponent,
 
       fp_id: base.fp_id,
       player_name: base.player_name,
@@ -983,7 +1008,7 @@ async function main() {
       kelly_fraction: kellyFraction(p_quantum, odds),
       score,
 
-      // If your SQL table has these, uncomment them in your INSERT table definition:
+      // optional diagnostics if your table has the cols:
       // sharp_books_used: sharp.sharp_books_used,
       // sharp_line_used: sharp.sharp_line_used,
     });
@@ -1002,9 +1027,11 @@ async function main() {
     if (insErr) throw insErr;
   }
 
-  // Diagnostics
+  // Diagnostics: check complement sanity on same (event,player,market,line,book)
+  // (We don't enforce here, just report.)
   let sharpFilled = 0;
   let sharpNull = 0;
+
   for (const r of out) {
     if (r.p_sharp == null) sharpNull++;
     else sharpFilled++;
@@ -1030,5 +1057,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
 
