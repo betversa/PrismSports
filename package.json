@@ -10,6 +10,7 @@
     "ratings:build": "tsx scripts/ratingsBuilder.ts",
     "ratings:build:ncaab": "tsx scripts/ratingsBuilder.ts",
     "ratings:build:nba": "tsx scripts/ratingsBuilder_nba.ts",
+    "nba:props:baselines:load": "tsx scripts/nbaPropBaselinesLoader.ts",
     "games:load:br:nba": "tsx scripts/basketballRefGamesLoader_nba.ts"
   },
   "dependencies": {
