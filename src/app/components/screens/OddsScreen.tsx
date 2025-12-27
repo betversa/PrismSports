@@ -1,4 +1,4 @@
-// screens/OddsScreen.tsx — FULL REWRITE (adds player picture + position from player_prop_ev_latest)
+// screens/OddsScreen.tsx — FULL REWRITE (Functional + Player Props modal + white-pill book logos)
 // ✅ Filters by sport_key
 // ✅ Desktop: centered max-width “web” layout (less app-like)
 // ✅ Desktop: books ALWAYS shown (no toggle)
@@ -6,11 +6,14 @@
 // ✅ Date pills ONLY show dates that actually have displayable games (same filtering as list)
 // ✅ Mobile cards keep “Show/Hide Books” toggle
 // ✅ History modal behavior unchanged (odds-only, line shown in hover tooltip)
-// ✅ Player Props modal NOW pulls from public.player_prop_ev_latest (NOT player_props_snapshot)
-// ✅ Props modal shows player picture + position next to name
-// ✅ Uses book column (draftkings/fanduel/betmgm/pinnacle/betonlineag) instead of bookmaker
-// ✅ “Last Updated” can be bumped by props modal using created_at
-// ✅ Robust image fallback (won’t disappear if blocked; shows placeholder)
+// ✅ Player Props modal:
+//    - ODDS from player_props_snapshot
+//    - POSITION + PICTURE from player_prop_ev_latest
+// ✅ Mobile button clutter fixed: Show/Hide Books + single “More” menu (History / Props)
+// ✅ Odds screen defaults to Moneyline (and resets to Moneyline on sport change)
+// ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across rows + props snapshots
+// ✅ FIX: props book logos appear in white pill (readable even if logo is black)
+// ✅ FIX: build error "Expected identifier but found end of file" — ensures proper closing tags
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -68,6 +71,25 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   bol: "/books/bol.png",
 };
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
+
+/** snapshot bookmaker strings */
+const BOOKMAKER_STR_BY_KEY: Record<BookKey, string> = {
+  dk: "draftkings",
+  fd: "fanduel",
+  mgm: "betmgm",
+  pin: "pinnacle",
+  bol: "betonlineag",
+};
+
+function bookKeyFromBookmaker(raw: string): BookKey | null {
+  const k = String(raw || "").toLowerCase();
+  if (k === "draftkings" || k === "dk") return "dk";
+  if (k === "fanduel" || k === "fd") return "fd";
+  if (k === "betmgm" || k === "mgm") return "mgm";
+  if (k === "pinnacle" || k === "pin") return "pin";
+  if (k === "betonlineag" || k === "bol" || k === "betonline") return "bol";
+  return null;
+}
 
 /** Desktop layout widths (web-friendly) */
 const COL_MATCHUP = 420;
@@ -264,17 +286,25 @@ function renderCellParts(parts: CellParts) {
   return (
     <div className="flex flex-col items-center justify-center leading-tight">
       <div className="tabular-nums">{parts.top}</div>
-      {parts.bottom != null ? <div className="tabular-nums opacity-95">{parts.bottom}</div> : null}
+      {parts.bottom != null ? (
+        <div className="tabular-nums opacity-95">{parts.bottom}</div>
+      ) : null}
     </div>
   );
 }
 
-function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME"): CellParts {
+function consensusPartsForRow(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME"
+): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
 
   if (market === "ml") {
     const odds: number[] = [];
-    if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
+    if (src)
+      for (const b of BOOKS)
+        if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
     const mOdds = median(odds);
     return cellMl(mOdds == null ? null : mOdds);
   }
@@ -319,7 +349,8 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   const mOver = median(overOdds);
   const mUnder = median(underOdds);
 
-  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
+  if (side === "AWAY")
+    return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
   return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
 }
 
@@ -364,7 +395,8 @@ function BookLogoPill({
         className={`${imgH} w-auto object-contain`}
         loading="lazy"
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+          (e.currentTarget as HTMLImageElement).src =
+            headerFallbackPillDataUri(fallbackLabel);
         }}
       />
     </div>
@@ -447,7 +479,10 @@ function BookHeader({
     >
       <span className="sr-only">{alt}</span>
       <div className="flex items-center justify-center">
-        <div style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }} className="flex items-center justify-center">
+        <div
+          style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H }}
+          className="flex items-center justify-center"
+        >
           <img
             src={src}
             alt={alt}
@@ -455,7 +490,8 @@ function BookHeader({
             className="object-contain opacity-95"
             loading="lazy"
             onError={(e) => {
-              (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+              (e.currentTarget as HTMLImageElement).src =
+                headerFallbackPillDataUri(fallbackLabel);
             }}
           />
         </div>
@@ -527,11 +563,17 @@ function MiniTeamRow({
  * CELL GETTERS
  * ========================= */
 
-function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
+function partsForBookSide(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  book: BookKey
+): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
   if (!src) return { top: "—" };
 
-  if (market === "ml") return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
+  if (market === "ml")
+    return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
 
   if (market === "spread") {
     const c = src.spread[book];
@@ -647,7 +689,9 @@ function buildChartSeriesOddsOnly(rows: HistoryRow[], uiMarket: Market, books: s
     binMap.set(bin, byBook);
   }
 
-  const bins = Array.from(binMap.keys()).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+  const bins = Array.from(binMap.keys()).sort(
+    (a, b) => new Date(a).getTime() - new Date(b).getTime()
+  );
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
@@ -755,7 +799,11 @@ function ModalShell({
         <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
+            {subtitle && (
+              <div className="text-[11px] text-[#808080] mt-0.5 break-words">
+                {subtitle}
+              </div>
+            )}
           </div>
           <button
             className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
@@ -773,48 +821,54 @@ function ModalShell({
 }
 
 /** =========================
- * PLAYER PROPS MODAL (NEW TABLE)
+ * PLAYER PROPS MODAL
  * ========================= */
+
+/**
+ * IMPORTANT:
+ * - ODDS/lines come from player_props_snapshot
+ * - Position/Picture come from player_prop_ev_latest
+ * - Join by normalized player_name
+ */
 
 type PropType = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
 
-const PROP_LABEL: Record<PropType, string> = {
+const PROP_LABEL2: Record<PropType, string> = {
   player_points: "Points",
   player_rebounds: "Rebounds",
   player_assists: "Assists",
   player_threes: "3 Pointers",
 };
 
-// book values in player_prop_ev_latest.book (based on your CSV): draftkings/fanduel/betmgm/pinnacle/betonlineag
-function bookKeyFromPropBook(raw: string): BookKey | null {
-  const k = String(raw || "").toLowerCase();
-  if (k === "draftkings") return "dk";
-  if (k === "fanduel") return "fd";
-  if (k === "betmgm") return "mgm";
-  if (k === "pinnacle") return "pin";
-  if (k === "betonlineag") return "bol";
-  return null;
-}
-
-type PlayerPropEvLatestRow = {
+type PlayerPropsSnapshotRow = {
   id: number;
-  created_at: string;
   sport_key: string;
   event_id: string | null;
   commence_time: string | null;
 
+  home_team?: string | null;
+  away_team?: string | null;
+
+  player_name: string | null;
   team: string | null;
   opponent: string | null;
 
+  market: string;
+  side: "over" | "under" | string;
+  line: number | null;
+  odds: number | null;
+  bookmaker: string;
+
+  created_at?: string | null;
+  snapshot_ts?: string | null;
+  ts?: string | null;
+  inserted_at?: string | null;
+};
+
+type PlayerPropEvLatestRow = {
   player_name: string | null;
   position: string | null;
   picture_url: string | null;
-
-  market: string; // player_points, etc
-  side: string; // over/under
-  line: number | null;
-  book: string; // draftkings, fanduel, ...
-  odds: number | null;
 };
 
 type PropCell = {
@@ -839,10 +893,30 @@ function initPropCell(): PropCell {
   return { line: null, over: null, under: null };
 }
 
-function propsMedianLine(rows: { line: number | null }[]) {
+function propsMedianLine(rows: PlayerPropsSnapshotRow[]) {
   const nums: number[] = [];
-  for (const r of rows) if (typeof r.line === "number" && Number.isFinite(r.line)) nums.push(r.line);
+  for (const r of rows)
+    if (typeof r.line === "number" && Number.isFinite(r.line)) nums.push(r.line);
   return median(nums);
+}
+
+function normPlayerName(s: string) {
+  return String(s || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ");
+}
+
+function playerInitials(name: string) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const a = parts[0]?.[0] ?? "";
+  const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
+  const ini = (a + b).toUpperCase();
+  return ini || "—";
 }
 
 function playerAvatarFallbackSvgDataUri(initials: string) {
@@ -861,15 +935,19 @@ function playerAvatarFallbackSvgDataUri(initials: string) {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
 
-function initialsFromName(name: string) {
-  const parts = String(name || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  const a = parts[0]?.[0] ?? "";
-  const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
-  const ini = (a + b).toUpperCase();
-  return ini || "—";
+// which timestamp column does player_props_snapshot use?
+// if your table uses snapshot_ts or ts, change SNAP_TS_COL below.
+const SNAP_TS_COL: "created_at" | "snapshot_ts" | "ts" = "created_at";
+
+function pickSnapTs(r: PlayerPropsSnapshotRow): string | null {
+  const raw =
+    SNAP_TS_COL === "created_at"
+      ? r.created_at ?? null
+      : SNAP_TS_COL === "snapshot_ts"
+      ? r.snapshot_ts ?? null
+      : r.ts ?? null;
+
+  return normalizeIso(raw);
 }
 
 function PlayerPropsModal({
@@ -899,45 +977,75 @@ function PlayerPropsModal({
       setLatestTs(null);
       setRows([]);
 
-      // Pull for this event_id + propType, newest first.
-      // NOTE: player_prop_ev_latest is already "latest" by design, but we still take newest created_at as snapshot label.
-      const q = supabase
-        .from("player_prop_ev_latest")
+      // 1) Pull snapshot odds (ODDS SOURCE)
+      const snap = await supabase
+        .from("player_props_snapshot")
         .select(
-          "id,created_at,sport_key,event_id,commence_time,team,opponent,player_name,position,picture_url,market,side,line,book,odds"
+          "id,sport_key,event_id,commence_time,home_team,away_team,player_name,team,opponent,market,side,line,odds,bookmaker,created_at,snapshot_ts,ts,inserted_at"
         )
         .eq("sport_key", sportKey)
         .eq("market", propType)
         .eq("event_id", ev.eventId)
-        .order("created_at", { ascending: false })
+        .order(SNAP_TS_COL, { ascending: false })
         .limit(5000);
-
-      const r1 = await q;
 
       if (!alive) return;
 
-      if (r1.error) {
-        setErr(r1.error.message);
+      if (snap.error) {
+        setErr(snap.error.message);
         setLoading(false);
         return;
       }
 
-      const raw = (r1.data ?? []) as PlayerPropEvLatestRow[];
+      const raw = (snap.data ?? []) as PlayerPropsSnapshotRow[];
       if (!raw.length) {
-        setLatestTs(null);
-        setRows([]);
         setLoading(false);
         return;
       }
 
-      const newest = raw[0]?.created_at ?? null;
+      const newest = pickSnapTs(raw[0]);
       setLatestTs(newest);
       if (newest && onLastUpdated) onLastUpdated(newest);
 
-      // only rows from newest batch
-      const latestOnly = raw.filter((x) => String(x.created_at) === String(newest));
+      const latestOnly = newest
+        ? raw.filter((x) => pickSnapTs(x) === newest)
+        : raw;
 
-      const byPlayer = new Map<string, PlayerPropEvLatestRow[]>();
+      // build distinct players from snapshot
+      const players = Array.from(
+        new Set(
+          latestOnly
+            .map((r) => (r.player_name ?? "").trim())
+            .filter(Boolean)
+        )
+      );
+
+      // 2) Pull enrichment (POSITION + PICTURE SOURCE)
+      // NOTE: we join by player_name; if your latest table has duplicates per player, we take first.
+      const enrich = await supabase
+        .from("player_prop_ev_latest")
+        .select("player_name,position,picture_url")
+        .eq("sport_key", sportKey)
+        .eq("event_id", ev.eventId)
+        .in("player_name", players);
+
+      if (!alive) return;
+
+      if (enrich.error) {
+        setErr(enrich.error.message);
+        setLoading(false);
+        return;
+      }
+
+      const emap = new Map<string, { position: string | null; pictureUrl: string | null }>();
+      (enrich.data ?? []).forEach((r: PlayerPropEvLatestRow) => {
+        const k = normPlayerName(r.player_name ?? "");
+        if (!k) return;
+        if (!emap.has(k)) emap.set(k, { position: r.position ?? null, pictureUrl: r.picture_url ?? null });
+      });
+
+      // 3) Wide-format by player
+      const byPlayer = new Map<string, PlayerPropsSnapshotRow[]>();
       for (const r of latestOnly) {
         const name = (r.player_name ?? "").trim();
         if (!name) continue;
@@ -956,7 +1064,7 @@ function PlayerPropsModal({
         };
 
         for (const r of prs) {
-          const bk = bookKeyFromPropBook(r.book);
+          const bk = bookKeyFromBookmaker(r.bookmaker);
           if (!bk) continue;
 
           if (typeof r.line === "number" && Number.isFinite(r.line)) {
@@ -969,13 +1077,14 @@ function PlayerPropsModal({
         }
 
         const lineConsensus = propsMedianLine(prs);
+        const meta = emap.get(normPlayerName(player));
 
         return {
           player,
           team: prs[0]?.team ?? null,
           opponent: prs[0]?.opponent ?? null,
-          position: prs[0]?.position ?? null,
-          pictureUrl: prs[0]?.picture_url ?? null,
+          position: meta?.position ?? null,
+          pictureUrl: meta?.pictureUrl ?? null,
           lineConsensus,
           byBook,
         };
@@ -995,10 +1104,86 @@ function PlayerPropsModal({
   const subtitle = [
     ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
     latestTs ? `Snapshot: ${fmtCTDateTime(latestTs)}` : "Snapshot: —",
-    "Source: player_prop_ev_latest",
   ]
     .filter(Boolean)
     .join(" · ");
+
+  function bookMeta(bk: BookKey) {
+    return bk === "dk"
+      ? { alt: "DraftKings", fb: "DK" }
+      : bk === "fd"
+      ? { alt: "FanDuel", fb: "FD" }
+      : bk === "mgm"
+      ? { alt: "BetMGM", fb: "MGM" }
+      : bk === "pin"
+      ? { alt: "Pinnacle", fb: "PIN" }
+      : { alt: "BetOnline", fb: "BOL" };
+  }
+
+  function PropBookCell({ cell }: { cell: PropCell }) {
+    return (
+      <div className="flex flex-col items-center justify-center leading-tight">
+        <div className="text-[12px] text-white font-extrabold tabular-nums">
+          {cell.line == null ? "—" : cell.line}
+        </div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">
+          O: {cell.over == null ? "—" : cell.over}
+        </div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">
+          U: {cell.under == null ? "—" : cell.under}
+        </div>
+      </div>
+    );
+  }
+
+  function PlayerHeaderCell({
+    name,
+    position,
+    pictureUrl,
+    team,
+    opponent,
+  }: {
+    name: string;
+    position?: string | null;
+    pictureUrl?: string | null;
+    team?: string | null;
+    opponent?: string | null;
+  }) {
+    const ini = playerInitials(name);
+    const fallback = playerAvatarFallbackSvgDataUri(ini);
+
+    return (
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="w-10 h-10 rounded-lg overflow-hidden border border-[#2a2a2a] bg-black/30 shrink-0">
+          <img
+            src={pictureUrl || fallback}
+            alt={name}
+            className="w-10 h-10 object-cover"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).src = fallback;
+            }}
+          />
+        </div>
+
+        <div className="min-w-0">
+          <div className="text-white font-extrabold text-[13px] truncate">
+            {name}
+            {position ? (
+              <span className="text-[#9a9a9a] font-bold"> · {position}</span>
+            ) : null}
+          </div>
+          {(team || opponent) ? (
+            <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
+              {team ?? "—"}{" "}
+              {opponent ? <span className="text-[#6f6f6f]">vs {opponent}</span> : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   function PropTypeSelect() {
     return (
@@ -1018,77 +1203,6 @@ function PlayerPropsModal({
     );
   }
 
-  function PropBookCell({ cell }: { cell: PropCell }) {
-    return (
-      <div className="flex flex-col items-center justify-center leading-tight">
-        <div className="text-[12px] text-white font-extrabold tabular-nums">{cell.line == null ? "—" : cell.line}</div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">O: {cell.over == null ? "—" : cell.over}</div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">U: {cell.under == null ? "—" : cell.under}</div>
-      </div>
-    );
-  }
-
-  function bookMeta(bk: BookKey) {
-    return bk === "dk"
-      ? { alt: "DraftKings", fb: "DK" }
-      : bk === "fd"
-      ? { alt: "FanDuel", fb: "FD" }
-      : bk === "mgm"
-      ? { alt: "BetMGM", fb: "MGM" }
-      : bk === "pin"
-      ? { alt: "Pinnacle", fb: "PIN" }
-      : { alt: "BetOnline", fb: "BOL" };
-  }
-
-  function PlayerCell({
-    name,
-    position,
-    pictureUrl,
-    team,
-    opponent,
-  }: {
-    name: string;
-    position?: string | null;
-    pictureUrl?: string | null;
-    team?: string | null;
-    opponent?: string | null;
-  }) {
-    const ini = initialsFromName(name);
-    const fallback = playerAvatarFallbackSvgDataUri(ini);
-
-    return (
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="w-10 h-10 rounded-lg overflow-hidden border border-[#2a2a2a] bg-black/30 shrink-0">
-          <img
-            src={pictureUrl || fallback}
-            alt={name}
-            className="w-10 h-10 object-cover"
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            onError={(e) => {
-              // IMPORTANT: do NOT hide — replace with fallback so user sees *something*
-              (e.currentTarget as HTMLImageElement).src = fallback;
-            }}
-          />
-        </div>
-
-        <div className="min-w-0">
-          <div className="text-white font-extrabold text-[13px] truncate">
-            {name}
-            {position ? <span className="text-[#9a9a9a] font-bold"> · {position}</span> : null}
-          </div>
-
-          {(team || opponent) ? (
-            <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-              {team ?? "—"}{" "}
-              {opponent ? <span className="text-[#6f6f6f]">vs {opponent}</span> : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <ModalShell title="Player Props" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -1098,29 +1212,27 @@ function PlayerPropsModal({
         </div>
       </div>
 
-      {/* If your app has a CSP that blocks external images, this helps you notice it quickly */}
-      <div className="mb-3 text-[11px] text-[#6f6f6f]">
-        If pictures still don’t show: check browser console for “Refused to load image” (CSP/img-src). This UI uses direct
-        <span className="text-[#cfcfcf] font-bold"> picture_url</span> from the table.
-      </div>
-
       {loading ? (
         <div className="text-xs text-[#808080]">Loading player props…</div>
       ) : err ? (
         <div className="text-xs text-red-400">Supabase error: {err}</div>
       ) : !rows.length ? (
         <div className="text-xs text-[#808080]">
-          No rows found for <span className="text-white font-extrabold">{PROP_LABEL[propType]}</span> for this event.
+          No rows found for{" "}
+          <span className="text-white font-extrabold">{PROP_LABEL2[propType]}</span>{" "}
+          for this event.
         </div>
       ) : (
         <>
           {/* Desktop/tablet */}
           <div className="hidden sm:block">
             <div className="overflow-x-auto rounded-xl border border-[#2a2a2a] bg-black/20">
-              <table className="min-w-[1020px] w-full">
+              <table className="min-w-[1080px] w-full">
                 <thead className="sticky top-0 z-10">
                   <tr className={`border-b ${HDR_BORDER}`}>
-                    <th className={`text-left px-4 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold`}>Player</th>
+                    <th className={`text-left px-4 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold`}>
+                      Player
+                    </th>
                     <th
                       className={`text-center px-3 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold border-l ${HDR_BORDER}`}
                     >
@@ -1153,7 +1265,7 @@ function PlayerPropsModal({
                   {rows.map((r) => (
                     <tr key={r.player} className={`border-b ${HDR_BORDER} last:border-b-0 hover:bg-white/5`}>
                       <td className="px-4 py-3">
-                        <PlayerCell
+                        <PlayerHeaderCell
                           name={r.player}
                           position={r.position}
                           pictureUrl={r.pictureUrl}
@@ -1179,7 +1291,7 @@ function PlayerPropsModal({
 
             <div className="mt-3 text-[11px] text-[#808080]">
               Each book cell shows: <span className="text-white font-bold">Line</span> +{" "}
-              <span className="text-white font-bold">O/U odds</span> (newest batch by created_at).
+              <span className="text-white font-bold">O/U odds</span> (latest snapshot only).
             </div>
           </div>
 
@@ -1189,7 +1301,7 @@ function PlayerPropsModal({
               <div key={r.player} className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
                 <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <PlayerCell
+                    <PlayerHeaderCell
                       name={r.player}
                       position={r.position}
                       pictureUrl={r.pictureUrl}
@@ -1197,9 +1309,11 @@ function PlayerPropsModal({
                       opponent={r.opponent}
                     />
                   </div>
-                  <div className="text-right shrink-0">
+                  <div className="text-right">
                     <div className="text-[10px] text-[#808080] font-semibold">Cons</div>
-                    <div className="text-white font-extrabold tabular-nums">{r.lineConsensus == null ? "—" : r.lineConsensus}</div>
+                    <div className="text-white font-extrabold tabular-nums">
+                      {r.lineConsensus == null ? "—" : r.lineConsensus}
+                    </div>
                   </div>
                 </div>
 
@@ -1352,7 +1466,7 @@ function HistoryChartPairOddsOnly({
                       }}
                     />
 
-                    <Legend />
+                    <Legend wrapperStyle={legendWrapperStyle} />
 
                     {books.map((b) => (
                       <Line
@@ -1782,7 +1896,10 @@ function EventTwoRows({
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
-        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
+        <td
+          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
+          rowSpan={2}
+        >
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
@@ -2091,7 +2208,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                     ev={ev}
                     market={market}
                     booksOpen={!!mobileOpenMap[ev.eventId]}
-                    onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
+                    onToggleBooks={() =>
+                      setMobileOpenMap((prev) => ({
+                        ...prev,
+                        [ev.eventId]: !prev[ev.eventId],
+                      }))
+                    }
                     onOpenHistory={openHistory}
                     onOpenProps={openProps}
                   />
@@ -2141,7 +2263,13 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <tbody>
                     {events.map((ev) => (
-                      <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} onOpenProps={openProps} />
+                      <EventTwoRows
+                        key={ev.eventId}
+                        ev={ev}
+                        market={market}
+                        onOpenHistory={openHistory}
+                        onOpenProps={openProps}
+                      />
                     ))}
                   </tbody>
                 </table>
@@ -2151,7 +2279,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         </div>
 
         {/* History modal */}
-        {historyOpen && historyEvent?.eventId && <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />}
+        {historyOpen && historyEvent?.eventId && (
+          <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
+        )}
 
         {/* Player Props modal */}
         {propsOpen && propsEvent?.eventId && (
@@ -2168,3 +2298,4 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
+
