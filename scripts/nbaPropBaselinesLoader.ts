@@ -1,11 +1,16 @@
 /**
  * scripts/nbaPropBaselinesLoader.ts
  *
- * Updates:
- * ✅ Only PTS/REB/AST/3PM from 4 FantasyPros sources
- * ✅ Store ONLY first position if multiple (e.g. "PG,SG" => "PG")
- * ✅ team_abbr becomes canonical team name via public.team_map.Abbreviation
- * ✅ Adds opponent via public.events (canon_home_team/canon_away_team)
+ * NBA Prop Baselines (NO PROJECTIONS)
+ * ✅ Pulls only PTS/REB/AST/3PM from FantasyPros stats tables:
+ *    - season avg
+ *    - last 7 avg
+ *    - last 15 avg
+ * ✅ Position: store ONLY first position (PG from PG,SG)
+ * ✅ Canonical team: team_map."Abbreviation" -> team_map.canonical
+ * ✅ Opponent: events (canon_home_team/canon_away_team) nearest upcoming via commence_time
+ * ✅ picture_url from fp_id
+ * ✅ Composite per stat (0..100 percentile blend)
  */
 
 import "dotenv/config";
@@ -13,9 +18,8 @@ import { createClient } from "@supabase/supabase-js";
 import * as cheerio from "cheerio";
 
 const URL_AVG_SZN = "https://www.fantasypros.com/nba/stats/avg-overall.php";
-const URL_AVG_7   = "https://www.fantasypros.com/nba/stats/avg-overall.php?days=7";
-const URL_AVG_15  = "https://www.fantasypros.com/nba/stats/avg-overall.php?days=15";
-const URL_PROJ    = "https://www.fantasypros.com/nba/projections/avg-daily-overall.php";
+const URL_AVG_7 = "https://www.fantasypros.com/nba/stats/avg-overall.php?days=7";
+const URL_AVG_15 = "https://www.fantasypros.com/nba/stats/avg-overall.php?days=15";
 
 type Stat4 = { pts?: number; reb?: number; ast?: number; pm3?: number };
 
@@ -23,26 +27,23 @@ type PlayerBase = {
   fp_id: number;
   player_name: string;
   player_url?: string | null;
-  team_abbr_raw?: string | null; // e.g. "LAL" from FantasyPros
-  position?: string | null;      // FIRST position only (e.g. "PG")
+  team_abbr_raw?: string | null; // e.g. LAL
+  position?: string | null;      // first position only, e.g. PG
 };
 
 type PlayerRow = PlayerBase & {
-  // raw inputs
-  pts_szn?: number | null;  reb_szn?: number | null;  ast_szn?: number | null;  pm3_szn?: number | null;
-  pts_7?: number | null;    reb_7?: number | null;    ast_7?: number | null;    pm3_7?: number | null;
-  pts_15?: number | null;   reb_15?: number | null;   ast_15?: number | null;   pm3_15?: number | null;
-  pts_proj?: number | null; reb_proj?: number | null; ast_proj?: number | null; pm3_proj?: number | null;
+  canonical?: string | null;
+  opponent?: string | null;
+  picture_url?: string | null;
 
-  // composites
+  pts_szn?: number | null; reb_szn?: number | null; ast_szn?: number | null; pm3_szn?: number | null;
+  pts_7?: number | null;   reb_7?: number | null;   ast_7?: number | null;   pm3_7?: number | null;
+  pts_15?: number | null;  reb_15?: number | null;  ast_15?: number | null;  pm3_15?: number | null;
+
   pts_comp?: number | null;
   reb_comp?: number | null;
   ast_comp?: number | null;
   pm3_comp?: number | null;
-
-  // canon
-  team_abbr?: string | null; // YOU requested this becomes canonical team name
-  opponent?: string | null;  // canonical opponent
 };
 
 function toNum(x: string | undefined | null): number | null {
@@ -60,12 +61,12 @@ function parseSeasonFromAnyPage($: cheerio.CheerioAPI): string {
 }
 
 function parseTeamPosLabel(label: string): { team: string | null; firstPos: string | null } {
-  // label like "(LAL - PG,SG)"
+  // "(LAL - PG,SG)" => team=LAL, firstPos=PG
   const m = label.match(/\(\s*([A-Z]{2,4})\s*-\s*([^)]+)\)/);
   if (!m) return { team: null, firstPos: null };
   const team = m[1];
-  const posRaw = m[2].trim();       // "PG,SG"
-  const firstPos = posRaw.split(",")[0]?.trim() || null; // "PG"
+  const posRaw = m[2].trim();
+  const firstPos = posRaw.split(",")[0]?.trim() || null;
   return { team, firstPos };
 }
 
@@ -81,8 +82,8 @@ async function fetchHtml(url: string): Promise<string> {
 }
 
 /**
- * Scrape avg-overall.php tables:
- * td.center order includes PTS(0), REB(1), AST(2), 3PM(7) on this page structure.
+ * avg-overall.php:
+ * td.center order includes PTS(0), REB(1), AST(2), ... , 3PM(7)
  */
 function scrapeAvgPage(html: string): { season: string; map: Map<number, PlayerBase & Stat4> } {
   const $ = cheerio.load(html);
@@ -109,53 +110,6 @@ function scrapeAvgPage(html: string): { season: string; map: Map<number, PlayerB
     const pts = toNum(centers[0]);
     const reb = toNum(centers[1]);
     const ast = toNum(centers[2]);
-    const pm3 = toNum(centers[7]); // 3PM
-
-    out.set(fp_id, {
-      fp_id,
-      player_name,
-      player_url: href,
-      team_abbr_raw,
-      position: firstPos,
-      pts: pts ?? undefined,
-      reb: reb ?? undefined,
-      ast: ast ?? undefined,
-      pm3: pm3 ?? undefined,
-    });
-  });
-
-  return { season, map: out };
-}
-
-/**
- * Scrape projections avg-daily-overall:
- * We take td.center[0]=PTS, [1]=REB, [2]=AST, [7]=3PM based on visible header order.
- */
-function scrapeProjPage(html: string): { map: Map<number, PlayerBase & Stat4>; rowCount: number } {
-  const $ = cheerio.load(html);
-  const out = new Map<number, PlayerBase & Stat4>();
-
-  $("tr").each((_, tr) => {
-    const $tr = $(tr);
-    const a = $tr.find("a.fp-player-link").first();
-    if (!a.length) return;
-
-    const player_name = (a.attr("fp-player-name") || a.text() || "").trim();
-    const href = a.attr("href") || null;
-
-    const cls = a.attr("class") || "";
-    const idMatch = cls.match(/fp-id-(\d+)/);
-    const fp_id = idMatch ? Number(idMatch[1]) : null;
-
-    const small = $tr.find("small").first().text().trim();
-    const { team: team_abbr_raw, firstPos } = parseTeamPosLabel(small);
-
-    const centers = $tr.find("td.center").toArray().map(td => $(td).text().trim());
-    if (!fp_id || !player_name || centers.length < 8) return;
-
-    const pts = toNum(centers[0]);
-    const reb = toNum(centers[1]);
-    const ast = toNum(centers[2]);
     const pm3 = toNum(centers[7]);
 
     out.set(fp_id, {
@@ -171,7 +125,7 @@ function scrapeProjPage(html: string): { map: Map<number, PlayerBase & Stat4>; r
     });
   });
 
-  return { map: out, rowCount: out.size };
+  return { season, map: out };
 }
 
 function percentileMap(valuesById: Map<number, number>): Map<number, number> {
@@ -192,9 +146,9 @@ function percentileMap(valuesById: Map<number, number>): Map<number, number> {
 function buildComposite(
   rows: Map<number, PlayerRow>,
   statKey: "pts" | "reb" | "ast" | "pm3",
-  weights: { szn: number; d7: number; d15: number; proj: number }
+  weights: { szn: number; d7: number; d15: number }
 ): Map<number, number> {
-  const pull = (suffix: string) => {
+  const pull = (suffix: "szn" | "7" | "15") => {
     const m = new Map<number, number>();
     for (const [id, r] of rows.entries()) {
       const v = (r as any)[`${statKey}_${suffix}`] as number | null | undefined;
@@ -206,7 +160,6 @@ function buildComposite(
   const pSzn = percentileMap(pull("szn"));
   const p7 = percentileMap(pull("7"));
   const p15 = percentileMap(pull("15"));
-  const pProj = percentileMap(pull("proj"));
 
   const out = new Map<number, number>();
   for (const [id] of rows.entries()) {
@@ -214,7 +167,6 @@ function buildComposite(
     const s = pSzn.get(id); if (s != null) parts.push([s, weights.szn]);
     const d7 = p7.get(id); if (d7 != null) parts.push([d7, weights.d7]);
     const d15 = p15.get(id); if (d15 != null) parts.push([d15, weights.d15]);
-    const pr = pProj.get(id); if (pr != null) parts.push([pr, weights.proj]);
 
     if (!parts.length) continue;
     const wsum = parts.reduce((a, [, w]) => a + w, 0);
@@ -231,12 +183,11 @@ async function main() {
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-  // 1) Pull FantasyPros pages
-  const [htmlSzn, html7, html15, htmlProj] = await Promise.all([
+  // 1) Fetch stats pages
+  const [htmlSzn, html7, html15] = await Promise.all([
     fetchHtml(URL_AVG_SZN),
     fetchHtml(URL_AVG_7),
     fetchHtml(URL_AVG_15),
-    fetchHtml(URL_PROJ),
   ]);
 
   const szn = scrapeAvgPage(htmlSzn);
@@ -244,17 +195,9 @@ async function main() {
   const d15 = scrapeAvgPage(html15);
   const season = szn.season;
 
-  const proj = scrapeProjPage(htmlProj);
-  if (proj.rowCount < 50) {
-    console.warn(
-      `WARNING: projections scraped only ${proj.rowCount} players; this page may be limited unless authenticated.`
-    );
-  }
+  console.log(`scrape counts: season=${szn.map.size} last7=${d7.map.size} last15=${d15.map.size}`);
 
-  // 2) Load team_map so we can convert Abbreviation -> Canonical Team Name
-  // You said: use team_map Abbreviation and return canonical name.
-  // Assumption: team_map has columns: Abbreviation, Canonical (or team / canonical_name).
-  // We'll select a few common candidates and pick whichever exists in your schema.
+  // 2) Load team_map Abbreviation -> canonical
   const { data: teamMapRows, error: tmErr } = await supabase
     .from("team_map")
     .select('"Abbreviation", canonical')
@@ -264,7 +207,7 @@ async function main() {
 
   const abbrToCanon = new Map<string, string>();
   for (const r of teamMapRows || []) {
-    const abbr = (r as any)["Abbreviation"]?.toString().trim(); // <-- must use the exact key
+    const abbr = (r as any)["Abbreviation"]?.toString().trim();
     const canon = (r as any).canonical?.toString().trim();
     if (abbr && canon) abbrToCanon.set(abbr, canon);
   }
@@ -279,12 +222,12 @@ async function main() {
       fp_id: p.fp_id,
       player_name: p.player_name || cur.player_name,
       player_url: p.player_url ?? cur.player_url ?? null,
-      team_abbr_raw: p.team_abbr_raw ?? (cur as any).team_abbr_raw ?? null,
-      position: p.position ?? (cur as any).position ?? null,
+      team_abbr_raw: p.team_abbr_raw ?? cur.team_abbr_raw ?? null,
+      position: p.position ?? cur.position ?? null,
     });
   }
 
-  function apply(map: Map<number, PlayerBase & Stat4>, suffix: "szn" | "7" | "15" | "proj") {
+  function apply(map: Map<number, PlayerBase & Stat4>, suffix: "szn" | "7" | "15") {
     for (const [id, p] of map.entries()) {
       upsertBase(p);
       const cur = merged.get(id)!;
@@ -301,20 +244,15 @@ async function main() {
   apply(szn.map, "szn");
   apply(d7.map, "7");
   apply(d15.map, "15");
-  apply(proj.map, "proj");
 
-  // 4) Canonicalize team name into team_abbr field (per your request)
+  // 4) Canonicalize team + picture_url
   for (const r of merged.values()) {
-    const raw = (r.team_abbr_raw || "").toString().trim();
-    r.team_abbr = raw ? (abbrToCanon.get(raw) ?? raw) : null; // canonical name if available, else keep raw
+    const raw = (r.team_abbr_raw || "").trim();
+    r.canonical = raw ? (abbrToCanon.get(raw) ?? raw) : null;
+    r.picture_url = `https://images.fantasypros.com/images/players/nba/${r.fp_id}/headshot/70x70.png`;
   }
 
-  // 5) Build opponent via events table (canon_home_team / canon_away_team)
-  // Strategy: for each team canonical name, find the nearest upcoming event for NBA,
-  // then return the opposing canonical team.
-  const uniqueTeams = [...new Set([...merged.values()].map(r => r.team_abbr).filter(Boolean) as string[])];
-
-  // Pull upcoming events (you can tighten time window if you want)
+  // 5) Opponent via events (nearest upcoming)
   const nowIso = new Date().toISOString();
   const { data: events, error: evErr } = await supabase
     .from("events")
@@ -326,7 +264,8 @@ async function main() {
 
   if (evErr) throw evErr;
 
-  // Map team canonical -> opponent canonical (nearest game)
+  const uniqueTeams = [...new Set([...merged.values()].map(r => r.canonical).filter(Boolean) as string[])];
+
   const teamToOpponent = new Map<string, string>();
   for (const team of uniqueTeams) {
     const game = (events || []).find(e => e.canon_home_team === team || e.canon_away_team === team);
@@ -336,12 +275,12 @@ async function main() {
   }
 
   for (const r of merged.values()) {
-    const team = r.team_abbr;
+    const team = r.canonical;
     r.opponent = team ? (teamToOpponent.get(team) ?? null) : null;
   }
 
-  // 6) composites
-  const weights = { szn: 0.35, d15: 0.25, d7: 0.25, proj: 0.15 };
+  // 6) composites (NO projections)
+  const weights = { szn: 0.4, d15: 0.3, d7: 0.3 };
 
   const ptsComp = buildComposite(merged, "pts", weights);
   const rebComp = buildComposite(merged, "reb", weights);
@@ -353,24 +292,23 @@ async function main() {
   for (const [id, s] of astComp.entries()) merged.get(id)!.ast_comp = s;
   for (const [id, s] of pm3Comp.entries()) merged.get(id)!.pm3_comp = s;
 
-  // 7) upsert payload
+  // 7) upsert
   const payload = [...merged.values()].map(r => ({
     season,
     fp_id: r.fp_id,
     player_name: r.player_name,
     player_url: r.player_url ?? null,
 
-    // you requested canonical team name goes into team_abbr
-    team_abbr: r.team_abbr ?? null,
     team_abbr_raw: r.team_abbr_raw ?? null,
-    positions: r.position ?? null,
-
+    canonical: r.canonical ?? null,
+    position: r.position ?? null,
     opponent: r.opponent ?? null,
+
+    picture_url: r.picture_url ?? null,
 
     pts_szn: r.pts_szn ?? null, reb_szn: r.reb_szn ?? null, ast_szn: r.ast_szn ?? null, pm3_szn: r.pm3_szn ?? null,
     pts_7: r.pts_7 ?? null,     reb_7: r.reb_7 ?? null,     ast_7: r.ast_7 ?? null,     pm3_7: r.pm3_7 ?? null,
     pts_15: r.pts_15 ?? null,   reb_15: r.reb_15 ?? null,   ast_15: r.ast_15 ?? null,   pm3_15: r.pm3_15 ?? null,
-    pts_proj: r.pts_proj ?? null, reb_proj: r.reb_proj ?? null, ast_proj: r.ast_proj ?? null, pm3_proj: r.pm3_proj ?? null,
 
     pts_comp: r.pts_comp ?? null,
     reb_comp: r.reb_comp ?? null,
