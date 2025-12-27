@@ -1,7 +1,7 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE
-// ------------------------------------------------
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v2: SHARP FIX)
+// ---------------------------------------------------------------------------
 // ✅ Scrapes FantasyPros season / last7 / last15 for: PTS, REB, AST, 3PM, MIN
 // ✅ Uses only those windows to build mean projections + sigma estimate
 // ✅ Uses odds_wide_latest (team, pin_spread_line, pin_total_line) to context-adjust minutes + mu
@@ -9,14 +9,16 @@
 // ✅ ONLY returns players from FUTURE GAMES:
 //    - event_id must exist in events table
 //    - commence_time must be > now
-// ✅ Builds sharp no-vig probability from Pinnacle pairs
-// ✅ p_sharp uses "nearest Pinnacle line" fallback within tolerance (fills far more cells)
+// ✅ FIX: p_sharp now uses BOTH Pinnacle + BetOnlineAG (avg when both exist)
+//    - fallback: Pinnacle-only if BetOnline missing (or BetOnline-only if Pinnacle missing)
+//    - still uses nearest-line fallback within tolerance (fills far more cells)
 // ✅ Outputs to ONE table: public.player_prop_ev_latest (cleared per run by sport_key)
 // ✅ Includes player picture_url
 //
 // Run: npm run nba:props:ev:build
 //
-// NOTE: Ensure the SQL table exists (player_prop_ev_latest) with the columns from the SQL I provided.
+// NOTE: Ensure the SQL table exists (player_prop_ev_latest) with the columns you expect.
+//       Optional debug fields are included but commented — enable if your table supports them.
 
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
@@ -45,10 +47,11 @@ const QUANTUM_BLEND_MODEL = 0.25;
 const QUANTUM_BLEND_SHARP = 0.75;
 
 // books
-const SHARP_BOOK = "pinnacle";
 const SOFT_BOOKS = new Set(["draftkings", "fanduel", "betmgm"]);
+const SHARP_BOOKS = ["pinnacle", "betonlineag"] as const;
 
-// Pinnacle nearest-line matching tolerance (points, assists, rebounds typical .5 increments)
+// Nearest-line matching tolerance (points, assists, rebounds typical .5 increments)
+// (You can bump to 1.5 if you want even more p_sharp fills)
 const PIN_LINE_TOLERANCE = 1.0;
 
 /* =========================================================
@@ -97,14 +100,6 @@ type OddsWide = {
   pin_total_line: number | null;
 };
 
-type PinnacleNoVigLine = {
-  line: number;
-  p_over: number;
-  p_under: number;
-  over_odds: number;
-  under_odds: number;
-};
-
 type PropsRow = {
   sport_key: string;
   event_id: string;
@@ -118,6 +113,17 @@ type PropsRow = {
   line: number;
   odds: number;
   bookmaker: string;
+};
+
+type SharpBook = (typeof SHARP_BOOKS)[number];
+
+type SharpNoVigLine = {
+  book: SharpBook;
+  line: number;
+  p_over: number;
+  p_under: number;
+  over_odds: number;
+  under_odds: number;
 };
 
 /* =========================================================
@@ -168,6 +174,8 @@ function kellyFraction(p: number, odds: number): number {
 }
 
 function weightedAvg(a: number | null, b: number | null, c: number | null): number | null {
+  // NOTE: signature is (szn, d7, d15) in your original, but you use W.d15 on third arg.
+  // We'll keep your intended weighting: szn (a), d7 (b), d15 (c)
   let sum = 0;
   let wsum = 0;
   if (a != null) {
@@ -183,6 +191,16 @@ function weightedAvg(a: number | null, b: number | null, c: number | null): numb
     wsum += W.d7;
   }
   return wsum ? sum / wsum : null;
+}
+
+function normBook(b: any): SharpBook | null {
+  const s = String(b || "").toLowerCase().trim();
+  if (!s) return null;
+
+  if (s === "pinnacle" || s.includes("pinnacle")) return "pinnacle";
+  if (s === "betonlineag" || s.includes("betonline")) return "betonlineag";
+
+  return null;
 }
 
 /* =========================================================
@@ -383,6 +401,9 @@ async function main() {
 
   /* -------------------------------------------------------
      2) Pull props snapshot ONLY for future events
+        NOTE: We pull ALL books (soft + sharp) because we need
+              Pinnacle/BetOnline for p_sharp, then we filter
+              to SOFT_BOOKS when outputting playable rows.
   -------------------------------------------------------- */
   const props: PropsRow[] = [];
   const eventIdList = Array.from(allowedEventIds);
@@ -520,32 +541,38 @@ async function main() {
   }
 
   /* -------------------------------------------------------
-     6) Build Pinnacle no-vig index:
-        key = event|player|market  => list of lines
+     6) Build SHARP no-vig index (Pinnacle + BetOnlineAG)
+        key = event|player|market => list of {book,line,p_over,p_under}
   -------------------------------------------------------- */
-  const pinIndex = new Map<string, PinnacleNoVigLine[]>();
+  const sharpIndex = new Map<string, SharpNoVigLine[]>();
 
   function idxKey(r: PropsRow) {
+    // Keep RAW market string so it matches snapshot structure 1:1
     return `${r.event_id}|${normName(r.player_name)}|${r.market}`;
   }
 
-  // group odds by event/player/market/line for pinnacle
-  const pinPairs = new Map<string, { line: number; over?: number; under?: number }>();
+  // (event|player|market|book|line) -> {over,under}
+  const sharpPairs = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
+
   for (const r of props) {
-    if (String(r.bookmaker).toLowerCase() !== SHARP_BOOK) continue;
-    const side = String(r.side).toLowerCase();
+    const book = normBook(r.bookmaker);
+    if (!book) continue;
+
+    const side = String(r.side || "").toLowerCase().trim();
     const line = toNum(r.line);
     const odds = toNum(r.odds);
     if (line == null || odds == null) continue;
 
-    const k = `${idxKey(r)}|${line}`;
-    const cur = pinPairs.get(k) ?? { line };
+    const k = `${idxKey(r)}|${book}|${line}`;
+    const cur = sharpPairs.get(k) ?? { book, line };
+
     if (side === "over") cur.over = odds;
     if (side === "under") cur.under = odds;
-    pinPairs.set(k, cur);
+
+    sharpPairs.set(k, cur);
   }
 
-  for (const [k, v] of pinPairs.entries()) {
+  for (const [k, v] of sharpPairs.entries()) {
     if (v.over == null || v.under == null) continue;
 
     const pO = americanToImpliedProb(v.over);
@@ -554,51 +581,91 @@ async function main() {
     if (denom <= 0) continue;
 
     const baseKey = k.split("|").slice(0, 3).join("|"); // event|player|market
-    const arr = pinIndex.get(baseKey) ?? [];
+    const arr = sharpIndex.get(baseKey) ?? [];
     arr.push({
+      book: v.book,
       line: v.line,
       p_over: pO / denom,
       p_under: pU / denom,
       over_odds: v.over,
       under_odds: v.under,
     });
-    pinIndex.set(baseKey, arr);
+    sharpIndex.set(baseKey, arr);
   }
 
-  // sort by line for stability
-  for (const [k, arr] of pinIndex.entries()) {
-    arr.sort((a, b) => a.line - b.line);
-    pinIndex.set(k, arr);
+  for (const [k, arr] of sharpIndex.entries()) {
+    arr.sort((a, b) => {
+      if (a.book !== b.book) return a.book.localeCompare(b.book);
+      return a.line - b.line;
+    });
+    sharpIndex.set(k, arr);
   }
 
-  function getNearestPinnacleNoVig(r: PropsRow): { p_sharp: number | null; pin_line_used: number | null } {
-    const arr = pinIndex.get(idxKey(r));
-    if (!arr || arr.length === 0) return { p_sharp: null, pin_line_used: null };
-
-    const target = toNum(r.line);
-    if (target == null) return { p_sharp: null, pin_line_used: null };
-
-    let best: PinnacleNoVigLine | null = null;
+  function nearestSharpForBook(arr: SharpNoVigLine[], book: SharpBook, targetLine: number): SharpNoVigLine | null {
+    let best: SharpNoVigLine | null = null;
     let bestDist = Infinity;
 
     for (const cand of arr) {
-      const dist = Math.abs(cand.line - target);
+      if (cand.book !== book) continue;
+      const dist = Math.abs(cand.line - targetLine);
       if (dist < bestDist) {
         bestDist = dist;
         best = cand;
       }
     }
 
-    if (!best || bestDist > PIN_LINE_TOLERANCE) return { p_sharp: null, pin_line_used: null };
+    if (!best || bestDist > PIN_LINE_TOLERANCE) return null;
+    return best;
+  }
 
-    const side = String(r.side).toLowerCase();
-    const p = side === "over" ? best.p_over : side === "under" ? best.p_under : null;
-    return { p_sharp: p ?? null, pin_line_used: best.line };
+  function getSharpNoVigP(r: PropsRow): {
+    p_sharp: number | null;
+    sharp_line_used: number | null;
+    sharp_books_used: string | null; // "pinnacle", "betonlineag", "pinnacle+betonlineag"
+  } {
+    const arr = sharpIndex.get(idxKey(r));
+    if (!arr || arr.length === 0) return { p_sharp: null, sharp_line_used: null, sharp_books_used: null };
+
+    const target = toNum(r.line);
+    if (target == null) return { p_sharp: null, sharp_line_used: null, sharp_books_used: null };
+
+    const pin = nearestSharpForBook(arr, "pinnacle", target);
+    const bol = nearestSharpForBook(arr, "betonlineag", target);
+
+    const side = String(r.side || "").toLowerCase().trim();
+    const pickP = (x: SharpNoVigLine | null) => {
+      if (!x) return null;
+      if (side === "over") return x.p_over;
+      if (side === "under") return x.p_under;
+      return null;
+    };
+
+    const pPin = pickP(pin);
+    const pBol = pickP(bol);
+
+    if (pPin != null && pBol != null) {
+      return {
+        p_sharp: clamp((pPin + pBol) / 2, 0, 1),
+        sharp_line_used: pin?.line ?? bol?.line ?? null,
+        sharp_books_used: "pinnacle+betonlineag",
+      };
+    }
+
+    if (pPin != null) {
+      return { p_sharp: clamp(pPin, 0, 1), sharp_line_used: pin?.line ?? null, sharp_books_used: "pinnacle" };
+    }
+
+    if (pBol != null) {
+      return { p_sharp: clamp(pBol, 0, 1), sharp_line_used: bol?.line ?? null, sharp_books_used: "betonlineag" };
+    }
+
+    return { p_sharp: null, sharp_line_used: null, sharp_books_used: null };
   }
 
   /* -------------------------------------------------------
-     7) Build final EV rows
+     7) Build final EV rows (SOFT books only)
   -------------------------------------------------------- */
+
   const out: any[] = [];
 
   for (const r of props) {
@@ -609,7 +676,7 @@ async function main() {
     const ct = r.commence_time ? new Date(r.commence_time) : null;
     if (!ct || !(ct.getTime() > now.getTime())) continue;
 
-    const book = String(r.bookmaker).toLowerCase();
+    const book = String(r.bookmaker).toLowerCase().trim();
     if (!SOFT_BOOKS.has(book)) continue;
 
     const playerNameRaw = String(r.player_name || "").trim();
@@ -618,7 +685,7 @@ async function main() {
     const base = baselineByName.get(normName(playerNameRaw));
     if (!base || !base.canonical) continue;
 
-    // Market mapping
+    // Market mapping (your output market names)
     const market =
       r.market === "player_points"
         ? "points"
@@ -631,10 +698,12 @@ async function main() {
         : null;
     if (!market) continue;
 
-    const side = String(r.side).toLowerCase() === "over" ? "over" : String(r.side).toLowerCase() === "under" ? "under" : null;
+    const side = String(r.side || "").toLowerCase().trim();
+    if (side !== "over" && side !== "under") continue;
+
     const line = toNum(r.line);
     const odds = toNum(r.odds);
-    if (!side || line == null || odds == null) continue;
+    if (line == null || odds == null) continue;
 
     // Context from odds_wide_latest by canonical team
     const ow = teamToOdds.get(base.canonical);
@@ -646,7 +715,8 @@ async function main() {
 
     const implied_team_total =
       pin_total_line != null && pin_spread_line != null ? pin_total_line / 2 - pin_spread_line / 2 : null;
-    const team_total_factor = implied_team_total != null ? clamp(implied_team_total / NBA_AVG_TEAM_TOTAL, 0.85, 1.15) : null;
+    const team_total_factor =
+      implied_team_total != null ? clamp(implied_team_total / NBA_AVG_TEAM_TOTAL, 0.85, 1.15) : null;
 
     // Minutes mean + adjusted
     const min_base = weightedAvg(base.min_szn, base.min_7, base.min_15);
@@ -699,8 +769,8 @@ async function main() {
 
     if (mu == null || p_model == null) continue;
 
-    // Sharp no-vig: nearest Pinnacle line fallback
-    const { p_sharp, pin_line_used } = getNearestPinnacleNoVig(r);
+    // SHARP no-vig (Pinnacle + BetOnlineAG) with nearest-line fallback
+    const { p_sharp, sharp_line_used, sharp_books_used } = getSharpNoVigP(r);
 
     // Quantum probability
     const p_quantum =
@@ -758,8 +828,9 @@ async function main() {
       kelly_fraction: kellyFraction(p_quantum, odds),
       score,
 
-      // optional debug fields (only if your SQL table includes them)
-      // pin_line_used,
+      // OPTIONAL DEBUG (enable only if your SQL has these columns)
+      // sharp_line_used,
+      // sharp_books_used,
     });
   }
 
@@ -776,12 +847,31 @@ async function main() {
     if (insErr) throw insErr;
   }
 
-  console.log(JSON.stringify({ ok: true, run_id, inserted_rows: out.length }, null, 2));
+  // Quick diagnostics so you can confirm p_sharp fill improved
+  let sharpFilled = 0;
+  let sharpNull = 0;
+  for (const r of out) {
+    if (r.p_sharp == null) sharpNull++;
+    else sharpFilled++;
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        run_id,
+        inserted_rows: out.length,
+        p_sharp_filled: sharpFilled,
+        p_sharp_null: sharpNull,
+      },
+      null,
+      2
+    )
+  );
 }
 
 main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
 
