@@ -257,23 +257,15 @@ async function main() {
   // We'll select a few common candidates and pick whichever exists in your schema.
   const { data: teamMapRows, error: tmErr } = await supabase
     .from("team_map")
-    .select("Abbreviation, abbreviation, Canonical, canonical, team, canonical_name, Team, name")
+    .select('"Abbreviation", canonical')
     .limit(500);
 
   if (tmErr) throw tmErr;
 
   const abbrToCanon = new Map<string, string>();
   for (const r of teamMapRows || []) {
-    const abbr = (r.Abbreviation || r.abbreviation || "").toString().trim();
-    const canon =
-      (r.Canonical ||
-        r.canonical ||
-        r.canonical_name ||
-        r.team ||
-        r.Team ||
-        r.name ||
-        "")?.toString().trim();
-
+    const abbr = (r as any)["Abbreviation"]?.toString().trim(); // <-- must use the exact key
+    const canon = (r as any).canonical?.toString().trim();
     if (abbr && canon) abbrToCanon.set(abbr, canon);
   }
 
