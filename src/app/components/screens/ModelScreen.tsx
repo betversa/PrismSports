@@ -1,11 +1,12 @@
-// screens/Model/ModelScreen.tsx — FULL REWRITE (Aggregated: 1 row per play, 3-book strip)
+// screens/Model/ModelScreen.tsx — FULL REWRITE (Aggregated: 1 row per play, 3-book strip + Details Modals)
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
 // ✅ NO duplicates: each unique play appears once
 // ✅ Shows DK / FD / MGM odds (and tiny EV%) in the same row
 // ✅ Highlights the BEST book for that play
 // ✅ Filters: Play Type (All / Game Lines / Player Props) + Book (All / DK / FD / MGM)
-// ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor with best book’s bet_fraction
+// ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor with best book’s bet fraction
+// ✅ NEW: Click any row/card to open a Details modal (offers + sizing + meta)
 // ✅ Mobile cards + Desktop table
 
 import { useEffect, useMemo, useState } from "react";
@@ -26,6 +27,7 @@ type AppSettingsRow = {
   bankroll: number | null;
   kelly_factor: number | null;
   max_units_per_play?: number | null;
+  updated_at?: string | null;
 };
 
 type EvPlayRow = {
@@ -111,12 +113,19 @@ type AggregatedPlay = {
 
   // Quantum / fair odds
   quantum_odds: number;
+  quantum_prob?: number | null; // used in modal (optional for props)
 
   // extra for props
   propMeta?: {
+    team: string | null;
+    opponent: string | null;
     player_name: string | null;
     position: string | null;
     picture_url: string | null;
+    market_raw?: string | null;
+    side_raw?: string | null;
+    line?: number | null;
+    p_quantum?: number | null;
   };
 
   // Books (may be missing)
@@ -188,6 +197,11 @@ function formatMoney(n: number) {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(n);
+}
+
+function pct(n: number, digits = 1) {
+  const x = safeNum(n, 0);
+  return `${x > 0 ? "+" : ""}${x.toFixed(digits)}%`;
 }
 
 function calcBetAmount(bankroll: number, betFraction: number, kellyFactor: number) {
@@ -280,7 +294,6 @@ function gamePlayKey(r: EvPlayRow) {
 
 function propPlayKey(r: PlayerPropEvLatestRow) {
   // Unique per: event + player + market + side + line
-  // Prefer fp_id if you fully trust it; otherwise player_name is okay.
   const pid = r.fp_id != null ? String(r.fp_id) : (r.player_name || "").trim().toLowerCase();
   const market = (r.market || "").trim().toLowerCase();
   const side = (r.side || "").trim().toLowerCase();
@@ -296,7 +309,7 @@ function chooseBestOffer(
   offers: Partial<Record<"draftkings" | "fanduel" | "betmgm", BookOffer>>
 ) {
   const list = (["draftkings", "fanduel", "betmgm"] as const)
-    .map((b) => offers[b] ? ({ b, o: offers[b]! }) : null)
+    .map((b) => (offers[b] ? ({ b, o: offers[b]! }) : null))
     .filter(Boolean) as { b: "draftkings" | "fanduel" | "betmgm"; o: BookOffer }[];
 
   if (!list.length) {
@@ -304,11 +317,13 @@ function chooseBestOffer(
   }
 
   list.sort((a, b) => {
-    // primary: EV desc, then: bet fraction desc, then: odds abs preference (stable)
+    // primary: EV desc, then bet fraction desc, then abs odds pref
     const ev = safeNum(b.o.ev_pct, 0) - safeNum(a.o.ev_pct, 0);
     if (ev !== 0) return ev;
+
     const bf = safeNum(b.o.bet_fraction, 0) - safeNum(a.o.bet_fraction, 0);
     if (bf !== 0) return bf;
+
     return Math.abs(safeNum(a.o.odds, 0)) - Math.abs(safeNum(b.o.odds, 0));
   });
 
@@ -347,6 +362,20 @@ export function ModelScreen() {
 
   const [settings, setSettings] = useState<AppSettingsRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Details modal state
+  const [selected, setSelected] = useState<AggregatedPlay | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  const openDetails = (p: AggregatedPlay) => {
+    setSelected(p);
+    setDetailsOpen(true);
+  };
+
+  const closeDetails = () => {
+    setDetailsOpen(false);
+    // keep selected for a moment to avoid flicker; cleared on modal close transition end if desired
+  };
 
   // Load once (client-side filtering keeps UI fast and avoids extra queries)
   useEffect(() => {
@@ -464,6 +493,15 @@ export function ModelScreen() {
     };
   }, []);
 
+  // Modal ESC close
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && detailsOpen) closeDetails();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detailsOpen]);
+
   const aggregated = useMemo(() => {
     const map = new Map<string, AggregatedPlay>();
 
@@ -491,6 +529,7 @@ export function ModelScreen() {
           lineLabel: fmtLineGame(r.market, r.line),
 
           quantum_odds: safeNum(r.quantum_odds, NaN),
+          quantum_prob: safeNum(r.quantum_prob, NaN),
 
           offers: {},
 
@@ -511,10 +550,11 @@ export function ModelScreen() {
 
       base.offers[bk] = offer;
 
-      // keep latest created_at (for Updated text)
-      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      // keep latest created_at
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
-      // best score for game uses confidence_score (but we compute after offers too)
+      // best score for game uses confidence_score
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
 
       map.set(key, base);
@@ -549,11 +589,18 @@ export function ModelScreen() {
           lineLabel: fmtPropLine(r.line),
 
           quantum_odds: safeNum(r.quantum_fair_odds, NaN),
+          quantum_prob: r.p_quantum ?? null,
 
           propMeta: {
+            team: r.team ?? null,
+            opponent: r.opponent ?? null,
             player_name: r.player_name ?? null,
             position: r.position ?? null,
             picture_url: r.picture_url ?? null,
+            market_raw: r.market ?? null,
+            side_raw: r.side ?? null,
+            line: r.line ?? null,
+            p_quantum: r.p_quantum ?? null,
           },
 
           offers: {},
@@ -570,13 +617,14 @@ export function ModelScreen() {
         book: bk,
         odds: safeNum(r.odds, NaN),
         ev_pct: safeNum(r.ev_pct, 0),
-        // props table uses kelly_fraction as the sizing fraction (per your data)
+        // props table uses kelly_fraction as sizing fraction
         bet_fraction: clamp(safeNum(r.kelly_fraction, 0), 0, 1),
       };
 
       base.offers[bk] = offer;
 
-      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
 
@@ -586,12 +634,7 @@ export function ModelScreen() {
     // derive bestBook/bestEv/bestBetFraction
     const plays = Array.from(map.values()).map((p) => {
       const { bestBook, bestEvPct, bestBetFraction } = chooseBestOffer(p.offers);
-      return {
-        ...p,
-        bestBook,
-        bestEvPct,
-        bestBetFraction,
-      };
+      return { ...p, bestBook, bestEvPct, bestBetFraction };
     });
 
     return plays.sort(sortPlays);
@@ -605,7 +648,6 @@ export function ModelScreen() {
     }
 
     if (bookFilter !== "all") {
-      // show only plays that have an offer for that book
       list = list.filter((p) => !!p.offers[bookFilter]);
     }
 
@@ -689,8 +731,7 @@ export function ModelScreen() {
           </div>
 
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Total Bet:{" "}
-            <span className="text-[#d4af37]">{totalBetDollars ? formatMoney(totalBetDollars) : "—"}</span>
+            Total Bet: <span className="text-[#d4af37]">{totalBetDollars ? formatMoney(totalBetDollars) : "—"}</span>
           </div>
         </div>
       </div>
@@ -723,6 +764,7 @@ export function ModelScreen() {
             bankroll={bankroll}
             kellyFactor={kellyFactor}
             settingsReady={settingsReady}
+            onOpenDetails={() => openDetails(p)}
           />
         ))}
       </div>
@@ -780,6 +822,7 @@ export function ModelScreen() {
                   bankroll={bankroll}
                   kellyFactor={kellyFactor}
                   settingsReady={settingsReady}
+                  onOpenDetails={() => openDetails(p)}
                 />
               ))}
 
@@ -806,6 +849,10 @@ export function ModelScreen() {
           <span className="text-[#808080]">Bet $:</span> bankroll × best_book_fraction × kelly_factor
         </div>
 
+        <div className="text-[#808080]">
+          Tip: click any row/card for <span className="text-white">Details</span>.
+        </div>
+
         {!settingsReady ? (
           <div className="text-[#808080]">
             Set <span className="text-white">Bankroll</span> and <span className="text-white">Kelly Factor</span> in
@@ -813,6 +860,16 @@ export function ModelScreen() {
           </div>
         ) : null}
       </div>
+
+      {/* DETAILS MODAL */}
+      <PlayDetailsModal
+        open={detailsOpen}
+        play={selected}
+        onClose={closeDetails}
+        bankroll={bankroll}
+        kellyFactor={kellyFactor}
+        settingsReady={settingsReady}
+      />
     </div>
   );
 }
@@ -826,16 +883,27 @@ function PlayRow({
   bankroll,
   kellyFactor,
   settingsReady,
+  onOpenDetails,
 }: {
   play: AggregatedPlay;
   bankroll: number;
   kellyFactor: number;
   settingsReady: boolean;
+  onOpenDetails: () => void;
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : NaN;
 
   return (
-    <tr className="hover:bg-[#0f0f0f]/50 transition-colors">
+    <tr
+      className="hover:bg-[#0f0f0f]/50 transition-colors cursor-pointer"
+      onClick={onOpenDetails}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") onOpenDetails();
+      }}
+      title="Open details"
+    >
       <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[340px]">
         <div className="text-white">
           {play.matchup ?? "—"}
@@ -891,10 +959,7 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-center">
-        <div className="text-[#d4af37] tabular-nums">
-          {play.bestEvPct > 0 ? "+" : ""}
-          {Number(play.bestEvPct).toFixed(1)}%
-        </div>
+        <div className="text-[#d4af37] tabular-nums">{pct(play.bestEvPct, 1)}</div>
       </td>
 
       <td className="p-3 text-center">
@@ -902,7 +967,13 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-center">
-        <BetAmountValue amount={betAmount} frac={play.bestBetFraction} bankroll={bankroll} kellyFactor={kellyFactor} ready={settingsReady} />
+        <BetAmountValue
+          amount={betAmount}
+          frac={play.bestBetFraction}
+          bankroll={bankroll}
+          kellyFactor={kellyFactor}
+          ready={settingsReady}
+        />
       </td>
     </tr>
   );
@@ -917,11 +988,13 @@ function PlayCard({
   bankroll,
   kellyFactor,
   settingsReady,
+  onOpenDetails,
 }: {
   play: AggregatedPlay;
   bankroll: number;
   kellyFactor: number;
   settingsReady: boolean;
+  onOpenDetails: () => void;
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
 
@@ -988,14 +1061,11 @@ function PlayCard({
         <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
       </div>
 
-      {/* EV + Score */}
-      <div className="mt-3 flex items-center justify-between">
+      {/* EV + Score + Details */}
+      <div className="mt-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] text-[#606060]">EV (best)</div>
-          <div className="text-[#d4af37] font-semibold tabular-nums">
-            {play.bestEvPct > 0 ? "+" : ""}
-            {Number(play.bestEvPct).toFixed(1)}%
-          </div>
+          <div className="text-[#d4af37] font-semibold tabular-nums">{pct(play.bestEvPct, 1)}</div>
         </div>
 
         <div className="text-right">
@@ -1004,6 +1074,14 @@ function PlayCard({
             <ScoreValue value={play.bestScore} />
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={onOpenDetails}
+          className="shrink-0 px-2.5 py-1 rounded bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
+        >
+          Details
+        </button>
       </div>
 
       {/* sizing breakdown */}
@@ -1012,6 +1090,378 @@ function PlayCard({
           {(play.bestBetFraction * 100).toFixed(2)}% × {Math.round(kellyFactor * 100)}% × {formatMoney(bankroll)}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/* =========================================================
+   Details Modal (new)
+========================================================= */
+
+function PlayDetailsModal({
+  open,
+  play,
+  onClose,
+  bankroll,
+  kellyFactor,
+  settingsReady,
+}: {
+  open: boolean;
+  play: AggregatedPlay | null;
+  onClose: () => void;
+  bankroll: number;
+  kellyFactor: number;
+  settingsReady: boolean;
+}) {
+  const [tab, setTab] = useState<"offers" | "sizing" | "meta">("offers");
+
+  useEffect(() => {
+    if (open) setTab("offers");
+  }, [open]);
+
+  if (!open || !play) return null;
+
+  const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
+
+  const offersList = (["draftkings", "fanduel", "betmgm"] as const)
+    .map((b) => play.offers[b] ? ({ key: b, offer: play.offers[b]! }) : null)
+    .filter(Boolean) as { key: "draftkings" | "fanduel" | "betmgm"; offer: BookOffer }[];
+
+  return (
+    <div className="fixed inset-0 z-[100]">
+      {/* Backdrop */}
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/70"
+        aria-label="Close details modal"
+      />
+
+      {/* Panel */}
+      <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-0 md:p-6">
+        <div className="relative w-full md:max-w-3xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
+          {/* Header */}
+          <div className="p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-white text-sm md:text-base truncate">
+                  {play.matchup ?? "—"}{" "}
+                  {play.kind === "prop" ? (
+                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                      PROP
+                    </span>
+                  ) : null}
+                </div>
+                <div className="text-[11px] text-[#808080] mt-1">
+                  {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)} ·{" "}
+                  <span className="text-[#606060]">{play.event_id}</span>
+                </div>
+              </div>
+
+              <div className="shrink-0 flex items-center gap-2">
+                <div className="text-right">
+                  <div className="text-[10px] text-[#606060]">Best EV</div>
+                  <div className="text-[#d4af37] font-semibold tabular-nums">{pct(play.bestEvPct, 1)}</div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-2.5 py-1 rounded bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {/* Subheader: pick */}
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                {play.kind === "prop" ? (
+                  <div className="flex items-center gap-3">
+                    <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
+                    <div className="min-w-0">
+                      <div className="text-white truncate">
+                        {play.pickLabel}
+                        {play.propMeta?.position ? (
+                          <span className="text-[#808080]"> · {String(play.propMeta.position).toUpperCase()}</span>
+                        ) : null}
+                      </div>
+                      <div className="text-[11px] text-[#808080] mt-0.5 truncate">
+                        {play.marketLabel} · {play.sideLabel} {play.lineLabel}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-white">
+                    <span className="text-[#d4af37]">{play.marketLabel}</span>{" "}
+                    <span className="text-[#606060]">·</span>{" "}
+                    <span className="text-white">{play.pickLabel}</span>{" "}
+                    <span className="text-[#808080]">
+                      · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="shrink-0 text-right">
+                <div className="text-[10px] text-[#606060]">Bet</div>
+                <div className="text-[#d4af37] font-semibold tabular-nums">
+                  {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+                </div>
+              </div>
+            </div>
+
+            {/* Tabs */}
+            <div className="mt-4 inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
+              <TabPill active={tab === "offers"} onClick={() => setTab("offers")} label="Offers" />
+              <TabPill active={tab === "sizing"} onClick={() => setTab("sizing")} label="Sizing" />
+              <TabPill active={tab === "meta"} onClick={() => setTab("meta")} label="Meta" />
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="p-4">
+            {tab === "offers" ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                    <div className="text-[10px] text-[#606060]">Quantum</div>
+                    <div className="mt-1 text-white font-semibold tabular-nums text-lg">
+                      {american(play.quantum_odds)}
+                    </div>
+                    {Number.isFinite(safeNum(play.quantum_prob, NaN)) ? (
+                      <div className="mt-1 text-[11px] text-[#808080] tabular-nums">
+                        p ≈ {(clamp(safeNum(play.quantum_prob, 0), 0, 1) * 100).toFixed(1)}%
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="md:col-span-2 bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                    <div className="text-[10px] text-[#606060] mb-2">Sportsbooks</div>
+                    <div className="space-y-2">
+                      {offersList.length ? (
+                        offersList.map(({ key, offer }) => (
+                          <OfferRow key={key} offer={offer} isBest={play.bestBook === key} />
+                        ))
+                      ) : (
+                        <div className="text-xs text-[#808080]">No book offers found for this play.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-[10px] text-[#606060]">
+                  Best book is highlighted. Tap/click other tabs for sizing + metadata.
+                </div>
+              </div>
+            ) : null}
+
+            {tab === "sizing" ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                    <div className="text-[10px] text-[#606060]">Inputs</div>
+                    <div className="mt-2 space-y-1 text-[11px] text-[#d0d0d0]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[#808080]">Bankroll</span>
+                        <span className="tabular-nums text-white">{bankroll ? formatMoney(bankroll) : "—"}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[#808080]">Kelly Factor</span>
+                        <span className="tabular-nums text-white">{(kellyFactor * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[#808080]">Best Book Fraction</span>
+                        <span className="tabular-nums text-white">{(play.bestBetFraction * 100).toFixed(2)}%</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[#808080]">Best EV</span>
+                        <span className="tabular-nums text-[#d4af37]">{pct(play.bestEvPct, 1)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                    <div className="text-[10px] text-[#606060]">Bet Amount</div>
+                    <div className="mt-2">
+                      <div className="inline-flex items-center px-3 py-1 rounded bg-[#d4af37]/20 border border-[#d4af37]/40 text-[#d4af37] font-semibold tabular-nums text-lg">
+                        {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+                      </div>
+                      <div className="mt-2 text-[11px] text-[#808080] tabular-nums">
+                        {settingsReady ? (
+                          <>
+                            {formatMoney(bankroll)} × {(play.bestBetFraction * 100).toFixed(2)}% ×{" "}
+                            {(kellyFactor * 100).toFixed(1)}%
+                          </>
+                        ) : (
+                          <>Set bankroll + kelly_factor in Settings to enable sizing.</>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                  <div className="text-[10px] text-[#606060] mb-2">Per-book fractions</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <MiniFrac book="draftkings" offer={play.offers.draftkings} />
+                    <MiniFrac book="fanduel" offer={play.offers.fanduel} />
+                    <MiniFrac book="betmgm" offer={play.offers.betmgm} />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {tab === "meta" ? (
+              <div className="space-y-3">
+                <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                  <div className="text-[10px] text-[#606060] mb-2">Core</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                    <MetaRow k="Kind" v={play.kind === "prop" ? "Player Prop" : "Game Line"} />
+                    <MetaRow k="Market" v={`${play.marketLabel} · ${play.sideLabel}`} />
+                    <MetaRow k="Pick" v={play.pickLabel} />
+                    <MetaRow k="Line" v={play.lineLabel} />
+                    <MetaRow k="Commence" v={`${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}`} />
+                    <MetaRow k="Event ID" v={play.event_id} mono />
+                    <MetaRow k="Updated" v={play.created_at ? fmtTimeCentral(play.created_at) : "—"} />
+                    <MetaRow k="Score" v={`${Math.round(play.bestScore)}`} />
+                  </div>
+                </div>
+
+                {play.kind === "prop" ? (
+                  <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+                    <div className="text-[10px] text-[#606060] mb-2">Prop details</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                      <MetaRow k="Team" v={play.propMeta?.team ?? "—"} />
+                      <MetaRow k="Opponent" v={play.propMeta?.opponent ?? "—"} />
+                      <MetaRow k="Position" v={play.propMeta?.position ? String(play.propMeta.position).toUpperCase() : "—"} />
+                      <MetaRow k="Market raw" v={play.propMeta?.market_raw ?? "—"} mono />
+                      <MetaRow k="Side raw" v={play.propMeta?.side_raw ?? "—"} mono />
+                      <MetaRow k="Line raw" v={play.propMeta?.line != null ? String(play.propMeta.line) : "—"} mono />
+                      <MetaRow
+                        k="p_quantum"
+                        v={
+                          play.propMeta?.p_quantum != null
+                            ? `${(clamp(safeNum(play.propMeta.p_quantum, 0), 0, 1) * 100).toFixed(1)}%`
+                            : "—"
+                        }
+                        mono
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          {/* Footer */}
+          <div className="p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-between">
+            <div className="text-[10px] text-[#606060]">
+              Best book:{" "}
+              <span className="text-[#d4af37]">
+                {play.bestBook ? bookShort(play.bestBook) : "—"}
+              </span>
+              <span className="text-[#404040]"> · </span>
+              EV: <span className="text-[#d4af37] tabular-nums">{pct(play.bestEvPct, 1)}</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 rounded bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabPill({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 text-xs transition-colors",
+        active ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
+      ].join(" ")}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+function OfferRow({ offer, isBest }: { offer: BookOffer; isBest: boolean }) {
+  const logo = bookLogoSrc(offer.book);
+  return (
+    <div
+      className={[
+        "flex items-center justify-between gap-3 rounded border px-3 py-2",
+        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0b0b0b] border-[#1f1f1f]",
+      ].join(" ")}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        {logo ? (
+          <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
+        ) : (
+          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
+            {bookShort(offer.book)}
+          </div>
+        )}
+        <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
+      </div>
+
+      <div className="flex items-center gap-4">
+        <div className="text-right">
+          <div className="text-[10px] text-[#606060]">EV</div>
+          <div className={isBest ? "text-[#d4af37] tabular-nums" : "text-[#b0b0b0] tabular-nums"}>
+            {pct(offer.ev_pct, 1)}
+          </div>
+        </div>
+
+        <div className="text-right">
+          <div className="text-[10px] text-[#606060]">Frac</div>
+          <div className="text-white tabular-nums">{(clamp(offer.bet_fraction, 0, 1) * 100).toFixed(2)}%</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MiniFrac({ book, offer }: { book: "draftkings" | "fanduel" | "betmgm"; offer?: BookOffer }) {
+  const logo = bookLogoSrc(book);
+  return (
+    <div className="rounded border border-[#1f1f1f] bg-[#0b0b0b] px-3 py-2 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2">
+        {logo ? (
+          <img src={logo} alt={bookShort(book)} className="h-4 w-4 opacity-95" draggable={false} />
+        ) : (
+          <div className="h-4 w-4 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[9px] text-[#808080]">
+            {bookShort(book)}
+          </div>
+        )}
+        <div className="text-[11px] text-[#d0d0d0]">{bookShort(book)}</div>
+      </div>
+
+      <div className="text-right">
+        <div className="text-[10px] text-[#606060]">Frac</div>
+        <div className="text-white tabular-nums">{offer ? `${(offer.bet_fraction * 100).toFixed(2)}%` : "—"}</div>
+      </div>
+    </div>
+  );
+}
+
+function MetaRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-[#0b0b0b] border border-[#1f1f1f] rounded px-3 py-2">
+      <div className="text-[#808080] text-[10px]">{k}</div>
+      <div className={["text-[#d0d0d0] text-[11px] truncate max-w-[60%]", mono ? "font-mono" : ""].join(" ")}>
+        {v}
+      </div>
     </div>
   );
 }
@@ -1042,7 +1492,6 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
 
   const logo = bookLogoSrc(offer.book);
   const oddsTxt = american(offer.odds);
-  const evTxt = `${offer.ev_pct > 0 ? "+" : ""}${Number(offer.ev_pct).toFixed(1)}%`;
 
   return (
     <div
@@ -1062,7 +1511,7 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
         <div className="text-white font-semibold tabular-nums">{oddsTxt}</div>
       </div>
       <div className={isBest ? "text-[#d4af37] text-[10px] tabular-nums" : "text-[#808080] text-[10px] tabular-nums"}>
-        {evTxt}
+        {pct(offer.ev_pct, 1)}
       </div>
     </div>
   );
@@ -1084,7 +1533,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
     <div
       className={[
         "rounded p-2 text-center border",
-        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border border-[#1f1f1f]",
       ].join(" ")}
     >
       <div className="flex items-center justify-center gap-2">
@@ -1098,8 +1547,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
       <div className={isBest ? "text-[#d4af37] text-[10px] tabular-nums mt-1" : "text-[#808080] text-[10px] tabular-nums mt-1"}>
-        {offer.ev_pct > 0 ? "+" : ""}
-        {Number(offer.ev_pct).toFixed(1)}%
+        {pct(offer.ev_pct, 1)}
       </div>
     </div>
   );
@@ -1136,7 +1584,15 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
   );
 }
 
-function PropPickInline({ name, position, picture_url }: { name: string; position: string | null; picture_url: string | null }) {
+function PropPickInline({
+  name,
+  position,
+  picture_url,
+}: {
+  name: string;
+  position: string | null;
+  picture_url: string | null;
+}) {
   return (
     <div className="flex items-center gap-2 min-w-0">
       <PropAvatar url={picture_url} name={name} />
@@ -1155,7 +1611,6 @@ function ScoreValue({ value }: { value: number }) {
   let color = "text-[#606060]";
   if (v >= 85) color = "text-[#d4af37]";
   else if (v >= 70) color = "text-white";
-
   return <div className={color}>{Math.round(v)}</div>;
 }
 
@@ -1187,4 +1642,5 @@ function BetAmountValue({
     </div>
   );
 }
+
 
