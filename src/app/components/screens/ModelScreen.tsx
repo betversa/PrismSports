@@ -1,4 +1,4 @@
-// screens/Model/ModelScreen.tsx — FULL REWRITE (ONLY change = History Graph logic matches your spec exactly)
+// screens/Model/ModelScreen.tsx — FULL REWRITE (ONLY change = add book deep-links + fallback for DK/FD/MGM)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -17,14 +17,16 @@
 //   B) GAME LINES history uses public.odds_snapshot_history
 //      - Match on: sport_key, event_id, market, side, bookmaker
 //      - Use: ts for x-axis + odds for y-axis
-// 
-// Notes:
-// - For props, we DO NOT use event_id (per your description). We key by player_name+market+side.
-// - For game lines, we DO use sport_key+event_id+market+side.
-// - Both use bookmaker in {draftkings,fanduel,betmgm} and ts ordering.
-// - If your history tables store odds in a different column name, update ODDS_COL_* below.
+//
+// ✅ NEW (THIS UPDATE):
+//   - Clicking DraftKings / FanDuel / BetMGM cells or offer rows opens the book app (if installed) with web fallback
+//   - Desktop opens the web URL in a new tab
+//   - Mobile tries the app scheme first, then falls back after ~800ms if the app didn’t open
+//
+// NOTE: App URL schemes vary by platform/version. If any book doesn’t open on your device,
+//       update BOOK_LINKS.app values below after testing.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   ResponsiveContainer,
@@ -100,8 +102,8 @@ type PlayerPropEvLatestRow = {
   picture_url: string | null;
 
   market: string | null; // "Points" / "Rebounds" / "Assists" / "3PT" (or variants)
-  side: string | null;   // "over"/"under"
-  line: number | null;   // shown in UI, not used for history
+  side: string | null; // "over"/"under"
+  line: number | null; // shown in UI, not used for history
 
   book: string; // "draftkings"/"fanduel"/"betmgm"
   odds: number;
@@ -143,7 +145,13 @@ type AggregatedPlay = {
 
   // meta for history keys
   gameMeta?: { market: GameMarketKey; side: GameSideKey };
-  propMeta?: { player_name: string | null; market: string | null; side: string | null; picture_url: string | null; position: string | null };
+  propMeta?: {
+    player_name: string | null;
+    market: string | null;
+    side: string | null;
+    picture_url: string | null;
+    position: string | null;
+  };
 
   // offers across books
   offers: Partial<Record<"draftkings" | "fanduel" | "betmgm", BookOffer>>;
@@ -159,25 +167,82 @@ type AggregatedPlay = {
    History tables & columns (adjust if your schema differs)
 ========================================================= */
 
-const PROPS_HISTORY_TABLE = "player_props_history";     // ✅ per your spec
-const GAME_HISTORY_TABLE  = "odds_snapshot_history";    // ✅ per your spec
+const PROPS_HISTORY_TABLE = "player_props_history"; // ✅ per your spec
+const GAME_HISTORY_TABLE = "odds_snapshot_history"; // ✅ per your spec
 
 // timestamp column
 const TS_COL_PROPS = "ts";
-const TS_COL_GAME  = "ts";
+const TS_COL_GAME = "ts";
 
 // bookmaker column
 const BOOK_COL_PROPS = "bookmaker";
-const BOOK_COL_GAME  = "bookmaker";
+const BOOK_COL_GAME = "bookmaker";
 
 // odds column (most common: "odds")
 const ODDS_COL_PROPS = "odds";
-const ODDS_COL_GAME  = "odds";
+const ODDS_COL_GAME = "odds";
 
 // market/side/player columns (per your spec)
 const PLAYER_COL_PROPS = "player_name";
 const MARKET_COL_PROPS = "market";
-const SIDE_COL_PROPS   = "side";
+const SIDE_COL_PROPS = "side";
+
+/* =========================================================
+   Book deep links (App → fallback web)
+========================================================= */
+
+type HardBook = "draftkings" | "fanduel" | "betmgm";
+
+// These are “best guess” schemes that work on many devices.
+// If any doesn’t open for you, tweak `app` for that book after testing.
+const BOOK_LINKS: Record<HardBook, { app: string; web: string }> = {
+  draftkings: {
+    app: "draftkings://sportsbook", // try: "draftkings://", "draftkings://sportsbook"
+    web: "https://sportsbook.draftkings.com",
+  },
+  fanduel: {
+    app: "fanduel://sportsbook", // try: "fanduel://", "fanduel://sportsbook"
+    web: "https://sportsbook.fanduel.com",
+  },
+  betmgm: {
+    app: "betmgm://sportsbook", // try: "betmgm://", "betmgm://sportsbook"
+    web: "https://sports.betmgm.com",
+  },
+};
+
+function isMobileUserAgent() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  return /Android|iPhone|iPad|iPod/i.test(ua);
+}
+
+function openSportsbook(book: HardBook) {
+  const link = BOOK_LINKS[book];
+  if (!link) return;
+
+  // Desktop: just open web in a new tab (cleanest + predictable)
+  const onMobile = isMobileUserAgent();
+  if (!onMobile) {
+    window.open(link.web, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  // Mobile: try app scheme, fall back to web after ~800ms
+  let didHide = false;
+  const onVis = () => {
+    if (document.visibilityState === "hidden") didHide = true;
+  };
+  document.addEventListener("visibilitychange", onVis);
+
+  // Try app
+  window.location.href = link.app;
+
+  // Fallback
+  window.setTimeout(() => {
+    document.removeEventListener("visibilitychange", onVis);
+    if (!didHide) window.location.href = link.web;
+  }, 800);
+}
 
 /* =========================================================
    Small helpers
@@ -200,21 +265,38 @@ function pct(n: number, digits = 1) {
 }
 function formatMoney(n: number) {
   if (!Number.isFinite(n)) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
 }
 function fmtTimeCentral(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
+  return d.toLocaleTimeString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 function fmtDateCentral(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", {
+    timeZone: "America/Chicago",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 }
 function fmtHourMinCT(iso: string) {
   const d = new Date(iso);
-  return d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
+  return d.toLocaleTimeString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 function normalizeBookKey(bookmaker: string): SoftBookKey | "other" {
   const b = (bookmaker || "").toLowerCase();
@@ -267,9 +349,16 @@ function canonPropMarket(marketRaw: string | null): PropMarketCanon | null {
   if (m === "points" || m === "pts" || m.includes("player_points")) return "Points";
   if (m === "rebounds" || m === "reb" || m.includes("player_rebounds")) return "Rebounds";
   if (m === "assists" || m === "ast" || m.includes("player_assists")) return "Assists";
-  if (m === "3pt" || m === "3pt+" || m === "3pm" || m === "threes" || m.includes("player_threes") || m.includes("3")) return "3PT";
+  if (
+    m === "3pt" ||
+    m === "3pt+" ||
+    m === "3pm" ||
+    m === "threes" ||
+    m.includes("player_threes") ||
+    m.includes("3")
+  )
+    return "3PT";
 
-  // if table already stores exactly the display strings (case insensitive)
   if (m === "3pt") return "3PT";
   return null;
 }
@@ -293,13 +382,11 @@ function fmtPropLine(line: number | null) {
 ========================================================= */
 
 function gamePlayKey(r: EvPlayRow) {
-  // unique per play (event+market+side+team+line)
   const team = (r.team || "").trim().toLowerCase();
   const line = r.line == null ? "x" : String(r.line);
   return `g|${r.event_id}|${r.market}|${r.side}|${line}|${team}`;
 }
 function propPlayKey(r: PlayerPropEvLatestRow) {
-  // unique per play (player+market+side+line) but we also include event_id for list uniqueness
   const name = (r.player_name || "").trim().toLowerCase();
   const market = (r.market || "").trim().toLowerCase();
   const side = (r.side || "").trim().toLowerCase();
@@ -311,7 +398,9 @@ function propPlayKey(r: PlayerPropEvLatestRow) {
    Choose best offer
 ========================================================= */
 
-function chooseBestOffer(offers: Partial<Record<"draftkings" | "fanduel" | "betmgm", BookOffer>>) {
+function chooseBestOffer(
+  offers: Partial<Record<"draftkings" | "fanduel" | "betmgm", BookOffer>>
+) {
   const list = (["draftkings", "fanduel", "betmgm"] as const)
     .map((b) => (offers[b] ? ({ b, o: offers[b]! }) : null))
     .filter(Boolean) as { b: "draftkings" | "fanduel" | "betmgm"; o: BookOffer }[];
@@ -325,7 +414,11 @@ function chooseBestOffer(offers: Partial<Record<"draftkings" | "fanduel" | "betm
   });
 
   const top = list[0];
-  return { bestBook: top.b, bestEvPct: safeNum(top.o.ev_pct, 0), bestBetFraction: clamp(safeNum(top.o.bet_fraction, 0), 0, 1) };
+  return {
+    bestBook: top.b,
+    bestEvPct: safeNum(top.o.ev_pct, 0),
+    bestBetFraction: clamp(safeNum(top.o.bet_fraction, 0), 0, 1),
+  };
 }
 
 function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
@@ -341,7 +434,12 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
    History series builder (exactly your match keys)
 ========================================================= */
 
-type HistoryPoint = { ts: string; draftkings?: number | null; fanduel?: number | null; betmgm?: number | null };
+type HistoryPoint = {
+  ts: string;
+  draftkings?: number | null;
+  fanduel?: number | null;
+  betmgm?: number | null;
+};
 
 function normalizeIso(raw: any): string | null {
   if (!raw) return null;
@@ -367,7 +465,9 @@ function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: s
     map.set(ts, cur);
   }
 
-  return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime()
+  );
 }
 
 /* =========================================================
@@ -455,7 +555,11 @@ export function ModelScreen() {
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      const settingsQ = supabase.from("app_settings").select("id,bankroll,kelly_factor,updated_at").eq("id", 1).limit(1);
+      const settingsQ = supabase
+        .from("app_settings")
+        .select("id,bankroll,kelly_factor,updated_at")
+        .eq("id", 1)
+        .limit(1);
 
       const [evRes, prRes, sRes] = await Promise.all([evQ, propsQ, settingsQ]);
 
@@ -540,7 +644,8 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
-      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       map.set(key, base);
     }
@@ -602,7 +707,8 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
-      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       map.set(key, base);
     }
@@ -633,7 +739,8 @@ export function ModelScreen() {
         <div>
           <h2 className="text-xl text-white mb-1">Model Picks</h2>
           <p className="text-xs text-[#808080]">
-            {filtered.length} plays · {kindFilter === "all" ? "All" : kindFilter === "game" ? "Game Lines" : "Player Props"}
+            {filtered.length} plays ·{" "}
+            {kindFilter === "all" ? "All" : kindFilter === "game" ? "Game Lines" : "Player Props"}
           </p>
         </div>
 
@@ -686,14 +793,21 @@ export function ModelScreen() {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[340px]">Matchup</th>
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-10 min-w-[340px]">
+                  Matchup
+                </th>
                 <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
                 <th className="text-left p-3 text-[#808080] min-w-[260px]">Pick</th>
                 <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
-                    <img src="/logos/Quantum.png" alt="Quantum" className="h-6 w-auto opacity-90" draggable={false} />
+                    <img
+                      src="/logos/Quantum.png"
+                      alt="Quantum"
+                      className="h-6 w-auto opacity-90"
+                      draggable={false}
+                    />
                   </div>
                 </th>
 
@@ -703,7 +817,12 @@ export function ModelScreen() {
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
-                    <img src="/logos/SpectrumEV.png" alt="SpectrumEV" className="h-6 w-auto opacity-90" draggable={false} />
+                    <img
+                      src="/logos/SpectrumEV.png"
+                      alt="SpectrumEV"
+                      className="h-6 w-auto opacity-90"
+                      draggable={false}
+                    />
                   </div>
                 </th>
 
@@ -842,14 +961,27 @@ function PlayRow({
         <div className="text-white font-semibold tabular-nums">{american(play.quantum_odds)}</div>
       </td>
 
+      {/* ✅ clickable book cells (stop row click) */}
       <td className="p-3 text-center">
-        <BookOfferCell offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
+        <BookOfferCell
+          offer={play.offers.draftkings}
+          isBest={play.bestBook === "draftkings"}
+          onOpenBook={() => openSportsbook("draftkings")}
+        />
       </td>
       <td className="p-3 text-center">
-        <BookOfferCell offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
+        <BookOfferCell
+          offer={play.offers.fanduel}
+          isBest={play.bestBook === "fanduel"}
+          onOpenBook={() => openSportsbook("fanduel")}
+        />
       </td>
       <td className="p-3 text-center">
-        <BookOfferCell offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
+        <BookOfferCell
+          offer={play.offers.betmgm}
+          isBest={play.bestBook === "betmgm"}
+          onOpenBook={() => openSportsbook("betmgm")}
+        />
       </td>
 
       <td className="p-3 text-center">
@@ -918,7 +1050,9 @@ function PlayCard({
             <div className="min-w-0">
               <div className="text-white text-sm truncate">
                 {play.pickLabel}
-                {play.propMeta?.position ? <span className="text-[#808080]"> · {play.propMeta.position}</span> : null}
+                {play.propMeta?.position ? (
+                  <span className="text-[#808080]"> · {play.propMeta.position}</span>
+                ) : null}
               </div>
               <div className="text-[11px] text-[#808080] mt-0.5 truncate">
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel}
@@ -929,7 +1063,8 @@ function PlayCard({
           <div className="text-white text-sm">
             {play.pickLabel}{" "}
             <span className="text-[#808080] text-xs">
-              · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
+              · {play.marketLabel} · {play.sideLabel}{" "}
+              {play.lineLabel !== "—" ? play.lineLabel : ""}
             </span>
           </div>
         )}
@@ -941,9 +1076,22 @@ function PlayCard({
           <div className="text-white font-semibold tabular-nums">{american(play.quantum_odds)}</div>
         </div>
 
-        <BookChip offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
-        <BookChip offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
-        <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
+        {/* ✅ clickable chips */}
+        <BookChip
+          offer={play.offers.draftkings}
+          isBest={play.bestBook === "draftkings"}
+          onOpenBook={() => openSportsbook("draftkings")}
+        />
+        <BookChip
+          offer={play.offers.fanduel}
+          isBest={play.bestBook === "fanduel"}
+          onOpenBook={() => openSportsbook("fanduel")}
+        />
+        <BookChip
+          offer={play.offers.betmgm}
+          isBest={play.bestBook === "betmgm"}
+          onOpenBook={() => openSportsbook("betmgm")}
+        />
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-3">
@@ -1006,7 +1154,12 @@ function PlayDetailsModal({
 
   return (
     <div className="fixed inset-0 z-[100]">
-      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/70"
+        aria-label="Close details modal"
+      />
 
       <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-0 md:p-6">
         <div className="relative w-full md:max-w-3xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
@@ -1057,7 +1210,12 @@ function PlayDetailsModal({
               <div className="space-y-2">
                 {offersList.length ? (
                   offersList.map(({ key, offer }) => (
-                    <OfferRow key={key} offer={offer} isBest={play.bestBook === key} />
+                    <OfferRow
+                      key={key}
+                      offer={offer}
+                      isBest={play.bestBook === key}
+                      onOpenBook={() => openSportsbook(key)}
+                    />
                   ))
                 ) : (
                   <div className="text-xs text-[#808080]">No book offers found for this play.</div>
@@ -1065,9 +1223,7 @@ function PlayDetailsModal({
               </div>
             ) : null}
 
-            {tab === "history" ? (
-              <OddsHistoryMiniChart play={play} />
-            ) : null}
+            {tab === "history" ? <OddsHistoryMiniChart play={play} /> : null}
           </div>
 
           <div className="p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
@@ -1111,14 +1267,19 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           const sideCanon = side === "o" ? "over" : side === "u" ? "under" : side;
 
           if (!player_name || !marketCanon || !["over", "under"].includes(sideCanon)) {
-            setDebug(`props keys missing: name=${!!player_name} marketCanon=${marketCanon ?? "null"} side=${sideCanon || "null"}`);
+            setDebug(
+              `props keys missing: name=${!!player_name} marketCanon=${marketCanon ?? "null"} side=${
+                sideCanon || "null"
+              }`
+            );
             return;
           }
 
-          // NOTE: per your spec, we only match player_name/market/side/bookmaker/ts (no event_id, no line)
           const q = supabase
             .from(PROPS_HISTORY_TABLE)
-            .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
+            .select(
+              `${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`
+            )
             .eq(PLAYER_COL_PROPS, player_name)
             .eq(MARKET_COL_PROPS, marketCanon)
             .eq(SIDE_COL_PROPS, sideCanon)
@@ -1151,7 +1312,11 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         const side = play.gameMeta?.side ?? null;
 
         if (!sport_key || !event_id || !market || !side) {
-          setDebug(`game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`);
+          setDebug(
+            `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${
+              market ?? "null"
+            } side=${side ?? "null"}`
+          );
           return;
         }
 
@@ -1235,7 +1400,11 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             <Tooltip
               formatter={(v: any) => american(Number(v))}
               labelFormatter={(l) => `CT ${fmtHourMinCT(String(l))}`}
-              contentStyle={{ background: "#0b0b0b", border: "1px solid #2a2a2a", color: "#d0d0d0" }}
+              contentStyle={{
+                background: "#0b0b0b",
+                border: "1px solid #2a2a2a",
+                color: "#d0d0d0",
+              }}
             />
             <Legend />
             <Line type="monotone" dataKey="draftkings" name="DK" dot={false} strokeWidth={2} />
@@ -1284,14 +1453,30 @@ function TabPill({ active, onClick, label }: { active: boolean; onClick: () => v
   );
 }
 
-function OfferRow({ offer, isBest }: { offer: BookOffer; isBest: boolean }) {
+function OfferRow({
+  offer,
+  isBest,
+  onOpenBook,
+}: {
+  offer: BookOffer;
+  isBest: boolean;
+  onOpenBook: () => void;
+}) {
   const logo = bookLogoSrc(offer.book);
+
   return (
-    <div
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenBook();
+      }}
       className={[
-        "flex items-center justify-between gap-3 rounded border px-3 py-2",
-        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0b0b0b] border-[#1f1f1f]",
+        "w-full text-left flex items-center justify-between gap-3 rounded border px-3 py-2",
+        "transition-colors",
+        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0b0b0b] border-[#1f1f1f] hover:bg-[#101010]",
       ].join(" ")}
+      title="Open sportsbook"
     >
       <div className="flex items-center gap-2 min-w-0">
         {logo ? (
@@ -1307,27 +1492,44 @@ function OfferRow({ offer, isBest }: { offer: BookOffer; isBest: boolean }) {
       <div className="flex items-center gap-4">
         <div className="text-right">
           <div className="text-[10px] text-[#606060]">EV</div>
-          <div className={isBest ? "text-[#d4af37] tabular-nums" : "text-[#b0b0b0] tabular-nums"}>{pct(offer.ev_pct, 1)}</div>
+          <div className={isBest ? "text-[#d4af37] tabular-nums" : "text-[#b0b0b0] tabular-nums"}>
+            {pct(offer.ev_pct, 1)}
+          </div>
         </div>
         <div className="text-right">
           <div className="text-[10px] text-[#606060]">Frac</div>
           <div className="text-white tabular-nums">{(clamp(offer.bet_fraction, 0, 1) * 100).toFixed(2)}%</div>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
-function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
+function BookOfferCell({
+  offer,
+  isBest,
+  onOpenBook,
+}: {
+  offer?: BookOffer;
+  isBest?: boolean;
+  onOpenBook: () => void;
+}) {
   if (!offer) return <div className="text-[#404040]">—</div>;
 
   const logo = bookLogoSrc(offer.book);
   return (
-    <div
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation(); // don’t open Details
+        onOpenBook();
+      }}
       className={[
         "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded border",
-        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        "transition-colors",
+        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border-[#1f1f1f] hover:bg-[#101010]",
       ].join(" ")}
+      title="Open sportsbook"
     >
       <div className="inline-flex items-center justify-center gap-2">
         {logo ? (
@@ -1342,11 +1544,19 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
       <div className={isBest ? "text-[#d4af37] text-[10px] tabular-nums" : "text-[#808080] text-[10px] tabular-nums"}>
         {pct(offer.ev_pct, 1)}
       </div>
-    </div>
+    </button>
   );
 }
 
-function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
+function BookChip({
+  offer,
+  isBest,
+  onOpenBook,
+}: {
+  offer?: BookOffer;
+  isBest?: boolean;
+  onOpenBook: () => void;
+}) {
   if (!offer) {
     return (
       <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-2 text-center">
@@ -1358,11 +1568,17 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
 
   const logo = bookLogoSrc(offer.book);
   return (
-    <div
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenBook();
+      }}
       className={[
-        "rounded p-2 text-center border",
-        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border border-[#1f1f1f]",
+        "rounded p-2 text-center border transition-colors",
+        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border border-[#1f1f1f] hover:bg-[#101010]",
       ].join(" ")}
+      title="Open sportsbook"
     >
       <div className="flex items-center justify-center gap-2">
         {logo ? (
@@ -1377,7 +1593,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
       <div className={isBest ? "text-[#d4af37] text-[10px] tabular-nums mt-1" : "text-[#808080] text-[10px] tabular-nums mt-1"}>
         {pct(offer.ev_pct, 1)}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -1412,7 +1628,15 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
   );
 }
 
-function PropPickInline({ name, position, picture_url }: { name: string; position: string | null; picture_url: string | null }) {
+function PropPickInline({
+  name,
+  position,
+  picture_url,
+}: {
+  name: string;
+  position: string | null;
+  picture_url: string | null;
+}) {
   return (
     <div className="flex items-center gap-2 min-w-0">
       <PropAvatar url={picture_url} name={name} />
