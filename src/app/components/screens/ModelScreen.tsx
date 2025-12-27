@@ -89,11 +89,11 @@ type PlayerPropEvLatestRow = {
   position: string | null;
   picture_url: string | null;
 
-  market: string | null; // often "assists"/"points"/"rebounds"/"threes"
-  side: string | null;   // "over"/"under"
+  market: string | null; // often "assists"/"points"/"rebounds"/"threes" or already "player_assists"
+  side: string | null; // "over"/"under"
   line: number | null;
 
-  book: string;          // "draftkings"/"fanduel"/"betmgm"
+  book: string; // "draftkings"/"fanduel"/"betmgm"
   odds: number;
 
   p_quantum: number | null;
@@ -127,7 +127,7 @@ type AggregatedPlay = {
 
   // Quantum / fair odds
   quantum_odds: number;
-  quantum_prob?: number | null; // used in modal (optional for props)
+  quantum_prob?: number | null;
 
   // extra for game queries
   gameMeta?: {
@@ -145,8 +145,7 @@ type AggregatedPlay = {
     position: string | null;
     picture_url: string | null;
 
-    // IMPORTANT: keep the market/side as stored in player_prop_ev_latest
-    // We'll map to history keys during the history query
+    // raw (from player_prop_ev_latest)
     market_raw?: string | null;
     side_raw?: string | null;
 
@@ -154,7 +153,7 @@ type AggregatedPlay = {
     p_quantum?: number | null;
   };
 
-  // Books (may be missing)
+  // Books
   offers: Partial<Record<"draftkings" | "fanduel" | "betmgm", BookOffer>>;
 
   // Derived
@@ -183,7 +182,7 @@ const GAME_HISTORY_TABLE = "odds_history";
 // ✅ Primary prop-history table (matches your CSV columns: bookmaker + ts)
 const PROP_HISTORY_TABLE_PRIMARY = "player_props_history";
 
-// ✅ Fallback older snapshot table (some environments still use this)
+// ✅ Fallback older snapshot table
 const PROP_HISTORY_TABLE_FALLBACK = "player_props_snapshot";
 
 /* =========================================================
@@ -321,16 +320,13 @@ function fmtPropLine(line: number | null) {
 ========================================================= */
 
 function gamePlayKey(r: EvPlayRow) {
-  // Unique per: event + market + side + line + team (team matters for ML/spread)
   const team = (r.team || "").trim().toLowerCase();
   const line = r.line == null ? "x" : String(r.line);
   return `g|${r.event_id}|${r.market}|${r.side}|${line}|${team}`;
 }
 
 function propPlayKey(r: PlayerPropEvLatestRow) {
-  // Unique per: event + player + market + side + line
-  const pid =
-    r.fp_id != null ? String(r.fp_id) : (r.player_name || "").trim().toLowerCase();
+  const pid = r.fp_id != null ? String(r.fp_id) : (r.player_name || "").trim().toLowerCase();
   const market = (r.market || "").trim().toLowerCase();
   const side = (r.side || "").trim().toLowerCase();
   const line = r.line == null ? "x" : String(r.line);
@@ -353,7 +349,6 @@ function chooseBestOffer(
   }
 
   list.sort((a, b) => {
-    // primary: EV desc, then bet fraction desc, then abs odds pref
     const ev = safeNum(b.o.ev_pct, 0) - safeNum(a.o.ev_pct, 0);
     if (ev !== 0) return ev;
 
@@ -376,11 +371,9 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
   const tb = b.commence_time ? new Date(b.commence_time).getTime() : Number.POSITIVE_INFINITY;
   if (ta !== tb) return ta - tb;
 
-  // then best EV desc
   const ev = safeNum(b.bestEvPct, 0) - safeNum(a.bestEvPct, 0);
   if (ev !== 0) return ev;
 
-  // then score desc
   return safeNum(b.bestScore, 0) - safeNum(a.bestScore, 0);
 }
 
@@ -444,12 +437,6 @@ function collapseHistory(
 
 /**
  * ✅ Converts player_prop_ev_latest market values to the history-table market keys.
- * Examples:
- *  - "assists" -> "player_assists"
- *  - "player_assists" -> "player_assists" (already)
- *  - "points" -> "player_points"
- *  - "rebounds" -> "player_rebounds"
- *  - "threes" -> "player_threes"
  */
 function toPropHistoryMarket(marketRaw: string | null): string | null {
   const m = (marketRaw || "").trim().toLowerCase();
@@ -461,13 +448,11 @@ function toPropHistoryMarket(marketRaw: string | null): string | null {
   if (m === "assists") return "player_assists";
   if (m === "threes" || m === "3pt" || m === "3pm" || m === "3s") return "player_threes";
 
-  // combos
   if (m === "pra" || m.includes("points_rebounds_assists")) return "player_points_rebounds_assists";
   if (m === "pa" || m.includes("points_assists")) return "player_points_assists";
   if (m === "pr" || m.includes("points_rebounds")) return "player_points_rebounds";
   if (m === "ra" || m.includes("rebounds_assists")) return "player_rebounds_assists";
 
-  // last resort: keep it (in case your history already uses non-player_ keys)
   return m;
 }
 
@@ -1486,11 +1471,7 @@ function PlayDetailsModal({
                       <MetaRow k="Opponent" v={play.propMeta?.opponent ?? "—"} />
                       <MetaRow
                         k="Position"
-                        v={
-                          play.propMeta?.position
-                            ? String(play.propMeta.position).toUpperCase()
-                            : "—"
-                        }
+                        v={play.propMeta?.position ? String(play.propMeta.position).toUpperCase() : "—"}
                       />
                       <MetaRow k="Market raw" v={play.propMeta?.market_raw ?? "—"} mono />
                       <MetaRow k="Side raw" v={play.propMeta?.side_raw ?? "—"} mono />
@@ -1565,6 +1546,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
             .order("ts", { ascending: true });
 
+          // game: keep line strict except h2h
           if (gm.market !== "h2h") {
             q = q.eq("line", gm.line);
           }
@@ -1585,8 +1567,8 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         // ✅ PROPS: relaxed matching, no line requirement
         const pm = play.propMeta;
         const playerName = (pm?.player_name ?? play.pickLabel ?? "").trim();
-        const side = toOverUnderSide(pm?.side_raw ?? play.sideLabel);
-        const historyMarket = toPropHistoryMarket(pm?.market_raw ?? play.marketLabel);
+        const side = toOverUnderSide(pm?.side_raw ?? null);
+        const historyMarket = toPropHistoryMarket(pm?.market_raw ?? null);
 
         if (!playerName || !side || !historyMarket) {
           if (mounted) setRows([]);
@@ -1637,7 +1619,6 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           }
 
           if (error) {
-            // not fatal — we’ll fallback
             console.warn("[OddsHistoryMiniChart] prop primary history error:", error.message);
           }
         }
@@ -1697,7 +1678,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
     return () => {
       mounted = false;
     };
-  }, [play.playKey]);
+  }, [play.playKey]); // re-run when selection changes
 
   if (loading && !rows.length) {
     return (
