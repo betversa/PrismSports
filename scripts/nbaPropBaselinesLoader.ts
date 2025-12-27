@@ -1,7 +1,7 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v2: SHARP FIX)
-// ---------------------------------------------------------------------------
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3: SHARP LINE TRANSLATION)
+// ----------------------------------------------------------------------------------------
 // ✅ Scrapes FantasyPros season / last7 / last15 for: PTS, REB, AST, 3PM, MIN
 // ✅ Uses only those windows to build mean projections + sigma estimate
 // ✅ Uses odds_wide_latest (team, pin_spread_line, pin_total_line) to context-adjust minutes + mu
@@ -9,16 +9,15 @@
 // ✅ ONLY returns players from FUTURE GAMES:
 //    - event_id must exist in events table
 //    - commence_time must be > now
-// ✅ FIX: p_sharp now uses BOTH Pinnacle + BetOnlineAG (avg when both exist)
-//    - fallback: Pinnacle-only if BetOnline missing (or BetOnline-only if Pinnacle missing)
-//    - still uses nearest-line fallback within tolerance (fills far more cells)
+// ✅ SHARP FIX (REAL):
+//    - Builds no-vig probs from Pinnacle and BetOnlineAG (when both sides exist at a sharp line)
+//    - For each soft-book alt line, "translate" sharp prob from nearest sharp line to the target line
+//      using a distribution anchored by YOUR sigma (Normal for PTS/REB/AST, Poisson for 3PM).
+//    - No more tolerance-gated nulls just because the soft book is on an alternate line.
 // ✅ Outputs to ONE table: public.player_prop_ev_latest (cleared per run by sport_key)
 // ✅ Includes player picture_url
 //
 // Run: npm run nba:props:ev:build
-//
-// NOTE: Ensure the SQL table exists (player_prop_ev_latest) with the columns you expect.
-//       Optional debug fields are included but commented — enable if your table supports them.
 
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
@@ -50,9 +49,7 @@ const QUANTUM_BLEND_SHARP = 0.75;
 const SOFT_BOOKS = new Set(["draftkings", "fanduel", "betmgm"]);
 const SHARP_BOOKS = ["pinnacle", "betonlineag"] as const;
 
-// Nearest-line matching tolerance (points, assists, rebounds typical .5 increments)
-// (You can bump to 1.5 if you want even more p_sharp fills)
-const PIN_LINE_TOLERANCE = 1.0;
+type SharpBook = (typeof SHARP_BOOKS)[number];
 
 /* =========================================================
    TYPES
@@ -104,24 +101,26 @@ type PropsRow = {
   sport_key: string;
   event_id: string;
   commence_time: string;
+
   player_name: string;
   player_id: string | null;
+
   team: string | null;
   opponent: string | null;
-  market: string;
-  side: string;
+
+  market: string; // raw snapshot market (player_points, etc)
+  side: string;   // over/under
   line: number;
   odds: number;
+
   bookmaker: string;
 };
-
-type SharpBook = (typeof SHARP_BOOKS)[number];
 
 type SharpNoVigLine = {
   book: SharpBook;
   line: number;
-  p_over: number;
-  p_under: number;
+  p_over: number;     // no-vig
+  p_under: number;    // no-vig
   over_odds: number;
   under_odds: number;
 };
@@ -150,6 +149,23 @@ function normName(s: string): string {
     .trim();
 }
 
+function normSide(s: any): "over" | "under" | null {
+  const t = String(s || "").toLowerCase().trim();
+  if (t === "over") return "over";
+  if (t === "under") return "under";
+  return null;
+}
+
+function normBook(b: any): SharpBook | null {
+  const s = String(b || "").toLowerCase().trim();
+  if (!s) return null;
+
+  if (s === "pinnacle" || s.includes("pinnacle")) return "pinnacle";
+  if (s === "betonlineag" || s.includes("betonline")) return "betonlineag";
+
+  return null;
+}
+
 function americanToImpliedProb(odds: number): number {
   if (odds === 0) return 0.5;
   if (odds > 0) return 100 / (odds + 100);
@@ -174,8 +190,6 @@ function kellyFraction(p: number, odds: number): number {
 }
 
 function weightedAvg(a: number | null, b: number | null, c: number | null): number | null {
-  // NOTE: signature is (szn, d7, d15) in your original, but you use W.d15 on third arg.
-  // We'll keep your intended weighting: szn (a), d7 (b), d15 (c)
   let sum = 0;
   let wsum = 0;
   if (a != null) {
@@ -191,16 +205,6 @@ function weightedAvg(a: number | null, b: number | null, c: number | null): numb
     wsum += W.d7;
   }
   return wsum ? sum / wsum : null;
-}
-
-function normBook(b: any): SharpBook | null {
-  const s = String(b || "").toLowerCase().trim();
-  if (!s) return null;
-
-  if (s === "pinnacle" || s.includes("pinnacle")) return "pinnacle";
-  if (s === "betonlineag" || s.includes("betonline")) return "betonlineag";
-
-  return null;
 }
 
 /* =========================================================
@@ -224,9 +228,69 @@ function normalCdf(x: number, mu: number, sigma: number): number {
   return 0.5 * (1 + sign * erf);
 }
 
-// P(X > line) using continuous approx (push mass ignored)
 function pOverNormal(line: number, mu: number, sigma: number): number {
   return clamp(1 - normalCdf(line, mu, sigma), 0, 1);
+}
+
+// Acklam inverse normal CDF approximation (for translating sharp line -> implied mean)
+function invNorm(p: number): number {
+  const pp = clamp(p, 1e-12, 1 - 1e-12);
+  const a = [
+    -3.969683028665376e+01,
+    2.209460984245205e+02,
+    -2.759285104469687e+02,
+    1.383577518672690e+02,
+    -3.066479806614716e+01,
+    2.506628277459239e+00,
+  ];
+  const b = [
+    -5.447609879822406e+01,
+    1.615858368580409e+02,
+    -1.556989798598866e+02,
+    6.680131188771972e+01,
+    -1.328068155288572e+01,
+  ];
+  const c = [
+    -7.784894002430293e-03,
+    -3.223964580411365e-01,
+    -2.400758277161838e+00,
+    -2.549732539343734e+00,
+    4.374664141464968e+00,
+    2.938163982698783e+00,
+  ];
+  const d = [
+    7.784695709041462e-03,
+    3.224671290700398e-01,
+    2.445134137142996e+00,
+    3.754408661907416e+00,
+  ];
+
+  const plow = 0.02425;
+  const phigh = 1 - plow;
+
+  let q: number, r: number;
+  if (pp < plow) {
+    q = Math.sqrt(-2 * Math.log(pp));
+    return (
+      (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    );
+  }
+
+  if (pp > phigh) {
+    q = Math.sqrt(-2 * Math.log(1 - pp));
+    return -(
+      (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    );
+  }
+
+  q = pp - 0.5;
+  r = q * q;
+  return (
+    (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+    (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+  );
 }
 
 // Poisson CDF for k <= floor(line)
@@ -248,6 +312,32 @@ function pOverPoisson(line: number, lambda: number): number {
   return clamp(1 - poissonCdf(k, Math.max(lambda, 0.01)), 0, 1);
 }
 
+// Solve lambda so that p_over_poisson(L0, lambda) ~= p0
+function inferLambdaFromPoissonOver(line: number, pOver: number): number | null {
+  const p0 = clamp(pOver, 1e-6, 1 - 1e-6);
+
+  // Reasonable bracket
+  let lo = 0.01;
+  let hi = Math.max(1, line + 6);
+
+  // Expand hi until pOver(hi) >= p0 (monotone increasing in lambda)
+  for (let i = 0; i < 30; i++) {
+    const pHi = pOverPoisson(line, hi);
+    if (pHi >= p0) break;
+    hi *= 1.6;
+    if (hi > 200) break;
+  }
+
+  // Binary search
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    const pm = pOverPoisson(line, mid);
+    if (pm < p0) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 /* =========================================================
    SIGMA + CONTEXT
 ========================================================= */
@@ -259,7 +349,6 @@ function sigmaFromWindows(
   d15: number | null,
   kind: "pts" | "reb" | "ast" | "pm3"
 ): number {
-  // baseline sigma scales with mean
   let base =
     kind === "pts"
       ? Math.max(3.0, 0.22 * mu)
@@ -269,7 +358,6 @@ function sigmaFromWindows(
       ? Math.max(1.5, 0.30 * mu)
       : Math.max(0.8, 0.45 * Math.max(mu, 0.5));
 
-  // disagreement term
   const parts: Array<[number, number]> = [];
   if (szn != null) parts.push([szn, W.szn]);
   if (d15 != null) parts.push([d15, W.d15]);
@@ -290,7 +378,7 @@ function minutesFactorFromSpread(spread: number | null): number | null {
   if (spread == null) return null;
   const a = Math.abs(spread);
   let f = a <= 4.5 ? 1.03 : a <= 9.5 ? 1.0 : a <= 14.5 ? 0.95 : 0.9;
-  if (spread <= -12) f -= 0.02; // huge favorite rest risk
+  if (spread <= -12) f -= 0.02;
   return clamp(f, 0.85, 1.06);
 }
 
@@ -357,6 +445,55 @@ function scrapeAvgPage(html: string): Map<number, { base: any; stats: StatPack }
 }
 
 /* =========================================================
+   SHARP BUILD + TRANSLATION
+========================================================= */
+
+function idxKey(event_id: string, player_name: string, market_raw: string) {
+  return `${event_id}|${normName(player_name)}|${String(market_raw || "").trim()}`;
+}
+
+// Convert a sharp no-vig probability at line L0 into an estimated prob at target line Lt,
+// using either:
+//  - Normal(mu, sigmaAnchor) for pts/reb/ast
+//  - Poisson(lambda) for threes
+function translateSharpToTarget(opts: {
+  marketOut: "points" | "rebounds" | "assists" | "threes";
+  side: "over" | "under";
+  targetLine: number;
+  sharpLine: number;
+  pSharpAtSharpLine: number; // no-vig at sharpLine
+  sigmaAnchor: number | null; // from model (pts/reb/ast)
+}): number | null {
+  const { marketOut, side, targetLine, sharpLine } = opts;
+  const p0 = clamp(opts.pSharpAtSharpLine, 1e-6, 1 - 1e-6);
+
+  // For PTS/REB/AST: infer implied mean from (sharpLine, p0, sigmaAnchor), then eval at targetLine.
+  if (marketOut !== "threes") {
+    const sigma = opts.sigmaAnchor != null && Number.isFinite(opts.sigmaAnchor) && opts.sigmaAnchor > 0
+      ? opts.sigmaAnchor
+      : null;
+
+    // If we don't have sigma, we can't translate reliably.
+    if (!sigma) return null;
+
+    // p_over(L0) = p0 => CDF((L0 - mu)/sigma) = 1 - p0
+    // => (L0 - mu)/sigma = invNorm(1 - p0) => mu = L0 - sigma * invNorm(1 - p0)
+    const z = invNorm(1 - p0);
+    const muSharp = sharpLine - sigma * z;
+
+    const pOverAtTarget = pOverNormal(targetLine, muSharp, sigma);
+    return side === "over" ? pOverAtTarget : 1 - pOverAtTarget;
+  }
+
+  // For threes: Poisson translate by inferring lambda from p_over at sharpLine, then evaluate at targetLine.
+  const lambda = inferLambdaFromPoissonOver(sharpLine, p0);
+  if (lambda == null) return null;
+
+  const pOverAtTarget = pOverPoisson(targetLine, lambda);
+  return side === "over" ? pOverAtTarget : 1 - pOverAtTarget;
+}
+
+/* =========================================================
    MAIN
 ========================================================= */
 
@@ -372,7 +509,7 @@ async function main() {
   const nowIso = now.toISOString();
 
   /* -------------------------------------------------------
-     1) Get FUTURE events (defines slate) — games not started
+     1) Get FUTURE events (defines slate)
   -------------------------------------------------------- */
   const { data: events, error: evErr } = await supabase
     .from("events")
@@ -390,7 +527,6 @@ async function main() {
     allowedEventIds.add(String(e.event_id));
   }
 
-  // If no future slate, clear output and exit
   if (allowedEventIds.size === 0) {
     const { error: delErr } = await supabase.from("player_prop_ev_latest").delete().eq("sport_key", SPORT_KEY);
     if (delErr) throw delErr;
@@ -400,10 +536,7 @@ async function main() {
   }
 
   /* -------------------------------------------------------
-     2) Pull props snapshot ONLY for future events
-        NOTE: We pull ALL books (soft + sharp) because we need
-              Pinnacle/BetOnline for p_sharp, then we filter
-              to SOFT_BOOKS when outputting playable rows.
+     2) Pull props snapshot for FUTURE events (ALL books!)
   -------------------------------------------------------- */
   const props: PropsRow[] = [];
   const eventIdList = Array.from(allowedEventIds);
@@ -432,7 +565,7 @@ async function main() {
   }
 
   /* -------------------------------------------------------
-     3) Scrape FantasyPros for baselines (szn/7/15)
+     3) Scrape FantasyPros baselines (szn/7/15)
   -------------------------------------------------------- */
   const [htmlS, html7, html15] = await Promise.all([fetchHtml(FP_SZN), fetchHtml(FP_7), fetchHtml(FP_15)]);
   const mapS = scrapeAvgPage(htmlS);
@@ -497,11 +630,7 @@ async function main() {
   /* -------------------------------------------------------
      4) Canonicalize team via team_map."Abbreviation" -> canonical
   -------------------------------------------------------- */
-  const { data: teamMapRows, error: tmErr } = await supabase
-    .from("team_map")
-    .select('"Abbreviation", canonical')
-    .limit(2000);
-
+  const { data: teamMapRows, error: tmErr } = await supabase.from("team_map").select('"Abbreviation", canonical').limit(2000);
   if (tmErr) throw tmErr;
 
   const abbrToCanon = new Map<string, string>();
@@ -520,7 +649,7 @@ async function main() {
   for (const b of baselines.values()) baselineByName.set(normName(b.player_name), b);
 
   /* -------------------------------------------------------
-     5) Pull odds_wide_latest context (spread/total per team)
+     5) Pull odds_wide_latest context
   -------------------------------------------------------- */
   const { data: oddsRows, error: oErr } = await supabase
     .from("odds_wide_latest")
@@ -542,28 +671,23 @@ async function main() {
 
   /* -------------------------------------------------------
      6) Build SHARP no-vig index (Pinnacle + BetOnlineAG)
-        key = event|player|market => list of {book,line,p_over,p_under}
+        key = event|player|marketRaw => list of lines per book
   -------------------------------------------------------- */
   const sharpIndex = new Map<string, SharpNoVigLine[]>();
 
-  function idxKey(r: PropsRow) {
-    // Keep RAW market string so it matches snapshot structure 1:1
-    return `${r.event_id}|${normName(r.player_name)}|${r.market}`;
-  }
-
-  // (event|player|market|book|line) -> {over,under}
+  // (event|player|market|book|line) -> {over, under}
   const sharpPairs = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
 
   for (const r of props) {
     const book = normBook(r.bookmaker);
     if (!book) continue;
 
-    const side = String(r.side || "").toLowerCase().trim();
+    const side = normSide(r.side);
     const line = toNum(r.line);
     const odds = toNum(r.odds);
-    if (line == null || odds == null) continue;
+    if (!side || line == null || odds == null) continue;
 
-    const k = `${idxKey(r)}|${book}|${line}`;
+    const k = `${idxKey(r.event_id, r.player_name, r.market)}|${book}|${line}`;
     const cur = sharpPairs.get(k) ?? { book, line };
 
     if (side === "over") cur.over = odds;
@@ -580,8 +704,9 @@ async function main() {
     const denom = pO + pU;
     if (denom <= 0) continue;
 
-    const baseKey = k.split("|").slice(0, 3).join("|"); // event|player|market
+    const baseKey = k.split("|").slice(0, 3).join("|"); // event|player|marketRaw
     const arr = sharpIndex.get(baseKey) ?? [];
+
     arr.push({
       book: v.book,
       line: v.line,
@@ -590,6 +715,7 @@ async function main() {
       over_odds: v.over,
       under_odds: v.under,
     });
+
     sharpIndex.set(baseKey, arr);
   }
 
@@ -601,7 +727,7 @@ async function main() {
     sharpIndex.set(k, arr);
   }
 
-  function nearestSharpForBook(arr: SharpNoVigLine[], book: SharpBook, targetLine: number): SharpNoVigLine | null {
+  function nearestSharpLine(arr: SharpNoVigLine[], book: SharpBook, targetLine: number): SharpNoVigLine | null {
     let best: SharpNoVigLine | null = null;
     let bestDist = Infinity;
 
@@ -613,63 +739,82 @@ async function main() {
         best = cand;
       }
     }
-
-    if (!best || bestDist > PIN_LINE_TOLERANCE) return null;
     return best;
   }
 
-  function getSharpNoVigP(r: PropsRow): {
-    p_sharp: number | null;
-    sharp_line_used: number | null;
-    sharp_books_used: string | null; // "pinnacle", "betonlineag", "pinnacle+betonlineag"
-  } {
-    const arr = sharpIndex.get(idxKey(r));
-    if (!arr || arr.length === 0) return { p_sharp: null, sharp_line_used: null, sharp_books_used: null };
+  // Get p_sharp at the SOFT line by translating from nearest sharp line
+  function getTranslatedSharpP(opts: {
+    event_id: string;
+    player_name: string;
+    marketRaw: string;
+    marketOut: "points" | "rebounds" | "assists" | "threes";
+    side: "over" | "under";
+    targetLine: number;
+    sigmaAnchor: number | null; // for pts/reb/ast translation
+  }): { p_sharp: number | null; sharp_books_used: string | null; sharp_line_used: number | null } {
+    const arr = sharpIndex.get(idxKey(opts.event_id, opts.player_name, opts.marketRaw));
+    if (!arr || arr.length === 0) return { p_sharp: null, sharp_books_used: null, sharp_line_used: null };
 
-    const target = toNum(r.line);
-    if (target == null) return { p_sharp: null, sharp_line_used: null, sharp_books_used: null };
+    const pin = nearestSharpLine(arr, "pinnacle", opts.targetLine);
+    const bol = nearestSharpLine(arr, "betonlineag", opts.targetLine);
 
-    const pin = nearestSharpForBook(arr, "pinnacle", target);
-    const bol = nearestSharpForBook(arr, "betonlineag", target);
-
-    const side = String(r.side || "").toLowerCase().trim();
     const pickP = (x: SharpNoVigLine | null) => {
       if (!x) return null;
-      if (side === "over") return x.p_over;
-      if (side === "under") return x.p_under;
-      return null;
+      return opts.side === "over" ? x.p_over : x.p_under;
     };
 
-    const pPin = pickP(pin);
-    const pBol = pickP(bol);
+    const pPin0 = pickP(pin);
+    const pBol0 = pickP(bol);
+
+    const pPin =
+      pPin0 != null && pin
+        ? translateSharpToTarget({
+            marketOut: opts.marketOut,
+            side: opts.side,
+            targetLine: opts.targetLine,
+            sharpLine: pin.line,
+            pSharpAtSharpLine: pPin0,
+            sigmaAnchor: opts.sigmaAnchor,
+          })
+        : null;
+
+    const pBol =
+      pBol0 != null && bol
+        ? translateSharpToTarget({
+            marketOut: opts.marketOut,
+            side: opts.side,
+            targetLine: opts.targetLine,
+            sharpLine: bol.line,
+            pSharpAtSharpLine: pBol0,
+            sigmaAnchor: opts.sigmaAnchor,
+          })
+        : null;
 
     if (pPin != null && pBol != null) {
       return {
         p_sharp: clamp((pPin + pBol) / 2, 0, 1),
-        sharp_line_used: pin?.line ?? bol?.line ?? null,
         sharp_books_used: "pinnacle+betonlineag",
+        sharp_line_used: pin?.line ?? bol?.line ?? null,
       };
     }
 
     if (pPin != null) {
-      return { p_sharp: clamp(pPin, 0, 1), sharp_line_used: pin?.line ?? null, sharp_books_used: "pinnacle" };
+      return { p_sharp: clamp(pPin, 0, 1), sharp_books_used: "pinnacle", sharp_line_used: pin?.line ?? null };
     }
 
     if (pBol != null) {
-      return { p_sharp: clamp(pBol, 0, 1), sharp_line_used: bol?.line ?? null, sharp_books_used: "betonlineag" };
+      return { p_sharp: clamp(pBol, 0, 1), sharp_books_used: "betonlineag", sharp_line_used: bol?.line ?? null };
     }
 
-    return { p_sharp: null, sharp_line_used: null, sharp_books_used: null };
+    return { p_sharp: null, sharp_books_used: null, sharp_line_used: null };
   }
 
   /* -------------------------------------------------------
      7) Build final EV rows (SOFT books only)
   -------------------------------------------------------- */
-
   const out: any[] = [];
 
   for (const r of props) {
-    // Safety: only future slate
     const eid = String(r.event_id || "");
     if (!allowedEventIds.has(eid)) continue;
 
@@ -685,27 +830,27 @@ async function main() {
     const base = baselineByName.get(normName(playerNameRaw));
     if (!base || !base.canonical) continue;
 
-    // Market mapping (your output market names)
-    const market =
+    // Market mapping
+    const marketOut =
       r.market === "player_points"
-        ? "points"
+        ? ("points" as const)
         : r.market === "player_rebounds"
-        ? "rebounds"
+        ? ("rebounds" as const)
         : r.market === "player_assists"
-        ? "assists"
+        ? ("assists" as const)
         : r.market === "player_threes"
-        ? "threes"
+        ? ("threes" as const)
         : null;
-    if (!market) continue;
+    if (!marketOut) continue;
 
-    const side = String(r.side || "").toLowerCase().trim();
-    if (side !== "over" && side !== "under") continue;
+    const side = normSide(r.side);
+    if (!side) continue;
 
     const line = toNum(r.line);
     const odds = toNum(r.odds);
     if (line == null || odds == null) continue;
 
-    // Context from odds_wide_latest by canonical team
+    // Context from odds_wide_latest
     const ow = teamToOdds.get(base.canonical);
     const pin_spread_line = ow?.pin_spread_line ?? null;
     const pin_total_line = ow?.pin_total_line ?? null;
@@ -744,24 +889,24 @@ async function main() {
     let p_model: number | null = null;
 
     if (min_adj != null) {
-      if (market === "points" && ptsRate != null) {
+      if (marketOut === "points" && ptsRate != null) {
         mu = ptsRate * min_adj * ttf;
         sigma = sigmaFromWindows(mu, base.pts_szn, base.pts_7, base.pts_15, "pts");
         const pO = pOverNormal(line, mu, sigma);
         p_model = side === "over" ? pO : 1 - pO;
-      } else if (market === "rebounds" && rebRate != null) {
+      } else if (marketOut === "rebounds" && rebRate != null) {
         mu = rebRate * min_adj * pf;
         sigma = sigmaFromWindows(mu, base.reb_szn, base.reb_7, base.reb_15, "reb");
         const pO = pOverNormal(line, mu, sigma);
         p_model = side === "over" ? pO : 1 - pO;
-      } else if (market === "assists" && astRate != null) {
+      } else if (marketOut === "assists" && astRate != null) {
         mu = astRate * min_adj * ttf;
         sigma = sigmaFromWindows(mu, base.ast_szn, base.ast_7, base.ast_15, "ast");
         const pO = pOverNormal(line, mu, sigma);
         p_model = side === "over" ? pO : 1 - pO;
-      } else if (market === "threes" && pm3Rate != null) {
+      } else if (marketOut === "threes" && pm3Rate != null) {
         mu = pm3Rate * min_adj * ttf;
-        sigma = Math.sqrt(Math.max(mu, 0.01));
+        sigma = Math.sqrt(Math.max(mu, 0.01)); // model sigma (kept for table)
         const pO = pOverPoisson(line, mu);
         p_model = side === "over" ? pO : 1 - pO;
       }
@@ -769,8 +914,18 @@ async function main() {
 
     if (mu == null || p_model == null) continue;
 
-    // SHARP no-vig (Pinnacle + BetOnlineAG) with nearest-line fallback
-    const { p_sharp, sharp_line_used, sharp_books_used } = getSharpNoVigP(r);
+    // SHARP probability at *this* line (translated from nearest sharp line)
+    const sharp = getTranslatedSharpP({
+      event_id: r.event_id,
+      player_name: r.player_name,
+      marketRaw: r.market,
+      marketOut,
+      side,
+      targetLine: line,
+      sigmaAnchor: marketOut === "threes" ? null : sigma, // sigma anchors translation for Normal markets
+    });
+
+    const p_sharp = sharp.p_sharp;
 
     // Quantum probability
     const p_quantum =
@@ -800,7 +955,7 @@ async function main() {
       position: base.position,
       picture_url: base.picture_url,
 
-      market,
+      market: marketOut,
       side,
       line,
       book,
@@ -828,9 +983,9 @@ async function main() {
       kelly_fraction: kellyFraction(p_quantum, odds),
       score,
 
-      // OPTIONAL DEBUG (enable only if your SQL has these columns)
-      // sharp_line_used,
-      // sharp_books_used,
+      // If your SQL table has these, uncomment them in your INSERT table definition:
+      // sharp_books_used: sharp.sharp_books_used,
+      // sharp_line_used: sharp.sharp_line_used,
     });
   }
 
@@ -847,7 +1002,7 @@ async function main() {
     if (insErr) throw insErr;
   }
 
-  // Quick diagnostics so you can confirm p_sharp fill improved
+  // Diagnostics
   let sharpFilled = 0;
   let sharpNull = 0;
   for (const r of out) {
@@ -863,6 +1018,7 @@ async function main() {
         inserted_rows: out.length,
         p_sharp_filled: sharpFilled,
         p_sharp_null: sharpNull,
+        sharp_fill_rate: out.length ? Number((sharpFilled / out.length) * 100).toFixed(1) + "%" : "—",
       },
       null,
       2
@@ -874,4 +1030,5 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
 
