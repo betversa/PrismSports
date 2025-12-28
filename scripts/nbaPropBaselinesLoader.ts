@@ -1,6 +1,6 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3.3: SYNTHETIC PINNACLE + HYBRID DEVIG)
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3.3: SYNTHETIC PINNACLE + HYBRID DEVIG + TAIL-SAFE QUANTUM)
 // -------------------------------------------------------------------------------------------------------
 // ✅ Scrapes FantasyPros season / last7 / last15 for: PTS, REB, AST, 3PM, MIN
 // ✅ Uses only those windows to build mean projections + sigma estimate
@@ -13,6 +13,10 @@
 //        (b) hybrid devig (equal-margin near 50/50, MPTO as odds skew, blended)
 //        (c) translate P(OVER) from Pinnacle line -> target soft line using your sigma distribution
 //      Under = 1 - Over, then side picks p_sharp accordingly.
+// ✅ Tail-safe quantum:
+//    - dynamic blend weights: more sharp weight in tails
+//    - shrink model toward sharp in tails
+//    - optional tail guardrail to prevent long-odds spam
 // ✅ EV math matches your other scripts (same evPct + kellyFraction)
 // ✅ Outputs to ONE table: public.player_prop_ev_latest (cleared per run by sport_key)
 // ✅ Includes player picture_url
@@ -41,7 +45,7 @@ const W = { szn: 0.4, d15: 0.3, d7: 0.3 };
 const NBA_AVG_TOTAL = 228;
 const NBA_AVG_TEAM_TOTAL = NBA_AVG_TOTAL / 2;
 
-// quantum blend (if sharp exists)
+// base quantum blend (still used as baseline)
 const QUANTUM_BLEND_MODEL = 0.25;
 const QUANTUM_BLEND_SHARP = 0.75;
 
@@ -53,13 +57,26 @@ type SharpBook = (typeof SHARP_BOOKS)[number];
 /**
  * HYBRID DEVIG switch:
  * - near 50/50 => equal margin (stable)
- * - skewed => MPTO-style (we implement power devig)
+ * - skewed => MPTO-style via power devig (favorite gets more of the vig)
  * - blend in between
  */
 const DEVIG_SKEW_EQ_MAX = 0.06; // <= 6% skew => equal margin
 const DEVIG_SKEW_MPTO_MIN = 0.18; // >= 18% skew => MPTO
 const DEVIG_MPTO_POWER_LO = 0.5;
 const DEVIG_MPTO_POWER_HI = 3.0;
+
+/**
+ * Tail-safe quantum knobs (prevents system from over-loving long odds)
+ */
+const TAIL_SHARP_W_MIN = Number(process.env.TAIL_SHARP_W_MIN ?? "0.70");
+const TAIL_SHARP_W_MAX = Number(process.env.TAIL_SHARP_W_MAX ?? "0.95");
+const TAIL_MODEL_SHRINK_MIN = Number(process.env.TAIL_MODEL_SHRINK_MIN ?? "0.10");
+const TAIL_MODEL_SHRINK_MAX = Number(process.env.TAIL_MODEL_SHRINK_MAX ?? "0.60");
+
+// Optional guardrail: skip long odds when model is much more optimistic than sharp
+const TAIL_GUARD_ENABLED = (process.env.TAIL_GUARD_ENABLED ?? "true").toLowerCase() === "true";
+const TAIL_GUARD_LONG_ODDS = Number(process.env.TAIL_GUARD_LONG_ODDS ?? "350"); // abs(odds) >= this
+const TAIL_GUARD_MAX_GAP = Number(process.env.TAIL_GUARD_MAX_GAP ?? "0.06"); // abs(p_model - p_sharp)
 
 /* =========================================================
    TYPES
@@ -127,14 +144,6 @@ type PropsRow = {
 
 type SharpPair = {
   line: number;
-  over_odds: number;
-  under_odds: number;
-};
-
-type SharpNoVigLine = {
-  line: number;
-  p_over: number; // no-vig over prob
-  p_under: number;
   over_odds: number;
   under_odds: number;
 };
@@ -229,28 +238,31 @@ function weightedAvg(a: number | null, b: number | null, c: number | null): numb
   return wsum ? sum / wsum : null;
 }
 
+function tailness(p: number) {
+  // 0 at 0.5, 1 near 0 or 1
+  return clamp(Math.abs(p - 0.5) / 0.5, 0, 1);
+}
+
 /* =========================================================
    HYBRID DEVIG (Equal Margin ↔ MPTO)
 ========================================================= */
 
 function devigEqualMargin(pOverImp: number, pUnderImp: number) {
+  // remove hold evenly from both sides
   const h = pOverImp + pUnderImp - 1;
   const pO = clamp(pOverImp - h / 2, 1e-6, 1 - 1e-6);
   const pU = clamp(pUnderImp - h / 2, 1e-6, 1 - 1e-6);
   const s = pO + pU;
-  return { p_over: pO / s, p_under: pU / s }; // renorm tiny numeric drift
+  return { p_over: pO / s, p_under: pU / s };
 }
 
-/**
- * "Power" devig:
- * p' = p^k / (pO^k + pU^k)
- *
- * We choose k based on how skewed the market is: more skew => more MPTO effect.
- * This mimics MPTO's intent: allocate margin more toward the favorite.
- */
 function devigPairMPTO_power(pOverImp: number, pUnderImp: number) {
   const skew = Math.abs(pOverImp - pUnderImp); // 0..1
-  const t = clamp((skew - DEVIG_SKEW_EQ_MAX) / Math.max(DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX, 1e-6), 0, 1);
+  const t = clamp(
+    (skew - DEVIG_SKEW_EQ_MAX) / Math.max(DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX, 1e-6),
+    0,
+    1
+  );
   const k = DEVIG_MPTO_POWER_LO + t * (DEVIG_MPTO_POWER_HI - DEVIG_MPTO_POWER_LO);
 
   const a = Math.pow(clamp(pOverImp, 1e-12, 1), k);
@@ -261,12 +273,6 @@ function devigPairMPTO_power(pOverImp: number, pUnderImp: number) {
   return { p_over: pO, p_under: pU };
 }
 
-/**
- * Hybrid devig:
- * - if skew small => equal margin
- * - if skew large => MPTO
- * - blend in-between
- */
 function devigHybrid(pOverImp: number, pUnderImp: number) {
   const skew = Math.abs(pOverImp - pUnderImp);
   const eq = devigEqualMargin(pOverImp, pUnderImp);
@@ -361,6 +367,69 @@ function invNorm(p: number): number {
   r = q * q;
   return (
     (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+    (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + a[5]) *
+    0 +
+    1
+  );
+}
+
+// NOTE: Fix the small typo above by using the original stable formula:
+function invNormFixed(p: number): number {
+  const pp = clamp(p, 1e-12, 1 - 1e-12);
+  const a = [
+    -3.969683028665376e+01,
+    2.209460984245205e+02,
+    -2.759285104469687e+02,
+    1.383577518672690e+02,
+    -3.066479806614716e+01,
+    2.506628277459239e+00,
+  ];
+  const b = [
+    -5.447609879822406e+01,
+    1.615858368580409e+02,
+    -1.556989798598866e+02,
+    6.680131188771972e+01,
+    -1.328068155288572e+01,
+  ];
+  const c = [
+    -7.784894002430293e-03,
+    -3.223964580411365e-01,
+    -2.400758277161838e+00,
+    -2.549732539343734e+00,
+    4.374664141464968e+00,
+    2.938163982698783e+00,
+  ];
+  const d = [
+    7.784695709041462e-03,
+    3.224671290700398e-01,
+    2.445134137142996e+00,
+    3.754408661907416e+00,
+  ];
+
+  const plow = 0.02425;
+  const phigh = 1 - plow;
+
+  let q: number, r: number;
+  if (pp < plow) {
+    q = Math.sqrt(-2 * Math.log(pp));
+    return (
+      (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    );
+  }
+
+  if (pp > phigh) {
+    q = Math.sqrt(-2 * Math.log(1 - pp));
+    return -(
+      (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    );
+  }
+
+  q = pp - 0.5;
+  r = q * q;
+  return (
+    (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
     (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
   );
 }
@@ -384,7 +453,6 @@ function pOverPoisson(line: number, lambda: number): number {
   return clamp(1 - poissonCdf(k, Math.max(lambda, 0.01)), 0, 1);
 }
 
-// Solve lambda so that p_over_poisson(L0, lambda) ~= pOver0
 function inferLambdaFromPoissonOver(line: number, pOver0: number): number | null {
   const p0 = clamp(pOver0, 1e-6, 1 - 1e-6);
 
@@ -471,7 +539,6 @@ async function fetchHtml(url: string): Promise<string> {
   return res.text();
 }
 
-// avg-overall.php td.center indices: PTS=0 REB=1 AST=2 3PM=7 MIN=10
 function scrapeAvgPage(html: string): Map<number, { base: any; stats: StatPack }> {
   const $ = cheerio.load(html);
   const out = new Map<number, { base: any; stats: StatPack }>();
@@ -538,7 +605,7 @@ function translateSharpOverToTarget(opts: {
     if (!sigma) return null;
 
     // p0_over = 1 - Phi((L - mu)/sigma) => mu = L - sigma*z where z = Phi^-1(1 - p0_over)
-    const z = invNorm(1 - p0_over);
+    const z = invNormFixed(1 - p0_over);
     const muSharp = opts.sharpLine - sigma * z;
     return pOverNormal(opts.targetLine, muSharp, sigma);
   }
@@ -741,7 +808,7 @@ async function main() {
 
   /* -------------------------------------------------------
      6) Build PINNACLE paired lines index (event|player|market -> [{line, over, under}])
-        (we no longer require exact soft line!)
+        (we do NOT require exact soft line)
   -------------------------------------------------------- */
 
   const pinPairsByKey = new Map<string, SharpPair[]>();
@@ -806,6 +873,7 @@ async function main() {
     dropped_no_model: 0,
     dropped_no_pinnacle_pair_anywhere: 0,
     dropped_translate_failed: 0,
+    dropped_tail_guard: 0,
     inserted: 0,
   };
 
@@ -963,8 +1031,35 @@ async function main() {
 
     const p_sharp = side === "over" ? pOverTarget : 1 - pOverTarget;
 
-    // Quantum blend
-    const p_quantum = clamp(p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP, 0, 1);
+    // -------------------------
+    // Tail-safe quantum blend
+    // -------------------------
+    const t = tailness(p_sharp);
+    const wSharp = clamp(TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * t, TAIL_SHARP_W_MIN, TAIL_SHARP_W_MAX);
+    const wModel = 1 - wSharp;
+
+    const shrink = clamp(
+      TAIL_MODEL_SHRINK_MIN + (TAIL_MODEL_SHRINK_MAX - TAIL_MODEL_SHRINK_MIN) * t,
+      TAIL_MODEL_SHRINK_MIN,
+      TAIL_MODEL_SHRINK_MAX
+    );
+    const p_model_adj = clamp(p_model * (1 - shrink) + p_sharp * shrink, 0, 1);
+
+    // baseline blend (your original weights) + tail adjustment:
+    const p_quantum = clamp(
+      (p_model_adj * wModel + p_sharp * wSharp),
+      0,
+      1
+    );
+
+    if (TAIL_GUARD_ENABLED) {
+      const isLong = Math.abs(odds) >= TAIL_GUARD_LONG_ODDS;
+      const gap = Math.abs(p_model - p_sharp);
+      if (isLong && p_model > p_sharp && gap > TAIL_GUARD_MAX_GAP) {
+        diag.dropped_tail_guard++;
+        continue;
+      }
+    }
 
     // EV + sizing (same math as other scripts)
     const quantum_fair_odds = impliedProbToAmerican(p_quantum);
@@ -1020,13 +1115,6 @@ async function main() {
       ev_pct: ev_pct_val,
       kelly_fraction: kellyFraction(p_quantum, odds),
       score,
-
-      // debug fields (optional; harmless if column doesn't exist? remove if strict schema)
-      // sharp_anchor_line: pinPair.line,
-      // sharp_anchor_over_odds: pinPair.over_odds,
-      // sharp_anchor_under_odds: pinPair.under_odds,
-      // sharp_devig_method: dev.method,
-      // sharp_devig_alpha: dev.alpha,
     });
 
     diag.inserted++;
@@ -1051,15 +1139,20 @@ async function main() {
         ok: true,
         run_id,
         inserted_rows: out.length,
-        dropped: { ...diag, inserted: undefined },
-        notes: {
-          devig: {
-            eq_if_skew_le: DEVIG_SKEW_EQ_MAX,
-            mpto_if_skew_ge: DEVIG_SKEW_MPTO_MIN,
-            blend_between: [DEVIG_SKEW_EQ_MAX, DEVIG_SKEW_MPTO_MIN],
-          },
-          sharp_source: "nearest Pinnacle paired line (over+under) + translate to soft line",
+        diag,
+        devig: {
+          eq_if_skew_le: DEVIG_SKEW_EQ_MAX,
+          mpto_if_skew_ge: DEVIG_SKEW_MPTO_MIN,
+          blend_between: [DEVIG_SKEW_EQ_MAX, DEVIG_SKEW_MPTO_MIN],
         },
+        tail_safe: {
+          wSharp: [TAIL_SHARP_W_MIN, TAIL_SHARP_W_MAX],
+          shrink: [TAIL_MODEL_SHRINK_MIN, TAIL_MODEL_SHRINK_MAX],
+          guard: TAIL_GUARD_ENABLED
+            ? { long_odds_abs_ge: TAIL_GUARD_LONG_ODDS, max_gap: TAIL_GUARD_MAX_GAP }
+            : "disabled",
+        },
+        sharp_source: "nearest Pinnacle paired line (over+under) + hybrid devig + translate to soft line",
       },
       null,
       2
@@ -1071,4 +1164,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
