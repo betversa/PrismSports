@@ -1,5 +1,5 @@
-// screens/Model/ModelScreen.tsx — FULL REWRITE (adds Line Movement portion ONLY; keeps routing-safe default export)
-// -------------------------------------------------------------------------------------------------------------
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (updates per your notes)
+// -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
@@ -164,8 +164,8 @@ type AggregatedPlay = {
    History tables & columns (adjust if your schema differs)
 ========================================================= */
 
-const PROPS_HISTORY_TABLE = "player_props_history";
-const GAME_HISTORY_TABLE = "odds_snapshot_history";
+const PROPS_HISTORY_TABLE = "player_props_history"; // ✅ per your spec
+const GAME_HISTORY_TABLE = "odds_snapshot_history"; // ✅ per your spec
 
 const TS_COL_PROPS = "ts";
 const TS_COL_GAME = "ts";
@@ -315,9 +315,11 @@ function fmtLineGame(market: GameMarketKey, line: number | null) {
 }
 
 /**
- * IMPORTANT:
+ * IMPORTANT FIX:
  * player_props_history.market values are like:
  *   "player_points" / "player_rebounds" / "player_assists" / "player_threes"
+ *
+ * So we map your display markets into those keys for history lookup.
  */
 type PropHistoryMarketKey =
   | "player_points"
@@ -329,16 +331,19 @@ function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | 
   const m = (marketRaw || "").trim().toLowerCase();
   if (!m) return null;
 
+  // already key
   if (m === "player_points") return "player_points";
   if (m === "player_rebounds") return "player_rebounds";
   if (m === "player_assists") return "player_assists";
   if (m === "player_threes") return "player_threes";
 
+  // friendly labels
   if (m === "points" || m === "pts") return "player_points";
   if (m === "rebounds" || m === "reb") return "player_rebounds";
   if (m === "assists" || m === "ast") return "player_assists";
   if (m === "3pt" || m === "3pm" || m === "threes" || m === "3") return "player_threes";
 
+  // odds-api style
   if (m.includes("player_points")) return "player_points";
   if (m.includes("player_rebounds")) return "player_rebounds";
   if (m.includes("player_assists")) return "player_assists";
@@ -390,7 +395,9 @@ function propPlayKey(r: PlayerPropEvLatestRow) {
    Best offer
 ========================================================= */
 
-function chooseBestOffer(offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>) {
+function chooseBestOffer(
+  offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>
+) {
   const order: Exclude<SoftBookKey, "all">[] = ["draftkings", "fanduel", "betmgm"];
   const list = order
     .map((b) => (offers[b] ? ({ b, o: offers[b]! }) : null))
@@ -422,7 +429,7 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
 }
 
 /* =========================================================
-   History series builder
+   History series builder (pivot by ts + book)
 ========================================================= */
 
 type HistoryPoint = {
@@ -439,7 +446,12 @@ function normalizeIso(raw: any): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
-function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: string): HistoryPoint[] {
+function collapseHistory(
+  rows: any[],
+  tsCol: string,
+  bookCol: string,
+  oddsCol: string
+): HistoryPoint[] {
   const map = new Map<string, HistoryPoint>();
 
   for (const r of rows) {
@@ -457,7 +469,9 @@ function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: s
     map.set(ts, cur);
   }
 
-  return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime()
+  );
 }
 
 /* =========================================================
@@ -472,8 +486,7 @@ const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
   { key: "pinnacle", label: "Pinnacle (history only)" },
 ];
 
-// IMPORTANT: default export keeps routing stable for Next pages that import default.
-export default function ModelScreen() {
+export function ModelScreen() {
   const [bookFilter, setBookFilter] = useState<SoftBookKey>("all");
   const [kindFilter, setKindFilter] = useState<PlayKind>("all");
 
@@ -545,7 +558,11 @@ export default function ModelScreen() {
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      const settingsQ = supabase.from("app_settings").select("id,bankroll,kelly_factor,updated_at").eq("id", 1).limit(1);
+      const settingsQ = supabase
+        .from("app_settings")
+        .select("id,bankroll,kelly_factor,updated_at")
+        .eq("id", 1)
+        .limit(1);
 
       const [evRes, prRes, sRes] = await Promise.all([evQ, propsQ, settingsQ]);
 
@@ -605,7 +622,7 @@ export default function ModelScreen() {
 
           marketLabel: marketLabelGame(r.market),
           sideLabel: sideLabelGame(r.market, r.side),
-          pickLabel: r.market === "totals" ? r.matchup ?? "Total" : r.team ?? "—",
+          pickLabel: r.market === "totals" ? (r.matchup ?? "Total") : (r.team ?? "—"),
           lineLabel: fmtLineGame(r.market, r.line),
 
           quantum_odds: safeNum(r.quantum_odds, NaN),
@@ -630,8 +647,6 @@ export default function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
-      base.created_at =
-        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       map.set(key, base);
     }
@@ -693,8 +708,6 @@ export default function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
-      base.created_at =
-        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       map.set(key, base);
     }
@@ -713,7 +726,7 @@ export default function ModelScreen() {
 
     if (bookFilter !== "all") {
       if (bookFilter === "pinnacle") {
-        // pinnacle is history-only; keep all plays visible
+        // Pinnacle is history-only; don't filter out plays
         list = list;
       } else {
         list = list.filter((p) => !!p.offers[bookFilter]);
@@ -1050,7 +1063,8 @@ function PlayCard({
           <div className="text-white text-sm">
             {play.pickLabel}{" "}
             <span className="text-[#808080] text-xs">
-              · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
+              · {play.marketLabel} · {play.sideLabel}{" "}
+              {play.lineLabel !== "—" ? play.lineLabel : ""}
             </span>
           </div>
         )}
@@ -1148,7 +1162,9 @@ function PlayDetailsModal({
 
               <div className="shrink-0 text-right">
                 <div className="text-[10px] text-[#606060]">Best EV</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">{pct(play.bestEvPct, 1)}</div>
+                <div className="text-[#d4af37] font-semibold tabular-nums">
+                  {pct(play.bestEvPct, 1)}
+                </div>
                 <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
                 <div className="text-[#d4af37] font-semibold tabular-nums">
                   {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
@@ -1177,7 +1193,7 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History (props mapping + adds PIN + colors + date in hover)
+   Odds History (props market mapping + PIN + colors + date in hover)
 ========================================================= */
 
 function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
@@ -1198,7 +1214,8 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           const player_name = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
 
           const marketKey =
-            historyPropMarketKey(play.propMeta?.market ?? null) ?? historyPropMarketKey(play.marketLabel ?? null);
+            historyPropMarketKey(play.propMeta?.market ?? null) ??
+            historyPropMarketKey(play.marketLabel ?? null);
 
           const sideRaw = (play.propMeta?.side ?? "").trim().toLowerCase();
           const sideCanon = sideRaw === "o" ? "over" : sideRaw === "u" ? "under" : sideRaw;
@@ -1236,7 +1253,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           if (!pts.length) {
             setDebug(
-              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`
+              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(
+                ","
+              )}`
             );
           }
           return;
@@ -1251,7 +1270,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         if (!sport_key || !event_id || !market || !side) {
           if (mounted) {
             setDebug(
-              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`
+              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${
+                side ?? "null"
+              }`
             );
           }
           return;
@@ -1264,7 +1285,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           .eq("event_id", event_id)
           .eq("market", market)
           .eq("side", side)
-          .in(BOOK_COL_GAME, HISTORY_BOOKS) // includes pinnacle
+          .in(BOOK_COL_GAME, HISTORY_BOOKS) // ✅ includes pinnacle
           .order(TS_COL_GAME, { ascending: true });
 
         if (!mounted) return;
@@ -1280,7 +1301,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
         if (!pts.length) {
           setDebug(
-            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`
+            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(
+              ","
+            )}`
           );
         }
       } finally {
@@ -1408,13 +1431,23 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
    UI atoms
 ========================================================= */
 
-function KindPill({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+function KindPill({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
   return (
     <button
       onClick={onClick}
       className={[
         "px-2.5 py-1 text-xs transition-colors",
-        active ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
+        active
+          ? "bg-[#1a1a1a] text-white"
+          : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
       ].join(" ")}
       type="button"
     >
@@ -1436,7 +1469,12 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
     >
       <div className="inline-flex items-center justify-center gap-2">
         {logo ? (
-          <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
+          <img
+            src={logo}
+            alt={bookShort(offer.book)}
+            className="h-5 w-5 opacity-95 shrink-0"
+            draggable={false}
+          />
         ) : (
           <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
             {bookShort(offer.book)}
@@ -1479,11 +1517,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div
-        className={
-          isBest ? "text-[#d4af37] text-[10px] tabular-nums mt-1" : "text-[#808080] text-[10px] tabular-nums mt-1"
-        }
-      >
+      <div className={isBest ? "text-[#d4af37] text-[10px] tabular-nums mt-1" : "text-[#808080] text-[10px] tabular-nums mt-1"}>
         {pct(offer.ev_pct, 1)}
       </div>
     </div>
