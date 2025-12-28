@@ -1,3 +1,11 @@
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Mobile spacing fixed: less crammed, better stacking)
+// -----------------------------------------------------------------------------------------------------
+// ✅ Top Plays filter: ONLY score >= 50
+// ✅ Score === 100 shows 🔥
+// ✅ Shows BOTH: Book odds + Quantum fair odds
+// ✅ Mobile layout: single-column rhythm, bigger tap targets, stats stack 2x2, less dense text
+// ✅ Desktop layout unchanged vibe
+
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -15,17 +23,9 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
-/**
- * OVERVIEW / HOME (LIVE) — FULL REWRITE (Schema-correct + dedupe + best book)
- *
- * ✅ Engaging home screen (Top Plays + Quick Actions + Pipeline + Model + Changelog)
- * ✅ Game +EV plays from public.ev_plays (matchup, book_odds, confidence_score, bookmaker, ev_pct)
- * ✅ Player prop +EV plays from public.player_prop_ev_latest (player_name, odds, score, book, ev_pct)
- * ✅ DEDUPE: one card per unique play, best book chosen automatically
- * ✅ Latest MC run from monte_carlo_runs (required if MC runs)
- * ✅ model_versions + model_changelog optional
- * ✅ Realtime soft refresh
- */
+/* =========================================================
+   TYPES
+========================================================= */
 
 type MonteCarloRunRow = {
   id: string;
@@ -41,7 +41,7 @@ type ModelVersionRow = {
   calib_window: string | null;
   anchor_weight_min: number | null;
   anchor_weight_max: number | null;
-  min_ev_threshold: number | null; // fraction (0.025) or percent (2.5) depending on your usage
+  min_ev_threshold: number | null; // fraction (0.025) or percent (2.5)
   updated_at: string | null;
 };
 
@@ -51,12 +51,6 @@ type ChangeLogRow = {
   changes: string[];
 };
 
-/**
- * IMPORTANT:
- * ev_plays + player_prop_ev_latest schemas are real and different.
- * Keep types permissive but read correct columns first.
- */
-
 type EvPlayRow = {
   id?: string;
   run_id?: string;
@@ -64,24 +58,24 @@ type EvPlayRow = {
   event_id?: string;
   commence_time?: string | null;
 
-  // GAME DISPLAY
-  matchup?: string | null; // ✅ in your CSV
-  market?: string | null; // h2h/spreads/totals
-  side?: string | null; // home/away/over/under
-  team?: string | null; // for ML/spreads
+  matchup?: string | null;
+  market?: string | null;
+  side?: string | null;
+  team?: string | null;
   line?: number | null;
 
-  // BOOK + ODDS
-  bookmaker?: string | null; // ✅ in your CSV
-  book_odds?: number | null; // ✅ in your CSV
-  // some legacy screens might still store odds here:
+  bookmaker?: string | null;
+  book_odds?: number | null;
   odds?: number | null;
 
-  // METRICS
+  quantum_fair_odds?: number | null;
+  fair_odds?: number | null;
+  quantum_odds?: number | null;
+
   ev_pct?: number | null;
   ev?: number | null;
-  confidence_score?: number | null; // ✅ in your CSV
-  score?: number | null; // legacy fallback
+  confidence_score?: number | null;
+  score?: number | null;
 };
 
 type PropEvRow = {
@@ -96,19 +90,21 @@ type PropEvRow = {
   position?: string | null;
   picture_url?: string | null;
 
-  market?: string | null; // points/rebounds/assists/threes
-  side?: string | null; // over/under
+  market?: string | null;
+  side?: string | null;
   line?: number | null;
 
-  // BOOK + ODDS
-  book?: string | null; // ✅ in your CSV
-  bookmaker?: string | null; // legacy fallback
-  odds?: number | null; // ✅ in your CSV
+  book?: string | null;
+  bookmaker?: string | null;
+  odds?: number | null;
 
-  // METRICS
+  quantum_fair_odds?: number | null;
+  fair_odds?: number | null;
+  quantum_odds?: number | null;
+
   ev_pct?: number | null;
   ev?: number | null;
-  score?: number | null; // ✅ in your CSV
+  score?: number | null;
 };
 
 /* =========================================================
@@ -117,9 +113,10 @@ type PropEvRow = {
 
 const GOLD = "#d4af37";
 type PlayTab = "all" | "game" | "props";
+const TOP_SCORE_MIN = 50;
 
 /* =========================================================
-   HELPERS — robust but schema-first
+   HELPERS
 ========================================================= */
 
 function safeNum(v: any): number | null {
@@ -135,7 +132,6 @@ function isFutureish(ts?: string | null) {
   if (!ts) return true;
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return true;
-  // allow slight drift / late ingestion
   return d.getTime() > Date.now() - 3 * 60 * 60 * 1000;
 }
 
@@ -155,7 +151,6 @@ function marketLabel(m?: string | null) {
   if (x === "h2h" || x.includes("money")) return "Moneyline";
   if (x.includes("spread")) return "Spread";
   if (x.includes("total")) return "Total";
-  // props: keep readable
   if (x.includes("points")) return "Points";
   if (x.includes("reb")) return "Rebounds";
   if (x.includes("ast")) return "Assists";
@@ -182,7 +177,6 @@ function fmtOdds(odds?: number | null) {
 function fmtLine(line?: number | null) {
   const n = safeNum(line);
   if (n == null) return "";
-  // keep + for positive spreads etc.
   return n > 0 ? `+${n}` : `${n}`;
 }
 
@@ -219,11 +213,6 @@ function timeAgo(ts: string) {
   return `${days}d ago`;
 }
 
-/**
- * EV normalization:
- * - If stored as fraction (0.04) => 4.0%
- * - If stored already percent (4.0) => 4.0%
- */
 function getEvPct(row: { ev_pct?: number | null; ev?: number | null }) {
   const v = row.ev_pct ?? row.ev ?? null;
   if (v == null) return null;
@@ -233,11 +222,6 @@ function getEvPct(row: { ev_pct?: number | null; ev?: number | null }) {
   return n;
 }
 
-/**
- * Score normalization:
- * - Games use confidence_score (preferred)
- * - Props use score (preferred)
- */
 function getGameScore(row: EvPlayRow) {
   const s = row.confidence_score ?? row.score ?? null;
   const n = safeNum(s);
@@ -252,11 +236,6 @@ function getPropScore(row: PropEvRow) {
   return clamp(n, 0, 100);
 }
 
-/**
- * Odds normalization:
- * - Games: book_odds (preferred), fallback odds
- * - Props: odds (preferred)
- */
 function getGameOdds(row: EvPlayRow) {
   const o = row.book_odds ?? row.odds ?? null;
   const n = safeNum(o);
@@ -270,16 +249,24 @@ function getPropOdds(row: PropEvRow) {
   return Math.trunc(n);
 }
 
+function getGameFairOdds(row: EvPlayRow) {
+  const o = row.quantum_fair_odds ?? row.fair_odds ?? row.quantum_odds ?? null;
+  const n = safeNum(o);
+  if (n == null) return null;
+  return Math.trunc(n);
+}
+
+function getPropFairOdds(row: PropEvRow) {
+  const o = row.quantum_fair_odds ?? row.fair_odds ?? row.quantum_odds ?? null;
+  const n = safeNum(o);
+  if (n == null) return null;
+  return Math.trunc(n);
+}
+
 /* =========================================================
-   DEDUPE KEYS + BEST BOOK PICK
+   DEDUPE
 ========================================================= */
 
-/**
- * Key idea:
- * - ev_plays often has the same play repeated across books.
- * - We want ONE card per play, choosing best book by:
- *   1) higher score, 2) higher EV, 3) has odds (not null)
- */
 function keyGamePlay(r: EvPlayRow) {
   return [
     r.event_id ?? "",
@@ -315,7 +302,11 @@ function pickBestGame(rows: EvPlayRow[]) {
 
       const oa = getGameOdds(a) != null ? 1 : 0;
       const ob = getGameOdds(b) != null ? 1 : 0;
-      return ob - oa;
+      if (ob !== oa) return ob - oa;
+
+      const fa = getGameFairOdds(a) != null ? 1 : 0;
+      const fb = getGameFairOdds(b) != null ? 1 : 0;
+      return fb - fa;
     })[0];
 }
 
@@ -333,7 +324,11 @@ function pickBestProp(rows: PropEvRow[]) {
 
       const oa = getPropOdds(a) != null ? 1 : 0;
       const ob = getPropOdds(b) != null ? 1 : 0;
-      return ob - oa;
+      if (ob !== oa) return ob - oa;
+
+      const fa = getPropFairOdds(a) != null ? 1 : 0;
+      const fb = getPropFairOdds(b) != null ? 1 : 0;
+      return fb - fa;
     })[0];
 }
 
@@ -360,11 +355,9 @@ export function OverviewScreen() {
       soft ? setLoadingSoft(true) : setLoading(true);
       setError(null);
 
-      const runQ = supabase
-        .from("monte_carlo_runs")
-        .select("id,created_at,sport_key")
-        .order("created_at", { ascending: false })
-        .limit(1);
+      const runQ = supabase.from("monte_carlo_runs").select("id,created_at,sport_key").order("created_at", {
+        ascending: false,
+      }).limit(1);
 
       const versionQ = supabase
         .from("model_versions")
@@ -374,24 +367,17 @@ export function OverviewScreen() {
         .order("release_date", { ascending: false })
         .limit(1);
 
-      const changelogQ = supabase
-        .from("model_changelog")
-        .select("version,date,changes")
-        .order("date", { ascending: false })
-        .limit(5);
+      const changelogQ = supabase.from("model_changelog").select("version,date,changes").order("date", {
+        ascending: false,
+      }).limit(5);
 
-      // Pull a bigger slice and rank client-side
-      const evQ = supabase
-        .from("ev_plays")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
+      const evQ = supabase.from("ev_plays").select("*").order("created_at", { ascending: false }).limit(250);
 
       const propsQ = supabase
         .from("player_prop_ev_latest")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(200);
+        .limit(250);
 
       const [runRes, versionRes, changelogRes, evRes, propsRes] = await Promise.all([
         runQ,
@@ -444,7 +430,6 @@ export function OverviewScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // realtime (soft refresh)
   useEffect(() => {
     const channel = supabase
       .channel("overview-live")
@@ -469,10 +454,6 @@ export function OverviewScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* =========================================================
-     DERIVED (meta + filters)
-  ========================================================= */
-
   const activeSport = latestRun?.sport_key ?? null;
 
   const meta = useMemo(() => {
@@ -482,11 +463,7 @@ export function OverviewScreen() {
 
     const minEv = latestVersion?.min_ev_threshold;
     const minEvPct =
-      minEv == null
-        ? "—"
-        : minEv <= 1
-        ? `${(minEv * 100).toFixed(1)}%`
-        : `${Number(minEv).toFixed(1)}%`;
+      minEv == null ? "—" : minEv <= 1 ? `${(minEv * 100).toFixed(1)}%` : `${Number(minEv).toFixed(1)}%`;
 
     const anchorRange =
       anchorMin != null && anchorMax != null ? `${anchorMin.toFixed(2)}–${anchorMax.toFixed(2)}` : "—";
@@ -514,10 +491,6 @@ export function OverviewScreen() {
       .filter((r) => isFutureish(r.commence_time ?? null));
   }, [propPlays, activeSport]);
 
-  /* =========================================================
-     TOP PLAYS (DEDUPED)
-  ========================================================= */
-
   const topGames = useMemo(() => {
     const map = new Map<string, EvPlayRow[]>();
     for (const r of evFiltered) {
@@ -525,7 +498,6 @@ export function OverviewScreen() {
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(r);
     }
-
     const unique = Array.from(map.values()).map(pickBestGame);
 
     unique.sort((a, b) => {
@@ -537,7 +509,7 @@ export function OverviewScreen() {
       return eb - ea;
     });
 
-    return unique.slice(0, 6);
+    return unique.filter((r) => (getGameScore(r) ?? -999) >= TOP_SCORE_MIN).slice(0, 6);
   }, [evFiltered]);
 
   const topProps = useMemo(() => {
@@ -547,7 +519,6 @@ export function OverviewScreen() {
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(r);
     }
-
     const unique = Array.from(map.values()).map(pickBestProp);
 
     unique.sort((a, b) => {
@@ -559,7 +530,7 @@ export function OverviewScreen() {
       return eb - ea;
     });
 
-    return unique.slice(0, 6);
+    return unique.filter((r) => (getPropScore(r) ?? -999) >= TOP_SCORE_MIN).slice(0, 6);
   }, [propsFiltered]);
 
   const topAll = useMemo(() => {
@@ -569,8 +540,6 @@ export function OverviewScreen() {
     ];
 
     merged.sort((a, b) => {
-      const sa = a.kind === "game" ? getGameScore(a.row) : getPropScore(b as any); // placeholder, fixed below
-      // (fix) compute properly:
       const A = a.kind === "game" ? getGameScore(a.row) : getPropScore(a.row as any);
       const B = b.kind === "game" ? getGameScore(b.row as any) : getPropScore(b.row as any);
       if ((B ?? -999) !== (A ?? -999)) return (B ?? -999) - (A ?? -999);
@@ -615,11 +584,9 @@ export function OverviewScreen() {
   ========================================================= */
 
   return (
-    <div className="space-y-10">
-      {/* =====================================================
-         HERO — PRODUCT FEEL
-      ====================================================== */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-6">
+    <div className="space-y-8 sm:space-y-10">
+      {/* HERO */}
+      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-6">
         <div
           className="pointer-events-none absolute inset-0 opacity-95"
           style={{
@@ -629,21 +596,20 @@ export function OverviewScreen() {
         />
 
         <div className="relative space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="min-w-0">
               <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1 text-[11px] text-[#b0b0b0]">
                 <Sparkles className="w-3 h-3 text-[#d4af37]" />
                 Prism Command Center
               </div>
 
-              <h2 className="text-2xl text-white mt-3 mb-2 tracking-tight">Today’s Best Edges — Live</h2>
+              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">Today’s Best Edges — Live</h2>
 
               <p className="text-sm text-[#b0b0b0] leading-relaxed max-w-3xl">
                 Your top-rated +EV plays, powered by Monte Carlo simulation, sharp anchoring, and no-vig pricing.
-                One card per play — the best book is selected automatically.
               </p>
 
-              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+              <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
                 <StatusPill
                   label="Latest Run"
                   value={
@@ -666,12 +632,17 @@ export function OverviewScreen() {
                   Live
                 </div>
               </div>
+
+              <div className="mt-2 text-[11px] text-[#606060]">
+                Top Plays only show <span className="text-white">Score ≥ {TOP_SCORE_MIN}</span>. Any play with{" "}
+                <span className="text-white">Score = 100</span> shows <span style={{ color: GOLD }}>🔥</span>.
+              </div>
             </div>
 
             <button
               type="button"
               onClick={() => loadAll({ soft: false })}
-              className="shrink-0 inline-flex items-center gap-2 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-white transition-colors"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-white transition-colors w-full sm:w-auto"
               title="Refresh"
             >
               <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
@@ -685,8 +656,8 @@ export function OverviewScreen() {
             </div>
           ) : null}
 
-          {/* Quick Actions */}
-          <div className="mt-2 grid grid-cols-3 gap-3">
+          {/* Quick Actions — stack on mobile */}
+          <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
             <QuickAction title="Odds" sub="Market grid + history" icon={Database} href="/odds" />
             <QuickAction title="Monte Carlo" sub="Projected scores + win%" icon={Calculator} href="/monte-carlo" />
             <QuickAction title="Model Picks" sub="Best +EV plays" icon={Trophy} href="/model" />
@@ -694,22 +665,23 @@ export function OverviewScreen() {
         </div>
       </div>
 
-      {/* =====================================================
-         TOP PLAYS
-      ====================================================== */}
+      {/* TOP PLAYS */}
       <section>
-        <div className="flex items-end justify-between gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3 sm:mb-4">
           <div>
             <h3 className="text-base text-white">Top Plays Right Now</h3>
             <div className="text-xs text-[#606060]">
-              Ranked by Score first, then EV%. Deduped to show one card per play.
+              Ranked by Score first, then EV%. Deduped to show one card per play. (Score ≥ {TOP_SCORE_MIN})
             </div>
           </div>
 
-          <Segmented value={tab} onChange={setTab} />
+          <div className="w-full sm:w-auto">
+            <Segmented value={tab} onChange={setTab} />
+          </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-3">
+        {/* Mobile: 1 column. Small tablets: 2. Desktop: 4 */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {loading ? (
             <>
               <SkeletonCard />
@@ -718,11 +690,12 @@ export function OverviewScreen() {
               <SkeletonCard />
             </>
           ) : playsToRender.length === 0 ? (
-            <div className="col-span-4 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-5 text-sm text-[#b0b0b0]">
+            <div className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-5 text-sm text-[#b0b0b0]">
               No top plays found for the current filter.
               <div className="text-xs text-[#606060] mt-1">
                 Check that <span className="text-white">ev_plays</span> and{" "}
-                <span className="text-white">player_prop_ev_latest</span> are populated for upcoming events.
+                <span className="text-white">player_prop_ev_latest</span> are populated for upcoming events, and that
+                some plays have <span className="text-white">score ≥ {TOP_SCORE_MIN}</span>.
               </div>
             </div>
           ) : (
@@ -743,6 +716,7 @@ export function OverviewScreen() {
                     ev={getEvPct(r)}
                     book={normalizeBook(r.bookmaker)}
                     odds={getGameOdds(r)}
+                    fairOdds={getGameFairOdds(r)}
                     commence={r.commence_time ? formatTsShort(r.commence_time) : null}
                   />
                 );
@@ -761,6 +735,7 @@ export function OverviewScreen() {
                   ev={getEvPct(r)}
                   book={normalizeBook(r.book ?? r.bookmaker)}
                   odds={getPropOdds(r)}
+                  fairOdds={getPropFairOdds(r)}
                   commence={r.commence_time ? formatTsShort(r.commence_time) : null}
                   pictureUrl={r.picture_url ?? null}
                 />
@@ -770,12 +745,10 @@ export function OverviewScreen() {
         </div>
       </section>
 
-      {/* =====================================================
-         PIPELINE + MODEL META
-      ====================================================== */}
-      <section className="grid grid-cols-3 gap-4">
+      {/* PIPELINE + MODEL META — stacks on mobile */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
         {/* Pipeline */}
-        <div className="col-span-2 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-5">
+        <div className="lg:col-span-2 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="text-base text-white">Processing Pipeline</div>
@@ -789,12 +762,13 @@ export function OverviewScreen() {
             </div>
           </div>
 
-          <div className="flex items-center justify-between">
+          {/* Mobile: vertical list. Desktop: horizontal with arrows */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
             {pipeline.map((step, i) => (
-              <div key={step.label} className="flex items-center flex-1 min-w-0">
+              <div key={step.label} className="flex items-center sm:flex-1 min-w-0">
                 <PipelineStep icon={step.icon} label={step.label} sublabel={step.sub} />
                 {i < pipeline.length - 1 ? (
-                  <ArrowRight className="w-5 h-5 text-[#505050] flex-shrink-0 mx-2" />
+                  <ArrowRight className="hidden sm:block w-5 h-5 text-[#505050] flex-shrink-0 mx-2" />
                 ) : null}
               </div>
             ))}
@@ -802,7 +776,7 @@ export function OverviewScreen() {
         </div>
 
         {/* Model meta */}
-        <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-5">
+        <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="text-base text-white">Model</div>
             <div className="text-[11px] text-[#606060]">{meta.updatedAt ? `Updated ${meta.updatedAt}` : ""}</div>
@@ -824,11 +798,9 @@ export function OverviewScreen() {
         </div>
       </section>
 
-      {/* =====================================================
-         WHAT CHANGED
-      ====================================================== */}
+      {/* CHANGELOG */}
       <section>
-        <h3 className="text-base text-white mb-4">What Changed</h3>
+        <h3 className="text-base text-white mb-3 sm:mb-4">What Changed</h3>
         <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl divide-y divide-[#2a2a2a]">
           {loading ? (
             <div className="p-4 text-xs text-[#b0b0b0]">Loading changelog…</div>
@@ -860,11 +832,8 @@ function gameSubtitle(r: EvPlayRow) {
   const m = marketLabel(r.market ?? "");
   const side = (r.side ?? "").toUpperCase();
   const line = fmtLine(r.line ?? null);
-
-  // Prefer "team" label for ML/spreads where your table has it
   const team = (r.team ?? "").trim();
   const pick = team ? `${team}${line ? ` ${line}` : ""}` : `${side}${line ? ` ${line}` : ""}`;
-
   return `${m} • ${pick}`;
 }
 
@@ -872,7 +841,7 @@ function propTitle(r: PropEvRow) {
   const pn = (r.player_name ?? "Unknown Player").trim();
   const t = (r.team ?? "").trim();
   const o = (r.opponent ?? "").trim();
-  const vs = t && o ? `${t} vs ${o}` : t || o ? (t || o) : "";
+  const vs = t && o ? `${t} vs ${o}` : t || o ? t || o : "";
   return vs ? `${pn} (${vs})` : pn;
 }
 
@@ -904,12 +873,12 @@ function QuickAction({
       onClick={() => (window.location.href = href)}
       className="text-left rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 hover:border-[#3a3a3a] transition-colors"
     >
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
           <div className="text-sm text-white">{title}</div>
           <div className="text-xs text-[#606060] mt-0.5">{sub}</div>
         </div>
-        <div className="w-9 h-9 rounded-lg bg-[#141414] border border-[#d4af37]/25 flex items-center justify-center">
+        <div className="w-9 h-9 rounded-lg bg-[#141414] border border-[#d4af37]/25 flex items-center justify-center shrink-0">
           <Icon className="w-4 h-4 text-[#d4af37]" />
         </div>
       </div>
@@ -925,7 +894,7 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
         type="button"
         onClick={() => onChange(v)}
         className={[
-          "px-3 py-1.5 rounded-lg text-xs border transition-colors",
+          "px-3 py-2 rounded-lg text-xs border transition-colors w-full sm:w-auto",
           active
             ? "bg-[#141414] border-[#d4af37]/40 text-white"
             : "bg-[#0b0b0b] border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:border-[#3a3a3a]",
@@ -937,7 +906,7 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
   };
 
   return (
-    <div className="inline-flex items-center gap-2">
+    <div className="grid grid-cols-3 gap-2 sm:inline-flex sm:items-center sm:gap-2">
       {btn("all", "All")}
       {btn("game", "Game Lines")}
       {btn("props", "Props")}
@@ -956,21 +925,23 @@ function StatusPill({ label, value }: { label: string; value: string }) {
 
 function PipelineStep({ icon: Icon, label, sublabel }: { icon: any; label: string; sublabel: string }) {
   return (
-    <div className="flex flex-col items-center flex-1 min-w-0">
-      <div className="w-12 h-12 bg-[#141414] border border-[#d4af37]/30 rounded-lg flex items-center justify-center mb-2">
+    <div className="flex items-center gap-3 sm:flex-col sm:gap-0 sm:items-center flex-1 min-w-0">
+      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-[#141414] border border-[#d4af37]/30 rounded-lg flex items-center justify-center shrink-0 sm:mb-2">
         <Icon className="w-5 h-5 text-[#d4af37]" />
       </div>
-      <div className="text-xs text-white text-center mb-0.5">{label}</div>
-      <div className="text-[10px] text-[#606060] text-center">{sublabel}</div>
+      <div className="min-w-0">
+        <div className="text-xs text-white sm:text-center mb-0.5">{label}</div>
+        <div className="text-[10px] text-[#606060] sm:text-center">{sublabel}</div>
+      </div>
     </div>
   );
 }
 
 function MiniStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-2 py-2">
+    <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-2.5 py-2.5">
       <div className="text-[10px] text-[#606060]">{label}</div>
-      <div className={["text-xs mt-0.5", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>
+      <div className={["text-xs mt-0.5 whitespace-nowrap truncate", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>
         {value}
       </div>
     </div>
@@ -979,9 +950,9 @@ function MiniStat({ label, value, accent }: { label: string; value: string; acce
 
 function MetaLine({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-3">
       <div className="text-[#808080]">{label}</div>
-      <div className={["text-white", warn ? "text-amber-300" : ""].join(" ")}>{value}</div>
+      <div className={["text-white text-right", warn ? "text-amber-300" : ""].join(" ")}>{value}</div>
     </div>
   );
 }
@@ -992,7 +963,8 @@ function SkeletonCard() {
       <div className="animate-pulse space-y-3">
         <div className="h-4 w-2/3 bg-[#1a1a1a] rounded" />
         <div className="h-3 w-1/2 bg-[#1a1a1a] rounded" />
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="h-10 bg-[#1a1a1a] rounded" />
           <div className="h-10 bg-[#1a1a1a] rounded" />
           <div className="h-10 bg-[#1a1a1a] rounded" />
           <div className="h-10 bg-[#1a1a1a] rounded" />
@@ -1024,7 +996,7 @@ function ChangeLogEntry({ version, date, changes }: { version: string; date: str
 }
 
 /* =========================================================
-   TOP PLAY CARD (reusable, premium)
+   TOP PLAY CARD — mobile breathing room
 ========================================================= */
 
 function TopPlayCard({
@@ -1037,6 +1009,7 @@ function TopPlayCard({
   ev,
   book,
   odds,
+  fairOdds,
   commence,
   pictureUrl,
 }: {
@@ -1049,14 +1022,17 @@ function TopPlayCard({
   ev: number | null;
   book: string;
   odds: number | null;
+  fairOdds: number | null;
   commence: string | null;
   pictureUrl?: string | null;
 }) {
-  const scoreText = score == null ? "—" : `${Math.round(score)}`;
+  const scoreRounded = score == null ? null : Math.round(score);
+  const scoreText = scoreRounded == null ? "—" : `${scoreRounded}`;
   const evText = ev == null ? "—" : `${ev.toFixed(1)}%`;
+  const showFire = scoreRounded === 100;
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4">
+    <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-4">
       {isTop3 ? (
         <div
           className="pointer-events-none absolute inset-0 opacity-70"
@@ -1070,14 +1046,18 @@ function TopPlayCard({
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <div
-              className="w-8 h-8 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] flex items-center justify-center shrink-0"
+              className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] flex items-center justify-center shrink-0"
               title={`Rank #${rank}`}
             >
-              {isTop3 ? <Flame className="w-4 h-4 text-[#d4af37]" /> : <Trophy className="w-4 h-4 text-[#808080]" />}
+              {showFire ? (
+                <Flame className="w-4 h-4 text-[#d4af37]" />
+              ) : (
+                <Trophy className={["w-4 h-4", isTop3 ? "text-[#d4af37]" : "text-[#808080]"].join(" ")} />
+              )}
             </div>
 
             {kind === "prop" ? (
-              <div className="w-8 h-8 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden shrink-0">
+              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden shrink-0">
                 {pictureUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={pictureUrl} alt="" className="w-full h-full object-cover" />
@@ -1089,25 +1069,31 @@ function TopPlayCard({
 
             <div className="min-w-0">
               <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player Prop" : "Game Line"}</div>
-              <div className="text-sm text-white leading-tight truncate">{title}</div>
+              <div className="text-[15px] sm:text-sm text-white leading-snug truncate">{title}</div>
             </div>
           </div>
 
           <div className="text-right shrink-0">
             <div className="text-[10px] text-[#606060]">Score</div>
-            <div className="text-sm text-white">{scoreText}</div>
+            <div className="text-sm text-white inline-flex items-center gap-1">
+              {scoreText}
+              {showFire ? <span style={{ color: GOLD }}>🔥</span> : null}
+            </div>
           </div>
         </div>
 
+        {/* Slightly more line-height on mobile */}
         <div className="text-xs text-[#b0b0b0] leading-relaxed">{subtitle}</div>
 
-        <div className="grid grid-cols-3 gap-2 text-xs">
+        {/* Mobile: 2x2 stats. Desktop+: 4 across */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
           <MiniStat label="EV" value={evText} accent />
           <MiniStat label="Book" value={book} />
-          <MiniStat label="Odds" value={fmtOdds(odds)} />
+          <MiniStat label="Book Odds" value={fmtOdds(odds)} />
+          <MiniStat label="Quantum" value={fmtOdds(fairOdds)} />
         </div>
 
-        {commence ? <div className="text-[11px] text-[#606060]">{commence}</div> : null}
+        {commence ? <div className="text-[11px] text-[#606060] pt-0.5">{commence}</div> : null}
       </div>
     </div>
   );
