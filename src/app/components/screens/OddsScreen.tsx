@@ -1,4 +1,4 @@
-// screens/OddsScreen.tsx — FULL REWRITE (FINAL VISUAL POLISH PASS)
+// screens/OddsScreen.tsx — FULL REWRITE (Odds + History + Player Props modal w/ headshots + positions)
 // -------------------------------------------------------------------------------------------------
 // ✅ Filters by sport_key
 // ✅ Desktop: centered max-width “web” layout (less app-like)
@@ -15,15 +15,7 @@
 // ✅ Odds screen defaults to Moneyline (and resets to Moneyline on sport change)
 // ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across odds rows + props snapshot ts (without opening modal)
 // ✅ FIX: props book logos appear in white pill (readable even if logo is black)
-//
-// FINAL POLISH (visual-only):
-// ✅ Slightly tighter header rhythm + better “web app” feel
-// ✅ Cleaner date-pill strip (sticky fade edges + consistent height)
-// ✅ Desktop table: softer row separators + subtle zebra hover + consistent cell padding
-// ✅ “Last Updated” chip style aligned with rest of UI
-// ✅ Modals: slightly cleaner header spacing + consistent panel framing
-// ✅ Mobile cards: better header alignment + less visual noise, more hierarchy
-// ✅ Tooltip: improved spacing, caps, and legibility
+// ✅ FIX: player_props_snapshot.player_id removed (column does not exist)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -111,14 +103,13 @@ const BOOK_LOGO_H = 24;
 
 /** Header colors */
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
-const HDR_BOOK_BG = "bg-[#2b2b2b]"; // slightly softer than before
+const HDR_BOOK_BG = "bg-[#303030]";
 const HDR_TEXT = "text-[#d0d0d0]";
 const HDR_BORDER = "border-[#232323]";
-const ROW_BORDER = "border-[#1f1f1f]";
 
 /** Subtle glow for header logos */
 const BOOK_GLOW =
-  "drop-shadow(0 1px 0 rgba(0,0,0,0.55)) drop-shadow(0 0 8px rgba(255,255,255,0.10)) drop-shadow(0 0 10px rgba(212,175,55,0.14))";
+  "drop-shadow(0 1px 0 rgba(0,0,0,0.55)) drop-shadow(0 0 8px rgba(255,255,255,0.10)) drop-shadow(0 0 10px rgba(212,175,55,0.16))";
 
 /* =========================================================
    TIME HELPERS
@@ -298,7 +289,7 @@ function renderCellParts(parts: CellParts) {
   return (
     <div className="flex flex-col items-center justify-center leading-tight">
       <div className="tabular-nums">{parts.top}</div>
-      {parts.bottom != null ? <div className="tabular-nums opacity-90">{parts.bottom}</div> : null}
+      {parts.bottom != null ? <div className="tabular-nums opacity-95">{parts.bottom}</div> : null}
     </div>
   );
 }
@@ -390,7 +381,7 @@ function BookLogoPill({
 
   return (
     <div
-      className={`${pillH} ${pillW} rounded-full bg-white/[0.96] border border-[#e7e7e7] px-3 flex items-center justify-center shadow-[0_2px_10px_rgba(0,0,0,0.18)]`}
+      className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`}
       title={alt}
     >
       <img
@@ -487,7 +478,7 @@ function BookHeader({
             src={src}
             alt={alt}
             style={{ width: BOOK_LOGO_W, height: BOOK_LOGO_H, filter: BOOK_GLOW }}
-            className="object-contain opacity-[0.96]"
+            className="object-contain opacity-95"
             loading="lazy"
             onError={(e) => {
               (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
@@ -518,7 +509,6 @@ function ConsensusValue({ parts }: { parts: CellParts }) {
       className={[
         "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
         `border-r ${HDR_BORDER}`,
-        "bg-black/10", // tiny distinction vs books
       ].join(" ")}
     >
       {renderCellParts(parts)}
@@ -724,7 +714,6 @@ function buildChartSeriesOddsOnly(rows: HistoryRow[], uiMarket: Market, books: s
     const cur = points[i];
 
     const widthOk = cur.mw != null ? cur.mw <= widthTight : false;
-
     let sharp = false;
 
     if (prev.pinProb != null && cur.pinProb != null) {
@@ -787,17 +776,16 @@ function ModalShell({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-7xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_18px_80px_rgba(0,0,0,0.55)]">
+      <div className="w-full max-w-7xl rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col">
         <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
-            <div className="text-white font-extrabold text-sm leading-tight">{title}</div>
-            {subtitle && <div className="text-[11px] text-[#8a8a8a] mt-1 break-words">{subtitle}</div>}
+            <div className="text-white font-extrabold text-sm">{title}</div>
+            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
           </div>
           <button
             className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
             onClick={onClose}
             type="button"
-            aria-label="Close"
           >
             ✕
           </button>
@@ -839,7 +827,6 @@ type PlayerPropsSnapshotRow = {
   away_team: string | null;
 
   player_name: string | null;
-  player_id: string | null;
 
   team: string | null;
   opponent: string | null;
@@ -978,7 +965,7 @@ function PlayerPropsModal({
       setRows([]);
 
       const selectCols =
-        "id,ts,inserted_at,run_id,sport_key,event_id,commence_time,home_team,away_team,player_name,player_id,team,opponent,market,side,line,odds,bookmaker,source";
+        "id,ts,inserted_at,run_id,sport_key,event_id,commence_time,home_team,away_team,player_name,team,opponent,market,side,line,odds,bookmaker,source";
 
       // 1) Try event_id
       const r1 = await supabase
@@ -1149,7 +1136,7 @@ function PlayerPropsModal({
         <select
           value={propType}
           onChange={(e) => setPropType(e.target.value as PropType)}
-          className="bg-black/30 border border-[#2a2a2a] text-white text-xs font-extrabold rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#d4af37]/30"
+          className="bg-black/30 border border-[#2a2a2a] text-white text-xs font-extrabold rounded-lg px-3 py-2"
         >
           <option value="player_points">Points</option>
           <option value="player_rebounds">Rebounds</option>
@@ -1163,11 +1150,13 @@ function PlayerPropsModal({
   function PropBookCell({ cell }: { cell: PropCell }) {
     return (
       <div className="flex flex-col items-center justify-center leading-tight">
-        <div className="text-[12px] text-white font-extrabold tabular-nums">
-          {cell.line == null ? "—" : cell.line}
+        <div className="text-[12px] text-white font-extrabold tabular-nums">{cell.line == null ? "—" : cell.line}</div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">
+          O: {cell.over == null ? "—" : cell.over}
         </div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">O: {cell.over == null ? "—" : cell.over}</div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">U: {cell.under == null ? "—" : cell.under}</div>
+        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">
+          U: {cell.under == null ? "—" : cell.under}
+        </div>
       </div>
     );
   }
@@ -1200,7 +1189,8 @@ function PlayerPropsModal({
 
           {(r.team || r.opponent) && (
             <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-              {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+              {r.team ?? "—"}{" "}
+              {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
             </div>
           )}
         </div>
@@ -1229,7 +1219,7 @@ function PlayerPropsModal({
         <>
           {/* Desktop/tablet */}
           <div className="hidden sm:block">
-            <div className="overflow-x-auto rounded-2xl border border-[#2a2a2a] bg-black/20 shadow-[0_12px_46px_rgba(0,0,0,0.26)]">
+            <div className="overflow-x-auto rounded-xl border border-[#2a2a2a] bg-black/20">
               <table className="min-w-[1040px] w-full">
                 <thead className="sticky top-0 z-10">
                   <tr className={`border-b ${HDR_BORDER}`}>
@@ -1267,7 +1257,7 @@ function PlayerPropsModal({
 
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={r.player} className={`border-b ${ROW_BORDER} last:border-b-0 hover:bg-white/[0.04]`}>
+                    <tr key={r.player} className={`border-b ${HDR_BORDER} last:border-b-0 hover:bg-white/5`}>
                       <td className="px-4 py-3">
                         <PlayerCell r={r} />
                       </td>
@@ -1277,7 +1267,10 @@ function PlayerPropsModal({
                       </td>
 
                       {BOOKS.map((bk, i) => (
-                        <td key={bk} className={["px-2 py-3 text-center", i === 0 ? `border-l ${HDR_BORDER}` : ""].join(" ")}>
+                        <td
+                          key={bk}
+                          className={["px-2 py-3 text-center", i === 0 ? `border-l ${HDR_BORDER}` : ""].join(" ")}
+                        >
                           <PropBookCell cell={r.byBook[bk]} />
                         </td>
                       ))}
@@ -1297,7 +1290,7 @@ function PlayerPropsModal({
           {/* Mobile */}
           <div className="sm:hidden space-y-3">
             {rows.map((r) => (
-              <div key={r.player} className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+              <div key={r.player} className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
                 <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
                   <div className="min-w-0 flex items-center gap-3">
                     <PlayerAvatar url={r.pictureUrl} name={r.player} size={34} />
@@ -1313,7 +1306,8 @@ function PlayerPropsModal({
 
                       {(r.team || r.opponent) && (
                         <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-                          {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+                          {r.team ?? "—"}{" "}
+                          {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
                         </div>
                       )}
                     </div>
@@ -1321,7 +1315,9 @@ function PlayerPropsModal({
 
                   <div className="text-right">
                     <div className="text-[10px] text-[#808080] font-semibold">Cons</div>
-                    <div className="text-white font-extrabold tabular-nums">{r.lineConsensus == null ? "—" : r.lineConsensus}</div>
+                    <div className="text-white font-extrabold tabular-nums">
+                      {r.lineConsensus == null ? "—" : r.lineConsensus}
+                    </div>
                   </div>
                 </div>
 
@@ -1329,7 +1325,7 @@ function PlayerPropsModal({
                   {BOOKS.map((bk) => {
                     const meta = bookMeta(bk);
                     return (
-                      <div key={bk} className="rounded-xl border border-[#2a2a2a] bg-black/10 p-3">
+                      <div key={bk} className="rounded-lg border border-[#2a2a2a] bg-black/10 p-3">
                         <div className="flex items-center justify-between mb-2">
                           <BookLogoPill src={BOOK_LOGOS[bk]} alt={meta.alt} fallbackLabel={meta.fb} size="sm" />
                           <div className="text-[10px] text-[#808080] font-bold">{bk.toUpperCase()}</div>
@@ -1372,7 +1368,7 @@ function HistoryChartPairOddsOnly({
   const isMobile = useIsMobile();
   const chartHeight = isMobile ? 420 : 520;
 
-  const leftTopLabel = uiMarket === "ml" ? "Odds" : uiMarket === "spread" ? "Odds" : "Odds";
+  const leftTopLabel = uiMarket === "ml" ? "Moneyline Odds" : uiMarket === "spread" ? "Spread Odds" : "Total Odds";
   const rightTopLabel = "Market Width (Prob)";
 
   const margin = isMobile ? { top: 8, right: 14, left: 36, bottom: 14 } : { top: 8, right: 16, left: 38, bottom: 16 };
@@ -1382,7 +1378,7 @@ function HistoryChartPairOddsOnly({
   const empty = !seriesA.length && !seriesB.length;
 
   return (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+    <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-white font-extrabold text-sm">{title}</div>
       </div>
@@ -1395,7 +1391,7 @@ function HistoryChartPairOddsOnly({
             { title: panelTitleA, data: seriesA } as const,
             { title: panelTitleB, data: seriesB } as const,
           ].map((panel) => (
-            <div key={panel.title} className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
+            <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
               <div className="flex items-center justify-between gap-3 mb-2">
                 <div className="text-white font-bold text-xs">{panel.title}</div>
                 <div className="flex items-center gap-3">
@@ -1430,29 +1426,28 @@ function HistoryChartPairOddsOnly({
                         });
 
                         return (
-                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg p-2.5 text-[11px] text-[#cfcfcf] max-w-[360px] shadow-[0_16px_60px_rgba(0,0,0,0.55)]">
+                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[340px]">
                             <div className="font-extrabold text-white mb-1">{label}</div>
 
                             {row?.mw != null && (
-                              <div className="mb-2 flex items-center justify-between gap-2">
-                                <span className="text-[#9a9a9a] font-semibold">Width</span>
-                                <span className="text-white font-extrabold tabular-nums">{row.mw}</span>
+                              <div className="mb-1">
+                                <span className="font-bold">Width:</span> {row.mw}
                               </div>
                             )}
 
                             <div className="space-y-0.5">
                               {pretty.slice(0, 12).map((x) => (
                                 <div key={x.book} className="flex items-center justify-between gap-2">
-                                  <span className="text-[#9a9a9a] font-semibold truncate">{x.book}</span>
+                                  <span className="text-[#9a9a9a] font-semibold">{x.book}</span>
                                   <span className="text-white font-extrabold tabular-nums">
                                     {x.odds}
-                                    {x.line != null ? <span className="text-white/70"> · {x.line}</span> : null}
+                                    {x.line != null ? <span className="text-white/80"> · {x.line}</span> : null}
                                   </span>
                                 </div>
                               ))}
                             </div>
 
-                            <div className="mt-2.5">
+                            <div className="mt-2">
                               {row?.sharp ? (
                                 <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
                                   Sharp Move
@@ -1611,28 +1606,42 @@ function LineMovementModal({
     .filter(Boolean)
     .join(" · ");
 
-  const tabBtn = (v: Market, label: string) => {
-    const active = activeMarket === v;
-    return (
-      <button
-        className={[
-          "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors",
-          active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]",
-        ].join(" ")}
-        onClick={() => setActiveMarket(v)}
-        type="button"
-      >
-        {label}
-      </button>
-    );
-  };
-
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        {tabBtn("ml", "Moneyline")}
-        {tabBtn("spread", "Spread")}
-        {tabBtn("total", "Total")}
+        <button
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "ml"
+              ? "bg-[#d4af37] text-black border-[#d4af37]"
+              : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
+          onClick={() => setActiveMarket("ml")}
+          type="button"
+        >
+          Moneyline
+        </button>
+        <button
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "spread"
+              ? "bg-[#d4af37] text-black border-[#d4af37]"
+              : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
+          onClick={() => setActiveMarket("spread")}
+          type="button"
+        >
+          Spread
+        </button>
+        <button
+          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
+            activeMarket === "total"
+              ? "bg-[#d4af37] text-black border-[#d4af37]"
+              : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
+          }`}
+          onClick={() => setActiveMarket("total")}
+          type="button"
+        >
+          Total
+        </button>
       </div>
 
       {loading ? (
@@ -1708,13 +1717,13 @@ function MobileMoreMenu({ onHistory, onProps }: { onHistory: () => void; onProps
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a] bg-black/10"
+        className="text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
       >
         More ▾
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] shadow-[0_16px_60px_rgba(0,0,0,0.55)] overflow-hidden z-20">
+        <div className="absolute right-0 mt-2 w-40 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] shadow-[0_16px_60px_rgba(0,0,0,0.45)] overflow-hidden z-20">
           <button
             type="button"
             onClick={() => {
@@ -1781,7 +1790,7 @@ function EventCardMobile({
       : { alt: "BetOnline", fb: "BOL" };
 
   return (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden shadow-[0_10px_34px_rgba(0,0,0,0.25)]">
+    <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
@@ -1789,7 +1798,7 @@ function EventCardMobile({
           <button
             type="button"
             onClick={onToggleBooks}
-            className="text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a] bg-black/10"
+            className="text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
           >
             {booksOpen ? "Hide Books" : "Show Books"}
           </button>
@@ -1804,7 +1813,7 @@ function EventCardMobile({
       </div>
 
       <div className="px-4 pb-4">
-        <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-3">
+        <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3">
           <div className="flex items-center justify-between mb-2">
             <div className="text-[12px] text-white font-extrabold">Consensus</div>
             <div className="text-[11px] text-[#808080] font-semibold">
@@ -1813,13 +1822,13 @@ function EventCardMobile({
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg border border-[#1f1f1f] bg-black/20 p-2">
+            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
               <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
                 {renderCellParts(awayCons)}
               </div>
             </div>
-            <div className="rounded-lg border border-[#1f1f1f] bg-black/20 p-2">
+            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
               <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
                 {renderCellParts(homeCons)}
@@ -1829,7 +1838,7 @@ function EventCardMobile({
         </div>
 
         {booksOpen && (
-          <div className="mt-3 rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
+          <div className="mt-3 rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
             <div className="px-4 py-2 border-b border-[#141414]">
               <div className="text-[12px] text-white font-extrabold">Books</div>
               <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
@@ -1887,12 +1896,9 @@ function EventTwoRows({
 
   return (
     <>
-      <tr className="hover:bg-white/[0.04] transition-colors">
+      <tr className="hover:bg-white/5 transition-colors">
         <td
-          className={[
-            "p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle",
-            `border-r ${HDR_BORDER}`,
-          ].join(" ")}
+          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
           rowSpan={2}
         >
           <div className="flex items-center justify-between gap-3 mb-3">
@@ -1911,7 +1917,7 @@ function EventTwoRows({
               <button
                 type="button"
                 onClick={() => onOpenProps(ev)}
-                className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a] bg-black/10"
+                className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
                 title="View player props"
               >
                 Props
@@ -1934,7 +1940,7 @@ function EventTwoRows({
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "bol")} />
       </tr>
 
-      <tr className={["hover:bg-white/[0.04] transition-colors", `border-t border-[#191919] border-b ${HDR_BORDER}`].join(" ")}>
+      <tr className={["hover:bg-white/5 transition-colors", `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue parts={homeConsensus} />
 
         <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
@@ -2045,8 +2051,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
 
     // ---- 2) Also include latest props snapshot timestamp (without opening modal)
-    // We take max(ts, inserted_at) across player_props_snapshot for this sport.
-    // This keeps “Last Updated” honest even if the user never opens Props.
     let propsLatest: string | null = null;
     try {
       const propsRes = await supabase
@@ -2168,21 +2172,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         <div className="pt-4 md:pt-6">
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
             <div>
-              <div className="flex items-center gap-3">
-                <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
-                <span className="hidden md:inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/20 px-3 py-1 text-[11px] text-[#bdbdbd] font-semibold">
-                  {headerLabel} · 5 books
-                </span>
-              </div>
+              <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
+              <div className="text-xs text-[#8a8a8a] mt-1">{headerLabel} · 5 books · refresh 60s</div>
 
-              <div className="text-xs text-[#8a8a8a] mt-1">Refresh: 60s · CT time</div>
-
-              <div className="md:hidden mt-2">
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/20 px-3 py-1 text-[11px] text-[#bdbdbd] font-semibold">
-                  <span className="text-[#6a6a6a] font-semibold">Last Updated</span>
-                  <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
-                  <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
-                </div>
+              <div className="md:hidden mt-2 text-[11px] text-[#6a6a6a] font-semibold">
+                Last Updated (CT): <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
               </div>
             </div>
 
@@ -2196,31 +2190,25 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           </div>
 
           <div className="mt-4 flex flex-col gap-3">
-            {/* Date pills (polish: fade edges) */}
-            <div className="relative">
-              <div className="absolute left-0 top-0 bottom-0 w-6 pointer-events-none bg-gradient-to-r from-[#0f0f0f] to-transparent z-10" />
-              <div className="absolute right-0 top-0 bottom-0 w-6 pointer-events-none bg-gradient-to-l from-[#0f0f0f] to-transparent z-10" />
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+              {availableDates.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setSelectedDate(d)}
+                  className={[
+                    "px-3 py-1.5 rounded-lg text-xs border transition-colors whitespace-nowrap font-extrabold",
+                    selectedDate === d
+                      ? "bg-[#d4af37] text-black border-[#d4af37]"
+                      : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]",
+                  ].join(" ")}
+                  title={d}
+                  type="button"
+                >
+                  {fmtDateBtn(d)}
+                </button>
+              ))}
 
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
-                {availableDates.map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setSelectedDate(d)}
-                    className={[
-                      "h-9 px-3 rounded-lg text-xs border transition-colors whitespace-nowrap font-extrabold",
-                      selectedDate === d
-                        ? "bg-[#d4af37] text-black border-[#d4af37]"
-                        : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]",
-                    ].join(" ")}
-                    title={d}
-                    type="button"
-                  >
-                    {fmtDateBtn(d)}
-                  </button>
-                ))}
-
-                {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
-              </div>
+              {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -2327,7 +2315,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         </div>
 
         {/* History modal */}
-        {historyOpen && historyEvent?.eventId && <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />}
+        {historyOpen && historyEvent?.eventId && (
+          <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
+        )}
 
         {/* Player Props modal */}
         {propsOpen && propsEvent?.eventId && (
@@ -2344,4 +2334,5 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
+
 
