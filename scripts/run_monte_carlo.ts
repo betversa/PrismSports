@@ -1,16 +1,18 @@
 /**
- * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6: Adaptive Devig + Baseline-Safe + Pace-Aware)
- * ---------------------------------------------------------------------------------------------
+ * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v5.1: Devig Switch + Tail-Safe EV)
+ * --------------------------------------------------------------------------------
  * Snapshot tables:
  *   ✅ monte_carlo_results: one row per (sport_key, event_id), overwritten each run
  *   ✅ monte_carlo_runs: history (one row per run)
  *   ✅ ev_plays: cleared per sport each run, then rebuilt
  *
- * v6 UPDATE (your request):
- *   ✅ Adaptive devig for SHARP no-vig probabilities
- *      - Near 50/50 markets → Equal-Margin devig (stable around pick'em)
- *      - Lopsided markets → MPTO devig (more realistic for heavy fav/dog)
- *      - Smooth blend between the two based on implied-prob skew
+ * NEW in v5.1:
+ *   ✅ Devig method SWITCH:
+ *      - near 50/50 => Equal-margin devig (normalize)
+ *      - lopsided => MPTO / Power devig (solve k: sum(p_i^k)=1)
+ *   ✅ Tail-safe EV blending:
+ *      - Sharps weighted heavier for favorites/underdogs (tails)
+ *      - Optional disagreement guardrail in tails to prevent "model hallucination"
  */
 
 import "dotenv/config";
@@ -146,7 +148,6 @@ type PossRow = {
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
   process.env.SUPABASE_KEY!;
@@ -184,12 +185,41 @@ const SOFT_BOOKS = (process.env.EV_SOFT_BOOKS || "draftkings,fanduel,betmgm")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-const QUANTUM_SHARP_WEIGHT = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.75");
-const QUANTUM_MC_WEIGHT = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.25");
+// Base blend weights (we will make these dynamic in tails)
+const QUANTUM_SHARP_WEIGHT_BASE = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.65");
+const QUANTUM_MC_WEIGHT_BASE = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.35");
+
 const KELLY_MULTIPLIER = Number(process.env.KELLY_MULTIPLIER ?? "0.25");
 
 const LINE_TOL = Number(process.env.LINE_TOL ?? "1e-6");
 const MIN_EV_PCT = Number(process.env.MIN_EV_PCT ?? "0");
+
+/**
+ * Devig switching threshold:
+ * - if sides are "close" (near 50/50), use equal-margin normalize
+ * - else use MPTO/Power devig
+ *
+ * Interpretation:
+ *   diff = |p1 - p2|
+ *   - small diff => close market => normalize is fine
+ *   - big diff => lopsided => MPTO is more stable
+ */
+const DEVIG_DIFF_SWITCH = Number(process.env.DEVIG_DIFF_SWITCH ?? "0.10"); // 0.10 ~= 55/45 vs 70/30 etc
+
+/**
+ * Tail safety:
+ * - if sharp says tail (p far from 0.5), increase sharp weight
+ */
+const TAIL_SHARP_W_MIN = Number(process.env.TAIL_SHARP_W_MIN ?? "0.70");
+const TAIL_SHARP_W_MAX = Number(process.env.TAIL_SHARP_W_MAX ?? "0.95");
+
+/**
+ * Optional tail disagreement guardrail:
+ * - If long odds and model >> sharp by too much, skip.
+ */
+const TAIL_GUARD_ENABLED = (process.env.TAIL_GUARD_ENABLED ?? "true").toLowerCase() === "true";
+const TAIL_GUARD_LONG_ODDS = Number(process.env.TAIL_GUARD_LONG_ODDS ?? "350"); // +/- threshold for "long"
+const TAIL_GUARD_MAX_GAP = Number(process.env.TAIL_GUARD_MAX_GAP ?? "0.06"); // 6% abs prob gap in tails
 
 /**
  * Pace weights (auto-renormalized if a component is missing)
@@ -205,16 +235,6 @@ const PACE_W_SPLIT = Number(process.env.PACE_W_SPLIT ?? "0.10");
  */
 const PTS_BLEND_WEIGHT_OFF = Number(process.env.PTS_BLEND_WEIGHT_OFF ?? "0.50"); // 0..1
 const PTS_BLEND_WEIGHT_DEF = 1 - PTS_BLEND_WEIGHT_OFF;
-
-/**
- * v6: Adaptive devig thresholds:
- * - skew = |p1 - p2| (implied prob skew)
- * - near pick'em → Equal Margin
- * - lopsided → MPTO
- * - smooth blend between the two across [DEVIG_SKEW_LO, DEVIG_SKEW_HI]
- */
-const DEVIG_SKEW_LO = Number(process.env.DEVIG_SKEW_LO ?? "0.06");
-const DEVIG_SKEW_HI = Number(process.env.DEVIG_SKEW_HI ?? "0.18");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
@@ -367,12 +387,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE
             ? "negative_means_home_better"
             : "positive_means_home_better",
-
-          devig: {
-            method: "adaptive(equal-margin↔mpto)",
-            skew_lo: DEVIG_SKEW_LO,
-            skew_hi: DEVIG_SKEW_HI,
-          },
         }
       : null;
 
@@ -469,22 +483,28 @@ function buildRunConfig(sportKey: string) {
     line_source: "consensus(avg latest-per-book from odds_snapshot)",
     generated_at: new Date().toISOString(),
 
-    quantum_sharp_weight: QUANTUM_SHARP_WEIGHT,
-    quantum_mc_weight: QUANTUM_MC_WEIGHT,
-    kelly_multiplier: KELLY_MULTIPLIER,
-
     ev_soft_books: SOFT_BOOKS,
     ev_sharp_books: SHARP_BOOKS,
+
+    // devig config
+    devig_switch: {
+      diff_switch: DEVIG_DIFF_SWITCH,
+      near_50_method: "equal_margin_normalize",
+      lopsided_method: "mpto_power",
+    },
+
+    // tail config
+    tail: {
+      sharp_w_min: TAIL_SHARP_W_MIN,
+      sharp_w_max: TAIL_SHARP_W_MAX,
+      guard_enabled: TAIL_GUARD_ENABLED,
+      guard_long_odds: TAIL_GUARD_LONG_ODDS,
+      guard_max_gap: TAIL_GUARD_MAX_GAP,
+    },
 
     min_ev_pct: MIN_EV_PCT,
     line_tol: LINE_TOL,
     write_trace: WRITE_TRACE,
-
-    devig: {
-      mode: "adaptive(equal-margin↔mpto)",
-      skew_lo: DEVIG_SKEW_LO,
-      skew_hi: DEVIG_SKEW_HI,
-    },
   };
 }
 
@@ -493,9 +513,8 @@ function buildRunConfig(sportKey: string) {
 ========================================================= */
 
 function paceClampForSport(sportKey: string): { lo: number; hi: number } {
-  // tighter clamps reduce risk of "scrape glitch => insane totals"
   if (sportKey === "basketball_nba") return { lo: 85, hi: 110 };
-  return { lo: 60, hi: 80 }; // NCAAB typical range
+  return { lo: 60, hi: 80 };
 }
 
 function computeTeamPace(
@@ -553,8 +572,8 @@ function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamR
 
   const defFallback = sportKey === "basketball_nba" ? 112 : 100;
 
-  const homeOff = homeOff100 > 0 ? homeOff100 : sportKey === "basketball_nba" ? 112 : 100;
-  const awayOff = awayOff100 > 0 ? awayOff100 : sportKey === "basketball_nba" ? 112 : 100;
+  const homeOff = homeOff100 > 0 ? homeOff100 : (sportKey === "basketball_nba" ? 112 : 100);
+  const awayOff = awayOff100 > 0 ? awayOff100 : (sportKey === "basketball_nba" ? 112 : 100);
   const homeDef = homeDef100 > 0 ? homeDef100 : defFallback;
   const awayDef = awayDef100 > 0 ? awayDef100 : defFallback;
 
@@ -709,7 +728,17 @@ async function rebuildEvPlaysForSport(
         const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
         if (!sharp) continue;
 
-        const quantumProb = clamp01(QUANTUM_SHARP_WEIGHT * sharp.prob + QUANTUM_MC_WEIGHT * mcProb);
+        // Dynamic blending in tails: use sharp more when p_sharp far from 0.5
+        const tail = tailness(sharp.prob); // 0 at 0.5, 1 near 0/1
+        const wSharp = clamp(TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail, TAIL_SHARP_W_MIN, TAIL_SHARP_W_MAX);
+        const wMc = 1 - wSharp;
+
+        // Optional: shrink MC toward sharp in tails a bit (prevents "model hallucination")
+        const shrink = clamp(0.10 + 0.50 * tail, 0.10, 0.60);
+        const mcAdj = clamp01(mcProb * (1 - shrink) + sharp.prob * shrink);
+
+        // final quantum probability (tail-safe)
+        const quantumProb = clamp01(wSharp * sharp.prob + wMc * mcAdj);
         const quantumOdds = probToAmericanOdds(quantumProb);
 
         for (const book of SOFT_BOOKS) {
@@ -719,6 +748,7 @@ async function rebuildEvPlaysForSport(
           const bookOdds = toNullNum(offer.odds);
           if (bookOdds == null) continue;
 
+          // line matching for spreads/totals
           if (market === "spreads" || market === "totals") {
             if (refLine == null) continue;
 
@@ -727,6 +757,18 @@ async function rebuildEvPlaysForSport(
 
             const expected = market === "spreads" ? (side === "home" ? refLine : -refLine) : refLine;
             if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
+          }
+
+          // Tail guardrail: if long odds + model way above sharp, skip
+          if (TAIL_GUARD_ENABLED) {
+            const isLong =
+              bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
+            const gap = Math.abs(mcProb - sharp.prob);
+
+            // Only guard when MC is the optimistic one (common failure mode)
+            if (isLong && mcProb > sharp.prob && gap > TAIL_GUARD_MAX_GAP) {
+              continue;
+            }
           }
 
           const ev = evPct(quantumProb, bookOdds);
@@ -892,7 +934,7 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
   const m = new Map<string, OddsSnapshotRow>();
   for (const r of rows) {
     const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
-    if (m.has(k)) continue; // rows already sorted desc by ts => first seen is latest
+    if (m.has(k)) continue;
     m.set(k, r);
   }
   return m;
@@ -928,7 +970,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     if (!Number.isFinite(lineNum)) continue;
 
     const k = `${eid}|${market}|${side}|${book}`;
-    if (latestPerBook.has(k)) continue; // first seen is latest (desc ts)
+    if (latestPerBook.has(k)) continue;
     latestPerBook.set(k, lineNum);
   }
 
@@ -943,7 +985,6 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
 
   for (const [k2, arr] of buckets.entries()) out.set(k2, mean(arr));
 
-  // simple symmetry fixes if only one side exists
   for (const id of eventIds) {
     const homeKey = `${id}|spreads|home`;
     const awayKey = `${id}|spreads|away`;
@@ -977,9 +1018,7 @@ async function upsertMonteCarloResultsSnapshot(rows: MonteCarloResultUpsert[]) {
   const chunkSize = 500;
   for (let i = 0; i < rows.length; i += chunkSize) {
     const batch = rows.slice(i, i + chunkSize);
-
     const { error } = await supabase.from("monte_carlo_results").upsert(batch, { onConflict: "sport_key,event_id" });
-
     if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results snapshot: ${error.message}`);
   }
 }
@@ -1016,11 +1055,21 @@ function oppositeSide(market: MarketKey, side: SideKey): SideKey | null {
   return null;
 }
 
+function getOffer(
+  latest: Map<string, OddsSnapshotRow>,
+  eventId: string,
+  market: MarketKey,
+  side: SideKey,
+  bookmaker: string
+): OddsSnapshotRow | null {
+  const k = `${eventId}|${market}|${side}|${bookmaker.toLowerCase()}`;
+  return latest.get(k) ?? null;
+}
+
 /**
- * v6: Sharp no-vig probability now uses ADAPTIVE devig:
- *  - Equal-Margin near 50/50
- *  - MPTO for lopsided markets
- *  - Smooth blend based on skew = |p1 - p2|
+ * SHARP no-vig probability builder with devig SWITCH:
+ * - If close market => equal-margin normalize
+ * - If lopsided => MPTO/Power devig
  */
 function getSharpNoVigProb(
   latest: Map<string, OddsSnapshotRow>,
@@ -1043,6 +1092,7 @@ function getSharpNoVigProb(
     const bo = toNullNum(b.odds);
     if (ao == null || bo == null) continue;
 
+    // Match spread/total line symmetry to refLine
     if (market === "spreads" || market === "totals") {
       if (refLine == null) continue;
 
@@ -1056,20 +1106,24 @@ function getSharpNoVigProb(
 
         if (!nearlyEqual(aLine, expA, LINE_TOL)) continue;
         if (!nearlyEqual(bLine, expB, LINE_TOL)) continue;
-
-        // spreads should be symmetric
         if (!nearlyEqual(aLine + bLine, 0, 1e-4)) continue;
       } else {
-        // totals must match same number
         if (!nearlyEqual(aLine, refLine, LINE_TOL)) continue;
         if (!nearlyEqual(bLine, refLine, LINE_TOL)) continue;
       }
     }
 
-    const p1 = americanOddsToProb(ao);
-    const p2 = americanOddsToProb(bo);
+    const p1 = clamp01(americanOddsToProb(ao));
+    const p2 = clamp01(americanOddsToProb(bo));
 
-    const [nv1] = noVigAdaptive(p1, p2);
+    // Decide devig method by closeness
+    const diff = Math.abs(p1 - p2);
+
+    const [nv1] =
+      diff <= DEVIG_DIFF_SWITCH
+        ? noVigEqualMargin(p1, p2)  // near 50/50
+        : noVigMPTO(p1, p2);        // lopsided
+
     probs.push(nv1);
   }
 
@@ -1077,21 +1131,83 @@ function getSharpNoVigProb(
   return { prob: mean(probs) };
 }
 
-function getOffer(
-  latest: Map<string, OddsSnapshotRow>,
-  eventId: string,
-  market: MarketKey,
-  side: SideKey,
-  bookmaker: string
-): OddsSnapshotRow | null {
-  const k = `${eventId}|${market}|${side}|${bookmaker.toLowerCase()}`;
-  return latest.get(k) ?? null;
+/* =========================================================
+   DEVIG METHODS
+========================================================= */
+
+/**
+ * Equal-margin (classic): normalize so p1+p2=1.
+ * Great when market is close to 50/50.
+ */
+function noVigEqualMargin(p1: number, p2: number): [number, number] {
+  const s = p1 + p2;
+  if (s <= 0) return [p1, p2];
+  return [p1 / s, p2 / s];
+}
+
+/**
+ * MPTO / Power devig:
+ * Find k so that p1^k + p2^k = 1
+ * then nv_i = p_i^k (since they sum to 1 by construction).
+ *
+ * Behavior:
+ * - For lopsided markets, tends to shrink extremes more realistically.
+ */
+function noVigMPTO(p1: number, p2: number): [number, number] {
+  const a = clamp(p1, 1e-12, 1 - 1e-12);
+  const b = clamp(p2, 1e-12, 1 - 1e-12);
+
+  const f = (k: number) => Math.pow(a, k) + Math.pow(b, k) - 1;
+
+  // k in (0, 10) is plenty; k=1 => equal-margin normalize only if a+b=1
+  let lo = 0.01;
+  let hi = 10;
+
+  // Ensure we have a bracket; f(lo) > 0 typically, f(hi) < 0 typically
+  // If not, fall back to normalize.
+  const flo = f(lo);
+  const fhi = f(hi);
+  if (!(Number.isFinite(flo) && Number.isFinite(fhi)) || flo * fhi > 0) {
+    return noVigEqualMargin(a, b);
+  }
+
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const fm = f(mid);
+    if (fm === 0) {
+      lo = hi = mid;
+      break;
+    }
+    if (flo * fm > 0) lo = mid;
+    else hi = mid;
+  }
+
+  const k = (lo + hi) / 2;
+  const na = Math.pow(a, k);
+  const nb = Math.pow(b, k);
+  const s = na + nb;
+  if (s <= 0) return noVigEqualMargin(a, b);
+  return [na / s, nb / s];
+}
+
+/* =========================================================
+   CONFIDENCE
+========================================================= */
+
+function tailness(p: number) {
+  // 0 at 0.5, 1 near 0 or 1
+  return clamp(Math.abs(p - 0.5) / 0.5, 0, 1);
 }
 
 function computeConfidenceScore(evPctVal: number, qProb: number, sharpProb: number, mcProb: number) {
   const evScore = clamp(evPctVal * 5, 0, 100);
   const probScore = clamp(Math.abs(qProb - 0.5) * 200, 0, 100);
-  const agreementScore = 100 - clamp(Math.abs(sharpProb - mcProb) * 300, 0, 100);
+
+  // Agreement between sharp and MC matters; in tails we penalize disagreement more
+  const t = tailness(sharpProb);
+  const disagreement = Math.abs(sharpProb - mcProb);
+  const agreementScore = 100 - clamp(disagreement * (300 + 200 * t), 0, 100);
+
   return 0.45 * evScore + 0.35 * probScore + 0.2 * agreementScore;
 }
 
@@ -1101,106 +1217,6 @@ function confidenceTier(score: number): string {
   if (score >= 65) return "B";
   if (score >= 55) return "C";
   return "D";
-}
-
-/* =========================================================
-   DEVIG HELPERS (v6)
-========================================================= */
-
-/**
- * Equal-Margin devig (best when close to 50/50).
- * Removes half the overround from each side.
- */
-function noVigEqualMargin(p1: number, p2: number): [number, number] {
-  const a = clamp01(p1);
-  const b = clamp01(p2);
-  const s = a + b;
-  if (s <= 0) return [a, b];
-
-  const m = (s - 1) / 2;
-  let nv1 = a - m;
-  let nv2 = b - m;
-
-  nv1 = clamp01(nv1);
-  nv2 = clamp01(nv2);
-
-  const ss = nv1 + nv2;
-  if (ss > 0) return [nv1 / ss, nv2 / ss];
-
-  // fallback proportional
-  return [a / s, b / s];
-}
-
-/**
- * MPTO devig (power transform):
- * Find k such that a^k + b^k = 1, then normalize.
- */
-function noVigMPTO(p1: number, p2: number): [number, number] {
-  const a = clamp01(p1);
-  const b = clamp01(p2);
-
-  const s = a + b;
-  if (s <= 0) return [a, b];
-
-  if (Math.abs(s - 1) < 1e-12) return [a / s, b / s];
-
-  // Binary search k in a wide safe range.
-  let lo = 0.01;
-  let hi = 50.0;
-
-  const f = (k: number) => Math.pow(a, k) + Math.pow(b, k) - 1;
-
-  // Must bracket a root for typical overround (s>1).
-  // If not bracketed (rare edge cases), fallback proportional.
-  if (f(lo) < 0) return [a / s, b / s];
-  if (f(hi) > 0) return [a / s, b / s];
-
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    const val = f(mid);
-    if (val > 0) lo = mid;
-    else hi = mid;
-  }
-
-  const k = (lo + hi) / 2;
-  let nv1 = Math.pow(a, k);
-  let nv2 = Math.pow(b, k);
-
-  const ss = nv1 + nv2;
-  if (ss > 0) {
-    nv1 /= ss;
-    nv2 /= ss;
-  }
-  return [nv1, nv2];
-}
-
-/**
- * Adaptive devig:
- * - skew = |a - b|
- * - w=0 => equal-margin
- * - w=1 => mpto
- * - smooth blend across [DEVIG_SKEW_LO, DEVIG_SKEW_HI]
- */
-function noVigAdaptive(p1: number, p2: number): [number, number] {
-  const a = clamp01(p1);
-  const b = clamp01(p2);
-
-  const skew = Math.abs(a - b);
-  const denom = Math.max(1e-9, DEVIG_SKEW_HI - DEVIG_SKEW_LO);
-  const w = clamp01((skew - DEVIG_SKEW_LO) / denom);
-
-  const [em1, em2] = noVigEqualMargin(a, b);
-  const [mp1, mp2] = noVigMPTO(a, b);
-
-  let nv1 = (1 - w) * em1 + w * mp1;
-  let nv2 = (1 - w) * em2 + w * mp2;
-
-  const s = nv1 + nv2;
-  if (s > 0) {
-    nv1 /= s;
-    nv2 /= s;
-  }
-  return [nv1, nv2];
 }
 
 /* =========================================================
