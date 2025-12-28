@@ -8,38 +8,30 @@ import {
   Target,
   TrendingUp,
   RefreshCw,
+  Activity,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
-/**
- * OVERVIEW (LIVE, NOT MOCK)
- *
- * Data sources:
- * - monte_carlo_runs: latest run timestamp (always exists if MC runs)
- * - model_versions: latest model meta + params (optional but recommended)
- * - model_changelog: latest change entries (optional but recommended)
- *
- * Live updates:
- * - Realtime subscriptions on all 3 tables (falls back to manual refresh button)
- */
+/* =========================================================
+   TYPES
+========================================================= */
 
 type ModelVersionRow = {
   version: string;
-  release_date: string | null; // date/timestamptz
-  status: string | null; // "Production"
+  release_date: string | null;
+  status: string | null;
   simulations: number | null;
-  calib_window: string | null; // "Rolling 14d"
+  calib_window: string | null;
   anchor_weight_min: number | null;
   anchor_weight_max: number | null;
-  min_ev_threshold: number | null; // recommend storing as fraction (0.025)
+  min_ev_threshold: number | null;
   updated_at: string | null;
 };
 
 type ChangeLogRow = {
   version: string;
   date: string | null;
-  changes: string[]; // text[]
-  created_at?: string | null;
+  changes: string[];
 };
 
 type MonteCarloRunRow = {
@@ -48,7 +40,9 @@ type MonteCarloRunRow = {
   sport_key: string;
 };
 
-const GOLD = "#d4af37";
+/* =========================================================
+   OVERVIEW SCREEN
+========================================================= */
 
 export function OverviewScreen() {
   const [loading, setLoading] = useState(true);
@@ -61,9 +55,7 @@ export function OverviewScreen() {
 
   async function loadAll({ soft }: { soft?: boolean } = {}) {
     try {
-      if (soft) setLoadingSoft(true);
-      else setLoading(true);
-
+      soft ? setLoadingSoft(true) : setLoading(true);
       setError(null);
 
       const runQ = supabase
@@ -74,37 +66,31 @@ export function OverviewScreen() {
 
       const versionQ = supabase
         .from("model_versions")
-        .select(
-          "version,release_date,status,simulations,calib_window,anchor_weight_min,anchor_weight_max,min_ev_threshold,updated_at"
-        )
+        .select("*")
         .order("release_date", { ascending: false })
         .limit(1);
 
       const changelogQ = supabase
         .from("model_changelog")
-        .select("version,date,changes,created_at")
+        .select("version,date,changes")
         .order("date", { ascending: false })
         .limit(6);
 
-      const [runRes, versionRes, changelogRes] = await Promise.all([runQ, versionQ, changelogQ]);
+      const [runRes, versionRes, changelogRes] = await Promise.all([
+        runQ,
+        versionQ,
+        changelogQ,
+      ]);
 
       if (runRes.error) throw runRes.error;
-      setLatestRun((runRes.data?.[0] ?? null) as MonteCarloRunRow | null);
+      setLatestRun(runRes.data?.[0] ?? null);
 
-      // model_versions is optional; don't hard-fail the whole page if missing
-      if (versionRes.error) {
-        console.warn("[Overview] model_versions query failed:", versionRes.error.message);
-        setLatestVersion(null);
-      } else {
-        setLatestVersion((versionRes.data?.[0] ?? null) as ModelVersionRow | null);
+      if (!versionRes.error) {
+        setLatestVersion(versionRes.data?.[0] ?? null);
       }
 
-      // model_changelog is optional
-      if (changelogRes.error) {
-        console.warn("[Overview] model_changelog query failed:", changelogRes.error.message);
-        setChangelog([]);
-      } else {
-        setChangelog((changelogRes.data ?? []) as ChangeLogRow[]);
+      if (!changelogRes.error) {
+        setChangelog(changelogRes.data ?? []);
       }
     } catch (e: any) {
       setError(e?.message ?? "Unknown error");
@@ -114,280 +100,246 @@ export function OverviewScreen() {
     }
   }
 
-  // initial load
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!alive) return;
-      await loadAll();
-    })();
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadAll();
   }, []);
 
-  // realtime subscriptions: when tables change, soft refresh
   useEffect(() => {
     const channel = supabase
       .channel("overview-live")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "monte_carlo_runs" },
-        () => loadAll({ soft: true })
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "model_versions" },
-        () => loadAll({ soft: true })
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "model_changelog" },
-        () => loadAll({ soft: true })
+      .on("postgres_changes", { event: "*", schema: "public", table: "*" }, () =>
+        loadAll({ soft: true })
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* =========================================================
+     DERIVED META
+  ========================================================= */
+
   const meta = useMemo(() => {
-    const sims = latestVersion?.simulations ?? null;
-
-    const anchorMin = latestVersion?.anchor_weight_min;
-    const anchorMax = latestVersion?.anchor_weight_max;
-
     const minEv = latestVersion?.min_ev_threshold;
     const minEvPct =
-      minEv == null
-        ? "—"
-        : minEv <= 1
-        ? `${(minEv * 100).toFixed(1)}%`
-        : `${Number(minEv).toFixed(1)}%`;
-
-    const anchorRange =
-      anchorMin != null && anchorMax != null
-        ? `${anchorMin.toFixed(2)}–${anchorMax.toFixed(2)}`
-        : "—";
+      minEv == null ? "—" : `${(minEv * 100).toFixed(1)}%`;
 
     return {
       version: latestVersion?.version ?? "—",
-      releaseDate: latestVersion?.release_date ? formatDate(latestVersion.release_date) : "—",
       status: latestVersion?.status ?? "—",
-      updatedAt: latestVersion?.updated_at ? formatTsShort(latestVersion.updated_at) : null,
-
-      sims: sims != null ? formatInt(sims) : "—",
-      calibWindow: latestVersion?.calib_window ?? "—",
-      anchorWeight: anchorRange,
+      sims: latestVersion?.simulations
+        ? formatInt(latestVersion.simulations)
+        : "—",
+      calib: latestVersion?.calib_window ?? "—",
+      anchor:
+        latestVersion?.anchor_weight_min != null &&
+        latestVersion?.anchor_weight_max != null
+          ? `${latestVersion.anchor_weight_min.toFixed(
+              2
+            )}–${latestVersion.anchor_weight_max.toFixed(2)}`
+          : "—",
       minEv: minEvPct,
+      updated: latestVersion?.updated_at
+        ? formatTsShort(latestVersion.updated_at)
+        : null,
     };
   }, [latestVersion]);
 
-  const pipeline = useMemo(() => {
-    const sims = latestVersion?.simulations ?? 10000;
-    return [
-      { icon: Database, label: "Odds Ingestion", sub: "5 Sportsbooks" },
-      { icon: Calculator, label: "Monte Carlo", sub: `${formatInt(sims)} Simulations` },
-      { icon: Anchor, label: "Market Anchoring", sub: "Sharp Lines" },
-      { icon: DollarSign, label: "No-Vig Pricing", sub: "True Probability" },
-      { icon: Target, label: "EV Calculation", sub: "Edge Detection" },
-      { icon: TrendingUp, label: "Results Tracking", sub: "Performance" },
-    ];
-  }, [latestVersion?.simulations]);
+  const pipeline = [
+    { icon: Database, label: "Odds Ingestion", sub: "Multi-book feeds" },
+    {
+      icon: Calculator,
+      label: "Monte Carlo",
+      sub: `${meta.sims} simulations`,
+    },
+    { icon: Anchor, label: "Market Anchoring", sub: "Sharp books" },
+    { icon: DollarSign, label: "No-Vig Pricing", sub: "True probabilities" },
+    { icon: Target, label: "EV Detection", sub: "Edge discovery" },
+    { icon: TrendingUp, label: "Tracking", sub: "Results & ROI" },
+  ];
+
+  /* =========================================================
+     RENDER
+  ========================================================= */
 
   return (
-    <div className="space-y-8">
-      {/* Header / Hero */}
+    <div className="space-y-10">
+      {/* =====================================================
+         HERO / SYSTEM STATUS
+      ====================================================== */}
       <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-6">
-        {/* subtle glow */}
         <div
-          className="pointer-events-none absolute inset-0 opacity-90"
+          className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(900px 220px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(700px 200px at 82% 10%, rgba(255,255,255,0.05), transparent 60%)",
+              "radial-gradient(800px 240px at 20% 0%, rgba(212,175,55,0.14), transparent 60%)",
           }}
         />
-        <div className="relative">
-          <div className="flex items-start justify-between gap-4">
+
+        <div className="relative space-y-4">
+          <div className="flex items-start justify-between">
             <div>
-              <h2 className="text-xl text-white mb-2">PrismSports Overview</h2>
-              <p className="text-sm text-[#b0b0b0] leading-relaxed max-w-3xl">
-                PrismSports is a quantitative sports betting analytics platform for NCAAB that combines Monte Carlo simulation,
-                sharp market anchoring, and no-vig pricing to identify positive expected value (EV) opportunities across moneyline,
-                spread, and total markets.
+              <h2 className="text-2xl text-white mb-2">
+                Prism Sports Analytics
+              </h2>
+              <p className="text-sm text-[#b0b0b0] max-w-3xl">
+                A live quantitative betting engine combining Monte Carlo
+                simulation, sharp-market anchoring, and no-vig pricing to
+                surface true expected value across moneyline, spread, and
+                totals.
               </p>
             </div>
 
             <button
-              type="button"
               onClick={() => loadAll({ soft: false })}
-              className="shrink-0 inline-flex items-center gap-2 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-white transition-colors"
-              title="Refresh"
+              className="inline-flex items-center gap-2 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-[#cfcfcf] hover:text-white"
             >
-              <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
+              <RefreshCw
+                className={`w-4 h-4 ${loadingSoft ? "animate-spin" : ""}`}
+              />
               Refresh
             </button>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
             <StatusPill
               label="Latest Run"
-              value={latestRun?.created_at ? formatTsShort(latestRun.created_at) : loading ? "Loading…" : "—"}
+              value={
+                latestRun?.created_at
+                  ? formatTsShort(latestRun.created_at)
+                  : "—"
+              }
             />
-            <StatusPill label="Sport" value={latestRun?.sport_key ?? "N/A"} />
+            <StatusPill
+              label="Sport"
+              value={latestRun?.sport_key ?? "—"}
+            />
             <StatusPill
               label="Model"
-              value={meta.version === "—" ? "No model_versions row" : meta.version}
+              value={meta.version}
               warn={meta.version === "—"}
             />
-            <div className="text-[#606060]">
-              {meta.updatedAt ? `Model updated ${meta.updatedAt}` : ""}
+            <div className="flex items-center gap-1 text-[#606060]">
+              <Activity className="w-3 h-3" />
+              Live
             </div>
           </div>
 
-          {error ? (
-            <div className="mt-4 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3 text-xs text-red-300">
+          {error && (
+            <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3 text-xs text-red-300">
               Supabase error: {error}
             </div>
-          ) : null}
-        </div>
-      </div>
-
-      {/* Pipeline Diagram */}
-      <div>
-        <h3 className="text-base text-white mb-4">Processing Pipeline</h3>
-        <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
-          <div className="flex items-center justify-between">
-            {pipeline.map((step, i) => (
-              <div key={step.label} className="flex items-center flex-1 min-w-0">
-                <PipelineStep icon={step.icon} label={step.label} sublabel={step.sub} />
-                {i < pipeline.length - 1 ? (
-                  <ArrowRight className="w-5 h-5 text-[#606060] flex-shrink-0 mx-2" />
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Latest Model Version */}
-      <div>
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h3 className="text-base text-white mb-1">Latest Model Version</h3>
-            <div className="text-xs text-[#606060]">
-              {loading ? "Loading…" : meta.updatedAt ? `Updated ${meta.updatedAt}` : ""}
-            </div>
-          </div>
-
-          <div className="text-xs text-[#808080]">
-            Status{" "}
-            <span className={meta.status === "Production" ? "text-emerald-500" : "text-[#d4af37]"}>
-              {meta.status}
-            </span>
-          </div>
-        </div>
-
-        <div className="mt-4 bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
-          <div className="grid grid-cols-3 gap-6">
-            <MetaStat label="Version" value={meta.version} />
-            <MetaStat label="Release Date" value={meta.releaseDate} />
-            <MetaStat label="Status" value={meta.status} accent />
-          </div>
-
-          <div className="mt-6 pt-6 border-t border-[#2a2a2a]">
-            <div className="text-xs text-[#808080] mb-2">Core Parameters</div>
-            <div className="grid grid-cols-4 gap-4 text-xs">
-              <CoreParam label="Simulations" value={meta.sims} />
-              <CoreParam label="Calibration Window" value={meta.calibWindow} />
-              <CoreParam label="Anchor Weight" value={meta.anchorWeight} />
-              <CoreParam label="Min EV Threshold" value={meta.minEv} />
-            </div>
-
-            {meta.version === "—" ? (
-              <div className="mt-4 text-[11px] text-[#606060]">
-                Add a row to <span className="text-white">model_versions</span> to populate Version/Params automatically.
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      {/* What Changed */}
-      <div>
-        <h3 className="text-base text-white mb-4">What Changed</h3>
-        <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg divide-y divide-[#2a2a2a]">
-          {loading ? (
-            <div className="p-4 text-xs text-[#b0b0b0]">Loading changelog…</div>
-          ) : changelog.length === 0 ? (
-            <div className="p-4 text-xs text-[#b0b0b0]">
-              No changelog entries yet. Add rows to <span className="text-white">model_changelog</span>.
-            </div>
-          ) : (
-            changelog.map((entry, idx) => (
-              <ChangeLogEntry
-                key={`${entry.version}-${idx}`}
-                version={entry.version}
-                date={entry.date ? formatDate(entry.date) : "—"}
-                changes={Array.isArray(entry.changes) ? entry.changes : []}
-              />
-            ))
           )}
         </div>
       </div>
 
-      {/* Sportsbook Coverage (static for now; make dynamic later if you want) */}
-      <div>
-        <h3 className="text-base text-white mb-4">Sportsbook Coverage</h3>
+      {/* =====================================================
+         PIPELINE
+      ====================================================== */}
+      <section>
+        <h3 className="text-base text-white mb-4">
+          How Prism Generates Edges
+        </h3>
         <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
-          <div className="grid grid-cols-5 gap-4 text-center">
-            <BookCard name="DraftKings" tag="Primary" />
-            <BookCard name="FanDuel" tag="Primary" />
-            <BookCard name="BetMGM" tag="Primary" />
-            <BookCard name="Pinnacle" tag="Sharp" />
-            <BookCard name="BetOnline" tag="Secondary" />
+          <div className="flex items-center justify-between">
+            {pipeline.map((p, i) => (
+              <div key={p.label} className="flex items-center flex-1">
+                <PipelineStep {...p} />
+                {i < pipeline.length - 1 && (
+                  <ArrowRight className="w-5 h-5 mx-2 text-[#505050]" />
+                )}
+              </div>
+            ))}
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* =====================================================
+         MODEL PARAMETERS
+      ====================================================== */}
+      <section>
+        <h3 className="text-base text-white mb-4">
+          Active Model Parameters
+        </h3>
+        <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
+          <div className="grid grid-cols-4 gap-4 text-xs">
+            <CoreParam label="Version" value={meta.version} />
+            <CoreParam label="Status" value={meta.status} />
+            <CoreParam label="Simulations" value={meta.sims} />
+            <CoreParam label="Min EV" value={meta.minEv} />
+            <CoreParam label="Calibration" value={meta.calib} />
+            <CoreParam label="Anchor Weight" value={meta.anchor} />
+            <CoreParam label="Last Updated" value={meta.updated ?? "—"} />
+          </div>
+        </div>
+      </section>
+
+      {/* =====================================================
+         CHANGELOG
+      ====================================================== */}
+      <section>
+        <h3 className="text-base text-white mb-4">What Changed</h3>
+        <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg divide-y divide-[#2a2a2a]">
+          {changelog.length === 0 ? (
+            <div className="p-4 text-xs text-[#808080]">
+              No changelog entries yet.
+            </div>
+          ) : (
+            changelog.map((c, i) => (
+              <ChangeLogEntry key={i} {...c} />
+            ))
+          )}
+        </div>
+      </section>
     </div>
   );
 }
 
-/* UI bits */
+/* =========================================================
+   UI PARTS
+========================================================= */
 
-function StatusPill({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+function StatusPill({
+  label,
+  value,
+  warn,
+}: {
+  label: string;
+  value: string;
+  warn?: boolean;
+}) {
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1">
-      <div className="text-[11px] text-[#808080]">{label}</div>
-      <div className={["text-[11px] font-medium", warn ? "text-amber-300" : "text-white"].join(" ")}>
+      <span className="text-[11px] text-[#808080]">{label}</span>
+      <span
+        className={`text-[11px] ${
+          warn ? "text-amber-300" : "text-white"
+        }`}
+      >
         {value}
-      </div>
+      </span>
     </div>
   );
 }
 
-function PipelineStep({ icon: Icon, label, sublabel }: { icon: any; label: string; sublabel: string }) {
+function PipelineStep({
+  icon: Icon,
+  label,
+  sub,
+}: {
+  icon: any;
+  label: string;
+  sub: string;
+}) {
   return (
     <div className="flex flex-col items-center flex-1 min-w-0">
-      <div className="w-12 h-12 bg-[#1a1a1a] border border-[#d4af37]/30 rounded-lg flex items-center justify-center mb-2">
+      <div className="w-12 h-12 rounded-lg bg-[#1a1a1a] border border-[#d4af37]/30 flex items-center justify-center mb-2">
         <Icon className="w-5 h-5 text-[#d4af37]" />
       </div>
-      <div className="text-xs text-white text-center mb-0.5">{label}</div>
-      <div className="text-[10px] text-[#606060] text-center">{sublabel}</div>
-    </div>
-  );
-}
-
-function MetaStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div>
-      <div className="text-xs text-[#808080] mb-1">{label}</div>
-      <div className={["text-sm", accent && value === "Production" ? "text-emerald-500" : "text-white"].join(" ")}>
-        {value}
-      </div>
+      <div className="text-xs text-white text-center">{label}</div>
+      <div className="text-[10px] text-[#606060] text-center">{sub}</div>
     </div>
   );
 }
@@ -395,35 +347,36 @@ function MetaStat({ label, value, accent }: { label: string; value: string; acce
 function CoreParam({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <span className="text-[#606060]">{label}:</span>{" "}
-      <span className="text-white">{value}</span>
+      <div className="text-[#606060] mb-0.5">{label}</div>
+      <div className="text-white">{value}</div>
     </div>
   );
 }
 
-function BookCard({ name, tag }: { name: string; tag: string }) {
-  return (
-    <div className="p-3 bg-[#1a1a1a] rounded">
-      <div className="text-xs text-[#d4af37]">{name}</div>
-      <div className="text-[10px] text-[#606060] mt-1">{tag}</div>
-    </div>
-  );
-}
-
-function ChangeLogEntry({ version, date, changes }: { version: string; date: string; changes: string[] }) {
+function ChangeLogEntry({
+  version,
+  date,
+  changes,
+}: {
+  version: string;
+  date: string | null;
+  changes: string[];
+}) {
   return (
     <div className="p-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex justify-between mb-2">
         <div className="text-sm text-white">{version}</div>
-        <div className="text-xs text-[#606060]">{date}</div>
+        <div className="text-xs text-[#606060]">
+          {date ? formatDate(date) : "—"}
+        </div>
       </div>
       <ul className="space-y-1.5">
-        {changes.map((change, idx) => (
+        {changes.map((c, i) => (
           <li
-            key={idx}
+            key={i}
             className="text-xs text-[#b0b0b0] pl-4 relative before:content-['•'] before:absolute before:left-0 before:text-[#d4af37]"
           >
-            {change}
+            {c}
           </li>
         ))}
       </ul>
@@ -431,25 +384,31 @@ function ChangeLogEntry({ version, date, changes }: { version: string; date: str
   );
 }
 
-/* helpers */
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function formatInt(n: number) {
-  try {
-    return new Intl.NumberFormat().format(n);
-  } catch {
-    return String(n);
-  }
+  return new Intl.NumberFormat().format(n);
 }
 
 function formatDate(ts: string) {
   const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
+  return d.toLocaleDateString([], {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 }
 
 function formatTsShort(ts: string) {
   const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return d.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
+
 
