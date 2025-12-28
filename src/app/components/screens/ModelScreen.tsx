@@ -1,13 +1,10 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (sticky headers + scroll + FP bar logs)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (scroll + sticky headers + modal safe-area + prop mu)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
 // ✅ Filters: Play Type + Book
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
-//
-// ✅ Main table is scrollable with STICKY HEADER (always visible)
-// ✅ Screen area is scrollable (keeps filters/header visible)
 //
 // ✅ LINE MOVEMENT (ONLY) in modal (offers tab removed)
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) is clickable to open modal
@@ -25,12 +22,10 @@
 // ✅ Tooltip shows DATE + TIME (CT)
 //
 // ✅ FantasyPros Game Logs (PLAYER PROPS ONLY)
-//    - Pulls via Vercel function: /api/fantasypros-gamelog?player_name=...
-//    - Renders as VERTICAL BAR CHART (like your screenshot)
-//        • each bar = a game
-//        • green if above today’s line, red if below
-//        • reference line across at today’s line
-//        • shows last N games (default 10)
+// ✅ Adds Projection (mu) for props (from player_prop_ev_latest.mu)
+//
+// ✅ Screen scrollable + desktop main table scrollable with sticky header row
+// ✅ Modal top safe-area fixed (notch) + modal content scrollable, header always visible
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -42,10 +37,6 @@ import {
   YAxis,
   Tooltip,
   Legend,
-  BarChart,
-  Bar,
-  Cell,
-  ReferenceLine,
 } from "recharts";
 
 /* =========================================================
@@ -118,6 +109,8 @@ type PlayerPropEvLatestRow = {
   book: string; // "draftkings"/"fanduel"/"betmgm"
   odds: number;
 
+  // model outputs
+  mu?: number | null; // ✅ projection
   p_quantum: number | null;
   quantum_fair_odds: number;
 
@@ -163,7 +156,7 @@ type AggregatedPlay = {
     side: string | null;
     picture_url: string | null;
     position: string | null;
-    line: number | null;
+    mu: number | null; // ✅ projection shown in modal
   };
 
   offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>;
@@ -295,6 +288,11 @@ function fmtDateTimeCT(iso: string) {
     minute: "2-digit",
   });
   return `${date} · ${time}`;
+}
+function fmtMu(mu: number | null | undefined) {
+  if (mu == null || !Number.isFinite(mu)) return "—";
+  const v = Math.round(mu * 10) / 10;
+  return v.toFixed(1);
 }
 
 function normalizeBookKey(bookmaker: string): SoftBookKey | "other" {
@@ -565,6 +563,7 @@ export function ModelScreen() {
             "line",
             "book",
             "odds",
+            "mu", // ✅ projection
             "p_quantum",
             "quantum_fair_odds",
             "ev_pct",
@@ -709,7 +708,7 @@ export function ModelScreen() {
             side: r.side ?? null,
             picture_url: r.picture_url ?? null,
             position: r.position ?? null,
-            line: r.line ?? null,
+            mu: (r.mu ?? null) as number | null,
           },
 
           offers: {},
@@ -731,6 +730,13 @@ export function ModelScreen() {
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
       base.created_at =
         [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+
+      // keep the most recent mu if it changes by book rows
+      const existingMu = base.propMeta?.mu ?? null;
+      const nextMu = (r.mu ?? null) as number | null;
+      if (base.propMeta && nextMu != null && Number.isFinite(nextMu)) {
+        if (existingMu == null || !Number.isFinite(existingMu)) base.propMeta.mu = nextMu;
+      }
 
       map.set(key, base);
     }
@@ -763,11 +769,11 @@ export function ModelScreen() {
   const settingsReady = !!(bankroll && kellyFactor);
 
   return (
-    // Screen scroll: keeps header/filters visible while the table/cards scroll below
-    <div className="h-[calc(100vh-120px)] overflow-y-auto pr-1 space-y-4">
+    // ✅ make the screen itself scrollable (so the app shell can keep nav/headers)
+    <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 sticky top-0 z-30 bg-[#060606] pt-2 pb-3 border-b border-[#141414]">
-        <div className="px-1">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
           <h2 className="text-xl text-white mb-1">Model Picks</h2>
           <p className="text-xs text-[#808080]">
             {filtered.length} plays ·{" "}
@@ -775,7 +781,7 @@ export function ModelScreen() {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs px-1">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <div className="inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
             <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
             <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
@@ -818,76 +824,78 @@ export function ModelScreen() {
         </div>
       ) : null}
 
-      {/* Desktop table (scrollable w/ sticky header) */}
+      {/* Desktop table */}
       <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
-        {/* Key change: vertical scroll container + sticky thead */}
-        <div className="max-h-[calc(100vh-250px)] overflow-auto">
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 z-20">
-              <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">
-                  Matchup
-                </th>
-                <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
-                <th className="text-left p-3 text-[#808080] min-w-[260px]">Pick</th>
-                <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
+        {/* ✅ vertical scroll container so header stays visible */}
+        <div className="max-h-[70vh] overflow-y-auto">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 z-20">
+                <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
+                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">
+                    Matchup
+                  </th>
+                  <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
+                  <th className="text-left p-3 text-[#808080] min-w-[260px]">Pick</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[110px]">
-                  <div className="flex items-center justify-center">
-                    <img
-                      src="/logos/Quantum.png"
-                      alt="Quantum"
-                      className="h-6 w-auto opacity-90"
-                      draggable={false}
-                    />
-                  </div>
-                </th>
+                  <th className="text-center p-3 text-[#808080] min-w-[110px]">
+                    <div className="flex items-center justify-center">
+                      <img
+                        src="/logos/Quantum.png"
+                        alt="Quantum"
+                        className="h-6 w-auto opacity-90"
+                        draggable={false}
+                      />
+                    </div>
+                  </th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[110px]">DK</th>
-                <th className="text-center p-3 text-[#808080] min-w-[110px]">FD</th>
-                <th className="text-center p-3 text-[#808080] min-w-[110px]">MGM</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[110px]">DK</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[110px]">FD</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[110px]">MGM</th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[110px]">
-                  <div className="flex items-center justify-center">
-                    <img
-                      src="/logos/SpectrumEV.png"
-                      alt="SpectrumEV"
-                      className="h-6 w-auto opacity-90"
-                      draggable={false}
-                    />
-                  </div>
-                </th>
+                  <th className="text-center p-3 text-[#808080] min-w-[110px]">
+                    <div className="flex items-center justify-center">
+                      <img
+                        src="/logos/SpectrumEV.png"
+                        alt="SpectrumEV"
+                        className="h-6 w-auto opacity-90"
+                        draggable={false}
+                      />
+                    </div>
+                  </th>
 
-                <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
-                <th className="text-center p-3 text-[#808080] min-w-[120px]">Bet $</th>
-              </tr>
-            </thead>
-
-            <tbody className="divide-y divide-[#1a1a1a]">
-              {filtered.map((p) => (
-                <PlayRow
-                  key={p.playKey}
-                  play={p}
-                  bankroll={bankroll}
-                  kellyFactor={kellyFactor}
-                  settingsReady={settingsReady}
-                  onOpenDetails={() => openDetails(p)}
-                />
-              ))}
-
-              {!loading && !filtered.length ? (
-                <tr>
-                  <td colSpan={11} className="p-6 text-center text-xs text-[#808080]">
-                    No positive EV plays found for this filter.
-                  </td>
+                  <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[120px]">Bet $</th>
                 </tr>
-              ) : null}
-            </tbody>
-          </table>
+              </thead>
+
+              <tbody className="divide-y divide-[#1a1a1a]">
+                {filtered.map((p) => (
+                  <PlayRow
+                    key={p.playKey}
+                    play={p}
+                    bankroll={bankroll}
+                    kellyFactor={kellyFactor}
+                    settingsReady={settingsReady}
+                    onOpenDetails={() => openDetails(p)}
+                  />
+                ))}
+
+                {!loading && !filtered.length ? (
+                  <tr>
+                    <td colSpan={11} className="p-6 text-center text-xs text-[#808080]">
+                      No positive EV plays found for this filter.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      {/* Mobile cards (native scroll via screen wrapper) */}
+      {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {!loading && !filtered.length ? (
           <div className="text-xs text-[#808080] px-3 py-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded text-center">
@@ -1078,6 +1086,10 @@ function PlayCard({
               </div>
               <div className="text-[11px] text-[#808080] mt-0.5 truncate">
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel}
+                {/* ✅ show mu on mobile card (small) */}
+                {play.propMeta?.mu != null ? (
+                  <span className="text-[#606060]"> · μ {fmtMu(play.propMeta.mu)}</span>
+                ) : null}
               </div>
             </div>
           </div>
@@ -1122,7 +1134,7 @@ function PlayCard({
 }
 
 /* =========================================================
-   Details Modal (LINE MOVEMENT + FantasyPros bar logs for props)
+   Details Modal (LINE MOVEMENT + FantasyPros logs for props)
 ========================================================= */
 
 function PlayDetailsModal({
@@ -1153,9 +1165,14 @@ function PlayDetailsModal({
         aria-label="Close details modal"
       />
 
-      <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-0 md:p-6">
-        <div className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
-          <div className="p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
+      {/* ✅ safe-area + top not cut off + content scroll */}
+      <div
+        className="absolute inset-0 md:flex md:items-center md:justify-center p-0 md:p-6"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
+        <div className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden flex flex-col max-h-[92vh] md:max-h-[85vh]">
+          {/* Header (sticky inside modal) */}
+          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-white text-sm md:text-base truncate">
@@ -1171,13 +1188,23 @@ function PlayDetailsModal({
                   <span className="text-[#606060]">{play.event_id}</span>
                 </div>
 
-                <div className="mt-2 text-white">
-                  <span className="text-[#d4af37]">{play.marketLabel}</span>{" "}
-                  <span className="text-[#606060]">·</span>{" "}
-                  <span className="text-white">{play.pickLabel}</span>{" "}
+                <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-[#d4af37]">{play.marketLabel}</span>
+                  <span className="text-[#606060]">·</span>
+                  <span className="text-white">{play.pickLabel}</span>
                   <span className="text-[#808080]">
                     · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
                   </span>
+
+                  {/* ✅ Projection (mu) */}
+                  {play.kind === "prop" ? (
+                    <>
+                      <span className="text-[#606060]">·</span>
+                      <span className="text-[#b0b0b0]">
+                        μ <span className="text-white tabular-nums">{fmtMu(play.propMeta?.mu ?? null)}</span>
+                      </span>
+                    </>
+                  ) : null}
                 </div>
               </div>
 
@@ -1192,15 +1219,14 @@ function PlayDetailsModal({
             </div>
           </div>
 
-          {/* Modal scroll */}
-          <div className="max-h-[75vh] md:max-h-[80vh] overflow-y-auto">
-            <div className="p-4 space-y-3">
-              <OddsHistoryMiniChart play={play} />
-              {play.kind === "prop" ? <FantasyProsGameLogsBar play={play} /> : null}
-            </div>
+          {/* Body (scrollable) */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            <OddsHistoryMiniChart play={play} />
+            {play.kind === "prop" ? <FantasyProsGameLogs play={play} /> : null}
           </div>
 
-          <div className="p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
+          {/* Footer */}
+          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
             <button
               type="button"
               onClick={onClose}
@@ -1253,7 +1279,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           const { data, error } = await supabase
             .from(PROPS_HISTORY_TABLE)
-            .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
+            .select(
+              `${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`
+            )
             .eq(PLAYER_COL_PROPS, player_name)
             .eq(MARKET_COL_PROPS, marketKey)
             .eq(SIDE_COL_PROPS, sideCanon)
@@ -1438,43 +1466,13 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 }
 
 /* =========================================================
-   FantasyPros Game Logs (BAR CHART like screenshot)
+   FantasyPros Game Logs (props only)
 ========================================================= */
 
-type FPBarPoint = {
-  key: string;      // x label id
-  label: string;    // date+opp
-  date: string;
-  opp: string;
-  value: number;    // selected stat
-  above: boolean;   // value >= line
-};
-
-function parseMaybeNum(s: string) {
-  const x = Number(String(s ?? "").replace(/[^\d.\-]/g, ""));
-  return Number.isFinite(x) ? x : NaN;
-}
-
-function inferPropStatFromPlay(play: AggregatedPlay): "pts" | "reb" | "ast" | "threes" | "pts_ast" | "pts_reb" | "reb_ast" | "pra" {
-  const mRaw = (play.propMeta?.market ?? play.marketLabel ?? "").toLowerCase();
-  const m = mRaw.replace(/\s+/g, "_");
-  if (m.includes("player_points_rebounds_assists") || m.includes("points_rebounds_assists") || m.includes("pra")) return "pra";
-  if (m.includes("player_points_assists") || m.includes("points_assists") || m.includes("pts+ast")) return "pts_ast";
-  if (m.includes("player_points_rebounds") || m.includes("points_rebounds") || m.includes("pts+reb")) return "pts_reb";
-  if (m.includes("player_rebounds_assists") || m.includes("rebounds_assists") || m.includes("reb+ast")) return "reb_ast";
-  if (m.includes("threes") || m.includes("3") || m.includes("player_threes")) return "threes";
-  if (m.includes("assists") || m.includes("player_assists")) return "ast";
-  if (m.includes("rebounds") || m.includes("player_rebounds")) return "reb";
-  return "pts";
-}
-
-function FantasyProsGameLogsBar({ play }: { play: AggregatedPlay }) {
+function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const [rows, setRows] = useState<FantasyProsLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [debug, setDebug] = useState<string>("");
-
-  // chart knobs
-  const [windowSize, setWindowSize] = useState<number>(10);
 
   useEffect(() => {
     let mounted = true;
@@ -1522,164 +1520,50 @@ function FantasyProsGameLogsBar({ play }: { play: AggregatedPlay }) {
     };
   }, [play.playKey]);
 
-  const line = safeNum(play.propMeta?.line ?? null, NaN);
-  const statKey = inferPropStatFromPlay(play);
-
-  const points: FPBarPoint[] = useMemo(() => {
-    const take = rows.slice(0, Math.max(1, windowSize)); // FP usually provides most recent first; keep that
-    const mapped: FPBarPoint[] = [];
-
-    for (let i = 0; i < take.length; i++) {
-      const r = take[i];
-      const pts = parseMaybeNum(r.pts);
-      const reb = parseMaybeNum(r.reb);
-      const ast = parseMaybeNum(r.ast);
-      const threes = parseMaybeNum(r.threes);
-
-      let value = NaN;
-      if (statKey === "pts") value = pts;
-      else if (statKey === "reb") value = reb;
-      else if (statKey === "ast") value = ast;
-      else if (statKey === "threes") value = threes;
-      else if (statKey === "pts_ast") value = pts + ast;
-      else if (statKey === "pts_reb") value = pts + reb;
-      else if (statKey === "reb_ast") value = reb + ast;
-      else if (statKey === "pra") value = pts + reb + ast;
-
-      if (!Number.isFinite(value)) continue;
-
-      const label = `${r.date} ${r.opp}`.trim();
-      mapped.push({
-        key: `${i}-${r.date}-${r.opp}`,
-        label,
-        date: r.date,
-        opp: r.opp,
-        value,
-        above: Number.isFinite(line) ? value >= line : false,
-      });
-    }
-
-    // We want bars left→right oldest→newest visually like your screenshot:
-    // If FP is newest first, reverse here so the oldest is left.
-    return mapped.reverse();
-  }, [rows, windowSize, statKey, line]);
-
-  const statLabel = (() => {
-    if (statKey === "pts") return "PTS";
-    if (statKey === "reb") return "REB";
-    if (statKey === "ast") return "AST";
-    if (statKey === "threes") return "3PM";
-    if (statKey === "pts_ast") return "PTS+AST";
-    if (statKey === "pts_reb") return "PTS+REB";
-    if (statKey === "reb_ast") return "REB+AST";
-    return "PRA";
-  })();
-
   return (
     <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
       <div className="flex items-center justify-between gap-3 mb-2">
-        <div className="min-w-0">
-          <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
-          <div className="text-[11px] text-[#808080] mt-0.5 truncate">
-            {statLabel}
-            {Number.isFinite(line) ? (
-              <>
-                <span className="text-[#606060]"> · </span>
-                <span className="text-[#d0d0d0]">
-                  Line {line} ({play.sideLabel})
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="text-[#606060]"> · </span>
-                <span className="text-[#808080]">No line</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <select
-            value={windowSize}
-            onChange={(e) => setWindowSize(Number(e.target.value))}
-            className="px-2 py-1 bg-[#111] border border-[#2a2a2a] rounded text-[#d0d0d0] outline-none text-[11px]"
-          >
-            {[5, 10, 15, 20].map((n) => (
-              <option key={n} value={n}>
-                Last {n}
-              </option>
-            ))}
-          </select>
-
-          {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
-        </div>
+        <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
+        {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
       </div>
 
-      {!points.length ? (
+      {rows.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="text-[#808080] border-b border-[#1f1f1f]">
+                <th className="text-left py-1 pr-2">Date</th>
+                <th className="text-left py-1 pr-2">Opp</th>
+                <th className="text-left py-1 pr-2">Score</th>
+                <th className="text-right py-1 pr-2">Min</th>
+                <th className="text-right py-1 pr-2">PTS</th>
+                <th className="text-right py-1 pr-2">REB</th>
+                <th className="text-right py-1 pr-2">AST</th>
+                <th className="text-right py-0">3PM</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#121212]">
+              {rows.slice(0, 10).map((r, idx) => (
+                <tr key={idx} className="text-[#d0d0d0]">
+                  <td className="py-1 pr-2 whitespace-nowrap">{r.date}</td>
+                  <td className="py-1 pr-2 whitespace-nowrap">{r.opp}</td>
+                  <td className="py-1 pr-2 whitespace-nowrap text-[#b0b0b0]">{r.score}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{r.min}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums text-white">{r.pts}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{r.reb}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{r.ast}</td>
+                  <td className="py-1 text-right tabular-nums">{r.threes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-2 text-[10px] text-[#606060]">Showing last {Math.min(10, rows.length)} games</div>
+        </div>
+      ) : (
         <div className="text-xs text-[#808080]">
           No game logs available.
           {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
         </div>
-      ) : (
-        <>
-          <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={points} barCategoryGap={8}>
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 10, fill: "#808080" }}
-                  axisLine={{ stroke: "#2a2a2a" }}
-                  tickLine={{ stroke: "#2a2a2a" }}
-                  interval={0}
-                />
-                <YAxis
-                  tick={{ fontSize: 10, fill: "#808080" }}
-                  axisLine={{ stroke: "#2a2a2a" }}
-                  tickLine={{ stroke: "#2a2a2a" }}
-                  width={40}
-                />
-                {Number.isFinite(line) ? (
-                  <ReferenceLine
-                    y={line}
-                    stroke="#d0d0d0"
-                    strokeDasharray="4 4"
-                    ifOverflow="extendDomain"
-                  />
-                ) : null}
-                <Tooltip
-                  formatter={(v: any) => {
-                    const num = Number(v);
-                    return Number.isFinite(num) ? num.toFixed(1) : "—";
-                  }}
-                  labelFormatter={(_, payload) => {
-                    const p = payload?.[0]?.payload as FPBarPoint | undefined;
-                    if (!p) return "";
-                    return `${p.date} · ${p.opp}`;
-                  }}
-                  contentStyle={{
-                    background: "#0b0b0b",
-                    border: "1px solid #2a2a2a",
-                    color: "#d0d0d0",
-                    fontSize: 12,
-                  }}
-                />
-                <Bar dataKey="value" name={statLabel} radius={[4, 4, 0, 0]} isAnimationActive={false}>
-                  {points.map((p) => (
-                    <Cell
-                      key={p.key}
-                      fill={p.above ? "#22c55e" : "#ef4444"}
-                      opacity={0.95}
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="mt-2 text-[10px] text-[#606060]">
-            Showing last {points.length} games · green = above line · red = below line
-          </div>
-        </>
       )}
     </div>
   );
@@ -1828,3 +1712,4 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
     </div>
   );
 }
+
