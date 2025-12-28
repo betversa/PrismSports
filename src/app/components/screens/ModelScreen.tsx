@@ -1,4 +1,4 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (scroll + sticky headers + modal safe-area + prop mu + BAR history + hover game data)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE
 // -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -6,31 +6,25 @@
 // ✅ Filters: Play Type + Book
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
 //
-// ✅ LINE MOVEMENT (ONLY) in modal (offers tab removed)
-// ✅ ONLY the Pick column (desktop) / Pick block (mobile) is clickable to open modal
-// ✅ History graph (BAR GRAPH):
-//    - PLAYER PROPS: public.player_props_history
-//        Match on: player_name, market, side, bookmaker
-//        Uses: ts for x-axis + odds for y-axis
-//        NOTE: history market values are like "player_points"/"player_rebounds"/"player_assists"/"player_threes"
-//    - GAME LINES: public.odds_snapshot_history
-//        Match on: sport_key, event_id, market, side, bookmaker
-//        Uses: ts for x-axis + odds for y-axis
-//
-// ✅ Adds Pinnacle odds to history graph (when present)
-// ✅ Colors each book uniquely (DK/FD/MGM/PIN)
+// ✅ LINE MOVEMENT stays a LINE CHART (DK/FD/MGM/PIN) — same as always
+// ✅ FantasyPros GAME LOGS become the BAR CHART (props only)
+// ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
 // ✅ Tooltip shows DATE + TIME (CT) + play/game context (matchup/market/side/line/start time)
 //
-// ✅ FantasyPros Game Logs (PLAYER PROPS ONLY)
-// ✅ Adds Projection (mu) for props (from player_prop_ev_latest.mu)
+// ✅ Adds Pinnacle odds to line movement (when present)
+// ✅ Colors each book uniquely (DK/FD/MGM/PIN)
 //
-// ✅ Screen scrollable + desktop main table scrollable with sticky header row
-// ✅ Modal top safe-area fixed (notch) + modal content scrollable, header always visible
+// ✅ Props modal shows Projection (mu) from player_prop_ev_latest.mu
+// ✅ Screen scrollable + desktop table scrollable with sticky header row
+// ✅ Modal safe-area padding + scrollable content, header always visible
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   ResponsiveContainer,
+  LineChart,
+  Line,
+  CartesianGrid,
   BarChart,
   Bar,
   XAxis,
@@ -228,17 +222,21 @@ function safeNum(n: any, fallback = 0) {
   const x = Number(n);
   return Number.isFinite(x) ? x : fallback;
 }
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
+
 function american(odds: number) {
   if (!Number.isFinite(odds)) return "—";
   return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
 }
+
 function pct(n: number, digits = 1) {
   const x = safeNum(n, 0);
   return `${x > 0 ? "+" : ""}${x.toFixed(digits)}%`;
 }
+
 function formatMoney(n: number) {
   if (!Number.isFinite(n)) return "—";
   return new Intl.NumberFormat("en-US", {
@@ -247,6 +245,7 @@ function formatMoney(n: number) {
     maximumFractionDigits: 0,
   }).format(n);
 }
+
 function fmtTimeCentral(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -256,6 +255,7 @@ function fmtTimeCentral(iso: string | null) {
     minute: "2-digit",
   });
 }
+
 function fmtDateCentral(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -266,6 +266,7 @@ function fmtDateCentral(iso: string | null) {
     day: "numeric",
   });
 }
+
 function fmtHourMinCT(iso: string) {
   const d = new Date(iso);
   return d.toLocaleTimeString("en-US", {
@@ -274,6 +275,7 @@ function fmtHourMinCT(iso: string) {
     minute: "2-digit",
   });
 }
+
 function fmtDateTimeCT(iso: string) {
   const d = new Date(iso);
   const date = d.toLocaleDateString("en-US", {
@@ -289,6 +291,7 @@ function fmtDateTimeCT(iso: string) {
   });
   return `${date} · ${time}`;
 }
+
 function fmtMu(mu: number | null | undefined) {
   if (mu == null || !Number.isFinite(mu)) return "—";
   const v = Math.round(mu * 10) / 10;
@@ -332,10 +335,12 @@ function marketLabelGame(market: GameMarketKey) {
   if (market === "spreads") return "Spread";
   return "Total";
 }
+
 function sideLabelGame(market: GameMarketKey, side: GameSideKey) {
   if (market === "totals") return side === "over" ? "Over" : "Under";
   return side === "home" ? "Home" : "Away";
 }
+
 function fmtLineGame(market: GameMarketKey, line: number | null) {
   if (market === "h2h") return "—";
   if (line == null || !Number.isFinite(line)) return "—";
@@ -379,12 +384,14 @@ function propMarketLabel(marketRaw: string | null) {
   if (k === "player_threes") return "3PT";
   return marketRaw ? marketRaw : "Prop";
 }
+
 function propSideLabel(sideRaw: string | null) {
   const s = (sideRaw || "").toLowerCase().trim();
   if (s === "over" || s === "o") return "Over";
   if (s === "under" || s === "u") return "Under";
   return sideRaw || "—";
 }
+
 function fmtPropLine(line: number | null) {
   if (line == null || !Number.isFinite(line)) return "—";
   const rounded = Math.round(line * 100) / 100;
@@ -400,6 +407,7 @@ function gamePlayKey(r: EvPlayRow) {
   const line = r.line == null ? "x" : String(r.line);
   return `g|${r.event_id}|${r.market}|${r.side}|${line}|${team}`;
 }
+
 function propPlayKey(r: PlayerPropEvLatestRow) {
   const name = (r.player_name || "").trim().toLowerCase();
   const market = (r.market || "").trim().toLowerCase();
@@ -412,9 +420,7 @@ function propPlayKey(r: PlayerPropEvLatestRow) {
    Best offer
 ========================================================= */
 
-function chooseBestOffer(
-  offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>
-) {
+function chooseBestOffer(offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>) {
   const order: Exclude<SoftBookKey, "all">[] = ["draftkings", "fanduel", "betmgm"];
   const list = order
     .map((b) => (offers[b] ? ({ b, o: offers[b]! }) : null))
@@ -440,8 +446,10 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
   const ta = a.commence_time ? new Date(a.commence_time).getTime() : Number.POSITIVE_INFINITY;
   const tb = b.commence_time ? new Date(b.commence_time).getTime() : Number.POSITIVE_INFINITY;
   if (ta !== tb) return ta - tb;
+
   const ev = safeNum(b.bestEvPct, 0) - safeNum(a.bestEvPct, 0);
   if (ev !== 0) return ev;
+
   return safeNum(b.bestScore, 0) - safeNum(a.bestScore, 0);
 }
 
@@ -463,12 +471,7 @@ function normalizeIso(raw: any): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
-function collapseHistory(
-  rows: any[],
-  tsCol: string,
-  bookCol: string,
-  oddsCol: string
-): HistoryPoint[] {
+function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: string): HistoryPoint[] {
   const map = new Map<string, HistoryPoint>();
 
   for (const r of rows) {
@@ -486,9 +489,7 @@ function collapseHistory(
     map.set(ts, cur);
   }
 
-  return Array.from(map.values()).sort(
-    (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime()
-  );
+  return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
 }
 
 /* =========================================================
@@ -619,6 +620,7 @@ export function ModelScreen() {
   const aggregated = useMemo(() => {
     const map = new Map<string, AggregatedPlay>();
 
+    // ---- games
     for (const r of games) {
       const bk = normalizeBookKey(r.bookmaker);
       if (bk === "other" || bk === "pinnacle") continue;
@@ -670,6 +672,7 @@ export function ModelScreen() {
       map.set(key, base);
     }
 
+    // ---- props
     for (const r of props) {
       const bk = normalizeBookKey(r.book);
       if (bk === "other" || bk === "pinnacle") continue;
@@ -753,7 +756,8 @@ export function ModelScreen() {
 
     if (bookFilter !== "all") {
       if (bookFilter === "pinnacle") {
-        list = list; // history-only
+        // history-only; keep list unchanged
+        list = list;
       } else {
         list = list.filter((p) => !!p.offers[bookFilter]);
       }
@@ -798,8 +802,7 @@ export function ModelScreen() {
           </select>
 
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Bankroll:{" "}
-            <span className="text-[#d4af37]">{bankroll ? formatMoney(bankroll) : "—"}</span>
+            Bankroll: <span className="text-[#d4af37]">{bankroll ? formatMoney(bankroll) : "—"}</span>
           </div>
           <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
             Kelly:{" "}
@@ -1095,8 +1098,7 @@ function PlayCard({
           <div className="text-white text-sm">
             {play.pickLabel}{" "}
             <span className="text-[#808080] text-xs">
-              · {play.marketLabel} · {play.sideLabel}{" "}
-              {play.lineLabel !== "—" ? play.lineLabel : ""}
+              · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
             </span>
           </div>
         )}
@@ -1133,7 +1135,7 @@ function PlayCard({
 }
 
 /* =========================================================
-   Details Modal (LINE MOVEMENT + FantasyPros logs for props)
+   Details Modal (LINE MOVEMENT line chart + FantasyPros BAR logs)
 ========================================================= */
 
 function PlayDetailsModal({
@@ -1153,9 +1155,7 @@ function PlayDetailsModal({
 }) {
   if (!open || !play) return null;
 
-  const betAmount = settingsReady
-    ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor)
-    : 0;
+  const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
 
   return (
     <div className="fixed inset-0 z-[100]">
@@ -1166,7 +1166,6 @@ function PlayDetailsModal({
         aria-label="Close details modal"
       />
 
-      {/* ✅ Fix: top of modal not cut off (safe-area + padding + max height) */}
       <div
         className="absolute inset-0 md:flex md:items-center md:justify-center p-0 md:p-6"
         style={{
@@ -1200,7 +1199,6 @@ function PlayDetailsModal({
                     · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
                   </span>
 
-                  {/* ✅ Projection (mu) */}
                   {play.kind === "prop" ? (
                     <>
                       <span className="text-[#606060]">·</span>
@@ -1217,9 +1215,7 @@ function PlayDetailsModal({
 
               <div className="shrink-0 text-right">
                 <div className="text-[10px] text-[#606060]">Best EV</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">
-                  {pct(play.bestEvPct, 1)}
-                </div>
+                <div className="text-[#d4af37] font-semibold tabular-nums">{pct(play.bestEvPct, 1)}</div>
                 <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
                 <div className="text-[#d4af37] font-semibold tabular-nums">
                   {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
@@ -1251,7 +1247,7 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History (BAR GRAPH + tooltip includes game/play data)
+   Odds History (LINE GRAPH + tooltip includes game/play data)
 ========================================================= */
 
 function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
@@ -1280,7 +1276,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           if (!player_name || !marketKey || !["over", "under"].includes(sideCanon)) {
             if (mounted) {
               setDebug(
-                `props keys missing: player="${player_name || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`
+                `props keys missing: player="${player_name || "—"}" marketKey="${
+                  marketKey || "null"
+                }" side="${sideCanon || "null"}"`
               );
             }
             return;
@@ -1310,7 +1308,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           if (!pts.length) {
             setDebug(
-              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`
+              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(
+                ","
+              )}`
             );
           }
           return;
@@ -1324,7 +1324,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         if (!sport_key || !event_id || !market || !side) {
           if (mounted) {
             setDebug(
-              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`
+              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${
+                market ?? "null"
+              } side=${side ?? "null"}`
             );
           }
           return;
@@ -1353,7 +1355,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
         if (!pts.length) {
           setDebug(
-            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`
+            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(
+              ","
+            )}`
           );
         }
       } finally {
@@ -1438,7 +1442,10 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           {play.kind === "prop" ? (
             <div style={{ color: "#808080" }}>
-              μ <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
+              μ{" "}
+              <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>
+                {fmtMu(play.propMeta?.mu ?? null)}
+              </span>
             </div>
           ) : null}
         </div>
@@ -1463,7 +1470,8 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={series} barCategoryGap={10}>
+          <LineChart data={series}>
+            <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
             <XAxis
               dataKey="ts"
               tickFormatter={fmtHourMinCT}
@@ -1478,24 +1486,64 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
               axisLine={{ stroke: "#2a2a2a" }}
               tickLine={{ stroke: "#2a2a2a" }}
               width={56}
+              domain={["auto", "auto"]}
             />
 
             <Tooltip content={TooltipContent} />
             <Legend />
 
             {hasAny("draftkings") ? (
-              <Bar dataKey="draftkings" name="DK" fill={BOOK_COLOR.draftkings} isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="draftkings"
+                name="DK"
+                stroke={BOOK_COLOR.draftkings}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
+
             {hasAny("fanduel") ? (
-              <Bar dataKey="fanduel" name="FD" fill={BOOK_COLOR.fanduel} isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="fanduel"
+                name="FD"
+                stroke={BOOK_COLOR.fanduel}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
+
             {hasAny("betmgm") ? (
-              <Bar dataKey="betmgm" name="MGM" fill={BOOK_COLOR.betmgm} isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="betmgm"
+                name="MGM"
+                stroke={BOOK_COLOR.betmgm}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
+
             {hasAny("pinnacle") ? (
-              <Bar dataKey="pinnacle" name="PIN" fill={BOOK_COLOR.pinnacle} isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="pinnacle"
+                name="PIN"
+                stroke={BOOK_COLOR.pinnacle}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
-          </BarChart>
+          </LineChart>
         </ResponsiveContainer>
       </div>
 
@@ -1505,7 +1553,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 }
 
 /* =========================================================
-   FantasyPros Game Logs (props only)
+   FantasyPros Game Logs (props only) — BAR CHART
 ========================================================= */
 
 function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
@@ -1559,6 +1607,88 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
     };
   }, [play.playKey]);
 
+  const marketKey = historyPropMarketKey(play.propMeta?.market ?? null);
+
+  const statKey: "pts" | "reb" | "ast" | "threes" =
+    marketKey === "player_rebounds"
+      ? "reb"
+      : marketKey === "player_assists"
+      ? "ast"
+      : marketKey === "player_threes"
+      ? "threes"
+      : "pts";
+
+  const statLabel =
+    statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
+
+  const chartData = useMemo(() => {
+    // show most recent 10 but plot oldest->newest left-to-right
+    const last = (rows ?? []).slice(0, 10).slice().reverse();
+    return last.map((r) => ({
+      date: r.date,
+      opp: r.opp,
+      score: r.score,
+      min: safeNum(r.min, 0),
+      pts: safeNum(r.pts, 0),
+      reb: safeNum(r.reb, 0),
+      ast: safeNum(r.ast, 0),
+      threes: safeNum(r.threes, 0),
+    }));
+  }, [rows]);
+
+  const LogsTooltip = (props: any) => {
+    const { active, payload, label } = props;
+    if (!active || !payload?.length) return null;
+
+    const d = payload[0]?.payload;
+    if (!d) return null;
+
+    return (
+      <div
+        style={{
+          background: "#0b0b0b",
+          border: "1px solid #2a2a2a",
+          padding: "10px",
+          borderRadius: 8,
+          color: "#d0d0d0",
+          minWidth: 240,
+        }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{label}</div>
+
+        <div style={{ fontSize: 11, color: "#b0b0b0", lineHeight: 1.35 }}>
+          <div>
+            vs <span style={{ color: "#fff" }}>{d.opp}</span> ·{" "}
+            <span style={{ color: "#808080" }}>{d.score}</span>
+          </div>
+
+          <div style={{ marginTop: 6, display: "grid", gap: 2 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#808080" }}>MIN</span>
+              <span style={{ color: "#fff" }}>{d.min}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#808080" }}>PTS</span>
+              <span style={{ color: "#fff" }}>{d.pts}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#808080" }}>REB</span>
+              <span style={{ color: "#fff" }}>{d.reb}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#808080" }}>AST</span>
+              <span style={{ color: "#fff" }}>{d.ast}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#808080" }}>3PM</span>
+              <span style={{ color: "#fff" }}>{d.threes}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
       <div className="flex items-center justify-between gap-3 mb-2">
@@ -1566,6 +1696,38 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
         {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
       </div>
 
+      {chartData.length ? (
+        <div className="mb-3">
+          <div className="text-[10px] text-[#606060] mb-2">
+            Last {chartData.length} games · {statLabel} bars
+          </div>
+
+          <div className="h-[220px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} barCategoryGap={12}>
+                <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "#808080" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  minTickGap={12}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: "#808080" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  width={36}
+                />
+                <Tooltip content={LogsTooltip} />
+                <Bar dataKey={statKey} name={statLabel} fill="#d4af37" isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      ) : null}
+
+      {/* (Optional) keep table view under the bar chart */}
       {rows.length ? (
         <div className="overflow-x-auto">
           <table className="w-full text-[11px]">
