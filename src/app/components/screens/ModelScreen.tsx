@@ -1,4 +1,4 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (updates per your notes)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Line Movement + FantasyPros Game Logs in Modal)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -6,20 +6,20 @@
 // ✅ Filters: Play Type + Book
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
 //
-// ✅ LINE MOVEMENT (ONLY) in modal (offers tab removed)
-// ✅ ONLY the Pick column (desktop) / Pick block (mobile) is clickable to open modal
+// ✅ MODAL: Line Movement + FantasyPros Game Logs (props only)
+// ✅ ONLY the Pick column / Pick block is clickable to open modal
 // ✅ History graph:
 //    - PLAYER PROPS: public.player_props_history
 //        Match on: player_name, market, side, bookmaker
-//        Uses: ts for x-axis + odds for y-axis
-//        NOTE: history market values are like "player_points"/"player_rebounds"/"player_assists"/"player_threes"
 //    - GAME LINES: public.odds_snapshot_history
 //        Match on: sport_key, event_id, market, side, bookmaker
-//        Uses: ts for x-axis + odds for y-axis
-//
 // ✅ Adds Pinnacle line to history graph (when present)
-// ✅ Colors each book line uniquely (DK/FD/MGM/PIN)
-// ✅ Tooltip shows DATE + TIME (CT)
+// ✅ Colors each book line uniquely + tooltip shows DATE + TIME (America/Chicago)
+//
+// ✅ FantasyPros Game Logs:
+//    - Props modal fetches from FP logs table (configurable constant below)
+//    - Displays last N games with date/opponent/min/pts/reb/ast/3pm
+//    - Includes safe fallbacks + debug messages if schema differs
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -63,7 +63,7 @@ type EvPlayRow = {
   market: GameMarketKey;
   side: GameSideKey;
 
-  line: number | null; // shown in UI, not used for history
+  line: number | null;
   bookmaker: string;
   book_odds: number;
 
@@ -96,11 +96,11 @@ type PlayerPropEvLatestRow = {
   position: string | null;
   picture_url: string | null;
 
-  market: string | null; // "Points" / "Rebounds" / "Assists" / "3PT" (or variants)
-  side: string | null; // "over"/"under"
-  line: number | null; // shown in UI, not used for history
+  market: string | null;
+  side: string | null;
+  line: number | null;
 
-  book: string; // "draftkings"/"fanduel"/"betmgm"
+  book: string;
   odds: number;
 
   p_quantum: number | null;
@@ -124,23 +124,19 @@ type AggregatedPlay = {
   kind: "game" | "prop";
   playKey: string;
 
-  // game identity
   sport_key?: string | null;
   event_id: string;
   commence_time: string | null;
   matchup: string | null;
 
-  // display
   marketLabel: string;
   sideLabel: string;
   pickLabel: string;
   lineLabel: string;
 
-  // fair odds
   quantum_odds: number;
   quantum_prob?: number | null;
 
-  // meta for history keys
   gameMeta?: { market: GameMarketKey; side: GameSideKey };
   propMeta?: {
     player_name: string | null;
@@ -150,7 +146,6 @@ type AggregatedPlay = {
     position: string | null;
   };
 
-  // offers across soft books
   offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>;
   bestBook: Exclude<SoftBookKey, "all"> | null;
   bestEvPct: number;
@@ -161,11 +156,11 @@ type AggregatedPlay = {
 };
 
 /* =========================================================
-   History tables & columns (adjust if your schema differs)
+   History tables & columns
 ========================================================= */
 
-const PROPS_HISTORY_TABLE = "player_props_history"; // ✅ per your spec
-const GAME_HISTORY_TABLE = "odds_snapshot_history"; // ✅ per your spec
+const PROPS_HISTORY_TABLE = "player_props_history";
+const GAME_HISTORY_TABLE = "odds_snapshot_history";
 
 const TS_COL_PROPS = "ts";
 const TS_COL_GAME = "ts";
@@ -181,13 +176,55 @@ const MARKET_COL_PROPS = "market";
 const SIDE_COL_PROPS = "side";
 
 /* =========================================================
+   FantasyPros Game Logs (CONFIG)
+   ---------------------------------------------------------
+   IMPORTANT: If your table/columns differ, change ONLY these constants.
+
+   Recommended schema for FP logs table:
+     - player_name (text)
+     - game_date (timestamptz or date)  OR  date (timestamptz/date)
+     - opponent (text) OR opp (text)
+     - minutes (number) OR min (number)
+     - pts, reb, ast, threes (3pm) columns (any reasonable naming)
+========================================================= */
+
+const FP_GAMELOGS_TABLE = "fantasypros_game_logs"; // <-- change if your table name differs
+
+// We support multiple possible column names safely:
+const FP_COL_PLAYER = "player_name";
+
+// Date candidates:
+const FP_DATE_CANDIDATES = ["game_date", "date", "gm_date", "dt"];
+
+// Opponent candidates:
+const FP_OPP_CANDIDATES = ["opponent", "opp", "vs", "opponent_abbrev"];
+
+// Minutes candidates:
+const FP_MIN_CANDIDATES = ["minutes", "min", "mins"];
+
+// Stat candidates:
+const FP_PTS_CANDIDATES = ["pts", "points"];
+const FP_REB_CANDIDATES = ["reb", "rebounds"];
+const FP_AST_CANDIDATES = ["ast", "assists"];
+const FP_3PM_CANDIDATES = ["threes", "3pm", "fg3m", "three_pm", "three_pointers_made"];
+
+// Optional: location (home/away)
+const FP_LOC_CANDIDATES = ["location", "home_away", "loc", "ha"];
+
+// Optional: team/opponent/team abbreviations
+const FP_TEAM_CANDIDATES = ["team", "team_abbrev"];
+const FP_RESULT_CANDIDATES = ["result", "wl", "outcome"];
+
+// How many rows to show
+const FP_GAMELOGS_LIMIT = 12;
+
+/* =========================================================
    Books + colors
 ========================================================= */
 
 const HISTORY_BOOKS: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
 
 const BOOK_COLOR: Record<AnyBook, string> = {
-  // DK green, FD blue, MGM gold, PIN purple
   draftkings: "#22c55e",
   fanduel: "#3b82f6",
   betmgm: "#d4af37",
@@ -195,7 +232,7 @@ const BOOK_COLOR: Record<AnyBook, string> = {
 };
 
 /* =========================================================
-   Small helpers
+   Helpers
 ========================================================= */
 
 function safeNum(n: any, fallback = 0) {
@@ -301,12 +338,10 @@ function marketLabelGame(market: GameMarketKey) {
   if (market === "spreads") return "Spread";
   return "Total";
 }
-
 function sideLabelGame(market: GameMarketKey, side: GameSideKey) {
   if (market === "totals") return side === "over" ? "Over" : "Under";
   return side === "home" ? "Home" : "Away";
 }
-
 function fmtLineGame(market: GameMarketKey, line: number | null) {
   if (market === "h2h") return "—";
   if (line == null || !Number.isFinite(line)) return "—";
@@ -315,11 +350,8 @@ function fmtLineGame(market: GameMarketKey, line: number | null) {
 }
 
 /**
- * IMPORTANT FIX:
- * player_props_history.market values are like:
+ * player_props_history.market values are typically:
  *   "player_points" / "player_rebounds" / "player_assists" / "player_threes"
- *
- * So we map your display markets into those keys for history lookup.
  */
 type PropHistoryMarketKey =
   | "player_points"
@@ -331,19 +363,16 @@ function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | 
   const m = (marketRaw || "").trim().toLowerCase();
   if (!m) return null;
 
-  // already key
   if (m === "player_points") return "player_points";
   if (m === "player_rebounds") return "player_rebounds";
   if (m === "player_assists") return "player_assists";
   if (m === "player_threes") return "player_threes";
 
-  // friendly labels
   if (m === "points" || m === "pts") return "player_points";
   if (m === "rebounds" || m === "reb") return "player_rebounds";
   if (m === "assists" || m === "ast") return "player_assists";
   if (m === "3pt" || m === "3pm" || m === "threes" || m === "3") return "player_threes";
 
-  // odds-api style
   if (m.includes("player_points")) return "player_points";
   if (m.includes("player_rebounds")) return "player_rebounds";
   if (m.includes("player_assists")) return "player_assists";
@@ -360,14 +389,12 @@ function propMarketLabel(marketRaw: string | null) {
   if (k === "player_threes") return "3PT";
   return marketRaw ? marketRaw : "Prop";
 }
-
 function propSideLabel(sideRaw: string | null) {
   const s = (sideRaw || "").toLowerCase().trim();
   if (s === "over" || s === "o") return "Over";
   if (s === "under" || s === "u") return "Under";
   return sideRaw || "—";
 }
-
 function fmtPropLine(line: number | null) {
   if (line == null || !Number.isFinite(line)) return "—";
   const rounded = Math.round(line * 100) / 100;
@@ -472,6 +499,71 @@ function collapseHistory(
   return Array.from(map.values()).sort(
     (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime()
   );
+}
+
+/* =========================================================
+   FantasyPros Game Logs types + helpers
+========================================================= */
+
+type FpGameLog = {
+  dateIso: string | null;
+  opp: string | null;
+  loc: string | null; // "H"/"A" or "@"
+  team: string | null;
+  result: string | null;
+
+  min: number | null;
+  pts: number | null;
+  reb: number | null;
+  ast: number | null;
+  threes: number | null;
+
+  raw: any;
+};
+
+function pickFirst(r: any, keys: string[]): any {
+  for (const k of keys) {
+    if (r && Object.prototype.hasOwnProperty.call(r, k) && r[k] != null) return r[k];
+  }
+  return null;
+}
+
+function toNumberOrNull(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toIsoOrNull(v: any): string | null {
+  const iso = normalizeIso(v);
+  return iso ?? null;
+}
+
+function normalizeLoc(v: any): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const low = s.toLowerCase();
+  if (low === "home" || low === "h") return "H";
+  if (low === "away" || low === "a") return "A";
+  if (s === "@") return "A";
+  return s.length <= 2 ? s.toUpperCase() : s;
+}
+
+function fmtLogDate(iso: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", {
+    timeZone: "America/Chicago",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function fmtOpp(opp: string | null, loc: string | null) {
+  const o = (opp || "").trim();
+  if (!o) return "—";
+  if (loc === "A" || loc === "@") return `@ ${o}`;
+  if (loc === "H") return `vs ${o}`;
+  return o;
 }
 
 /* =========================================================
@@ -647,7 +739,6 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
-
       map.set(key, base);
     }
 
@@ -708,7 +799,6 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
-
       map.set(key, base);
     }
 
@@ -726,13 +816,11 @@ export function ModelScreen() {
 
     if (bookFilter !== "all") {
       if (bookFilter === "pinnacle") {
-        // Pinnacle is history-only; don't filter out plays
-        list = list;
+        list = list; // history-only
       } else {
         list = list.filter((p) => !!p.offers[bookFilter]);
       }
     }
-
     return list;
   }, [aggregated, kindFilter, bookFilter]);
 
@@ -810,12 +898,7 @@ export function ModelScreen() {
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
-                    <img
-                      src="/logos/Quantum.png"
-                      alt="Quantum"
-                      className="h-6 w-auto opacity-90"
-                      draggable={false}
-                    />
+                    <img src="/logos/Quantum.png" alt="Quantum" className="h-6 w-auto opacity-90" draggable={false} />
                   </div>
                 </th>
 
@@ -847,7 +930,10 @@ export function ModelScreen() {
                   bankroll={bankroll}
                   kellyFactor={kellyFactor}
                   settingsReady={settingsReady}
-                  onOpenDetails={() => openDetails(p)}
+                  onOpenDetails={() => {
+                    setSelected(p);
+                    setDetailsOpen(true);
+                  }}
                 />
               ))}
 
@@ -878,7 +964,10 @@ export function ModelScreen() {
             bankroll={bankroll}
             kellyFactor={kellyFactor}
             settingsReady={settingsReady}
-            onOpenDetails={() => openDetails(p)}
+            onOpenDetails={() => {
+              setSelected(p);
+              setDetailsOpen(true);
+            }}
           />
         ))}
       </div>
@@ -886,7 +975,7 @@ export function ModelScreen() {
       <PlayDetailsModal
         open={detailsOpen}
         play={selected}
-        onClose={closeDetails}
+        onClose={() => setDetailsOpen(false)}
         bankroll={bankroll}
         kellyFactor={kellyFactor}
         settingsReady={settingsReady}
@@ -896,7 +985,7 @@ export function ModelScreen() {
 }
 
 /* =========================================================
-   Desktop Row (ONLY pick column opens modal)
+   Desktop Row (ONLY pick opens modal)
 ========================================================= */
 
 function PlayRow({
@@ -946,7 +1035,7 @@ function PlayRow({
           type="button"
           onClick={onOpenDetails}
           className="w-full text-left hover:opacity-90"
-          title="Open line movement"
+          title="Open line movement + FantasyPros logs"
         >
           {play.kind === "prop" ? (
             <PropPickInline
@@ -1042,7 +1131,7 @@ function PlayCard({
         type="button"
         onClick={onOpenDetails}
         className="mt-3 w-full text-left hover:opacity-90"
-        title="Open line movement"
+        title="Open line movement + FantasyPros logs"
       >
         {play.kind === "prop" ? (
           <div className="flex items-center gap-3">
@@ -1094,15 +1183,17 @@ function PlayCard({
           </div>
         </div>
 
-        <div className="text-[10px] text-[#606060]">Tap pick for chart</div>
+        <div className="text-[10px] text-[#606060]">Tap pick for details</div>
       </div>
     </div>
   );
 }
 
 /* =========================================================
-   Details Modal (LINE MOVEMENT ONLY)
+   Details Modal (Line Movement + FantasyPros Game Logs)
 ========================================================= */
+
+type ModalTab = "movement" | "gamelogs";
 
 function PlayDetailsModal({
   open,
@@ -1119,9 +1210,17 @@ function PlayDetailsModal({
   kellyFactor: number;
   settingsReady: boolean;
 }) {
+  const [tab, setTab] = useState<ModalTab>("movement");
+
+  useEffect(() => {
+    if (open) setTab("movement");
+  }, [open, play?.playKey]);
+
   if (!open || !play) return null;
 
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
+
+  const tabEnabledLogs = play.kind === "prop";
 
   return (
     <div className="fixed inset-0 z-[100]">
@@ -1171,10 +1270,47 @@ function PlayDetailsModal({
                 </div>
               </div>
             </div>
+
+            {/* Tabs */}
+            <div className="mt-4 flex items-center gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setTab("movement")}
+                className={[
+                  "px-3 py-1.5 rounded border transition-colors",
+                  tab === "movement"
+                    ? "bg-[#111] border-[#d4af37]/40 text-white"
+                    : "bg-transparent border-[#2a2a2a] text-[#808080] hover:text-white hover:bg-[#0f0f0f]",
+                ].join(" ")}
+              >
+                Line Movement
+              </button>
+
+              <button
+                type="button"
+                onClick={() => tabEnabledLogs && setTab("gamelogs")}
+                disabled={!tabEnabledLogs}
+                className={[
+                  "px-3 py-1.5 rounded border transition-colors",
+                  !tabEnabledLogs
+                    ? "bg-transparent border-[#222] text-[#404040] cursor-not-allowed"
+                    : tab === "gamelogs"
+                    ? "bg-[#111] border-[#d4af37]/40 text-white"
+                    : "bg-transparent border-[#2a2a2a] text-[#808080] hover:text-white hover:bg-[#0f0f0f]",
+                ].join(" ")}
+                title={!tabEnabledLogs ? "FantasyPros logs are only available for player props" : "FantasyPros game logs"}
+              >
+                FantasyPros Logs
+              </button>
+            </div>
           </div>
 
           <div className="p-4">
-            <OddsHistoryMiniChart play={play} />
+            {tab === "movement" ? (
+              <OddsHistoryMiniChart play={play} />
+            ) : (
+              <FantasyProsGameLogs play={play} />
+            )}
           </div>
 
           <div className="p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
@@ -1193,7 +1329,7 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History (props market mapping + PIN + colors + date in hover)
+   Odds History (PIN + colors + date in hover)
 ========================================================= */
 
 function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
@@ -1285,7 +1421,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           .eq("event_id", event_id)
           .eq("market", market)
           .eq("side", side)
-          .in(BOOK_COL_GAME, HISTORY_BOOKS) // ✅ includes pinnacle
+          .in(BOOK_COL_GAME, HISTORY_BOOKS)
           .order(TS_COL_GAME, { ascending: true });
 
         if (!mounted) return;
@@ -1372,57 +1508,198 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             <Legend />
 
             {hasAny("draftkings") ? (
-              <Line
-                type="monotone"
-                dataKey="draftkings"
-                name="DK"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.draftkings}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="draftkings" name="DK" dot={false} strokeWidth={2} stroke={BOOK_COLOR.draftkings} isAnimationActive={false} />
             ) : null}
-
             {hasAny("fanduel") ? (
-              <Line
-                type="monotone"
-                dataKey="fanduel"
-                name="FD"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.fanduel}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="fanduel" name="FD" dot={false} strokeWidth={2} stroke={BOOK_COLOR.fanduel} isAnimationActive={false} />
             ) : null}
-
             {hasAny("betmgm") ? (
-              <Line
-                type="monotone"
-                dataKey="betmgm"
-                name="MGM"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.betmgm}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="betmgm" name="MGM" dot={false} strokeWidth={2} stroke={BOOK_COLOR.betmgm} isAnimationActive={false} />
             ) : null}
-
             {hasAny("pinnacle") ? (
-              <Line
-                type="monotone"
-                dataKey="pinnacle"
-                name="PIN"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.pinnacle}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="pinnacle" name="PIN" dot={false} strokeWidth={2} stroke={BOOK_COLOR.pinnacle} isAnimationActive={false} />
             ) : null}
           </LineChart>
         </ResponsiveContainer>
       </div>
 
       {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+    </div>
+  );
+}
+
+/* =========================================================
+   FantasyPros Game Logs (props only)
+========================================================= */
+
+function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
+  const [rows, setRows] = useState<FpGameLog[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [debug, setDebug] = useState<string>("");
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      setLoading(true);
+      setRows([]);
+      setDebug("");
+
+      try {
+        if (play.kind !== "prop") {
+          setDebug("FantasyPros logs are only shown for player props.");
+          return;
+        }
+
+        const player = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
+        if (!player) {
+          setDebug("Missing player_name for FantasyPros logs lookup.");
+          return;
+        }
+
+        // We deliberately select * to support unknown schemas.
+        const { data, error } = await supabase
+          .from(FP_GAMELOGS_TABLE)
+          .select("*")
+          .eq(FP_COL_PLAYER, player)
+          // Order by likely date col - we can't safely order without knowing which exists,
+          // so we'll sort client-side after parsing.
+          .limit(150);
+
+        if (!mounted) return;
+
+        if (error) {
+          setDebug(`FantasyPros logs error: ${error.message} (table: ${FP_GAMELOGS_TABLE})`);
+          setRows([]);
+          return;
+        }
+
+        const parsed: FpGameLog[] = (data ?? []).map((r: any) => {
+          const dateRaw = pickFirst(r, FP_DATE_CANDIDATES);
+          const oppRaw = pickFirst(r, FP_OPP_CANDIDATES);
+          const minRaw = pickFirst(r, FP_MIN_CANDIDATES);
+
+          const ptsRaw = pickFirst(r, FP_PTS_CANDIDATES);
+          const rebRaw = pickFirst(r, FP_REB_CANDIDATES);
+          const astRaw = pickFirst(r, FP_AST_CANDIDATES);
+          const thRaw = pickFirst(r, FP_3PM_CANDIDATES);
+
+          const locRaw = pickFirst(r, FP_LOC_CANDIDATES);
+          const teamRaw = pickFirst(r, FP_TEAM_CANDIDATES);
+          const resRaw = pickFirst(r, FP_RESULT_CANDIDATES);
+
+          return {
+            dateIso: toIsoOrNull(dateRaw),
+            opp: oppRaw != null ? String(oppRaw) : null,
+            loc: normalizeLoc(locRaw),
+            team: teamRaw != null ? String(teamRaw) : null,
+            result: resRaw != null ? String(resRaw) : null,
+
+            min: toNumberOrNull(minRaw),
+            pts: toNumberOrNull(ptsRaw),
+            reb: toNumberOrNull(rebRaw),
+            ast: toNumberOrNull(astRaw),
+            threes: toNumberOrNull(thRaw),
+
+            raw: r,
+          };
+        });
+
+        // Sort by date desc
+        parsed.sort((a, b) => {
+          const ta = a.dateIso ? new Date(a.dateIso).getTime() : -Infinity;
+          const tb = b.dateIso ? new Date(b.dateIso).getTime() : -Infinity;
+          return tb - ta;
+        });
+
+        const trimmed = parsed.slice(0, FP_GAMELOGS_LIMIT);
+        setRows(trimmed);
+
+        if (!trimmed.length) {
+          setDebug(
+            `No FantasyPros logs found for "${player}". Table="${FP_GAMELOGS_TABLE}". Check that "${FP_COL_PLAYER}" matches.`
+          );
+        } else {
+          // Light schema sanity debug:
+          const sample = trimmed[0];
+          const missing =
+            sample.dateIso == null ||
+            (sample.pts == null && sample.reb == null && sample.ast == null && sample.threes == null);
+
+          if (missing) {
+            setDebug(
+              `Found rows, but key columns may not match expected names. Adjust FP_DATE_CANDIDATES / stat candidates at top.`
+            );
+          }
+        }
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, [play.playKey]);
+
+  if (loading && !rows.length) {
+    return (
+      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+        <div className="text-xs text-[#808080]">Loading FantasyPros game logs…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
+        <div className="text-[10px] text-[#404040]">
+          Showing last {Math.min(rows.length, FP_GAMELOGS_LIMIT)} games
+        </div>
+      </div>
+
+      {!rows.length ? (
+        <div className="text-xs text-[#808080]">
+          No game logs available.
+          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[#808080] border-b border-[#1f1f1f]">
+                <th className="text-left py-2 pr-3">Date</th>
+                <th className="text-left py-2 pr-3">Opp</th>
+                <th className="text-center py-2 pr-3">MIN</th>
+                <th className="text-center py-2 pr-3">PTS</th>
+                <th className="text-center py-2 pr-3">REB</th>
+                <th className="text-center py-2 pr-3">AST</th>
+                <th className="text-center py-2 pr-0">3PM</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#141414]">
+              {rows.map((r, idx) => (
+                <tr key={idx} className="text-[#d0d0d0]">
+                  <td className="py-2 pr-3 whitespace-nowrap">{fmtLogDate(r.dateIso)}</td>
+                  <td className="py-2 pr-3 whitespace-nowrap">
+                    <span className="text-white">{fmtOpp(r.opp, r.loc)}</span>
+                    {r.result ? <span className="text-[#606060]"> · {r.result}</span> : null}
+                  </td>
+                  <td className="py-2 pr-3 text-center tabular-nums">{r.min ?? "—"}</td>
+                  <td className="py-2 pr-3 text-center tabular-nums">{r.pts ?? "—"}</td>
+                  <td className="py-2 pr-3 text-center tabular-nums">{r.reb ?? "—"}</td>
+                  <td className="py-2 pr-3 text-center tabular-nums">{r.ast ?? "—"}</td>
+                  <td className="py-2 pr-0 text-center tabular-nums">{r.threes ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -1469,12 +1746,7 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
     >
       <div className="inline-flex items-center justify-center gap-2">
         {logo ? (
-          <img
-            src={logo}
-            alt={bookShort(offer.book)}
-            className="h-5 w-5 opacity-95 shrink-0"
-            draggable={false}
-          />
+          <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
         ) : (
           <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
             {bookShort(offer.book)}
@@ -1593,4 +1865,5 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
     </div>
   );
 }
+
 
