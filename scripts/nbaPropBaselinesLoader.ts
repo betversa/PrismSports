@@ -1,22 +1,19 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3.2: REQUIRE PINNACLE EXACT LINE)
-// -----------------------------------------------------------------------------------------------
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (FULL REWRITE v3.3: SYNTHETIC PINNACLE + HYBRID DEVIG)
+// -------------------------------------------------------------------------------------------------------
 // ✅ Scrapes FantasyPros season / last7 / last15 for: PTS, REB, AST, 3PM, MIN
 // ✅ Uses only those windows to build mean projections + sigma estimate
 // ✅ Uses odds_wide_latest (team, pin_spread_line, pin_total_line) to context-adjust minutes + mu
 // ✅ Uses player_props_snapshot for lines/odds/books and event_id/commence_time/home_team/away_team
 // ✅ ONLY returns players from FUTURE GAMES (event exists + commence_time > now)
-// ✅ SHARP FIX (REAL):
-//    - Builds no-vig probs from Pinnacle and BetOnlineAG (when both sides exist at a sharp line)
-//    - For each soft-book alt line, "translate" sharp *OVER* prob from nearest sharp line to target line
-//      using a distribution anchored by YOUR sigma (Normal for PTS/REB/AST, Poisson for 3PM).
-//    - IMPORTANT: Translation is solved from P(OVER) always, then UNDER = 1 - OVER.
-// ✅ NEW IN v3.2 (YOUR REQUEST):
-//    - ONLY INSERT a play if PINNACLE EXISTS AT THE EXACT SAME LINE for that event/player/market:
-//      * requires BOTH over+under Pinnacle odds at that exact line
-//      * no BetOnline-only plays
-//      * no "translated-only" Pinnacle (nearest line) plays
+// ✅ SHARP FIX (UPDATED):
+//    - Builds synthetic "Pinnacle no-vig OVER prob at the SOFT line" using:
+//        (a) nearest available Pinnacle paired line (over+under) for that player/market/event
+//        (b) hybrid devig (equal-margin near 50/50, MPTO as odds skew, blended)
+//        (c) translate P(OVER) from Pinnacle line -> target soft line using your sigma distribution
+//      Under = 1 - Over, then side picks p_sharp accordingly.
+// ✅ EV math matches your other scripts (same evPct + kellyFraction)
 // ✅ Outputs to ONE table: public.player_prop_ev_latest (cleared per run by sport_key)
 // ✅ Includes player picture_url
 //
@@ -52,6 +49,17 @@ const QUANTUM_BLEND_SHARP = 0.75;
 const SOFT_BOOKS = new Set(["draftkings", "fanduel", "betmgm"]);
 const SHARP_BOOKS = ["pinnacle", "betonlineag"] as const;
 type SharpBook = (typeof SHARP_BOOKS)[number];
+
+/**
+ * HYBRID DEVIG switch:
+ * - near 50/50 => equal margin (stable)
+ * - skewed => MPTO-style (we implement power devig)
+ * - blend in between
+ */
+const DEVIG_SKEW_EQ_MAX = 0.06; // <= 6% skew => equal margin
+const DEVIG_SKEW_MPTO_MIN = 0.18; // >= 18% skew => MPTO
+const DEVIG_MPTO_POWER_LO = 0.5;
+const DEVIG_MPTO_POWER_HI = 3.0;
 
 /* =========================================================
    TYPES
@@ -99,8 +107,6 @@ type OddsWide = {
   pin_total_line: number | null;
 };
 
-// NOTE: player_id/team/opponent removed because those are null in your snapshot.
-// We derive opponent from home_team/away_team.
 type PropsRow = {
   sport_key: string;
   event_id: string;
@@ -119,11 +125,16 @@ type PropsRow = {
   bookmaker: string;
 };
 
+type SharpPair = {
+  line: number;
+  over_odds: number;
+  under_odds: number;
+};
+
 type SharpNoVigLine = {
-  book: SharpBook;
   line: number;
   p_over: number; // no-vig over prob
-  p_under: number; // no-vig under prob (= 1 - p_over)
+  p_under: number;
   over_odds: number;
   under_odds: number;
 };
@@ -162,10 +173,8 @@ function normSide(s: any): "over" | "under" | null {
 function normBook(b: any): SharpBook | null {
   const s = String(b || "").toLowerCase().trim();
   if (!s) return null;
-
   if (s === "pinnacle" || s.includes("pinnacle")) return "pinnacle";
   if (s === "betonlineag" || s.includes("betonline")) return "betonlineag";
-
   return null;
 }
 
@@ -218,6 +227,57 @@ function weightedAvg(a: number | null, b: number | null, c: number | null): numb
     wsum += W.d7;
   }
   return wsum ? sum / wsum : null;
+}
+
+/* =========================================================
+   HYBRID DEVIG (Equal Margin ↔ MPTO)
+========================================================= */
+
+function devigEqualMargin(pOverImp: number, pUnderImp: number) {
+  const h = pOverImp + pUnderImp - 1;
+  const pO = clamp(pOverImp - h / 2, 1e-6, 1 - 1e-6);
+  const pU = clamp(pUnderImp - h / 2, 1e-6, 1 - 1e-6);
+  const s = pO + pU;
+  return { p_over: pO / s, p_under: pU / s }; // renorm tiny numeric drift
+}
+
+/**
+ * "Power" devig:
+ * p' = p^k / (pO^k + pU^k)
+ *
+ * We choose k based on how skewed the market is: more skew => more MPTO effect.
+ * This mimics MPTO's intent: allocate margin more toward the favorite.
+ */
+function devigPairMPTO_power(pOverImp: number, pUnderImp: number) {
+  const skew = Math.abs(pOverImp - pUnderImp); // 0..1
+  const t = clamp((skew - DEVIG_SKEW_EQ_MAX) / Math.max(DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX, 1e-6), 0, 1);
+  const k = DEVIG_MPTO_POWER_LO + t * (DEVIG_MPTO_POWER_HI - DEVIG_MPTO_POWER_LO);
+
+  const a = Math.pow(clamp(pOverImp, 1e-12, 1), k);
+  const b = Math.pow(clamp(pUnderImp, 1e-12, 1), k);
+  const denom = a + b || 1;
+  const pO = clamp(a / denom, 1e-6, 1 - 1e-6);
+  const pU = clamp(1 - pO, 1e-6, 1 - 1e-6);
+  return { p_over: pO, p_under: pU };
+}
+
+/**
+ * Hybrid devig:
+ * - if skew small => equal margin
+ * - if skew large => MPTO
+ * - blend in-between
+ */
+function devigHybrid(pOverImp: number, pUnderImp: number) {
+  const skew = Math.abs(pOverImp - pUnderImp);
+  const eq = devigEqualMargin(pOverImp, pUnderImp);
+  const mp = devigPairMPTO_power(pOverImp, pUnderImp);
+
+  if (skew <= DEVIG_SKEW_EQ_MAX) return { ...eq, method: "equal_margin" as const, alpha: 0 };
+  if (skew >= DEVIG_SKEW_MPTO_MIN) return { ...mp, method: "mpto" as const, alpha: 1 };
+
+  const alpha = clamp((skew - DEVIG_SKEW_EQ_MAX) / (DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX), 0, 1);
+  const pO = clamp(eq.p_over * (1 - alpha) + mp.p_over * alpha, 1e-6, 1 - 1e-6);
+  return { p_over: pO, p_under: 1 - pO, method: "blend" as const, alpha };
 }
 
 /* =========================================================
@@ -454,19 +514,18 @@ function scrapeAvgPage(html: string): Map<number, { base: any; stats: StatPack }
 }
 
 /* =========================================================
-   SHARP BUILD + TRANSLATION
+   SHARP KEY + TRANSLATION
 ========================================================= */
 
 function idxKey(event_id: string, player_name: string, market_raw: string) {
   return `${event_id}|${normName(player_name)}|${String(market_raw || "").trim()}`;
 }
 
-// translate from p_over at sharpLine to targetLine, returns p_over(targetLine)
 function translateSharpOverToTarget(opts: {
   marketOut: "points" | "rebounds" | "assists" | "threes";
   targetLine: number;
   sharpLine: number;
-  pOverAtSharpLine: number; // no-vig OVER at sharpLine (always OVER)
+  pOverAtSharpLine: number; // no-vig OVER at sharpLine
   sigmaAnchor: number | null; // required for normal markets
 }): number | null {
   const p0_over = clamp(opts.pOverAtSharpLine, 1e-6, 1 - 1e-6);
@@ -478,6 +537,7 @@ function translateSharpOverToTarget(opts: {
         : null;
     if (!sigma) return null;
 
+    // p0_over = 1 - Phi((L - mu)/sigma) => mu = L - sigma*z where z = Phi^-1(1 - p0_over)
     const z = invNorm(1 - p0_over);
     const muSharp = opts.sharpLine - sigma * z;
     return pOverNormal(opts.targetLine, muSharp, sigma);
@@ -488,6 +548,10 @@ function translateSharpOverToTarget(opts: {
   return pOverPoisson(opts.targetLine, lambda);
 }
 
+/* =========================================================
+   MAIN
+========================================================= */
+
 async function main() {
   const supabaseUrl = process.env.SUPABASE_URL!;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -497,7 +561,6 @@ async function main() {
 
   // @ts-ignore
   const run_id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `run_${Date.now()}`;
-
   const now = new Date();
   const nowIso = now.toISOString();
 
@@ -515,15 +578,11 @@ async function main() {
   if (evErr) throw evErr;
 
   const allowedEventIds = new Set<string>();
-  for (const e of (events || []) as any[]) {
-    if (!e?.event_id) continue;
-    allowedEventIds.add(String(e.event_id));
-  }
+  for (const e of (events || []) as any[]) if (e?.event_id) allowedEventIds.add(String(e.event_id));
 
   if (allowedEventIds.size === 0) {
     const { error: delErr } = await supabase.from("player_prop_ev_latest").delete().eq("sport_key", SPORT_KEY);
     if (delErr) throw delErr;
-
     console.log(JSON.stringify({ ok: true, run_id, inserted_rows: 0, reason: "no_future_events" }, null, 2));
     return;
   }
@@ -552,7 +611,6 @@ async function main() {
   if (props.length === 0) {
     const { error: delErr } = await supabase.from("player_prop_ev_latest").delete().eq("sport_key", SPORT_KEY);
     if (delErr) throw delErr;
-
     console.log(JSON.stringify({ ok: true, run_id, inserted_rows: 0, reason: "no_future_props_rows" }, null, 2));
     return;
   }
@@ -682,22 +740,16 @@ async function main() {
   }
 
   /* -------------------------------------------------------
-     6) Build SHARP no-vig index (Pinnacle + BetOnlineAG)
-        AND build a STRICT Pinnacle EXACT-LINE presence index
+     6) Build PINNACLE paired lines index (event|player|market -> [{line, over, under}])
+        (we no longer require exact soft line!)
   -------------------------------------------------------- */
 
-  // sharpIndex: event|player|marketRaw -> list of no-vig lines per book
-  const sharpIndex = new Map<string, SharpNoVigLine[]>();
-
-  // exactPinPairs: (event|player|marketRaw|line) -> { over, under }
-  const exactPinPairs = new Map<string, { over: number; under: number }>();
-
-  // (event|player|market|book|line) -> {over, under}
-  const sharpPairs = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
+  const pinPairsByKey = new Map<string, SharpPair[]>();
+  const tmp = new Map<string, { line: number; over?: number; under?: number }>();
 
   for (const r of props) {
     const book = normBook(r.bookmaker);
-    if (!book) continue;
+    if (book !== "pinnacle") continue;
 
     const side = normSide(r.side);
     const line = toNum(r.line);
@@ -705,82 +757,57 @@ async function main() {
     if (!side || line == null || odds == null) continue;
 
     const base = idxKey(r.event_id, r.player_name, r.market);
-
-    // Strict Pinnacle exact-line presence tracking
-    if (book === "pinnacle") {
-      const kPin = `${base}|${line}`;
-      const cur = exactPinPairs.get(kPin) ?? { over: NaN, under: NaN };
-      if (side === "over") cur.over = odds;
-      if (side === "under") cur.under = odds;
-      exactPinPairs.set(kPin, cur);
-    }
-
-    // General sharp pairing for no-vig build (pin + bol)
-    const k = `${base}|${book}|${line}`;
-    const cur = sharpPairs.get(k) ?? { book, line };
+    const k = `${base}|${line}`;
+    const cur = tmp.get(k) ?? { line };
     if (side === "over") cur.over = odds;
     if (side === "under") cur.under = odds;
-    sharpPairs.set(k, cur);
+    tmp.set(k, cur);
   }
 
-  // Build no-vig sharpIndex
-  for (const [k, v] of sharpPairs.entries()) {
+  for (const [k, v] of tmp.entries()) {
     if (v.over == null || v.under == null) continue;
-
-    const pO = americanToImpliedProb(v.over);
-    const pU = americanToImpliedProb(v.under);
-    const denom = pO + pU;
-    if (denom <= 0) continue;
-
-    const pOverNoVig = pO / denom;
-    const pUnderNoVig = pU / denom;
-
-    const baseKey = k.split("|").slice(0, 3).join("|"); // event|player|marketRaw
-    const arr = sharpIndex.get(baseKey) ?? [];
-
-    arr.push({
-      book: v.book,
-      line: v.line,
-      p_over: pOverNoVig,
-      p_under: pUnderNoVig,
-      over_odds: v.over,
-      under_odds: v.under,
-    });
-
-    sharpIndex.set(baseKey, arr);
+    const base = k.split("|").slice(0, 3).join("|");
+    const arr = pinPairsByKey.get(base) ?? [];
+    arr.push({ line: v.line, over_odds: v.over, under_odds: v.under });
+    pinPairsByKey.set(base, arr);
   }
 
-  for (const [k, arr] of sharpIndex.entries()) {
-    arr.sort((a, b) => {
-      if (a.book !== b.book) return a.book.localeCompare(b.book);
-      return a.line - b.line;
-    });
-    sharpIndex.set(k, arr);
+  for (const [k, arr] of pinPairsByKey.entries()) {
+    arr.sort((a, b) => a.line - b.line);
+    pinPairsByKey.set(k, arr);
   }
 
-  function nearestSharpLine(arr: SharpNoVigLine[], book: SharpBook, targetLine: number): SharpNoVigLine | null {
-    let best: SharpNoVigLine | null = null;
+  function nearestPinPair(baseKey: string, targetLine: number): SharpPair | null {
+    const arr = pinPairsByKey.get(baseKey);
+    if (!arr || !arr.length) return null;
+
+    let best: SharpPair | null = null;
     let bestDist = Infinity;
-
-    for (const cand of arr) {
-      if (cand.book !== book) continue;
-      const dist = Math.abs(cand.line - targetLine);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = cand;
+    for (const p of arr) {
+      const d = Math.abs(p.line - targetLine);
+      if (d < bestDist) {
+        bestDist = d;
+        best = p;
       }
     }
     return best;
   }
 
   /* -------------------------------------------------------
-     7) Build final EV rows (SOFT books only)
-        NEW RULE: Require Pinnacle BOTH SIDES at EXACT SAME LINE
+     7) Build final EV rows (SOFT books only) using synthetic Pinnacle at soft line
   -------------------------------------------------------- */
   const out: any[] = [];
   const created_at = new Date().toISOString();
 
-  let dropped_no_pin_exact = 0;
+  const diag = {
+    dropped_bad_side_or_odds: 0,
+    dropped_no_baseline: 0,
+    dropped_no_team: 0,
+    dropped_no_model: 0,
+    dropped_no_pinnacle_pair_anywhere: 0,
+    dropped_translate_failed: 0,
+    inserted: 0,
+  };
 
   for (const r of props) {
     const eid = String(r.event_id || "");
@@ -793,12 +820,21 @@ async function main() {
     if (!SOFT_BOOKS.has(book)) continue;
 
     const playerNameRaw = String(r.player_name || "").trim();
-    if (!playerNameRaw) continue;
+    if (!playerNameRaw) {
+      diag.dropped_no_baseline++;
+      continue;
+    }
 
     const base = baselineByName.get(normName(playerNameRaw));
-    if (!base || !base.canonical) continue;
+    if (!base) {
+      diag.dropped_no_baseline++;
+      continue;
+    }
+    if (!base.canonical) {
+      diag.dropped_no_team++;
+      continue;
+    }
 
-    // Market mapping
     const marketOut =
       r.market === "player_points"
         ? ("points" as const)
@@ -812,26 +848,14 @@ async function main() {
     if (!marketOut) continue;
 
     const side = normSide(r.side);
-    if (!side) continue;
-
     const line = toNum(r.line);
     const odds = toNum(r.odds);
-    if (line == null || odds == null) continue;
-
-    // ✅ STRICT PINNACLE PRESENCE CHECK (exact same line, both sides)
-    const pinKey = `${idxKey(r.event_id, r.player_name, r.market)}|${line}`;
-    const pinPair = exactPinPairs.get(pinKey);
-    const hasPinExact =
-      pinPair &&
-      Number.isFinite(pinPair.over) &&
-      Number.isFinite(pinPair.under);
-
-    if (!hasPinExact) {
-      dropped_no_pin_exact++;
+    if (!side || line == null || odds == null) {
+      diag.dropped_bad_side_or_odds++;
       continue;
     }
 
-    // Opponent (best effort) from snapshot home/away
+    // Opponent from snapshot home/away
     const homeCanon = canonTeam(r.home_team);
     const awayCanon = canonTeam(r.away_team);
     const opponent =
@@ -876,7 +900,7 @@ async function main() {
     const pf = pace_factor ?? 1.0;
     const ttf = team_total_factor ?? 1.0;
 
-    // Build mu/sigma/p_model
+    // Model p
     let mu: number | null = null;
     let sigma: number | null = null;
     let p_model: number | null = null;
@@ -899,50 +923,50 @@ async function main() {
         p_model = side === "over" ? pO : 1 - pO;
       } else if (marketOut === "threes" && pm3Rate != null) {
         mu = pm3Rate * min_adj * ttf;
-        sigma = Math.sqrt(Math.max(mu, 0.01)); // model sigma (kept for table)
+        sigma = Math.sqrt(Math.max(mu, 0.01));
         const pO = pOverPoisson(line, mu);
         p_model = side === "over" ? pO : 1 - pO;
       }
     }
 
-    if (mu == null || p_model == null) continue;
-
-    // ✅ SHARP probability: still computed using the sharpIndex,
-    // but because we REQUIRE pinnacle exact pair at this line, we also require
-    // a pinnacle sharp entry exists (it should, unless your sharpIndex build missed it).
-    const arr = sharpIndex.get(idxKey(r.event_id, r.player_name, r.market));
-    const pin = arr ? nearestSharpLine(arr, "pinnacle", line) : null;
-
-    if (!pin || pin.book !== "pinnacle") {
-      // Extremely rare: pinnacle exists in snapshot but wasn’t paired into sharpIndex.
-      // (Example: duplicate names/market strings mismatch.)
-      dropped_no_pin_exact++;
+    if (mu == null || p_model == null) {
+      diag.dropped_no_model++;
       continue;
     }
 
-    // Translate from Pinnacle (if same line, this is effectively identity)
+    // Synthetic Pinnacle at soft line:
+    const baseKey = idxKey(r.event_id, r.player_name, r.market);
+    const pinPair = nearestPinPair(baseKey, line);
+    if (!pinPair) {
+      diag.dropped_no_pinnacle_pair_anywhere++;
+      continue;
+    }
+
+    const pO_imp = americanToImpliedProb(pinPair.over_odds);
+    const pU_imp = americanToImpliedProb(pinPair.under_odds);
+    const dev = devigHybrid(pO_imp, pU_imp);
+    const pOver_nv_at_pinLine = dev.p_over;
+
+    // Translate to target soft line
     const pOverTarget = translateSharpOverToTarget({
       marketOut,
       targetLine: line,
-      sharpLine: pin.line,
-      pOverAtSharpLine: pin.p_over,
+      sharpLine: pinPair.line,
+      pOverAtSharpLine: pOver_nv_at_pinLine,
       sigmaAnchor: marketOut === "threes" ? null : sigma,
     });
 
     if (pOverTarget == null) {
-      dropped_no_pin_exact++;
+      diag.dropped_translate_failed++;
       continue;
     }
 
     const p_sharp = side === "over" ? pOverTarget : 1 - pOverTarget;
 
-    // Quantum probability (model + sharp)
-    const p_quantum = clamp(
-      p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP,
-      0,
-      1
-    );
+    // Quantum blend
+    const p_quantum = clamp(p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP, 0, 1);
 
+    // EV + sizing (same math as other scripts)
     const quantum_fair_odds = impliedProbToAmerican(p_quantum);
     const book_implied_prob = americanToImpliedProb(odds);
     const ev_pct_val = evPct(p_quantum, odds);
@@ -971,6 +995,7 @@ async function main() {
       book,
       odds,
 
+      // context
       pin_spread_line,
       pin_total_line,
       implied_team_total,
@@ -978,21 +1003,33 @@ async function main() {
       pace_factor,
       team_total_factor,
 
+      // model
       min_base,
       min_adj,
       mu,
       sigma,
       p_model,
 
+      // sharp / quantum
       p_sharp,
       p_quantum,
       quantum_fair_odds,
 
+      // ev outputs
       book_implied_prob,
       ev_pct: ev_pct_val,
       kelly_fraction: kellyFraction(p_quantum, odds),
       score,
+
+      // debug fields (optional; harmless if column doesn't exist? remove if strict schema)
+      // sharp_anchor_line: pinPair.line,
+      // sharp_anchor_over_odds: pinPair.over_odds,
+      // sharp_anchor_under_odds: pinPair.under_odds,
+      // sharp_devig_method: dev.method,
+      // sharp_devig_alpha: dev.alpha,
     });
+
+    diag.inserted++;
   }
 
   /* -------------------------------------------------------
@@ -1008,25 +1045,21 @@ async function main() {
     if (insErr) throw insErr;
   }
 
-  // Diagnostics: check p_sharp fill rate
-  let sharpFilled = 0;
-  let sharpNull = 0;
-
-  for (const r of out) {
-    if (r.p_sharp == null) sharpNull++;
-    else sharpFilled++;
-  }
-
   console.log(
     JSON.stringify(
       {
         ok: true,
         run_id,
         inserted_rows: out.length,
-        dropped_no_pin_exact,
-        p_sharp_filled: sharpFilled,
-        p_sharp_null: sharpNull,
-        sharp_fill_rate: out.length ? Number((sharpFilled / out.length) * 100).toFixed(1) + "%" : "—",
+        dropped: { ...diag, inserted: undefined },
+        notes: {
+          devig: {
+            eq_if_skew_le: DEVIG_SKEW_EQ_MAX,
+            mpto_if_skew_ge: DEVIG_SKEW_MPTO_MIN,
+            blend_between: [DEVIG_SKEW_EQ_MAX, DEVIG_SKEW_MPTO_MIN],
+          },
+          sharp_source: "nearest Pinnacle paired line (over+under) + translate to soft line",
+        },
       },
       null,
       2
@@ -1038,3 +1071,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
