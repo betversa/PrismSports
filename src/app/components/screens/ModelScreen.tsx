@@ -1,4 +1,4 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Line Movement + FantasyPros Game Logs in Modal)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (fix export + line movement + FantasyPros logs)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -6,20 +6,24 @@
 // ✅ Filters: Play Type + Book
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
 //
-// ✅ MODAL: Line Movement + FantasyPros Game Logs (props only)
-// ✅ ONLY the Pick column / Pick block is clickable to open modal
+// ✅ LINE MOVEMENT (ONLY) in modal (offers tab removed)
+// ✅ ONLY the Pick column (desktop) / Pick block (mobile) is clickable to open modal
 // ✅ History graph:
 //    - PLAYER PROPS: public.player_props_history
 //        Match on: player_name, market, side, bookmaker
+//        Uses: ts for x-axis + odds for y-axis
+//        NOTE: history market values are like "player_points"/"player_rebounds"/"player_assists"/"player_threes"
 //    - GAME LINES: public.odds_snapshot_history
 //        Match on: sport_key, event_id, market, side, bookmaker
-// ✅ Adds Pinnacle line to history graph (when present)
-// ✅ Colors each book line uniquely + tooltip shows DATE + TIME (America/Chicago)
+//        Uses: ts for x-axis + odds for y-axis
 //
-// ✅ FantasyPros Game Logs:
-//    - Props modal fetches from FP logs table (configurable constant below)
-//    - Displays last N games with date/opponent/min/pts/reb/ast/3pm
-//    - Includes safe fallbacks + debug messages if schema differs
+// ✅ Adds Pinnacle line to history graph (when present)
+// ✅ Colors each book line uniquely (DK/FD/MGM/PIN)
+// ✅ Tooltip shows DATE + TIME (CT)
+//
+// ✅ FantasyPros Game Logs (PLAYER PROPS ONLY)
+//    - Pulls via Vercel function: /api/fantasypros-gamelog?player_name=...
+//    - Parses Game Log table from https://www.fantasypros.com/nba/games/<slug>.php
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -100,7 +104,7 @@ type PlayerPropEvLatestRow = {
   side: string | null;
   line: number | null;
 
-  book: string;
+  book: string; // "draftkings"/"fanduel"/"betmgm"
   odds: number;
 
   p_quantum: number | null;
@@ -124,19 +128,23 @@ type AggregatedPlay = {
   kind: "game" | "prop";
   playKey: string;
 
+  // identity
   sport_key?: string | null;
   event_id: string;
   commence_time: string | null;
   matchup: string | null;
 
+  // display
   marketLabel: string;
   sideLabel: string;
   pickLabel: string;
   lineLabel: string;
 
+  // fair odds
   quantum_odds: number;
   quantum_prob?: number | null;
 
+  // meta for history keys
   gameMeta?: { market: GameMarketKey; side: GameSideKey };
   propMeta?: {
     player_name: string | null;
@@ -154,6 +162,25 @@ type AggregatedPlay = {
 
   created_at: string | null;
 };
+
+/* =========================================================
+   FantasyPros logs (API response type)
+========================================================= */
+
+type FantasyProsLogRow = {
+  date: string;
+  opp: string;
+  score: string;
+  min: string;
+  pts: string;
+  reb: string;
+  ast: string;
+  threes: string;
+};
+
+type FantasyProsApiResponse =
+  | { ok: true; player_name: string; slug: string; url: string; rows: FantasyProsLogRow[] }
+  | { ok: false; error: string; slug?: string; url?: string };
 
 /* =========================================================
    History tables & columns
@@ -174,49 +201,6 @@ const ODDS_COL_GAME = "odds";
 const PLAYER_COL_PROPS = "player_name";
 const MARKET_COL_PROPS = "market";
 const SIDE_COL_PROPS = "side";
-
-/* =========================================================
-   FantasyPros Game Logs (CONFIG)
-   ---------------------------------------------------------
-   IMPORTANT: If your table/columns differ, change ONLY these constants.
-
-   Recommended schema for FP logs table:
-     - player_name (text)
-     - game_date (timestamptz or date)  OR  date (timestamptz/date)
-     - opponent (text) OR opp (text)
-     - minutes (number) OR min (number)
-     - pts, reb, ast, threes (3pm) columns (any reasonable naming)
-========================================================= */
-
-const FP_GAMELOGS_TABLE = "fantasypros_game_logs"; // <-- change if your table name differs
-
-// We support multiple possible column names safely:
-const FP_COL_PLAYER = "player_name";
-
-// Date candidates:
-const FP_DATE_CANDIDATES = ["game_date", "date", "gm_date", "dt"];
-
-// Opponent candidates:
-const FP_OPP_CANDIDATES = ["opponent", "opp", "vs", "opponent_abbrev"];
-
-// Minutes candidates:
-const FP_MIN_CANDIDATES = ["minutes", "min", "mins"];
-
-// Stat candidates:
-const FP_PTS_CANDIDATES = ["pts", "points"];
-const FP_REB_CANDIDATES = ["reb", "rebounds"];
-const FP_AST_CANDIDATES = ["ast", "assists"];
-const FP_3PM_CANDIDATES = ["threes", "3pm", "fg3m", "three_pm", "three_pointers_made"];
-
-// Optional: location (home/away)
-const FP_LOC_CANDIDATES = ["location", "home_away", "loc", "ha"];
-
-// Optional: team/opponent/team abbreviations
-const FP_TEAM_CANDIDATES = ["team", "team_abbrev"];
-const FP_RESULT_CANDIDATES = ["result", "wl", "outcome"];
-
-// How many rows to show
-const FP_GAMELOGS_LIMIT = 12;
 
 /* =========================================================
    Books + colors
@@ -349,10 +333,6 @@ function fmtLineGame(market: GameMarketKey, line: number | null) {
   return `${line}`;
 }
 
-/**
- * player_props_history.market values are typically:
- *   "player_points" / "player_rebounds" / "player_assists" / "player_threes"
- */
 type PropHistoryMarketKey =
   | "player_points"
   | "player_rebounds"
@@ -456,7 +436,7 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
 }
 
 /* =========================================================
-   History series builder (pivot by ts + book)
+   History series builder
 ========================================================= */
 
 type HistoryPoint = {
@@ -502,71 +482,6 @@ function collapseHistory(
 }
 
 /* =========================================================
-   FantasyPros Game Logs types + helpers
-========================================================= */
-
-type FpGameLog = {
-  dateIso: string | null;
-  opp: string | null;
-  loc: string | null; // "H"/"A" or "@"
-  team: string | null;
-  result: string | null;
-
-  min: number | null;
-  pts: number | null;
-  reb: number | null;
-  ast: number | null;
-  threes: number | null;
-
-  raw: any;
-};
-
-function pickFirst(r: any, keys: string[]): any {
-  for (const k of keys) {
-    if (r && Object.prototype.hasOwnProperty.call(r, k) && r[k] != null) return r[k];
-  }
-  return null;
-}
-
-function toNumberOrNull(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function toIsoOrNull(v: any): string | null {
-  const iso = normalizeIso(v);
-  return iso ?? null;
-}
-
-function normalizeLoc(v: any): string | null {
-  const s = String(v ?? "").trim();
-  if (!s) return null;
-  const low = s.toLowerCase();
-  if (low === "home" || low === "h") return "H";
-  if (low === "away" || low === "a") return "A";
-  if (s === "@") return "A";
-  return s.length <= 2 ? s.toUpperCase() : s;
-}
-
-function fmtLogDate(iso: string | null) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
-    timeZone: "America/Chicago",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function fmtOpp(opp: string | null, loc: string | null) {
-  const o = (opp || "").trim();
-  if (!o) return "—";
-  if (loc === "A" || loc === "@") return `@ ${o}`;
-  if (loc === "H") return `vs ${o}`;
-  return o;
-}
-
-/* =========================================================
    Screen
 ========================================================= */
 
@@ -578,6 +493,7 @@ const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
   { key: "pinnacle", label: "Pinnacle (history only)" },
 ];
 
+// IMPORTANT: named export (fixes your Vercel build error)
 export function ModelScreen() {
   const [bookFilter, setBookFilter] = useState<SoftBookKey>("all");
   const [kindFilter, setKindFilter] = useState<PlayKind>("all");
@@ -693,7 +609,6 @@ export function ModelScreen() {
   const aggregated = useMemo(() => {
     const map = new Map<string, AggregatedPlay>();
 
-    // GAME PLAYS
     for (const r of games) {
       const bk = normalizeBookKey(r.bookmaker);
       if (bk === "other" || bk === "pinnacle") continue;
@@ -739,10 +654,12 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+
       map.set(key, base);
     }
 
-    // PROP PLAYS
     for (const r of props) {
       const bk = normalizeBookKey(r.book);
       if (bk === "other" || bk === "pinnacle") continue;
@@ -799,6 +716,9 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+
       map.set(key, base);
     }
 
@@ -821,6 +741,7 @@ export function ModelScreen() {
         list = list.filter((p) => !!p.offers[bookFilter]);
       }
     }
+
     return list;
   }, [aggregated, kindFilter, bookFilter]);
 
@@ -898,7 +819,12 @@ export function ModelScreen() {
 
                 <th className="text-center p-3 text-[#808080] min-w-[110px]">
                   <div className="flex items-center justify-center">
-                    <img src="/logos/Quantum.png" alt="Quantum" className="h-6 w-auto opacity-90" draggable={false} />
+                    <img
+                      src="/logos/Quantum.png"
+                      alt="Quantum"
+                      className="h-6 w-auto opacity-90"
+                      draggable={false}
+                    />
                   </div>
                 </th>
 
@@ -930,10 +856,7 @@ export function ModelScreen() {
                   bankroll={bankroll}
                   kellyFactor={kellyFactor}
                   settingsReady={settingsReady}
-                  onOpenDetails={() => {
-                    setSelected(p);
-                    setDetailsOpen(true);
-                  }}
+                  onOpenDetails={() => openDetails(p)}
                 />
               ))}
 
@@ -964,10 +887,7 @@ export function ModelScreen() {
             bankroll={bankroll}
             kellyFactor={kellyFactor}
             settingsReady={settingsReady}
-            onOpenDetails={() => {
-              setSelected(p);
-              setDetailsOpen(true);
-            }}
+            onOpenDetails={() => openDetails(p)}
           />
         ))}
       </div>
@@ -975,7 +895,7 @@ export function ModelScreen() {
       <PlayDetailsModal
         open={detailsOpen}
         play={selected}
-        onClose={() => setDetailsOpen(false)}
+        onClose={closeDetails}
         bankroll={bankroll}
         kellyFactor={kellyFactor}
         settingsReady={settingsReady}
@@ -985,7 +905,7 @@ export function ModelScreen() {
 }
 
 /* =========================================================
-   Desktop Row (ONLY pick opens modal)
+   Desktop Row (ONLY pick column opens modal)
 ========================================================= */
 
 function PlayRow({
@@ -1035,7 +955,7 @@ function PlayRow({
           type="button"
           onClick={onOpenDetails}
           className="w-full text-left hover:opacity-90"
-          title="Open line movement + FantasyPros logs"
+          title="Open line movement"
         >
           {play.kind === "prop" ? (
             <PropPickInline
@@ -1131,7 +1051,7 @@ function PlayCard({
         type="button"
         onClick={onOpenDetails}
         className="mt-3 w-full text-left hover:opacity-90"
-        title="Open line movement + FantasyPros logs"
+        title="Open line movement"
       >
         {play.kind === "prop" ? (
           <div className="flex items-center gap-3">
@@ -1139,9 +1059,7 @@ function PlayCard({
             <div className="min-w-0">
               <div className="text-white text-sm truncate">
                 {play.pickLabel}
-                {play.propMeta?.position ? (
-                  <span className="text-[#808080]"> · {play.propMeta.position}</span>
-                ) : null}
+                {play.propMeta?.position ? <span className="text-[#808080]"> · {play.propMeta.position}</span> : null}
               </div>
               <div className="text-[11px] text-[#808080] mt-0.5 truncate">
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel}
@@ -1152,8 +1070,7 @@ function PlayCard({
           <div className="text-white text-sm">
             {play.pickLabel}{" "}
             <span className="text-[#808080] text-xs">
-              · {play.marketLabel} · {play.sideLabel}{" "}
-              {play.lineLabel !== "—" ? play.lineLabel : ""}
+              · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
             </span>
           </div>
         )}
@@ -1183,17 +1100,15 @@ function PlayCard({
           </div>
         </div>
 
-        <div className="text-[10px] text-[#606060]">Tap pick for details</div>
+        <div className="text-[10px] text-[#606060]">Tap pick for chart</div>
       </div>
     </div>
   );
 }
 
 /* =========================================================
-   Details Modal (Line Movement + FantasyPros Game Logs)
+   Details Modal (LINE MOVEMENT + FantasyPros logs for props)
 ========================================================= */
-
-type ModalTab = "movement" | "gamelogs";
 
 function PlayDetailsModal({
   open,
@@ -1210,29 +1125,16 @@ function PlayDetailsModal({
   kellyFactor: number;
   settingsReady: boolean;
 }) {
-  const [tab, setTab] = useState<ModalTab>("movement");
-
-  useEffect(() => {
-    if (open) setTab("movement");
-  }, [open, play?.playKey]);
-
   if (!open || !play) return null;
 
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
 
-  const tabEnabledLogs = play.kind === "prop";
-
   return (
     <div className="fixed inset-0 z-[100]">
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/70"
-        aria-label="Close details modal"
-      />
+      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
 
       <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-0 md:p-6">
-        <div className="relative w-full md:max-w-3xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
+        <div className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
           <div className="p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1261,56 +1163,18 @@ function PlayDetailsModal({
 
               <div className="shrink-0 text-right">
                 <div className="text-[10px] text-[#606060]">Best EV</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">
-                  {pct(play.bestEvPct, 1)}
-                </div>
+                <div className="text-[#d4af37] font-semibold tabular-nums">{pct(play.bestEvPct, 1)}</div>
                 <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
                 <div className="text-[#d4af37] font-semibold tabular-nums">
                   {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
                 </div>
               </div>
             </div>
-
-            {/* Tabs */}
-            <div className="mt-4 flex items-center gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setTab("movement")}
-                className={[
-                  "px-3 py-1.5 rounded border transition-colors",
-                  tab === "movement"
-                    ? "bg-[#111] border-[#d4af37]/40 text-white"
-                    : "bg-transparent border-[#2a2a2a] text-[#808080] hover:text-white hover:bg-[#0f0f0f]",
-                ].join(" ")}
-              >
-                Line Movement
-              </button>
-
-              <button
-                type="button"
-                onClick={() => tabEnabledLogs && setTab("gamelogs")}
-                disabled={!tabEnabledLogs}
-                className={[
-                  "px-3 py-1.5 rounded border transition-colors",
-                  !tabEnabledLogs
-                    ? "bg-transparent border-[#222] text-[#404040] cursor-not-allowed"
-                    : tab === "gamelogs"
-                    ? "bg-[#111] border-[#d4af37]/40 text-white"
-                    : "bg-transparent border-[#2a2a2a] text-[#808080] hover:text-white hover:bg-[#0f0f0f]",
-                ].join(" ")}
-                title={!tabEnabledLogs ? "FantasyPros logs are only available for player props" : "FantasyPros game logs"}
-              >
-                FantasyPros Logs
-              </button>
-            </div>
           </div>
 
-          <div className="p-4">
-            {tab === "movement" ? (
-              <OddsHistoryMiniChart play={play} />
-            ) : (
-              <FantasyProsGameLogs play={play} />
-            )}
+          <div className="p-4 space-y-3">
+            <OddsHistoryMiniChart play={play} />
+            {play.kind === "prop" ? <FantasyProsGameLogs play={play} /> : null}
           </div>
 
           <div className="p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
@@ -1329,7 +1193,7 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History (PIN + colors + date in hover)
+   Odds History (props market mapping + PIN + colors + date in hover)
 ========================================================= */
 
 function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
@@ -1348,7 +1212,6 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
       try {
         if (play.kind === "prop") {
           const player_name = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
-
           const marketKey =
             historyPropMarketKey(play.propMeta?.market ?? null) ??
             historyPropMarketKey(play.marketLabel ?? null);
@@ -1367,9 +1230,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           const { data, error } = await supabase
             .from(PROPS_HISTORY_TABLE)
-            .select(
-              `${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`
-            )
+            .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
             .eq(PLAYER_COL_PROPS, player_name)
             .eq(MARKET_COL_PROPS, marketKey)
             .eq(SIDE_COL_PROPS, sideCanon)
@@ -1389,15 +1250,12 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           if (!pts.length) {
             setDebug(
-              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(
-                ","
-              )}`
+              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`
             );
           }
           return;
         }
 
-        // GAME history
         const sport_key = (play.sport_key ?? "").trim();
         const event_id = play.event_id;
         const market = play.gameMeta?.market ?? null;
@@ -1406,9 +1264,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         if (!sport_key || !event_id || !market || !side) {
           if (mounted) {
             setDebug(
-              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${
-                side ?? "null"
-              }`
+              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`
             );
           }
           return;
@@ -1437,9 +1293,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
         if (!pts.length) {
           setDebug(
-            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(
-              ","
-            )}`
+            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`
           );
         }
       } finally {
@@ -1533,7 +1387,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 ========================================================= */
 
 function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
-  const [rows, setRows] = useState<FpGameLog[]>([]);
+  const [rows, setRows] = useState<FantasyProsLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [debug, setDebug] = useState<string>("");
 
@@ -1541,97 +1395,37 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
     let mounted = true;
 
     async function load() {
+      const playerName = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
+      if (!playerName) {
+        setRows([]);
+        setDebug("No player name available for FantasyPros lookup.");
+        return;
+      }
+
       setLoading(true);
-      setRows([]);
       setDebug("");
+      setRows([]);
 
       try {
-        if (play.kind !== "prop") {
-          setDebug("FantasyPros logs are only shown for player props.");
-          return;
-        }
-
-        const player = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
-        if (!player) {
-          setDebug("Missing player_name for FantasyPros logs lookup.");
-          return;
-        }
-
-        // We deliberately select * to support unknown schemas.
-        const { data, error } = await supabase
-          .from(FP_GAMELOGS_TABLE)
-          .select("*")
-          .eq(FP_COL_PLAYER, player)
-          // Order by likely date col - we can't safely order without knowing which exists,
-          // so we'll sort client-side after parsing.
-          .limit(150);
+        const url = `/api/fantasypros-gamelog?player_name=${encodeURIComponent(playerName)}`;
+        const res = await fetch(url);
+        const json = (await res.json()) as FantasyProsApiResponse;
 
         if (!mounted) return;
 
-        if (error) {
-          setDebug(`FantasyPros logs error: ${error.message} (table: ${FP_GAMELOGS_TABLE})`);
+        if (!json.ok) {
           setRows([]);
+          setDebug(`FantasyPros logs error: ${json.error}${json.url ? ` (${json.url})` : ""}`);
           return;
         }
 
-        const parsed: FpGameLog[] = (data ?? []).map((r: any) => {
-          const dateRaw = pickFirst(r, FP_DATE_CANDIDATES);
-          const oppRaw = pickFirst(r, FP_OPP_CANDIDATES);
-          const minRaw = pickFirst(r, FP_MIN_CANDIDATES);
-
-          const ptsRaw = pickFirst(r, FP_PTS_CANDIDATES);
-          const rebRaw = pickFirst(r, FP_REB_CANDIDATES);
-          const astRaw = pickFirst(r, FP_AST_CANDIDATES);
-          const thRaw = pickFirst(r, FP_3PM_CANDIDATES);
-
-          const locRaw = pickFirst(r, FP_LOC_CANDIDATES);
-          const teamRaw = pickFirst(r, FP_TEAM_CANDIDATES);
-          const resRaw = pickFirst(r, FP_RESULT_CANDIDATES);
-
-          return {
-            dateIso: toIsoOrNull(dateRaw),
-            opp: oppRaw != null ? String(oppRaw) : null,
-            loc: normalizeLoc(locRaw),
-            team: teamRaw != null ? String(teamRaw) : null,
-            result: resRaw != null ? String(resRaw) : null,
-
-            min: toNumberOrNull(minRaw),
-            pts: toNumberOrNull(ptsRaw),
-            reb: toNumberOrNull(rebRaw),
-            ast: toNumberOrNull(astRaw),
-            threes: toNumberOrNull(thRaw),
-
-            raw: r,
-          };
-        });
-
-        // Sort by date desc
-        parsed.sort((a, b) => {
-          const ta = a.dateIso ? new Date(a.dateIso).getTime() : -Infinity;
-          const tb = b.dateIso ? new Date(b.dateIso).getTime() : -Infinity;
-          return tb - ta;
-        });
-
-        const trimmed = parsed.slice(0, FP_GAMELOGS_LIMIT);
-        setRows(trimmed);
-
-        if (!trimmed.length) {
-          setDebug(
-            `No FantasyPros logs found for "${player}". Table="${FP_GAMELOGS_TABLE}". Check that "${FP_COL_PLAYER}" matches.`
-          );
-        } else {
-          // Light schema sanity debug:
-          const sample = trimmed[0];
-          const missing =
-            sample.dateIso == null ||
-            (sample.pts == null && sample.reb == null && sample.ast == null && sample.threes == null);
-
-          if (missing) {
-            setDebug(
-              `Found rows, but key columns may not match expected names. Adjust FP_DATE_CANDIDATES / stat candidates at top.`
-            );
-          }
+        setRows(json.rows ?? []);
+        if (!(json.rows ?? []).length) {
+          setDebug(`FantasyPros logs: parsed 0 rows (${json.url})`);
         }
+      } catch (e: any) {
+        if (!mounted) return;
+        setDebug(`FantasyPros logs error: ${e?.message ?? String(e)}`);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -1643,60 +1437,48 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
     };
   }, [play.playKey]);
 
-  if (loading && !rows.length) {
-    return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
-        <div className="text-xs text-[#808080]">Loading FantasyPros game logs…</div>
-      </div>
-    );
-  }
-
   return (
     <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
       <div className="flex items-center justify-between gap-3 mb-2">
         <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
-        <div className="text-[10px] text-[#404040]">
-          Showing last {Math.min(rows.length, FP_GAMELOGS_LIMIT)} games
-        </div>
+        {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
       </div>
 
-      {!rows.length ? (
-        <div className="text-xs text-[#808080]">
-          No game logs available.
-          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
-        </div>
-      ) : (
+      {rows.length ? (
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <table className="w-full text-[11px]">
             <thead>
               <tr className="text-[#808080] border-b border-[#1f1f1f]">
-                <th className="text-left py-2 pr-3">Date</th>
-                <th className="text-left py-2 pr-3">Opp</th>
-                <th className="text-center py-2 pr-3">MIN</th>
-                <th className="text-center py-2 pr-3">PTS</th>
-                <th className="text-center py-2 pr-3">REB</th>
-                <th className="text-center py-2 pr-3">AST</th>
-                <th className="text-center py-2 pr-0">3PM</th>
+                <th className="text-left py-1 pr-2">Date</th>
+                <th className="text-left py-1 pr-2">Opp</th>
+                <th className="text-left py-1 pr-2">Score</th>
+                <th className="text-right py-1 pr-2">Min</th>
+                <th className="text-right py-1 pr-2">PTS</th>
+                <th className="text-right py-1 pr-2">REB</th>
+                <th className="text-right py-1 pr-2">AST</th>
+                <th className="text-right py-0">3PM</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#141414]">
-              {rows.map((r, idx) => (
+            <tbody className="divide-y divide-[#121212]">
+              {rows.slice(0, 10).map((r, idx) => (
                 <tr key={idx} className="text-[#d0d0d0]">
-                  <td className="py-2 pr-3 whitespace-nowrap">{fmtLogDate(r.dateIso)}</td>
-                  <td className="py-2 pr-3 whitespace-nowrap">
-                    <span className="text-white">{fmtOpp(r.opp, r.loc)}</span>
-                    {r.result ? <span className="text-[#606060]"> · {r.result}</span> : null}
-                  </td>
-                  <td className="py-2 pr-3 text-center tabular-nums">{r.min ?? "—"}</td>
-                  <td className="py-2 pr-3 text-center tabular-nums">{r.pts ?? "—"}</td>
-                  <td className="py-2 pr-3 text-center tabular-nums">{r.reb ?? "—"}</td>
-                  <td className="py-2 pr-3 text-center tabular-nums">{r.ast ?? "—"}</td>
-                  <td className="py-2 pr-0 text-center tabular-nums">{r.threes ?? "—"}</td>
+                  <td className="py-1 pr-2 whitespace-nowrap">{r.date}</td>
+                  <td className="py-1 pr-2 whitespace-nowrap">{r.opp}</td>
+                  <td className="py-1 pr-2 whitespace-nowrap text-[#b0b0b0]">{r.score}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{r.min}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums text-white">{r.pts}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{r.reb}</td>
+                  <td className="py-1 pr-2 text-right tabular-nums">{r.ast}</td>
+                  <td className="py-1 text-right tabular-nums">{r.threes}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-
+          <div className="mt-2 text-[10px] text-[#606060]">Showing last {Math.min(10, rows.length)} games</div>
+        </div>
+      ) : (
+        <div className="text-xs text-[#808080]">
+          No game logs available.
           {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
         </div>
       )}
@@ -1708,23 +1490,13 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
    UI atoms
 ========================================================= */
 
-function KindPill({
-  active,
-  onClick,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-}) {
+function KindPill({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (
     <button
       onClick={onClick}
       className={[
         "px-2.5 py-1 text-xs transition-colors",
-        active
-          ? "bg-[#1a1a1a] text-white"
-          : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
+        active ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
       ].join(" ")}
       type="button"
     >
@@ -1827,15 +1599,7 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
   );
 }
 
-function PropPickInline({
-  name,
-  position,
-  picture_url,
-}: {
-  name: string;
-  position: string | null;
-  picture_url: string | null;
-}) {
+function PropPickInline({ name, position, picture_url }: { name: string; position: string | null; picture_url: string | null }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
       <PropAvatar url={picture_url} name={name} />
