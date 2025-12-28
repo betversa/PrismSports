@@ -11,7 +11,7 @@
 //    - Adds a horizontal reference line for TODAY’S line (the prop line)
 //    - Bars colored by whether that game was OVER (green) / UNDER (red) today’s line
 //    - Hover does NOT shade the whole chart area; it only highlights the bar
-// ✅ Projection label uses μ symbol: "Our Projection: μ 23.4"
+// ✅ Projection label uses μ symbol: "Our Projection: 23.4"
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
 //
 // ✅ Adds Pinnacle odds to line movement (when present)
@@ -1086,7 +1086,7 @@ function PlayCard({
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel}
               </div>
               <div className="text-[11px] text-[#b0b0b0] mt-0.5">
-                Our Projection: <span className="text-white">μ {fmtMu(mu)}</span>
+                Our Projection: <span className="text-white">{fmtMu(mu)}</span>
               </div>
             </div>
           </div>
@@ -1199,7 +1199,7 @@ function PlayDetailsModal({
 
                 {play.kind === "prop" ? (
                   <div className="mt-1 text-[11px] text-[#b0b0b0]">
-                    Our Projection: <span className="text-white">μ {fmtMu(mu)}</span>
+                    Our Projection: <span className="text-white">{fmtMu(mu)}</span>
                   </div>
                 ) : null}
               </div>
@@ -1435,7 +1435,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             <div style={{ color: "#808080" }}>
               Our Projection:{" "}
               <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>
-                μ {fmtMu(play.propMeta?.mu ?? null)}
+                {fmtMu(play.propMeta?.mu ?? null)}
               </span>
             </div>
           ) : null}
