@@ -186,8 +186,8 @@ const SOFT_BOOKS = (process.env.EV_SOFT_BOOKS || "draftkings,fanduel,betmgm")
   .filter(Boolean);
 
 // Base blend weights (we will make these dynamic in tails)
-const QUANTUM_SHARP_WEIGHT_BASE = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.65");
-const QUANTUM_MC_WEIGHT_BASE = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.35");
+const QUANTUM_SHARP_WEIGHT_BASE = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.8");
+const QUANTUM_MC_WEIGHT_BASE = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.2");
 
 const KELLY_MULTIPLIER = Number(process.env.KELLY_MULTIPLIER ?? "0.25");
 
@@ -210,7 +210,7 @@ const DEVIG_DIFF_SWITCH = Number(process.env.DEVIG_DIFF_SWITCH ?? "0.10"); // 0.
  * Tail safety:
  * - if sharp says tail (p far from 0.5), increase sharp weight
  */
-const TAIL_SHARP_W_MIN = Number(process.env.TAIL_SHARP_W_MIN ?? "0.70");
+const TAIL_SHARP_W_MIN = Number(process.env.TAIL_SHARP_W_MIN ?? "0.80");
 const TAIL_SHARP_W_MAX = Number(process.env.TAIL_SHARP_W_MAX ?? "0.95");
 
 /**
