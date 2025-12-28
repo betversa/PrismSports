@@ -1,4 +1,4 @@
-// screens/Model/ModelScreen.tsx — FULL REWRITE (updates per your notes)
+// screens/Model/ModelScreen.tsx — FULL REWRITE (updates per your notes + FantasyPros Research under chart)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -20,6 +20,10 @@
 // ✅ Adds Pinnacle line to history graph (when present)
 // ✅ Colors each book line uniquely (DK/FD/MGM/PIN)
 // ✅ Tooltip shows DATE + TIME (CT)
+//
+// ✅ NEW: Research (FantasyPros Game Logs) under the chart (props only)
+//    - Client calls /api/fantasypros-gamelog?player=LeBron%20James
+//    - Shows game log table + L10 hit rate vs current line for that prop
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -285,7 +289,6 @@ function bookLogoSrc(bookmaker: string): string | null {
   if (b === "draftkings" || b === "dk") return "/books/dksquare.png";
   if (b === "fanduel" || b === "fd") return "/books/fdsquare.png";
   if (b === "betmgm" || b === "mgm") return "/books/mgmsquare.png";
-  // optional: add a Pinnacle asset if you have one
   if (b === "pinnacle" || b === "pin") return "/books/pinsquare.png";
   return null;
 }
@@ -319,28 +322,27 @@ function fmtLineGame(market: GameMarketKey, line: number | null) {
  * IMPORTANT FIX (your props issue):
  * player_props_history.market values are like:
  *   "player_points" / "player_rebounds" / "player_assists" / "player_threes"
- *
- * So we map your display markets into those keys for history lookup.
  */
-type PropHistoryMarketKey = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
+type PropHistoryMarketKey =
+  | "player_points"
+  | "player_rebounds"
+  | "player_assists"
+  | "player_threes";
 
 function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | null {
   const m = (marketRaw || "").trim().toLowerCase();
   if (!m) return null;
 
-  // if it's already the history key
   if (m === "player_points") return "player_points";
   if (m === "player_rebounds") return "player_rebounds";
   if (m === "player_assists") return "player_assists";
   if (m === "player_threes") return "player_threes";
 
-  // friendly labels
   if (m === "points" || m === "pts") return "player_points";
   if (m === "rebounds" || m === "reb") return "player_rebounds";
   if (m === "assists" || m === "ast") return "player_assists";
   if (m === "3pt" || m === "3pm" || m === "threes" || m === "3") return "player_threes";
 
-  // odds-api style
   if (m.includes("player_points")) return "player_points";
   if (m.includes("player_rebounds")) return "player_rebounds";
   if (m.includes("player_assists")) return "player_assists";
@@ -472,6 +474,197 @@ function collapseHistory(
 }
 
 /* =========================================================
+   NEW: FantasyPros Research (Game Log)
+========================================================= */
+
+type FPGameLogRow = {
+  date: string;
+  opp: string;
+  score: string;
+  min: number | null;
+  pts: number | null;
+  reb: number | null;
+  ast: number | null;
+  threes: number | null;
+};
+
+function statKeyFromMarketLabel(marketLabel: string): "pts" | "reb" | "ast" | "threes" {
+  const m = (marketLabel || "").toLowerCase();
+  if (m.includes("rebound")) return "reb";
+  if (m.includes("assist")) return "ast";
+  if (m.includes("3") || m.includes("three")) return "threes";
+  return "pts";
+}
+
+function getStatValue(r: FPGameLogRow, key: "pts" | "reb" | "ast" | "threes") {
+  if (key === "pts") return r.pts;
+  if (key === "reb") return r.reb;
+  if (key === "ast") return r.ast;
+  return r.threes;
+}
+
+function PropResearchSection({ play }: { play: AggregatedPlay }) {
+  const [rows, setRows] = useState<FPGameLogRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string>("");
+
+  const playerName = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
+  const statKey = statKeyFromMarketLabel(play.marketLabel);
+
+  const line =
+    play.lineLabel && play.lineLabel !== "—" ? Number(play.lineLabel) : null;
+
+  const side = (play.propMeta?.side ?? "").toLowerCase().trim(); // over/under
+
+  useEffect(() => {
+    let mounted = true;
+    async function load() {
+      setErr("");
+      setRows([]);
+      if (!playerName) return;
+
+      setLoading(true);
+      try {
+        const res = await fetch(
+          `/api/fantasypros-gamelog?player=${encodeURIComponent(playerName)}`
+        );
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || `HTTP ${res.status}`);
+        }
+        const json = await res.json();
+        const list = (json?.rows ?? []) as FPGameLogRow[];
+        if (mounted) setRows(list);
+      } catch (e: any) {
+        if (mounted) setErr(e?.message ? String(e.message) : "Failed to load game logs.");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, [play.playKey]);
+
+  const last10 = useMemo(() => rows.slice(0, 10), [rows]);
+
+  const hitRate = useMemo(() => {
+    if (!last10.length || line == null || (side !== "over" && side !== "under")) return null;
+
+    let hits = 0;
+    let counted = 0;
+
+    for (const r of last10) {
+      const v = getStatValue(r, statKey);
+      if (v == null) continue;
+      counted++;
+      if (side === "over" ? v > line : v < line) hits++;
+    }
+
+    if (!counted) return null;
+    return { hits, counted, pct: (hits / counted) * 100 };
+  }, [last10, line, side, statKey]);
+
+  return (
+    <div className="mt-4 bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[10px] text-[#606060]">Research</div>
+          <div className="text-white text-sm truncate">
+            {playerName || "—"} <span className="text-[#808080]">· Game Logs</span>
+          </div>
+
+          {hitRate ? (
+            <div className="mt-1 text-[11px] text-[#808080]">
+              L10 vs line{" "}
+              <span className="text-white">
+                {side.toUpperCase()} {line}
+              </span>{" "}
+              ({statKey.toUpperCase()}):{" "}
+              <span className="text-[#d4af37] font-semibold tabular-nums">
+                {hitRate.hits}/{hitRate.counted} ({hitRate.pct.toFixed(0)}%)
+              </span>
+            </div>
+          ) : (
+            <div className="mt-1 text-[11px] text-[#606060]">
+              {line == null ? "Line not available for hit-rate." : "Hit-rate unavailable."}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="mt-3 text-xs text-[#808080]">Loading game logs…</div>
+      ) : err ? (
+        <div className="mt-3 text-xs text-red-400 break-words">{err}</div>
+      ) : !rows.length ? (
+        <div className="mt-3 text-xs text-[#808080]">No game logs found.</div>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[#808080] border-b border-[#1f1f1f]">
+                <th className="text-left py-2 pr-3 whitespace-nowrap">Date</th>
+                <th className="text-left py-2 pr-3 whitespace-nowrap">Opp</th>
+                <th className="text-center py-2 px-2 whitespace-nowrap">MIN</th>
+                <th className="text-center py-2 px-2 whitespace-nowrap">PTS</th>
+                <th className="text-center py-2 px-2 whitespace-nowrap">REB</th>
+                <th className="text-center py-2 px-2 whitespace-nowrap">AST</th>
+                <th className="text-center py-2 pl-2 whitespace-nowrap">3PM</th>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-[#141414]">
+              {rows.slice(0, 12).map((r, idx) => {
+                const v = getStatValue(r, statKey);
+                const isHit =
+                  line != null && (side === "over" || side === "under") && v != null
+                    ? side === "over"
+                      ? v > line
+                      : v < line
+                    : null;
+
+                const hitCls = isHit === true ? "text-emerald-300 font-semibold" : isHit === false ? "text-red-300 font-semibold" : "";
+
+                return (
+                  <tr key={`${r.date}-${idx}`} className="text-[#d0d0d0]">
+                    <td className="py-2 pr-3 whitespace-nowrap text-white">{r.date}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap">{r.opp}</td>
+
+                    <td className="py-2 px-2 text-center tabular-nums">{r.min ?? "—"}</td>
+
+                    <td className={["py-2 px-2 text-center tabular-nums", statKey === "pts" ? hitCls : ""].join(" ")}>
+                      {r.pts ?? "—"}
+                    </td>
+
+                    <td className={["py-2 px-2 text-center tabular-nums", statKey === "reb" ? hitCls : ""].join(" ")}>
+                      {r.reb ?? "—"}
+                    </td>
+
+                    <td className={["py-2 px-2 text-center tabular-nums", statKey === "ast" ? hitCls : ""].join(" ")}>
+                      {r.ast ?? "—"}
+                    </td>
+
+                    <td className={["py-2 pl-2 text-center tabular-nums", statKey === "threes" ? hitCls : ""].join(" ")}>
+                      {r.threes ?? "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          <div className="mt-2 text-[10px] text-[#404040]">
+            Showing most recent games first.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================================================
    Screen
 ========================================================= */
 
@@ -511,7 +704,6 @@ export function ModelScreen() {
 
       const nowIso = new Date().toISOString();
 
-      // ev_plays (game lines) — still your soft books table (DK/FD/MGM)
       const evQ = supabase
         .from("ev_plays")
         .select(
@@ -523,7 +715,6 @@ export function ModelScreen() {
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      // player_prop_ev_latest (props) — still soft books table (DK/FD/MGM)
       const propsQ = supabase
         .from("player_prop_ev_latest")
         .select(
@@ -603,7 +794,7 @@ export function ModelScreen() {
     // GAME PLAYS
     for (const r of games) {
       const bk = normalizeBookKey(r.bookmaker);
-      if (bk === "other" || bk === "pinnacle") continue; // ev_plays does not include pin offers
+      if (bk === "other" || bk === "pinnacle") continue;
 
       const key = gamePlayKey(r);
       const existing = map.get(key);
@@ -729,9 +920,7 @@ export function ModelScreen() {
 
     if (bookFilter !== "all") {
       if (bookFilter === "pinnacle") {
-        // pinnacle is history-only; filter doesn't make sense for offers, so show all plays
-        // but user still might want it selectable; keep plays visible.
-        list = list;
+        list = list; // history only — keep visible
       } else {
         list = list.filter((p) => !!p.offers[bookFilter]);
       }
@@ -887,7 +1076,14 @@ export function ModelScreen() {
         ))}
       </div>
 
-      <PlayDetailsModal open={detailsOpen} play={selected} onClose={closeDetails} bankroll={bankroll} kellyFactor={kellyFactor} settingsReady={settingsReady} />
+      <PlayDetailsModal
+        open={detailsOpen}
+        play={selected}
+        onClose={closeDetails}
+        bankroll={bankroll}
+        kellyFactor={kellyFactor}
+        settingsReady={settingsReady}
+      />
     </div>
   );
 }
@@ -1088,16 +1284,14 @@ function PlayCard({
           </div>
         </div>
 
-        <div className="text-[10px] text-[#606060]">
-          Tap pick for chart
-        </div>
+        <div className="text-[10px] text-[#606060]">Tap pick for chart</div>
       </div>
     </div>
   );
 }
 
 /* =========================================================
-   Details Modal (LINE MOVEMENT ONLY)
+   Details Modal (LINE MOVEMENT ONLY + Research below chart)
 ========================================================= */
 
 function PlayDetailsModal({
@@ -1121,7 +1315,12 @@ function PlayDetailsModal({
 
   return (
     <div className="fixed inset-0 z-[100]">
-      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/70"
+        aria-label="Close details modal"
+      />
 
       <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-0 md:p-6">
         <div className="relative w-full md:max-w-3xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden">
@@ -1164,6 +1363,9 @@ function PlayDetailsModal({
 
           <div className="p-4">
             <OddsHistoryMiniChart play={play} />
+
+            {/* ✅ NEW: Research block under the chart (props only) */}
+            {play.kind === "prop" ? <PropResearchSection play={play} /> : null}
           </div>
 
           <div className="p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
@@ -1202,7 +1404,6 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         if (play.kind === "prop") {
           const player_name = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
 
-          // ✅ FIX: map "Points/Rebounds/Assists/3PT" -> "player_points/player_rebounds/player_assists/player_threes"
           const marketKey =
             historyPropMarketKey(play.propMeta?.market ?? null) ??
             historyPropMarketKey(play.marketLabel ?? null);
@@ -1221,7 +1422,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           const { data, error } = await supabase
             .from(PROPS_HISTORY_TABLE)
-            .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
+            .select(
+              `${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`
+            )
             .eq(PLAYER_COL_PROPS, player_name)
             .eq(MARKET_COL_PROPS, marketKey)
             .eq(SIDE_COL_PROPS, sideCanon)
@@ -1240,7 +1443,6 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           setSeries(pts);
 
           if (!pts.length) {
-            // show super explicit debug (your exact situation)
             setDebug(
               `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`
             );
@@ -1270,7 +1472,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           .eq("event_id", event_id)
           .eq("market", market)
           .eq("side", side)
-          .in(BOOK_COL_GAME, HISTORY_BOOKS) // ✅ includes pinnacle
+          .in(BOOK_COL_GAME, HISTORY_BOOKS)
           .order(TS_COL_GAME, { ascending: true });
 
         if (!mounted) return;
@@ -1344,7 +1546,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             />
             <Tooltip
               formatter={(v: any) => american(Number(v))}
-              labelFormatter={(l) => fmtDateTimeCT(String(l))} // ✅ date + time
+              labelFormatter={(l) => fmtDateTimeCT(String(l))}
               contentStyle={{
                 background: "#0b0b0b",
                 border: "1px solid #2a2a2a",
@@ -1355,51 +1557,19 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             <Legend />
 
             {hasAny("draftkings") ? (
-              <Line
-                type="monotone"
-                dataKey="draftkings"
-                name="DK"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.draftkings}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="draftkings" name="DK" dot={false} strokeWidth={2} stroke={BOOK_COLOR.draftkings} isAnimationActive={false} />
             ) : null}
 
             {hasAny("fanduel") ? (
-              <Line
-                type="monotone"
-                dataKey="fanduel"
-                name="FD"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.fanduel}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="fanduel" name="FD" dot={false} strokeWidth={2} stroke={BOOK_COLOR.fanduel} isAnimationActive={false} />
             ) : null}
 
             {hasAny("betmgm") ? (
-              <Line
-                type="monotone"
-                dataKey="betmgm"
-                name="MGM"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.betmgm}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="betmgm" name="MGM" dot={false} strokeWidth={2} stroke={BOOK_COLOR.betmgm} isAnimationActive={false} />
             ) : null}
 
             {hasAny("pinnacle") ? (
-              <Line
-                type="monotone"
-                dataKey="pinnacle"
-                name="PIN"
-                dot={false}
-                strokeWidth={2}
-                stroke={BOOK_COLOR.pinnacle}
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="pinnacle" name="PIN" dot={false} strokeWidth={2} stroke={BOOK_COLOR.pinnacle} isAnimationActive={false} />
             ) : null}
           </LineChart>
         </ResponsiveContainer>
