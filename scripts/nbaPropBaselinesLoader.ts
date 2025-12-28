@@ -32,8 +32,8 @@ const NBA_AVG_TOTAL = 228;
 const NBA_AVG_TEAM_TOTAL = NBA_AVG_TOTAL / 2;
 
 // quantum blend (if sharp exists)
-const QUANTUM_BLEND_MODEL = 0.25;
-const QUANTUM_BLEND_SHARP = 0.75;
+const QUANTUM_BLEND_MODEL = 0.2;
+const QUANTUM_BLEND_SHARP = 0.8;
 
 // books
 const SOFT_BOOKS = new Set(["draftkings", "fanduel", "betmgm"]);
