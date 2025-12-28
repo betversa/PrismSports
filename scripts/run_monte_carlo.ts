@@ -1,22 +1,16 @@
 /**
- * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v5: Baseline-Safe + Pace-Aware)
- * -----------------------------------------------------------------------------
+ * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6: Adaptive Devig + Baseline-Safe + Pace-Aware)
+ * ---------------------------------------------------------------------------------------------
  * Snapshot tables:
  *   ✅ monte_carlo_results: one row per (sport_key, event_id), overwritten each run
  *   ✅ monte_carlo_runs: history (one row per run)
  *   ✅ ev_plays: cleared per sport each run, then rebuilt
  *
- * FIXES in v5 (the issues you described):
- *   ✅ Removes the hard-coded "100 baseline" assumption that explodes NBA totals
- *      - Uses a baseline-free blend that works for BOTH:
- *          * NBA (raw OffRtg/DefRtg like 112/113)
- *          * NCAAB (100-centered opponent-adjusted ratings)
- *
- *   ✅ Pace is treated as POSSESSIONS PER GAME (per team), not "per 100"
- *      - We still convert per-100 ratings to per-game via (paceGame / 100)
- *
- *   ✅ Sport-specific pace sanity clamps
- *      - Prevents scrape glitches from turning into 275+ totals
+ * v6 UPDATE (your request):
+ *   ✅ Adaptive devig for SHARP no-vig probabilities
+ *      - Near 50/50 markets → Equal-Margin devig (stable around pick'em)
+ *      - Lopsided markets → MPTO devig (more realistic for heavy fav/dog)
+ *      - Smooth blend between the two based on implied-prob skew
  */
 
 import "dotenv/config";
@@ -152,6 +146,7 @@ type PossRow = {
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
   process.env.SUPABASE_KEY!;
@@ -189,8 +184,8 @@ const SOFT_BOOKS = (process.env.EV_SOFT_BOOKS || "draftkings,fanduel,betmgm")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-const QUANTUM_SHARP_WEIGHT = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.65");
-const QUANTUM_MC_WEIGHT = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.35");
+const QUANTUM_SHARP_WEIGHT = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.75");
+const QUANTUM_MC_WEIGHT = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.25");
 const KELLY_MULTIPLIER = Number(process.env.KELLY_MULTIPLIER ?? "0.25");
 
 const LINE_TOL = Number(process.env.LINE_TOL ?? "1e-6");
@@ -210,6 +205,16 @@ const PACE_W_SPLIT = Number(process.env.PACE_W_SPLIT ?? "0.10");
  */
 const PTS_BLEND_WEIGHT_OFF = Number(process.env.PTS_BLEND_WEIGHT_OFF ?? "0.50"); // 0..1
 const PTS_BLEND_WEIGHT_DEF = 1 - PTS_BLEND_WEIGHT_OFF;
+
+/**
+ * v6: Adaptive devig thresholds:
+ * - skew = |p1 - p2| (implied prob skew)
+ * - near pick'em → Equal Margin
+ * - lopsided → MPTO
+ * - smooth blend between the two across [DEVIG_SKEW_LO, DEVIG_SKEW_HI]
+ */
+const DEVIG_SKEW_LO = Number(process.env.DEVIG_SKEW_LO ?? "0.06");
+const DEVIG_SKEW_HI = Number(process.env.DEVIG_SKEW_HI ?? "0.18");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
@@ -362,6 +367,12 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE
             ? "negative_means_home_better"
             : "positive_means_home_better",
+
+          devig: {
+            method: "adaptive(equal-margin↔mpto)",
+            skew_lo: DEVIG_SKEW_LO,
+            skew_hi: DEVIG_SKEW_HI,
+          },
         }
       : null;
 
@@ -468,6 +479,12 @@ function buildRunConfig(sportKey: string) {
     min_ev_pct: MIN_EV_PCT,
     line_tol: LINE_TOL,
     write_trace: WRITE_TRACE,
+
+    devig: {
+      mode: "adaptive(equal-margin↔mpto)",
+      skew_lo: DEVIG_SKEW_LO,
+      skew_hi: DEVIG_SKEW_HI,
+    },
   };
 }
 
@@ -528,35 +545,16 @@ function averageNonNull(arr: Array<number | null | undefined>): number | null {
    MODEL (PACE-AWARE, BASELINE-FREE)
 ========================================================= */
 
-/**
- * Baseline-free per-100 point expectation:
- *
- * Instead of assuming a universal "100" baseline (which breaks NBA raw OffRtg/DefRtg),
- * we blend offense and opponent defense directly into a per-100 expected scoring rate.
- *
- *   home_pp100 = w*home_off100 + (1-w)*away_def100
- *   away_pp100 = w*away_off100 + (1-w)*home_def100
- *
- * Then convert per-100 -> per-game:
- *   pts = pp100 * (paceGame / 100)
- *
- * This behaves well for BOTH:
- * - NBA (OffRtg/DefRtg are already on the correct scoring scale)
- * - NCAAB (100-centered adj ratings: offense >100 and defense <100 still translate correctly)
- */
 function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
   const homeOff100 = num(home.engine_adj_off, 0);
   const homeDef100 = num(home.engine_adj_def, 0);
   const awayOff100 = num(away.engine_adj_off, 0);
   const awayDef100 = num(away.engine_adj_def, 0);
 
-  // Defensive sanity fallback (if any row is missing/0 due to bad upstream data)
-  // - For NCAAB adj ratings, ~100 is typical center.
-  // - For NBA raw ratings, ~112 is typical.
   const defFallback = sportKey === "basketball_nba" ? 112 : 100;
 
-  const homeOff = homeOff100 > 0 ? homeOff100 : (sportKey === "basketball_nba" ? 112 : 100);
-  const awayOff = awayOff100 > 0 ? awayOff100 : (sportKey === "basketball_nba" ? 112 : 100);
+  const homeOff = homeOff100 > 0 ? homeOff100 : sportKey === "basketball_nba" ? 112 : 100;
+  const awayOff = awayOff100 > 0 ? awayOff100 : sportKey === "basketball_nba" ? 112 : 100;
   const homeDef = homeDef100 > 0 ? homeDef100 : defFallback;
   const awayDef = awayDef100 > 0 ? awayDef100 : defFallback;
 
@@ -894,7 +892,7 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
   const m = new Map<string, OddsSnapshotRow>();
   for (const r of rows) {
     const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
-    if (m.has(k)) continue;
+    if (m.has(k)) continue; // rows already sorted desc by ts => first seen is latest
     m.set(k, r);
   }
   return m;
@@ -930,7 +928,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     if (!Number.isFinite(lineNum)) continue;
 
     const k = `${eid}|${market}|${side}|${book}`;
-    if (latestPerBook.has(k)) continue;
+    if (latestPerBook.has(k)) continue; // first seen is latest (desc ts)
     latestPerBook.set(k, lineNum);
   }
 
@@ -945,6 +943,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
 
   for (const [k2, arr] of buckets.entries()) out.set(k2, mean(arr));
 
+  // simple symmetry fixes if only one side exists
   for (const id of eventIds) {
     const homeKey = `${id}|spreads|home`;
     const awayKey = `${id}|spreads|away`;
@@ -1017,6 +1016,12 @@ function oppositeSide(market: MarketKey, side: SideKey): SideKey | null {
   return null;
 }
 
+/**
+ * v6: Sharp no-vig probability now uses ADAPTIVE devig:
+ *  - Equal-Margin near 50/50
+ *  - MPTO for lopsided markets
+ *  - Smooth blend based on skew = |p1 - p2|
+ */
 function getSharpNoVigProb(
   latest: Map<string, OddsSnapshotRow>,
   eventId: string,
@@ -1051,8 +1056,11 @@ function getSharpNoVigProb(
 
         if (!nearlyEqual(aLine, expA, LINE_TOL)) continue;
         if (!nearlyEqual(bLine, expB, LINE_TOL)) continue;
+
+        // spreads should be symmetric
         if (!nearlyEqual(aLine + bLine, 0, 1e-4)) continue;
       } else {
+        // totals must match same number
         if (!nearlyEqual(aLine, refLine, LINE_TOL)) continue;
         if (!nearlyEqual(bLine, refLine, LINE_TOL)) continue;
       }
@@ -1060,7 +1068,8 @@ function getSharpNoVigProb(
 
     const p1 = americanOddsToProb(ao);
     const p2 = americanOddsToProb(bo);
-    const [nv1] = noVigPair(p1, p2);
+
+    const [nv1] = noVigAdaptive(p1, p2);
     probs.push(nv1);
   }
 
@@ -1095,6 +1104,106 @@ function confidenceTier(score: number): string {
 }
 
 /* =========================================================
+   DEVIG HELPERS (v6)
+========================================================= */
+
+/**
+ * Equal-Margin devig (best when close to 50/50).
+ * Removes half the overround from each side.
+ */
+function noVigEqualMargin(p1: number, p2: number): [number, number] {
+  const a = clamp01(p1);
+  const b = clamp01(p2);
+  const s = a + b;
+  if (s <= 0) return [a, b];
+
+  const m = (s - 1) / 2;
+  let nv1 = a - m;
+  let nv2 = b - m;
+
+  nv1 = clamp01(nv1);
+  nv2 = clamp01(nv2);
+
+  const ss = nv1 + nv2;
+  if (ss > 0) return [nv1 / ss, nv2 / ss];
+
+  // fallback proportional
+  return [a / s, b / s];
+}
+
+/**
+ * MPTO devig (power transform):
+ * Find k such that a^k + b^k = 1, then normalize.
+ */
+function noVigMPTO(p1: number, p2: number): [number, number] {
+  const a = clamp01(p1);
+  const b = clamp01(p2);
+
+  const s = a + b;
+  if (s <= 0) return [a, b];
+
+  if (Math.abs(s - 1) < 1e-12) return [a / s, b / s];
+
+  // Binary search k in a wide safe range.
+  let lo = 0.01;
+  let hi = 50.0;
+
+  const f = (k: number) => Math.pow(a, k) + Math.pow(b, k) - 1;
+
+  // Must bracket a root for typical overround (s>1).
+  // If not bracketed (rare edge cases), fallback proportional.
+  if (f(lo) < 0) return [a / s, b / s];
+  if (f(hi) > 0) return [a / s, b / s];
+
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const val = f(mid);
+    if (val > 0) lo = mid;
+    else hi = mid;
+  }
+
+  const k = (lo + hi) / 2;
+  let nv1 = Math.pow(a, k);
+  let nv2 = Math.pow(b, k);
+
+  const ss = nv1 + nv2;
+  if (ss > 0) {
+    nv1 /= ss;
+    nv2 /= ss;
+  }
+  return [nv1, nv2];
+}
+
+/**
+ * Adaptive devig:
+ * - skew = |a - b|
+ * - w=0 => equal-margin
+ * - w=1 => mpto
+ * - smooth blend across [DEVIG_SKEW_LO, DEVIG_SKEW_HI]
+ */
+function noVigAdaptive(p1: number, p2: number): [number, number] {
+  const a = clamp01(p1);
+  const b = clamp01(p2);
+
+  const skew = Math.abs(a - b);
+  const denom = Math.max(1e-9, DEVIG_SKEW_HI - DEVIG_SKEW_LO);
+  const w = clamp01((skew - DEVIG_SKEW_LO) / denom);
+
+  const [em1, em2] = noVigEqualMargin(a, b);
+  const [mp1, mp2] = noVigMPTO(a, b);
+
+  let nv1 = (1 - w) * em1 + w * mp1;
+  let nv2 = (1 - w) * em2 + w * mp2;
+
+  const s = nv1 + nv2;
+  if (s > 0) {
+    nv1 /= s;
+    nv2 /= s;
+  }
+  return [nv1, nv2];
+}
+
+/* =========================================================
    ODDS + EV MATH
 ========================================================= */
 
@@ -1106,12 +1215,6 @@ function probToAmericanOdds(p: number): number {
   const pp = clamp01(p);
   if (pp <= 0 || pp >= 1) return 0;
   return pp >= 0.5 ? Math.round((-100 * pp) / (1 - pp)) : Math.round((100 * (1 - pp)) / pp);
-}
-
-function noVigPair(p1: number, p2: number): [number, number] {
-  const s = p1 + p2;
-  if (s <= 0) return [p1, p2];
-  return [p1 / s, p2 / s];
 }
 
 function evPct(trueProb: number, bookOdds: number): number {
