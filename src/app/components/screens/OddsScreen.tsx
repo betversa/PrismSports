@@ -12,7 +12,7 @@ import {
   LineChart,
   Line,
   XAxis,
-  YAxis,
+  YAxis, 
   Tooltip,
   CartesianGrid,
   Legend,
