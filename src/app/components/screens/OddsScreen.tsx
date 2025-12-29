@@ -1620,7 +1620,7 @@ function GameDetailsModal({
 
       setTabsBarH(Math.ceil(tabsH));
       // +8px safety buffer prevents “peek through” during momentum scroll
-      setPropsHeaderTop(Math.ceil(tabsH + propH + 8));
+      setPropsHeaderTop(Math.ceil(tabsH + propH));
     };
 
     measure();
