@@ -2173,88 +2173,108 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   <div className="text-white font-extrabold text-[13px]">Model Probabilities</div>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <div className="text-white font-extrabold text-[12px]">Spread</div>
-
-                  <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
-                    <span>
-                      Line (Home):{" "}
-                      <span className="text-white font-extrabold tabular-nums">
-                        {predRow.spread_line_home ?? "—"}
-                      </span>
-                    </span>
-
-                    {/* white vertical divider */}
-                    <span className="mx-3 h-4 w-px bg-white/80" />
-
-                    <span>
-                      Margin (H):{" "}
-                      <span className="text-white font-extrabold tabular-nums">
-                        {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-
-
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeTeam}</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.home_cover_prob))}</div>
-                      </div>
-                      <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.cover_push_prob))}</div>
-                      </div>
-                      <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayTeam}</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.away_cover_prob))}</div>
-                      </div>
-                    </div>
-                  </div>
-
+                {/* SPREAD */}
+                <div className="mt-3">
                   <div className="flex items-center justify-between">
-                  <div className="text-white font-extrabold text-[12px]">Total</div>
+                    <div className="text-white font-extrabold text-[12px]">Spread</div>
 
-                  <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
-                    <span>
-                      Line:{" "}
-                      <span className="text-white font-extrabold tabular-nums">
-                        {predRow.total_line ?? "—"}
+                    <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
+                      <span>
+                        Line (Home):{" "}
+                        <span className="text-white font-extrabold tabular-nums">
+                          {predRow.spread_line_home ?? "—"}
+                        </span>
                       </span>
-                    </span>
 
-                    {/* white vertical divider */}
-                    <span className="mx-3 h-4 w-px bg-white/80" />
+                      {/* white vertical divider */}
+                      <span className="mx-3 h-4 w-px bg-white/80" />
 
-                    <span>
-                      Proj Total:{" "}
-                      <span className="text-white font-extrabold tabular-nums">
-                        {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                      <span>
+                        Margin (H):{" "}
+                        <span className="text-white font-extrabold tabular-nums">
+                          {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                        </span>
                       </span>
-                    </span>
+                    </div>
                   </div>
-                </div>
 
-
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Over</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.over_prob))}</div>
-                      </div>
-                      <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.total_push_prob))}</div>
-                      </div>
-                      <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeTeam}</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.home_cover_prob))}
                       </div>
                     </div>
 
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.cover_push_prob))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayTeam}</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.away_cover_prob))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION DIVIDER */}
+                <div className="my-4 h-px bg-white/10" />
+
+                {/* TOTAL */}
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="text-white font-extrabold text-[12px]">Total</div>
+
+                      <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
+                        <span>
+                        Line:{" "}
+                        <span className="text-white font-extrabold tabular-nums">
+                          {predRow.total_line ?? "—"}
+                        </span>
+                      </span>
+
+                      {/* white vertical divider */}
+                      <span className="mx-3 h-4 w-px bg-white/80" />
+
+                      <span>
+                        Proj Total:{" "}
+                        <span className="text-white font-extrabold tabular-nums">
+                          {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Over</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.over_prob))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.total_push_prob))}
+                      </div>
+                  </div>
+
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.under_prob))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
+
 
               {/* Last 5 */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
