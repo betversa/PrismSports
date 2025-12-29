@@ -104,7 +104,6 @@ type PlayerPropEvLatestRow = {
   book: string; // "draftkings"/"fanduel"/"betmgm"
   odds: number;
 
-  // model outputs
   mu?: number | null; // ✅ projection
   p_quantum: number | null;
   quantum_fair_odds: number;
@@ -127,23 +126,19 @@ type AggregatedPlay = {
   kind: "game" | "prop";
   playKey: string;
 
-  // identity
   sport_key?: string | null;
   event_id: string;
   commence_time: string | null;
   matchup: string | null;
 
-  // display
   marketLabel: string;
   sideLabel: string;
   pickLabel: string;
   lineLabel: string;
 
-  // fair odds
   quantum_odds: number;
   quantum_prob?: number | null;
 
-  // meta for history keys
   gameMeta?: { market: GameMarketKey; side: GameSideKey };
   propMeta?: {
     player_name: string | null;
@@ -151,8 +146,8 @@ type AggregatedPlay = {
     side: string | null;
     picture_url: string | null;
     position: string | null;
-    mu: number | null; // ✅ projection shown in modal
-    line: number | null; // ✅ today line shown on bar chart
+    mu: number | null;
+    line: number | null;
   };
 
   offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>;
@@ -210,10 +205,10 @@ const SIDE_COL_PROPS = "side";
 const HISTORY_BOOKS: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
 
 const BOOK_COLOR: Record<AnyBook, string> = {
-  draftkings: "#22c55e", // green
-  fanduel: "#3b82f6", // blue
-  betmgm: "#d4af37", // gold
-  pinnacle: "#a855f7", // purple
+  draftkings: "#22c55e",
+  fanduel: "#3b82f6",
+  betmgm: "#d4af37",
+  pinnacle: "#a855f7",
 };
 
 const OVER_GREEN = "#22c55e";
@@ -524,7 +519,7 @@ const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
   { key: "pinnacle", label: "Pinnacle (history only)" },
 ];
 
-export function ModelScreen() {
+export default function ModelScreen() {
   const [bookFilter, setBookFilter] = useState<SoftBookKey>("all");
   const [kindFilter, setKindFilter] = useState<PlayKind>("all");
 
@@ -766,14 +761,17 @@ export function ModelScreen() {
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
       base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
-      // preserve mu/line if missing
       if (base.propMeta) {
         const nextMu = (r.mu ?? null) as number | null;
         if (nextMu != null && Number.isFinite(nextMu) && (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu)))
           base.propMeta.mu = nextMu;
 
         const nextLine = (r.line ?? null) as number | null;
-        if (nextLine != null && Number.isFinite(nextLine) && (base.propMeta.line == null || !Number.isFinite(base.propMeta.line)))
+        if (
+          nextLine != null &&
+          Number.isFinite(nextLine) &&
+          (base.propMeta.line == null || !Number.isFinite(base.propMeta.line))
+        )
           base.propMeta.line = nextLine;
       }
 
@@ -793,12 +791,7 @@ export function ModelScreen() {
     if (kindFilter !== "all") list = list.filter((p) => p.kind === kindFilter);
 
     if (bookFilter !== "all") {
-      if (bookFilter === "pinnacle") {
-        // history only filter: don't remove rows; just clarifies the dropdown option
-        list = list;
-      } else {
-        list = list.filter((p) => !!p.offers[bookFilter]);
-      }
+      if (bookFilter !== "pinnacle") list = list.filter((p) => !!p.offers[bookFilter]);
     }
 
     return list;
@@ -1014,7 +1007,6 @@ function PlayRow({
             </div>
           </div>
 
-          {/* Tiny best-book hint */}
           {bestOffer ? (
             <div
               className="shrink-0 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1"
@@ -1034,12 +1026,7 @@ function PlayRow({
 
       {/* PICK (clickable) */}
       <td className="p-3 text-left">
-        <button
-          type="button"
-          onClick={onOpenDetails}
-          className="w-full text-left hover:opacity-90"
-          title="Open line movement"
-        >
+        <button type="button" onClick={onOpenDetails} className="w-full text-left hover:opacity-90" title="Open line movement">
           {play.kind === "prop" ? (
             <PropPickInline
               name={play.pickLabel}
@@ -1082,7 +1069,11 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-center">
-        <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
+        <div
+          className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(
+            " "
+          )}
+        >
           {score}
         </div>
       </td>
@@ -1135,26 +1126,23 @@ function PlayCard({
 
         <div className="shrink-0 text-right">
           <div className="inline-flex items-center gap-2">
-            <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
+            <div
+              className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(
+                " "
+              )}
+            >
               {score}
             </div>
             <div className="text-right">
               <div className="text-[10px] text-[#606060]">Bet</div>
-              <div className="text-[#d4af37] font-semibold tabular-nums">
-                {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
-              </div>
+              <div className="text-[#d4af37] font-semibold tabular-nums">{settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}</div>
             </div>
           </div>
         </div>
       </div>
 
       {/* PICK (clickable) */}
-      <button
-        type="button"
-        onClick={onOpenDetails}
-        className="mt-3 w-full text-left hover:opacity-90"
-        title="Open line movement"
-      >
+      <button type="button" onClick={onOpenDetails} className="mt-3 w-full text-left hover:opacity-90" title="Open line movement">
         {play.kind === "prop" ? (
           <div className="flex items-center gap-3">
             <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
@@ -1278,7 +1266,6 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            {/* Legend hint */}
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
               <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
               <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
@@ -1331,15 +1318,16 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
       try {
         if (play.kind === "prop") {
           const player_name = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
-          const marketKey =
-            historyPropMarketKey(play.propMeta?.market ?? null) ?? historyPropMarketKey(play.marketLabel ?? null);
+          const marketKey = historyPropMarketKey(play.propMeta?.market ?? null);
 
           const sideRaw = (play.propMeta?.side ?? "").trim().toLowerCase();
           const sideCanon = sideRaw === "o" ? "over" : sideRaw === "u" ? "under" : sideRaw;
 
           if (!player_name || !marketKey || !["over", "under"].includes(sideCanon)) {
             if (mounted) {
-              setDebug(`props keys missing: player="${player_name || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`);
+              setDebug(
+                `props keys missing: player="${player_name || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`
+              );
             }
             return;
           }
@@ -1376,7 +1364,8 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         const side = play.gameMeta?.side ?? null;
 
         if (!sport_key || !event_id || !market || !side) {
-          if (mounted) setDebug(`game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`);
+          if (mounted)
+            setDebug(`game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`);
           return;
         }
 
@@ -1532,55 +1521,19 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             />
 
             {hasAny("draftkings") ? (
-              <Line
-                type="monotone"
-                dataKey="draftkings"
-                name="DK"
-                stroke={BOOK_COLOR.draftkings}
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             ) : null}
 
             {hasAny("fanduel") ? (
-              <Line
-                type="monotone"
-                dataKey="fanduel"
-                name="FD"
-                stroke={BOOK_COLOR.fanduel}
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             ) : null}
 
             {hasAny("betmgm") ? (
-              <Line
-                type="monotone"
-                dataKey="betmgm"
-                name="MGM"
-                stroke={BOOK_COLOR.betmgm}
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             ) : null}
 
             {hasAny("pinnacle") ? (
-              <Line
-                type="monotone"
-                dataKey="pinnacle"
-                name="PIN"
-                stroke={BOOK_COLOR.pinnacle}
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-                isAnimationActive={false}
-              />
+              <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             ) : null}
           </LineChart>
         </ResponsiveContainer>
@@ -1656,7 +1609,6 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const statLabel = statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
 
   const chartData = useMemo(() => {
-    // show most recent 10 but plot oldest->newest left-to-right
     const last = (rows ?? []).slice(0, 10).slice().reverse();
     return last.map((r) => ({
       date: r.date,
@@ -1719,9 +1671,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
                   <span style={{ color: "#fff" }}>{line}</span>
                 </div>
                 {overUnder ? (
-                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>
-                    {overUnder}
-                  </div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>{overUnder}</div>
                 ) : null}
               </>
             ) : null}
@@ -1751,19 +1701,11 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} barCategoryGap={12}>
                 <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 10, fill: "#808080" }}
-                  axisLine={{ stroke: "#2a2a2a" }}
-                  tickLine={{ stroke: "#2a2a2a" }}
-                  minTickGap={12}
-                />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
                 <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
 
-                {/* ✅ Tooltip cursor transparent so it doesn't shade the whole plot */}
                 <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
 
-                {/* ✅ Today's line reference */}
                 {todayLine != null && Number.isFinite(todayLine) ? (
                   <ReferenceLine
                     y={todayLine}
@@ -1802,7 +1744,13 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
             </thead>
             <tbody className="divide-y divide-[#121212]">
               {rows.slice(0, 10).map((r, idx) => {
-                const d = { min: safeNum(r.min, 0), pts: safeNum(r.pts, 0), reb: safeNum(r.reb, 0), ast: safeNum(r.ast, 0), threes: safeNum(r.threes, 0) };
+                const d = {
+                  min: safeNum(r.min, 0),
+                  pts: safeNum(r.pts, 0),
+                  reb: safeNum(r.reb, 0),
+                  ast: safeNum(r.ast, 0),
+                  threes: safeNum(r.threes, 0),
+                };
                 const v = safeNum((d as any)[statKey], NaN);
                 const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
                 const isOver = line != null && Number.isFinite(v) ? v >= line : null;
@@ -1813,7 +1761,10 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
                     <td className="py-1 pr-2 whitespace-nowrap">{r.opp}</td>
                     <td className="py-1 pr-2 whitespace-nowrap text-[#b0b0b0]">{r.score}</td>
                     <td className="py-1 pr-2 text-right tabular-nums">{d.min}</td>
-                    <td className="py-1 text-right tabular-nums" style={{ color: isOver == null ? "#d0d0d0" : isOver ? OVER_GREEN : UNDER_RED }}>
+                    <td
+                      className="py-1 text-right tabular-nums"
+                      style={{ color: isOver == null ? "#d0d0d0" : isOver ? OVER_GREEN : UNDER_RED }}
+                    >
                       {Number.isFinite(v) ? v : "—"}
                     </td>
                   </tr>
@@ -1870,33 +1821,23 @@ function LegendDot({ label, color }: { label: string; color: string }) {
   );
 }
 
-function StatChip({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
+/**
+ * IMPORTANT:
+ * The build error you hit was from accidentally putting the closing `]` INSIDE the ternary string:
+ *   : "bg... border..."]   <-- ❌ bracket inside string
+ * This must be:
+ *   : "bg... border..."    <-- ✅ then close array after
+ */
+function StatChip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div
       className={[
         "rounded-lg border px-2 py-2 text-center",
-        accent
-          ? "bg-[#d4af37]/10 border-[#d4af37]/25"
-          : "bg-[#0a0a0a] border-[#1f1f1f"] // <-- ensure this string closes, then only ONE ]
+        accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f]",
       ].join(" ")}
     >
       <div className="text-[10px] text-[#606060]">{label}</div>
-      <div
-        className={[
-          "mt-0.5 font-semibold tabular-nums",
-          accent ? "text-[#d4af37]" : "text-white",
-        ].join(" ")}
-      >
-        {value}
-      </div>
+      <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
     </div>
   );
 }
@@ -1926,9 +1867,7 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
-      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
-        {pct(offer.ev_pct, 1)}
-      </div>
+      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
     </div>
   );
 }
@@ -1958,9 +1897,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
-        {pct(offer.ev_pct, 1)}
-      </div>
+      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
     </div>
   );
 }
