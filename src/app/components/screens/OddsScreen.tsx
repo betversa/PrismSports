@@ -1,13 +1,12 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Predictions spacing fixed + Last 5 Games added)
+// screens/OddsScreen.tsx — FULL REWRITE (Predictions tab: Win% meter + true last-5 + spacing polish)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ FIX: Predictions tab spacing + layout tightened (less dead space / better grid)
-// ✅ NEW: Last 5 Games panel in Predictions (NBA: basketballref_games_nba, NCAAB: kenpom_games)
+// ✅ Fix: Predictions win% = horizontal split meter w/ 50% tick (replaces circle)
+// ✅ Fix: Last 5 games are truly the MOST RECENT completed games (DESC by date, score != null, date <= now)
+// ✅ Adds last-5 panels into the “dead space” on Predictions tab (Away + Home columns)
 // ✅ Keeps: single Game Details button, single Market buttons ONLY in Line Movement tab
 // ✅ Keeps: Player Props tab = one row per player, books in same row
-// ✅ Keeps: line movement tooltip shows DATE + TIME (CT) + line+odds for spread/total
-//
-// NOTE: kenpom_games column names may be either literal (e.g. "Team1 (Away)") or snake_case.
-//       This script attempts literal first; if you use snake_case, adjust in fetchLast5Games().
+// ✅ Keeps: modal background gradient + subtle noise
+// ✅ Tooltip on charts shows DATE + TIME (CT) and line+odds for spread/total
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -241,29 +240,14 @@ function pickTs(row: any): string | null {
 }
 
 function pickOdds(row: any): number | null {
-  const raw = pickAny(row, [
-    "odds",
-    "price",
-    "american_odds",
-    "odds_american",
-    "book_odds",
-  ]);
+  const raw = pickAny(row, ["odds", "price", "american_odds", "odds_american", "book_odds"]);
   if (raw == null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
 function pickLine(row: any): number | null {
-  const raw = pickAny(row, [
-    "line",
-    "points",
-    "point",
-    "total",
-    "spread_line",
-    "total_line",
-    "prop_line",
-    "value",
-  ]);
+  const raw = pickAny(row, ["line", "points", "point", "total", "spread_line", "total_line", "prop_line", "value"]);
   if (raw == null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
@@ -342,31 +326,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: {
-        line: row.dk_total_line ?? null,
-        over: row.dk_total_over_odds ?? null,
-        under: row.dk_total_under_odds ?? null,
-      },
-      fd: {
-        line: row.fd_total_line ?? null,
-        over: row.fd_total_over_odds ?? null,
-        under: row.fd_total_under_odds ?? null,
-      },
-      mgm: {
-        line: row.mgm_total_line ?? null,
-        over: row.mgm_total_over_odds ?? null,
-        under: row.mgm_total_under_odds ?? null,
-      },
-      pin: {
-        line: row.pin_total_line ?? null,
-        over: row.pin_total_over_odds ?? null,
-        under: row.pin_total_under_odds ?? null,
-      },
-      bol: {
-        line: row.bol_total_line ?? null,
-        over: row.bol_total_over_odds ?? null,
-        under: row.bol_total_under_odds ?? null,
-      },
+      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
+      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
+      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
+      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
+      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
     },
   };
 }
@@ -529,15 +493,7 @@ function BookLogoPill({
 
 function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: boolean }) {
   const fb =
-    bookKey === "dk"
-      ? "DK"
-      : bookKey === "fd"
-      ? "FD"
-      : bookKey === "mgm"
-      ? "MGM"
-      : bookKey === "pin"
-      ? "PIN"
-      : "BOL";
+    bookKey === "dk" ? "DK" : bookKey === "fd" ? "FD" : bookKey === "mgm" ? "MGM" : bookKey === "pin" ? "PIN" : "BOL";
   return (
     <th
       className={[
@@ -550,12 +506,7 @@ function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: bo
       style={{ width: COL_BOOK }}
     >
       <div className="flex items-center justify-center">
-        <BookLogoPill
-          src={BOOK_LOGOS[bookKey]}
-          alt={BOOK_LABEL[bookKey]}
-          fallbackLabel={fb}
-          size="md"
-        />
+        <BookLogoPill src={BOOK_LOGOS[bookKey]} alt={BOOK_LABEL[bookKey]} fallbackLabel={fb} size="md" />
       </div>
     </th>
   );
@@ -587,15 +538,7 @@ function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boole
   );
 }
 
-function MiniTeamRow({
-  team,
-  logoUrl,
-  side,
-}: {
-  team: string;
-  logoUrl: string | null;
-  side: "AWAY" | "HOME";
-}) {
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -712,19 +655,13 @@ function EventCardMobile({
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
-        <div className="text-[12px] text-[#cfcfcf] font-semibold">
-          {fmtCTTimeOnly(ev.commenceTime)} CT
-        </div>
+        <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
         <div className="flex items-center gap-2">
           <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
             {booksOpen ? "Hide Books" : "Show Books"}
           </button>
-          <button
-            type="button"
-            onClick={() => onOpenDetails(ev)}
-            className={[BTN_BASE, BTN_ON].join(" ")}
-          >
+          <button type="button" onClick={() => onOpenDetails(ev)} className={[BTN_BASE, BTN_ON].join(" ")}>
             Game Details
           </button>
         </div>
@@ -746,20 +683,12 @@ function EventCardMobile({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
-                {leftLabel}
-              </div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(awayCons)}
-              </div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
-                {rightLabel}
-              </div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(homeCons)}
-              </div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
             </div>
           </div>
         </div>
@@ -770,12 +699,8 @@ function EventCardMobile({
               <div className="text-[12px] text-white font-extrabold">Books</div>
               <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
                 <div />
-                <div className="text-[10px] text-[#808080] font-semibold text-center">
-                  {leftLabel}
-                </div>
-                <div className="text-[10px] text-[#808080] font-semibold text-center">
-                  {rightLabel}
-                </div>
+                <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
+                <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
               </div>
             </div>
 
@@ -823,10 +748,7 @@ function EventTwoRows({
     <>
       <tr className="hover:bg-white/5 transition-colors">
         <td
-          className={[
-            "p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle",
-            `border-r ${HDR_BORDER}`,
-          ].join(" ")}
+          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
           rowSpan={2}
         >
           <div className="flex items-center justify-between gap-3 mb-3">
@@ -868,7 +790,7 @@ function EventTwoRows({
 }
 
 /* =========================================================
-   MODAL SHELL (with subtle background)
+   MODAL SHELL (subtle background + noise)
 ========================================================= */
 
 function ModalShell({
@@ -890,7 +812,6 @@ function ModalShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // subtle inline "noise" overlay via SVG data-uri (very light)
   const noiseSvg = encodeURIComponent(`
     <svg xmlns="http://www.w3.org/2000/svg" width="180" height="180">
       <filter id="n">
@@ -918,7 +839,6 @@ function ModalShell({
             "linear-gradient(180deg, rgba(15,15,15,0.98), rgba(10,10,10,0.98))",
         }}
       >
-        {/* soft noise overlay */}
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.10]"
           style={{
@@ -953,24 +873,14 @@ function ModalShell({
 
 type DetailsTab = "line" | "pred" | "props";
 
-function TabBtn({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={[
         "px-3 py-1.5 text-xs font-extrabold rounded-lg border transition-colors",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
+        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -1230,7 +1140,7 @@ function toNum(v: any): number | null {
 
 function toProb01(v: number | null | undefined): number | null {
   if (v == null) return null;
-  const x = v > 1.5 ? v / 100 : v; // robust for 0-100 or 0-1
+  const x = v > 1.5 ? v / 100 : v; // supports 0-100 or 0-1
   if (!Number.isFinite(x)) return null;
   return Math.max(0, Math.min(1, x));
 }
@@ -1253,25 +1163,24 @@ function probToAmerican(p: number | null): string {
 }
 
 function winColors(awayP: number | null, homeP: number | null) {
-  if (awayP == null || homeP == null)
+  if (awayP == null || homeP == null) {
     return {
       away: "text-white",
       home: "text-white",
       awayHex: "#d0d0d0",
       homeHex: "#d0d0d0",
     };
-  if (awayP > homeP)
-    return { away: "text-emerald-400", home: "text-red-400", awayHex: "#34d399", homeHex: "#f87171" };
-  if (homeP > awayP)
-    return { away: "text-red-400", home: "text-emerald-400", awayHex: "#f87171", homeHex: "#34d399" };
+  }
+  if (awayP > homeP) return { away: "text-emerald-400", home: "text-red-400", awayHex: "#34d399", homeHex: "#f87171" };
+  if (homeP > awayP) return { away: "text-red-400", home: "text-emerald-400", awayHex: "#f87171", homeHex: "#34d399" };
   return { away: "text-white", home: "text-white", awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
 }
 
 /* =========================================================
-   NEW: 100% SPLIT DONUT (Away/Home arcs) with score inside
+   NEW: WIN% METER (split bar + 50% tick)
 ========================================================= */
 
-function SplitDonut({
+function WinSplitMeter({
   awayP,
   homeP,
   awayLabel,
@@ -1291,388 +1200,279 @@ function SplitDonut({
   const a = awayP ?? 0.5;
   const h = homeP ?? 0.5;
   const total = a + h || 1;
-  const aN = a / total;
-  const hN = h / total;
-
-  // SVG ring
-  const size = 168; // slightly smaller to reduce "float"
-  const cx = size / 2;
-  const cy = size / 2;
-  const r = 66;
-  const c = 2 * Math.PI * r;
-  const stroke = 14;
-
-  const aLen = c * aN;
-  const hLen = c * hN;
-
-  // Start at 12 o'clock
-  const rotate = -90;
+  const aN = Math.max(0, Math.min(1, a / total));
+  const hN = Math.max(0, Math.min(1, h / total));
 
   return (
-    <div className="relative w-[168px] h-[168px]">
-      <svg width={size} height={size} className="block">
-        <g transform={`rotate(${rotate} ${cx} ${cy})`}>
-          <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={stroke} />
-          <circle
-            cx={cx}
-            cy={cy}
-            r={r}
-            fill="none"
-            stroke={awayColor}
-            strokeWidth={stroke}
-            strokeLinecap="round"
-            strokeDasharray={`${aLen} ${c - aLen}`}
-            strokeDashoffset={0}
-          />
-          <circle
-            cx={cx}
-            cy={cy}
-            r={r}
-            fill="none"
-            stroke={homeColor}
-            strokeWidth={stroke}
-            strokeLinecap="round"
-            strokeDasharray={`${hLen} ${c - hLen}`}
-            strokeDashoffset={-aLen}
-          />
-        </g>
-
-        <circle cx={cx} cy={cy} r={r - stroke / 2} fill="rgba(0,0,0,0.28)" />
-      </svg>
-
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-2">
-        <div className="text-[10px] text-[#b0b0b0] font-semibold">Projected Score</div>
-        <div className="mt-1 text-white font-extrabold tabular-nums text-[20px] leading-tight">{scoreText}</div>
-
-        <div className="mt-2 grid grid-cols-2 gap-2 w-full px-3">
-          <div className="rounded-lg border border-[#2a2a2a] bg-black/25 py-1">
-            <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayLabel}</div>
-            <div className="text-[12px] font-extrabold tabular-nums" style={{ color: awayColor }}>
-              {pct(awayP)}
-            </div>
-          </div>
-          <div className="rounded-lg border border-[#2a2a2a] bg-black/25 py-1">
-            <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeLabel}</div>
-            <div className="text-[12px] font-extrabold tabular-nums" style={{ color: homeColor }}>
-              {pct(homeP)}
-            </div>
-          </div>
+    <div className="w-full">
+      <div className="flex items-center justify-between text-[11px] font-extrabold">
+        <div className="truncate" style={{ color: awayColor }}>
+          {awayLabel} <span className="text-white/80 font-semibold">({pct(awayP)})</span>
         </div>
+        <div className="truncate text-right" style={{ color: homeColor }}>
+          {homeLabel} <span className="text-white/80 font-semibold">({pct(homeP)})</span>
+        </div>
+      </div>
+
+      <div className="mt-2 relative h-4 rounded-full border border-[#2a2a2a] bg-black/30 overflow-hidden">
+        <div className="absolute inset-y-0 left-0" style={{ width: `${aN * 100}%`, background: awayColor, opacity: 0.9 }} />
+        <div className="absolute inset-y-0 right-0" style={{ width: `${hN * 100}%`, background: homeColor, opacity: 0.9 }} />
+
+        {/* 50% tick */}
+        <div className="absolute top-[-4px] bottom-[-4px] left-1/2 w-[2px] bg-white/85" />
+        <div className="absolute top-[-2px] left-1/2 -translate-x-1/2 w-3 h-3 rounded-full border border-white/70 bg-[#0f0f0f]" />
+      </div>
+
+      <div className="mt-2 flex items-center justify-between">
+        <div className="text-[11px] text-[#b0b0b0] font-semibold">Projected Score</div>
+        <div className="text-white font-extrabold tabular-nums text-[14px]">{scoreText}</div>
       </div>
     </div>
   );
 }
 
 /* =========================================================
-   NEW: LAST 5 GAMES (NBA / NCAAB)
+   LAST 5 GAMES (NBA: basketballref_games_nba, NCAAB: kenpom_games)
 ========================================================= */
 
-type RecentGame = {
-  date: string | null;
-  opp: string;
+type TeamGameRow = {
+  dateIso: string; // yyyy-mm-dd (or iso)
+  opponent: string;
   isHome: boolean;
-  teamPts: number | null;
-  oppPts: number | null;
-  result: "W" | "L" | "—";
-  scoreText: string;
+  teamPts: number;
+  oppPts: number;
+  result: "W" | "L";
 };
 
-function safeNum(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-function safeStr(v: any): string {
-  return v == null ? "" : String(v).trim();
-}
-function fmtYmdShort(d: string | null) {
-  if (!d) return "—";
-  const dt = new Date(d.includes("T") ? d : `${d}T12:00:00`);
-  if (Number.isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+function parseYmdToIso(ymdLike: any): string | null {
+  if (ymdLike == null) return null;
+  const s = String(ymdLike).trim();
+  if (!s) return null;
+
+  // already iso-ish
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+
+  // try Date parse
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    // force y-m-d in CT-ish by using UTC date parts (good enough for ordering)
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  return null;
 }
 
-async function fetchLast5Games({
-  sportKey,
-  teamName,
+function fmtGameDateShort(dateIso: string) {
+  const d = new Date(`${dateIso}T12:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateIso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function isCompletedScore(a: any, b: any) {
+  const x = Number(a);
+  const y = Number(b);
+  return Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0);
+}
+
+function mapTeamGameRowsFromAny({
+  raw,
+  team,
 }: {
-  sportKey: string;
-  teamName: string;
-}): Promise<
-  Array<{
-    date: string | null;
-    opp: string;
-    isHome: boolean;
-    teamPts: number | null;
-    oppPts: number | null;
-    result: "W" | "L" | "—";
-    scoreText: string;
-  }>
-> {
-  const tn = (teamName ?? "").trim();
-  if (!tn) return [];
+  raw: any[];
+  team: string;
+}): TeamGameRow[] {
+  const out: TeamGameRow[] = [];
+  const nowYmd = ctTodayYmd();
+  const nowMs = new Date(`${nowYmd}T23:59:59Z`).getTime();
 
-  const todayYmd = ctTodayYmd(); // YYYY-MM-DD in CT
+  for (const r of raw) {
+    const dateIso =
+      parseYmdToIso(
+        pickAny(r, ["date", "game_date", "Date", "dt", "gameDay", "day"])
+      ) ?? null;
+    if (!dateIso) continue;
 
-  // -----------------------
-  // NBA (basketballref_games_nba)
-  // -----------------------
-  if (sportKey === "basketball_nba") {
-    // We pull a larger window (e.g., 30) then filter to "completed" games
-    // so scheduled/future rows with null/0-0 don't pollute last 5.
-    const { data, error } = await supabase
-      .from("basketballref_games_nba")
-      .select("date, away_team, home_team, away_pts, home_pts")
-      .or(`away_team.ilike.%${tn}%,home_team.ilike.%${tn}%`)
-      // Exclude missing scores
-      .not("away_pts", "is", null)
-      .not("home_pts", "is", null)
-      // Exclude future dates (assumes date is YYYY-MM-DD or comparable date-like)
-      .lte("date", todayYmd)
-      .order("date", { ascending: false })
-      .limit(40);
+    const dateMs = new Date(`${dateIso}T12:00:00Z`).getTime();
+    if (!Number.isFinite(dateMs)) continue;
 
-    if (error || !data) return [];
+    // must be in the past or today (completed)
+    if (dateMs > nowMs) continue;
 
-    // Filter out "0-0 placeholder" rows if they exist
-    const completed = (data as any[])
-      .filter((r) => {
-        const a = Number(r.away_pts);
-        const h = Number(r.home_pts);
-        return Number.isFinite(a) && Number.isFinite(h) && (a > 0 || h > 0);
-      })
-      .slice(0, 5);
+    const away =
+      (pickAny(r, ["away_team", "away", "team1", "team1_away", "Team1 (Away)", "team1 (away)"]) ?? "") as any;
+    const home =
+      (pickAny(r, ["home_team", "home", "team2", "team2_home", "Team2 (Home)", "team2 (home)"]) ?? "") as any;
 
-    return completed.map((r) => {
-      const away = String(r.away_team ?? "").trim();
-      const home = String(r.home_team ?? "").trim();
+    const awayTeam = String(away ?? "").trim();
+    const homeTeam = String(home ?? "").trim();
+    if (!awayTeam && !homeTeam) continue;
 
-      const isHome = home.toLowerCase() === tn.toLowerCase();
-      const opp = isHome ? away : home;
+    const teamLc = team.trim().toLowerCase();
+    const isAway = awayTeam.trim().toLowerCase() === teamLc;
+    const isHome = homeTeam.trim().toLowerCase() === teamLc;
+    if (!isAway && !isHome) continue;
 
-      const awayPts = Number(r.away_pts);
-      const homePts = Number(r.home_pts);
+    const awayPts = pickAny(r, ["away_pts", "away_points", "score1", "Score1", "pts_away", "points_away"]);
+    const homePts = pickAny(r, ["home_pts", "home_points", "score2", "Score2", "pts_home", "points_home"]);
 
-      const teamPts = isHome ? homePts : awayPts;
-      const oppPts = isHome ? awayPts : homePts;
+    if (!isCompletedScore(awayPts, homePts)) continue;
 
-      const result: "W" | "L" | "—" =
-        Number.isFinite(teamPts) && Number.isFinite(oppPts)
-          ? teamPts > oppPts
-            ? "W"
-            : "L"
-          : "—";
+    const a = Number(awayPts);
+    const h = Number(homePts);
 
-      return {
-        date: (r.date ?? null) as string | null,
-        opp,
-        isHome,
-        teamPts: Number.isFinite(teamPts) ? teamPts : null,
-        oppPts: Number.isFinite(oppPts) ? oppPts : null,
-        result,
-        scoreText:
-          Number.isFinite(teamPts) && Number.isFinite(oppPts)
-            ? `${teamPts}-${oppPts}`
-            : "—",
-      };
+    const teamPts = isAway ? a : h;
+    const oppPts = isAway ? h : a;
+    const opponent = isAway ? homeTeam : awayTeam;
+
+    const result: "W" | "L" = teamPts > oppPts ? "W" : "L";
+
+    out.push({
+      dateIso,
+      opponent,
+      isHome: isHome,
+      teamPts,
+      oppPts,
+      result,
     });
   }
 
-  // -----------------------
-  // NCAAB (kenpom_games)
-  // -----------------------
-  if (sportKey === "basketball_ncaab") {
-    // Note: column names can differ; we "select *" safely and map flexibly.
-    // We still filter to completed games by requiring numeric scores > 0.
-    const { data, error } = await supabase
-      .from("kenpom_games")
-      .select("*")
-      .or(`team.ilike.%${tn}%,opponent.ilike.%${tn}%,home_team.ilike.%${tn}%,away_team.ilike.%${tn}%`)
-      .order("date", { ascending: false })
-      .limit(80);
-
-    if (error || !data) return [];
-
-    // Helpers for flexible field names
-    const pickAny = (row: any, keys: string[]) => {
-      for (const k of keys) if (row?.[k] != null) return row[k];
-      return null;
-    };
-
-    const toNum = (v: any): number | null => {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const toStr = (v: any): string => String(v ?? "").trim();
-
-    // Try to interpret each row into a standard "game result"
-    const parsed = (data as any[])
-      .map((r) => {
-        const date =
-          (pickAny(r, ["date", "game_date", "dt", "day"]) ?? null) as
-            | string
-            | null;
-
-        // Prefer explicit home/away schema if present
-        const awayTeam = toStr(pickAny(r, ["away_team", "away", "team_away"]));
-        const homeTeam = toStr(pickAny(r, ["home_team", "home", "team_home"]));
-
-        const awayPts = toNum(pickAny(r, ["away_pts", "away_score", "pts_away", "score_away"]));
-        const homePts = toNum(pickAny(r, ["home_pts", "home_score", "pts_home", "score_home"]));
-
-        // Alternate schema: team/opponent with a home/away flag
-        const team = toStr(pickAny(r, ["team", "team_name"]));
-        const opp = toStr(pickAny(r, ["opponent", "opp", "opponent_name"]));
-        const teamPtsAlt = toNum(pickAny(r, ["team_score", "team_pts", "pts", "score_for"]));
-        const oppPtsAlt = toNum(pickAny(r, ["opp_score", "opp_pts", "score_against"]));
-        const locRaw = toStr(pickAny(r, ["location", "loc", "home_away", "site"])).toLowerCase(); // e.g. "H", "A", "Home", "@"
-        const isHomeAlt =
-          locRaw === "h" ||
-          locRaw.includes("home") ||
-          locRaw === "" ||
-          locRaw === "neutral"; // neutral treated as "home" false later if needed
-
-        // Decide which schema we have
-        const hasHomeAwaySchema = awayTeam && homeTeam;
-
-        // If we have home/away teams, use that
-        if (hasHomeAwaySchema) {
-          const tnLower = tn.toLowerCase();
-          const isHome = homeTeam.toLowerCase().includes(tnLower);
-          const isAway = awayTeam.toLowerCase().includes(tnLower);
-          if (!isHome && !isAway) return null;
-
-          // Completed game requires scores
-          if (awayPts == null || homePts == null) return null;
-          if ((awayPts ?? 0) <= 0 && (homePts ?? 0) <= 0) return null;
-
-          const teamPts = isHome ? homePts : awayPts;
-          const oppPts = isHome ? awayPts : homePts;
-          const opponent = isHome ? awayTeam : homeTeam;
-
-          const result: "W" | "L" | "—" =
-            teamPts != null && oppPts != null ? (teamPts > oppPts ? "W" : "L") : "—";
-
-          return {
-            date,
-            opp: opponent,
-            isHome,
-            teamPts,
-            oppPts,
-            result,
-            scoreText: teamPts != null && oppPts != null ? `${teamPts}-${oppPts}` : "—",
-          };
-        }
-
-        // Else try team/opponent schema
-        if (!team || !opp) return null;
-
-        const tnLower = tn.toLowerCase();
-        const isThisTeam = team.toLowerCase().includes(tnLower) || opp.toLowerCase().includes(tnLower);
-        if (!isThisTeam) return null;
-
-        // If the row is reversed (tn appears in opponent), swap
-        const rowHasTeamAsTN = team.toLowerCase().includes(tnLower);
-
-        const finalTeam = rowHasTeamAsTN ? team : opp;
-        const finalOpp = rowHasTeamAsTN ? opp : team;
-
-        const finalTeamPts = rowHasTeamAsTN ? teamPtsAlt : oppPtsAlt;
-        const finalOppPts = rowHasTeamAsTN ? oppPtsAlt : teamPtsAlt;
-
-        // Completed game requires scores
-        if (finalTeamPts == null || finalOppPts == null) return null;
-        if ((finalTeamPts ?? 0) <= 0 && (finalOppPts ?? 0) <= 0) return null;
-
-        const result: "W" | "L" | "—" =
-          finalTeamPts != null && finalOppPts != null
-            ? finalTeamPts > finalOppPts
-              ? "W"
-              : "L"
-            : "—";
-
-        // If location implies away (e.g. "@"), set isHome=false
-        const isHome = rowHasTeamAsTN ? isHomeAlt : !isHomeAlt;
-
-        return {
-          date,
-          opp: finalOpp,
-          isHome,
-          teamPts: finalTeamPts,
-          oppPts: finalOppPts,
-          result,
-          scoreText:
-            finalTeamPts != null && finalOppPts != null
-              ? `${finalTeamPts}-${finalOppPts}`
-              : "—",
-        };
-      })
-      .filter(Boolean) as Array<{
-      date: string | null;
-      opp: string;
-      isHome: boolean;
-      teamPts: number | null;
-      oppPts: number | null;
-      result: "W" | "L" | "—";
-      scoreText: string;
-    }>;
-
-    // Filter to past/known dates if date exists
-    const completed = parsed
-      .filter((g) => {
-        if (!g.date) return true; // if no date field, still allow (but rare)
-        // if date is YYYY-MM-DD, keep <= today
-        if (/^\d{4}-\d{2}-\d{2}$/.test(g.date)) return g.date <= todayYmd;
-        return true;
-      })
-      .slice(0, 5);
-
-    return completed;
-  }
-
-  // Default: no data source configured
-  return [];
+  // newest first
+  out.sort((x, y) => (x.dateIso < y.dateIso ? 1 : x.dateIso > y.dateIso ? -1 : 0));
+  return out;
 }
 
-function Last5Panel({ title, team, games }: { title: string; team: string; games: RecentGame[] }) {
+async function fetchLast5ForTeam({
+  sportKey,
+  team,
+}: {
+  sportKey: string;
+  team: string;
+}): Promise<{ games: TeamGameRow[]; sourceTable: string | null; error: string | null }> {
+  const teamSafe = team?.trim();
+  if (!teamSafe) return { games: [], sourceTable: null, error: "Missing team name." };
+
+  // Try NBA table first when NBA; KenPom when NCAAB; but still robust with fallbacks.
+  const candidates: Array<{
+    table: string;
+    dateCol: string;
+    colA: string;
+    colB: string;
+  }> =
+    sportKey === "basketball_nba"
+      ? [
+          { table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" },
+          // fallback if schema differs
+          { table: "basketballref_games_nba", dateCol: "game_date", colA: "away_team", colB: "home_team" },
+        ]
+      : sportKey === "basketball_ncaab"
+      ? [
+          // common snake_case variants people use for KenPom imports
+          { table: "kenpom_games", dateCol: "date", colA: "team1", colB: "team2" },
+          { table: "kenpom_games", dateCol: "date", colA: "team1_away", colB: "team2_home" },
+          { table: "kenpom_games", dateCol: "Date", colA: "Team1 (Away)", colB: "Team2 (Home)" },
+        ]
+      : [
+          // If you later add other sports, this just returns none.
+          { table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" },
+          { table: "kenpom_games", dateCol: "date", colA: "team1", colB: "team2" },
+        ];
+
+  let lastErr: string | null = null;
+
+  for (const c of candidates) {
+    try {
+      const { data, error } = await supabase
+        .from(c.table)
+        .select("*")
+        .or(`${c.colA}.eq.${teamSafe},${c.colB}.eq.${teamSafe}`)
+        .order(c.dateCol as any, { ascending: false })
+        .limit(40);
+
+      if (error) {
+        lastErr = error.message;
+        continue;
+      }
+
+      const rows = data ?? [];
+      const mapped = mapTeamGameRowsFromAny({ raw: rows, team: teamSafe }).slice(0, 5);
+
+      if (mapped.length) return { games: mapped, sourceTable: c.table, error: null };
+
+      // If query worked but mapped empty, keep trying (maybe different col names in rows)
+      if (rows.length) {
+        // Try mapping anyway with flexible keys (already done); if still empty, keep searching.
+      }
+    } catch (e: any) {
+      lastErr = String(e?.message ?? e ?? "Unknown error");
+      continue;
+    }
+  }
+
+  return { games: [], sourceTable: null, error: lastErr ?? "No recent games found." };
+}
+
+function Last5Panel({
+  title,
+  teamName,
+  games,
+  loading,
+  error,
+}: {
+  title: string;
+  teamName: string;
+  games: TeamGameRow[];
+  loading: boolean;
+  error: string;
+}) {
   return (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-white font-extrabold text-[12px]">{title}</div>
-        <div className="text-[11px] text-[#b0b0b0] font-semibold truncate max-w-[70%] text-right">
-          {team}
+    <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-white font-extrabold text-[13px]">{title}</div>
+          <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5 truncate">{teamName}</div>
         </div>
+        <div className="text-[10px] text-[#808080] font-semibold">Last 5</div>
       </div>
 
-      <div className="mt-2 space-y-2">
-        {games.map((g, i) => (
-          <div
-            key={`${title}-${i}`}
-            className="flex items-center justify-between gap-2 rounded-xl border border-[#1f1f1f] bg-black/20 px-3 py-2"
-          >
-            <div className="min-w-0">
-              <div className="text-[11px] text-[#b0b0b0] font-semibold truncate">
-                {fmtYmdShort(g.date)} • {g.isHome ? "vs" : "@"}{" "}
-                <span className="text-white font-extrabold">{g.opp}</span>
+      {loading ? (
+        <div className="mt-3 text-sm text-[#b0b0b0]">Loading recent games…</div>
+      ) : error ? (
+        <div className="mt-3 text-sm text-red-400">Couldn’t load: {error}</div>
+      ) : !games.length ? (
+        <div className="mt-3 text-sm text-[#b0b0b0]">No completed games found.</div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {games.map((g) => {
+            const badge =
+              g.result === "W"
+                ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                : "bg-red-500/15 text-red-300 border-red-500/30";
+            const at = g.isHome ? "vs" : "@";
+            return (
+              <div key={`${g.dateIso}-${g.opponent}-${g.result}`} className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[12px] text-white font-extrabold">
+                    {fmtGameDateShort(g.dateIso)} <span className="text-[#808080] font-semibold">•</span>{" "}
+                    <span className="text-[#cfcfcf] font-semibold">
+                      {at} {g.opponent}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-[#b0b0b0] font-semibold tabular-nums">
+                    {g.teamPts}-{g.oppPts}
+                  </div>
+                </div>
+
+                <div className={`shrink-0 px-2 py-1 rounded-md border text-[11px] font-extrabold ${badge}`}>
+                  {g.result}
+                </div>
               </div>
-              <div className="text-[12px] text-white font-extrabold tabular-nums">{g.scoreText}</div>
-            </div>
-
-            <div
-              className={[
-                "shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold border",
-                g.result === "W"
-                  ? "text-emerald-300 border-emerald-500/40 bg-emerald-500/10"
-                  : g.result === "L"
-                  ? "text-red-300 border-red-500/40 bg-red-500/10"
-                  : "text-[#d0d0d0] border-[#2a2a2a] bg-black/20",
-              ].join(" ")}
-            >
-              {g.result}
-            </div>
-          </div>
-        ))}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1754,10 +1554,13 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const [predError, setPredError] = useState("");
   const [predRow, setPredRow] = useState<MonteCarloRow | null>(null);
 
-  // last 5 state
-  const [last5Away, setLast5Away] = useState<RecentGame[]>([]);
-  const [last5Home, setLast5Home] = useState<RecentGame[]>([]);
-  const [last5Loading, setLast5Loading] = useState(false);
+  // last-5 state
+  const [l5AwayLoading, setL5AwayLoading] = useState(false);
+  const [l5HomeLoading, setL5HomeLoading] = useState(false);
+  const [l5AwayErr, setL5AwayErr] = useState("");
+  const [l5HomeErr, setL5HomeErr] = useState("");
+  const [l5Away, setL5Away] = useState<TeamGameRow[]>([]);
+  const [l5Home, setL5Home] = useState<TeamGameRow[]>([]);
 
   // props state
   const [propMarket, setPropMarket] = useState<PropMarket>("Points");
@@ -1800,7 +1603,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     };
   }, [tab, sportKey, ev.eventId, lmMarket]);
 
-  // Predictions fetch
+  // Predictions fetch (+ last 5)
   useEffect(() => {
     if (tab !== "pred") return;
     let alive = true;
@@ -1810,12 +1613,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     setPredRow(null);
 
     (async () => {
-      const { data, error } = await supabase
-        .from("monte_carlo_results")
-        .select("*")
-        .eq("event_id", ev.eventId)
-        .limit(1);
-
+      const { data, error } = await supabase.from("monte_carlo_results").select("*").eq("event_id", ev.eventId).limit(1);
       if (!alive) return;
 
       if (error) {
@@ -1863,39 +1661,62 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
       setPredRow(row);
       setPredLoading(false);
+
+      // Kick off last-5 loads once we have team names
+      const awayTeam = (ev.away?.team ?? row.away_team ?? "").trim();
+      const homeTeam = (ev.home?.team ?? row.home_team ?? "").trim();
+
+      if (awayTeam) {
+        setL5AwayLoading(true);
+        setL5AwayErr("");
+        fetchLast5ForTeam({ sportKey, team: awayTeam })
+          .then((res) => {
+            if (!alive) return;
+            setL5Away(res.games);
+            setL5AwayErr(res.error ?? "");
+          })
+          .catch((e: any) => {
+            if (!alive) return;
+            setL5Away([]);
+            setL5AwayErr(String(e?.message ?? e ?? "Unknown error"));
+          })
+          .finally(() => {
+            if (!alive) return;
+            setL5AwayLoading(false);
+          });
+      } else {
+        setL5Away([]);
+        setL5AwayErr("Missing away team name.");
+      }
+
+      if (homeTeam) {
+        setL5HomeLoading(true);
+        setL5HomeErr("");
+        fetchLast5ForTeam({ sportKey, team: homeTeam })
+          .then((res) => {
+            if (!alive) return;
+            setL5Home(res.games);
+            setL5HomeErr(res.error ?? "");
+          })
+          .catch((e: any) => {
+            if (!alive) return;
+            setL5Home([]);
+            setL5HomeErr(String(e?.message ?? e ?? "Unknown error"));
+          })
+          .finally(() => {
+            if (!alive) return;
+            setL5HomeLoading(false);
+          });
+      } else {
+        setL5Home([]);
+        setL5HomeErr("Missing home team name.");
+      }
     })();
 
     return () => {
       alive = false;
     };
-  }, [tab, ev.eventId]);
-
-  // Last 5 fetch (only when Predictions tab is open)
-  useEffect(() => {
-    if (tab !== "pred") return;
-
-    const awayTeamName = ev.away?.team ?? predRow?.away_team ?? "";
-    const homeTeamName = ev.home?.team ?? predRow?.home_team ?? "";
-    if (!awayTeamName && !homeTeamName) return;
-
-    let alive = true;
-    setLast5Loading(true);
-
-    (async () => {
-      const [a, h] = await Promise.all([
-        fetchLast5Games({ sportKey, teamName: awayTeamName }),
-        fetchLast5Games({ sportKey, teamName: homeTeamName }),
-      ]);
-      if (!alive) return;
-      setLast5Away(a);
-      setLast5Home(h);
-      setLast5Loading(false);
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, [tab, sportKey, ev.away?.team, ev.home?.team, predRow?.away_team, predRow?.home_team]);
+  }, [tab, ev.eventId, sportKey, ev.away?.team, ev.home?.team]);
 
   // Props fetch
   useEffect(() => {
@@ -1907,12 +1728,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     setPropsAgg([]);
 
     (async () => {
-      const snap = await supabase
-        .from("player_props_snapshot")
-        .select("*")
-        .eq("sport_key", sportKey)
-        .eq("event_id", ev.eventId);
-
+      const snap = await supabase.from("player_props_snapshot").select("*").eq("sport_key", sportKey).eq("event_id", ev.eventId);
       if (!alive) return;
 
       if (snap.error) {
@@ -1961,11 +1777,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       const metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
 
       if (names.length) {
-        const meta = await supabase
-          .from("player_prop_ev_latest")
-          .select("player_name,team,position,picture_url")
-          .in("player_name", names);
-
+        const meta = await supabase.from("player_prop_ev_latest").select("player_name,team,position,picture_url").in("player_name", names);
         if (!meta.error && meta.data) {
           for (const m of meta.data as any[]) {
             const key = String(m.player_name ?? "").trim();
@@ -2046,7 +1858,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
   const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
 
-  // Key Lines derived from board consensus (so it always matches what user sees)
+  // Key Lines derived from board consensus (always matches what user sees)
   const consMlAway = consensusPartsForRow(ev, "ml", "AWAY");
   const consMlHome = consensusPartsForRow(ev, "ml", "HOME");
   const consSprAway = consensusPartsForRow(ev, "spread", "AWAY");
@@ -2056,6 +1868,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
+      {/* Tabs */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
           Line Movement
@@ -2071,6 +1884,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       {/* LINE MOVEMENT TAB */}
       {tab === "line" && (
         <div>
+          {/* single market selector ONLY here */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
               <button
@@ -2140,22 +1954,22 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
             <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
           ) : (
             <div className="space-y-3">
-              {/* Top: key lines + model snapshot (tightened) */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 p-4">
+              {/* Dead space fill: Key Lines + Last 5 */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
+                  <div>
                     <div className="text-white font-extrabold text-[13px]">Key Lines</div>
                     <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
                       Consensus + Quantum fair odds (from win probabilities)
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <div className="rounded-xl border border-[#2a2a2a] bg-black/25 px-3 py-2">
                       <div className="text-[10px] text-[#b0b0b0] font-semibold">Quantum ML</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {awayTeam}: <span style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span> •{" "}
-                        {homeTeam}: <span style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
+                        {awayTeam}: <span style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span> • {homeTeam}:{" "}
+                        <span style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
                       </div>
                     </div>
 
@@ -2169,27 +1983,27 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums">
-                      {awayTeam}: {consSprAway.top} <span className="text-[#b0b0b0]">{consSprAway.bottom ?? ""}</span>
+                      {awayTeam}: {consSprAway.top} <span className="text-[#b0b0b0]">{consSprAway.bottom ? consSprAway.bottom : ""}</span>
                       <span className="text-[#808080] mx-2">|</span>
-                      {homeTeam}: {consSprHome.top} <span className="text-[#b0b0b0]">{consSprHome.bottom ?? ""}</span>
+                      {homeTeam}: {consSprHome.top} <span className="text-[#b0b0b0]">{consSprHome.bottom ? consSprHome.bottom : ""}</span>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Total</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums">
-                      Over: {consTotOver.top} <span className="text-[#b0b0b0]">{consTotOver.bottom ?? ""}</span>
+                      Over: {consTotOver.top} <span className="text-[#b0b0b0]">{consTotOver.bottom ? consTotOver.bottom : ""}</span>
                       <span className="text-[#808080] mx-2">|</span>
-                      Under: {consTotUnder.top} <span className="text-[#b0b0b0]">{consTotUnder.bottom ?? ""}</span>
+                      Under: {consTotUnder.top} <span className="text-[#b0b0b0]">{consTotUnder.bottom ? consTotUnder.bottom : ""}</span>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Model Snapshot</div>
-                    <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="mt-1 grid grid-cols-3 gap-2">
                       <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
                         <div className="text-[10px] text-[#b0b0b0] font-semibold">Proj Total</div>
                         <div className="text-white font-extrabold tabular-nums text-[12px]">
@@ -2211,22 +2025,29 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     </div>
                   </div>
                 </div>
+
+                {/* Last 5 panels */}
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <Last5Panel title="Away" teamName={awayTeam} games={l5Away} loading={l5AwayLoading} error={l5AwayErr} />
+                  <Last5Panel title="Home" teamName={homeTeam} games={l5Home} loading={l5HomeLoading} error={l5HomeErr} />
+                </div>
               </div>
 
-              {/* Middle: donut + teams (tight grid) */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 p-4">
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_200px_1fr] gap-4 items-center">
+              {/* Main hero row: teams + Win% meter in the middle */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
+                  {/* Away */}
                   <div className="flex items-center gap-3">
                     {awayLogo ? (
                       <img
                         src={awayLogo}
                         alt={`${awayTeam} logo`}
-                        className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
                         loading="lazy"
                         onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
-                      <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
+                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
                     )}
                     <div className="min-w-0">
                       <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
@@ -2239,8 +2060,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-center">
-                    <SplitDonut
+                  {/* Center meter */}
+                  <div className="w-full">
+                    <WinSplitMeter
                       awayP={awayP}
                       homeP={homeP}
                       awayLabel="Away"
@@ -2251,6 +2073,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     />
                   </div>
 
+                  {/* Home */}
                   <div className="flex items-center gap-3 justify-start lg:justify-end">
                     <div className="min-w-0 text-right">
                       <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
@@ -2265,32 +2088,14 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                       <img
                         src={homeLogo}
                         alt={`${homeTeam} logo`}
-                        className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
                         loading="lazy"
                         onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
-                      <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
+                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
                     )}
                   </div>
-                </div>
-              </div>
-
-              {/* NEW: Last 5 Games */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-white font-extrabold text-[13px]">Last 5 Games</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
-                      Recent results for each team (from your games tables)
-                    </div>
-                  </div>
-                  {last5Loading && <div className="text-[11px] text-[#b0b0b0] font-semibold">Loading…</div>}
-                </div>
-
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <Last5Panel title="Away" team={awayTeam} games={last5Away} />
-                  <Last5Panel title="Home" team={homeTeam} games={last5Home} />
                 </div>
               </div>
 
@@ -2321,8 +2126,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </div>
 
                   <div className="mt-3 text-[11px] text-[#b0b0b0]">
-                    σ Margin:{" "}
-                    <span className="text-white font-extrabold tabular-nums">{predRow.sigma_margin_game ?? "—"}</span>
+                    σ Margin: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_margin_game ?? "—"}</span>
                   </div>
                 </div>
 
@@ -2330,8 +2134,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   <div className="flex items-center justify-between">
                     <div className="text-white font-extrabold text-[13px]">Total</div>
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                      Line:{" "}
-                      <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
+                      Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
                     </div>
                   </div>
 
@@ -2351,8 +2154,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </div>
 
                   <div className="mt-3 text-[11px] text-[#b0b0b0]">
-                    σ Total:{" "}
-                    <span className="text-white font-extrabold tabular-nums">{predRow.sigma_total_game ?? "—"}</span>
+                    σ Total: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_total_game ?? "—"}</span>
                   </div>
                 </div>
               </div>
@@ -2381,9 +2183,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                 </button>
               ))}
             </div>
-            <div className="text-[11px] text-[#b0b0b0] font-semibold">
-              One row per player • Over/Under grouped • Books in columns
-            </div>
+            <div className="text-[11px] text-[#b0b0b0] font-semibold">One row per player • Over/Under grouped • Books in columns</div>
           </div>
 
           {propsLoading ? (
@@ -2584,9 +2384,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         .limit(1);
 
       if (!propsRes.error) {
-        const r = (propsRes.data?.[0] ?? null) as
-          | { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null }
-          | null;
+        const r = (propsRes.data?.[0] ?? null) as { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null } | null;
         propsLatest = normalizeIso(r?.ts ?? r?.snapshot_ts ?? r?.inserted_at ?? null);
       }
     } catch {
@@ -2709,9 +2507,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                     <span className={PILL_DOT} />
                     <span className={PILL_TX}>Prism Odds Board</span>
                   </div>
-                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
-                    {sportLabel}
-                  </h2>
+                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
                   <div className={HERO_SUB}>
                     One board per slate. Books shown side-by-side with consensus. Open Game Details for movement, predictions, and props.
                   </div>
@@ -2781,9 +2577,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         ev={ev}
                         market={market}
                         booksOpen={!!mobileOpenMap[ev.eventId]}
-                        onToggleBooks={() =>
-                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
-                        }
+                        onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
                         onOpenDetails={openDetails}
                       />
                     ))}
@@ -2815,26 +2609,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <thead className="sticky top-0 z-20">
                           <tr className={`border-b ${HDR_BORDER}`}>
-                            <th
-                              className={[
-                                "text-left px-4 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "sticky left-0 z-30 text-[13px] font-extrabold",
-                              ].join(" ")}
-                            >
+                            <th className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}>
                               Matchup
                             </th>
 
-                            <th
-                              className={[
-                                "text-center px-3 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "z-20 text-[13px] font-extrabold border-l",
-                                HDR_BORDER,
-                              ].join(" ")}
-                            >
+                            <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}>
                               Consensus
                             </th>
 
