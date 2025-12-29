@@ -1178,8 +1178,8 @@ type MonteCarloRow = {
   total_push_prob?: number | null;
   under_prob?: number | null;
 
-  sigma_margin_game?: number | null;
-  sigma_total_game?: number | null;
+  projected_margin_home?: number | null;
+  projected_total?: number | null;
 };
 
 function toNum(v: any): number | null {
@@ -1683,8 +1683,8 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
         total_push_prob: toNum(r.total_push_prob),
         under_prob: toNum(r.under_prob),
 
-        sigma_margin_game: toNum(r.sigma_margin_game),
-        sigma_total_game: toNum(r.sigma_total_game),
+        projected_margin_home: toNum(r.projected_margin_home),
+        projected_total: toNum(r.projected_total),
       };
 
       setPredRow(row);
@@ -2210,7 +2210,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     </div>
 
                     <div className="mt-2 text-[11px] text-[#b0b0b0]">
-                      σ Margin: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_margin_game ?? "—"}</span>
+                      Projected Margin Home: <span className="text-white font-extrabold tabular-nums">{predRow.projected_margin_home ?? "—"}</span>
                     </div>
                   </div>
 
@@ -2238,7 +2238,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     </div>
 
                     <div className="mt-2 text-[11px] text-[#b0b0b0]">
-                      σ Total: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_total_game ?? "—"}</span>
+                      Projected Total: <span className="text-white font-extrabold tabular-nums">{predRow.projected_total ?? "—"}</span>
                     </div>
                   </div>
                 </div>
