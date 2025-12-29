@@ -1,11 +1,15 @@
-// scripts/nbaPlayerPropEvBuilder.ts 
+// scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.4: FIX CONTEXT LINES BY EVENT_ID+TEAM)
-// ------------------------------------------------------------------------------------------
-// ✅ FIX: pin_spread_line / pin_total_line are now pulled by (event_id + team) instead of team-only
-//      This prevents “everything is -15 / 225” caused by team-only overwrites in odds_wide_latest.
-// ✅ Keeps your v3.3 logic: synthetic Pinnacle + hybrid devig + translate to soft line
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.5: SHARP FALLBACKS + MODEL-ONLY)
+// ------------------------------------------------------------------------------------
+// ✅ FIX: pin_spread_line / pin_total_line are pulled by (event_id + team) not team-only
+// ✅ SHARP LOGIC:
+//      1) Prefer Pinnacle paired lines (over+under at same line) nearest to soft line
+//      2) If Pinnacle missing -> use BetOnlineAG paired lines
+//      3) If both missing (or translate fails) -> MODEL-ONLY fallback (still inserts)
+// ✅ Keeps your v3.4 logic: synthetic sharp at soft line via translation + hybrid devig
 // ✅ Uses odds_wide_latest rows keyed by event_id|canonical_team (canonicalized through team_map aliases)
+// ✅ Outputs ONLY SOFT books into player_prop_ev_latest (DK/FD/MGM)
 //
 // Run: npm run nba:props:ev:build
 
@@ -153,7 +157,7 @@ function normSide(s: any): "over" | "under" | null {
   return null;
 }
 
-function normBook(b: any): SharpBook | null {
+function normBookAnySharp(b: any): SharpBook | null {
   const s = String(b || "").toLowerCase().trim();
   if (!s) return null;
   if (s === "pinnacle" || s.includes("pinnacle")) return "pinnacle";
@@ -654,7 +658,7 @@ async function main() {
   apply(map15, "15");
 
   /* -------------------------------------------------------
-     4) Team canonicalization
+     4) Team canonicalization (team_map)
   -------------------------------------------------------- */
   const { data: teamMapRows, error: tmErr } = await supabase
     .from("team_map")
@@ -698,8 +702,7 @@ async function main() {
         ✅ FIX: key by event_id + canonical team
   -------------------------------------------------------- */
 
-  // IMPORTANT: if odds_wide_latest does NOT have event_id, you must add it,
-  // or change the select below to the correct id column.
+  // IMPORTANT: odds_wide_latest must have event_id and team
   const { data: oddsRows, error: oErr } = await supabase
     .from("odds_wide_latest")
     .select("event_id, team, pin_spread_line, pin_total_line")
@@ -726,15 +729,21 @@ async function main() {
   }
 
   /* -------------------------------------------------------
-     6) Build PINNACLE paired lines index (event|player|market -> [{line, over, under}])
+     6) Build SHARP paired lines index
+        event|player|market -> {pinnacle:[...], betonlineag:[...]}
   -------------------------------------------------------- */
 
-  const pinPairsByKey = new Map<string, SharpPair[]>();
-  const tmp = new Map<string, { line: number; over?: number; under?: number }>();
+  type SharpPairsByBook = {
+    pinnacle?: SharpPair[];
+    betonlineag?: SharpPair[];
+  };
+
+  const sharpPairsByKey = new Map<string, SharpPairsByBook>();
+  const tmpSharp = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
 
   for (const r of props) {
-    const book = normBook(r.bookmaker);
-    if (book !== "pinnacle") continue;
+    const book = normBookAnySharp(r.bookmaker);
+    if (!book) continue;
 
     const side = normSide(r.side);
     const line = toNum(r.line);
@@ -742,28 +751,34 @@ async function main() {
     if (!side || line == null || odds == null) continue;
 
     const base = idxKey(r.event_id, r.player_name, r.market);
-    const k = `${base}|${line}`;
-    const cur = tmp.get(k) ?? { line };
+    const k = `${base}|${book}|${line}`;
+
+    const cur = tmpSharp.get(k) ?? { book, line };
     if (side === "over") cur.over = odds;
     if (side === "under") cur.under = odds;
-    tmp.set(k, cur);
+    tmpSharp.set(k, cur);
   }
 
-  for (const [k, v] of tmp.entries()) {
+  for (const [k, v] of tmpSharp.entries()) {
     if (v.over == null || v.under == null) continue;
-    const base = k.split("|").slice(0, 3).join("|");
-    const arr = pinPairsByKey.get(base) ?? [];
+
+    const baseKey = k.split("|").slice(0, 3).join("|");
+    const bucket = sharpPairsByKey.get(baseKey) ?? {};
+    const arr = (bucket[v.book] ?? []) as SharpPair[];
     arr.push({ line: v.line, over_odds: v.over, under_odds: v.under });
-    pinPairsByKey.set(base, arr);
+    bucket[v.book] = arr;
+    sharpPairsByKey.set(baseKey, bucket);
   }
 
-  for (const [k, arr] of pinPairsByKey.entries()) {
-    arr.sort((a, b) => a.line - b.line);
-    pinPairsByKey.set(k, arr);
+  for (const [baseKey, bucket] of sharpPairsByKey.entries()) {
+    if (bucket.pinnacle?.length) bucket.pinnacle.sort((a, b) => a.line - b.line);
+    if (bucket.betonlineag?.length) bucket.betonlineag.sort((a, b) => a.line - b.line);
+    sharpPairsByKey.set(baseKey, bucket);
   }
 
-  function nearestPinPair(baseKey: string, targetLine: number): SharpPair | null {
-    const arr = pinPairsByKey.get(baseKey);
+  function nearestSharpPair(baseKey: string, targetLine: number, book: SharpBook): SharpPair | null {
+    const bucket = sharpPairsByKey.get(baseKey);
+    const arr = bucket?.[book];
     if (!arr || !arr.length) return null;
 
     let best: SharpPair | null = null;
@@ -778,6 +793,20 @@ async function main() {
     return best;
   }
 
+  function bestAvailableSharpPair(
+    baseKey: string,
+    targetLine: number
+  ): { book: SharpBook; pair: SharpPair } | null {
+    // Preference: Pinnacle first, then BetOnlineAG
+    const pin = nearestSharpPair(baseKey, targetLine, "pinnacle");
+    if (pin) return { book: "pinnacle", pair: pin };
+
+    const bol = nearestSharpPair(baseKey, targetLine, "betonlineag");
+    if (bol) return { book: "betonlineag", pair: bol };
+
+    return null;
+  }
+
   /* -------------------------------------------------------
      7) Build final EV rows (SOFT books only)
   -------------------------------------------------------- */
@@ -789,9 +818,14 @@ async function main() {
     dropped_no_baseline: 0,
     dropped_no_team: 0,
     dropped_no_model: 0,
-    dropped_no_pinnacle_pair_anywhere: 0,
+
+    used_pinnacle: 0,
+    used_betonline: 0,
+    used_model_only: 0,
+
     dropped_translate_failed: 0,
     dropped_no_context_line: 0,
+
     inserted: 0,
   };
 
@@ -853,12 +887,12 @@ async function main() {
           : null
         : null;
 
-    // ✅ FIXED context lookup
+    // ✅ FIXED context lookup (event_id + canonical team)
     const ow = oddsByEventTeam.get(`${eid}|${base.canonical}`) ?? null;
     const pin_spread_line = ow?.pin_spread_line ?? null;
     const pin_total_line = ow?.pin_total_line ?? null;
 
-    // (optional) if you want to drop rows missing context entirely:
+    // (optional) gate if you want to drop missing context entirely:
     // if (pin_spread_line == null && pin_total_line == null) { diag.dropped_no_context_line++; continue; }
 
     const minutes_factor = minutesFactorFromSpread(pin_spread_line);
@@ -923,37 +957,56 @@ async function main() {
       continue;
     }
 
-    // Synthetic Pinnacle at soft line:
+    // Sharp (Pinnacle -> BetOnlineAG -> model-only)
     const baseKey = idxKey(r.event_id, r.player_name, r.market);
-    const pinPair = nearestPinPair(baseKey, line);
-    if (!pinPair) {
-      diag.dropped_no_pinnacle_pair_anywhere++;
-      continue;
+    const sharpPick = bestAvailableSharpPair(baseKey, line);
+
+    let p_sharp: number | null = null;
+    let sharp_source: "pinnacle" | "betonlineag" | "model_only" = "model_only";
+    let has_sharp = false;
+
+    if (sharpPick) {
+      const pair = sharpPick.pair;
+
+      const pO_imp = americanToImpliedProb(pair.over_odds);
+      const pU_imp = americanToImpliedProb(pair.under_odds);
+      const dev = devigHybrid(pO_imp, pU_imp);
+      const pOver_nv_at_sharpLine = dev.p_over;
+
+      const pOverTarget = translateSharpOverToTarget({
+        marketOut,
+        targetLine: line,
+        sharpLine: pair.line,
+        pOverAtSharpLine: pOver_nv_at_sharpLine,
+        sigmaAnchor: marketOut === "threes" ? null : sigma,
+      });
+
+      if (pOverTarget == null) {
+        // Translation failed -> model-only fallback (still insert)
+        diag.dropped_translate_failed++;
+        p_sharp = null;
+        sharp_source = "model_only";
+        has_sharp = false;
+      } else {
+        p_sharp = side === "over" ? pOverTarget : 1 - pOverTarget;
+        sharp_source = sharpPick.book;
+        has_sharp = true;
+
+        if (sharpPick.book === "pinnacle") diag.used_pinnacle++;
+        else diag.used_betonline++;
+      }
+    } else {
+      diag.used_model_only++;
+      p_sharp = null;
+      sharp_source = "model_only";
+      has_sharp = false;
     }
 
-    const pO_imp = americanToImpliedProb(pinPair.over_odds);
-    const pU_imp = americanToImpliedProb(pinPair.under_odds);
-    const dev = devigHybrid(pO_imp, pU_imp);
-    const pOver_nv_at_pinLine = dev.p_over;
-
-    // Translate to target soft line
-    const pOverTarget = translateSharpOverToTarget({
-      marketOut,
-      targetLine: line,
-      sharpLine: pinPair.line,
-      pOverAtSharpLine: pOver_nv_at_pinLine,
-      sigmaAnchor: marketOut === "threes" ? null : sigma,
-    });
-
-    if (pOverTarget == null) {
-      diag.dropped_translate_failed++;
-      continue;
-    }
-
-    const p_sharp = side === "over" ? pOverTarget : 1 - pOverTarget;
-
-    // Quantum blend
-    const p_quantum = clamp(p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP, 0, 1);
+    // Quantum blend (if no sharp, use model only)
+    const p_quantum =
+      has_sharp && p_sharp != null
+        ? clamp(p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP, 0, 1)
+        : clamp(p_model, 0, 1);
 
     // EV + sizing
     const quantum_fair_odds = impliedProbToAmerican(p_quantum);
@@ -984,7 +1037,7 @@ async function main() {
       book,
       odds,
 
-      // ✅ context (now correctly keyed)
+      // ✅ context (keyed correctly)
       pin_spread_line,
       pin_total_line,
       implied_team_total,
@@ -1000,6 +1053,8 @@ async function main() {
       p_model,
 
       // sharp / quantum
+      has_sharp,
+      sharp_source,
       p_sharp,
       p_quantum,
       quantum_fair_odds,
@@ -1038,12 +1093,17 @@ async function main() {
           dropped_no_baseline: diag.dropped_no_baseline,
           dropped_no_team: diag.dropped_no_team,
           dropped_no_model: diag.dropped_no_model,
-          dropped_no_pinnacle_pair_anywhere: diag.dropped_no_pinnacle_pair_anywhere,
           dropped_translate_failed: diag.dropped_translate_failed,
           dropped_no_context_line: diag.dropped_no_context_line,
         },
+        sharp_usage: {
+          used_pinnacle: diag.used_pinnacle,
+          used_betonline: diag.used_betonline,
+          used_model_only: diag.used_model_only,
+        },
         notes: {
-          context_fix: "odds_wide_latest now indexed by (event_id + canonical team)",
+          context_fix: "odds_wide_latest indexed by (event_id + canonical team)",
+          sharp_fallbacks: "pinnacle -> betonlineag -> model_only",
           devig: {
             eq_if_skew_le: DEVIG_SKEW_EQ_MAX,
             mpto_if_skew_ge: DEVIG_SKEW_MPTO_MIN,
