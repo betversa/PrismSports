@@ -1,14 +1,21 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Quantum inline + Side-by-side History + Predictions tab)
+// screens/OddsScreen.tsx — FULL REWRITE (Game Details modal: Line Movement + Predictions + Player Props)
 // -------------------------------------------------------------------------------------------------
 // ✅ Hero section uses SAME structure/spacing as Model + MonteCarlo screens
 // ✅ Desktop: centered max-width “web” layout
 // ✅ Desktop: books ALWAYS shown (no toggle)
-// ✅ Mobile: Show/Hide Books toggle + More menu (History / Props)
-// ✅ TABLE: Adds Quantum column NEXT to Consensus (no separate Predictions section)
-// ✅ History modal: Line movement charts SIDE-BY-SIDE (Away/Over left, Home/Under right)
-// ✅ History modal: Subnav tabs (Line Movement / Predictions / Player Props)
-// ✅ Predictions tab: Team logos + side-by-side MC data, projected score center, bold win% circle (green/red)
-// ✅ Props tab: odds from player_props_snapshot + meta (pos/pic) from player_prop_ev_latest
+// ✅ Mobile: Show/Hide Books toggle + single Game Details button
+// ✅ ONE button per game: "Game Details" (no separate History / Props / MonteCarlo buttons)
+// ✅ Game Details modal has tabs: Line Movement / Predictions / Player Props
+// ✅ Line Movement tab:
+//    - ONLY place where Market (ML/Spread/Total) buttons exist (single copy)
+//    - Side-by-side charts for Away + Home (Total uses Over + Under)
+//    - Spread/Total hover shows BOTH line + odds (per book)
+// ✅ Predictions tab:
+//    - Pulls from monte_carlo_results (schema per your CSV)
+//    - Side-by-side team panels w/ logos, projected score center, big Win% circle (higher green, lower red)
+// ✅ Player Props tab:
+//    - Odds from player_props_snapshot, meta (pos/pic/team) from player_prop_ev_latest
+//    - ONE ROW PER PLAYER (Over + Under grouped, all books in same row; no duplicate rows per book)
 // ✅ player_props_snapshot has NO created_at (uses ts / snapshot_ts / inserted_at)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -84,8 +91,7 @@ const BOOK_LOGOS: Record<BookKey, string> = {
 };
 
 const COL_MATCHUP = 420;
-const COL_CONSENSUS = 170;
-const COL_QUANTUM = 170;
+const COL_CONSENSUS = 180;
 const COL_BOOK = 120;
 
 const PAGE_MAX_W = "max-w-[1320px]";
@@ -223,7 +229,7 @@ function maxIso(a: string | null, b: string | null) {
 }
 
 /* =========================================================
-   FLEX COLUMN PICKERS (history / monte carlo tables vary)
+   FLEX COLUMN PICKERS (history/props vary)
 ========================================================= */
 
 function pickAny(row: any, keys: string[]) {
@@ -253,7 +259,7 @@ function pickOdds(row: any): number | null {
 }
 
 function pickLine(row: any): number | null {
-  const raw = pickAny(row, ["line", "points", "point", "total", "spread_line", "total_line"]);
+  const raw = pickAny(row, ["line", "points", "point", "total", "spread_line", "total_line", "prop_line", "value"]);
   if (raw == null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
@@ -466,129 +472,7 @@ function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", 
 }
 
 /* =========================================================
-   QUANTUM (Monte Carlo) — flexible mapping
-========================================================= */
-
-type QuantumByEvent = Map<
-  string,
-  {
-    away_ml?: number | null;
-    home_ml?: number | null;
-
-    away_spread_line?: number | null;
-    away_spread_odds?: number | null;
-    home_spread_line?: number | null;
-    home_spread_odds?: number | null;
-
-    total_line?: number | null;
-    over_odds?: number | null;
-    under_odds?: number | null;
-
-    away_win_pct?: number | null;
-    home_win_pct?: number | null;
-    away_score?: number | null;
-    home_score?: number | null;
-
-    // extras
-    pace?: number | null;
-    sigma_margin?: number | null;
-    sigma_total?: number | null;
-    updated_at?: string | null;
-    raw?: any;
-  }
->;
-
-function asNum(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function asPct(v: any): number | null {
-  const n = asNum(v);
-  if (n == null) return null;
-  // Accept either 0-1 or 0-100 formats.
-  if (n > 1.0001) return n; // assume already percent
-  return n * 100;
-}
-
-function mapMonteCarloRowToQuantum(row: any) {
-  // Try MANY likely column names across your schema versions.
-  const away_score = asNum(pickAny(row, ["away_score", "proj_away_score", "away_points", "proj_away_points", "away_pts", "mu_away"]));
-  const home_score = asNum(pickAny(row, ["home_score", "proj_home_score", "home_points", "proj_home_points", "home_pts", "mu_home"]));
-
-  const away_win_pct = asPct(pickAny(row, ["away_win_pct", "away_win_percent", "p_away_win", "away_winprob", "away_win_prob"]));
-  const home_win_pct = asPct(pickAny(row, ["home_win_pct", "home_win_percent", "p_home_win", "home_winprob", "home_win_prob"]));
-
-  // Quantum odds (moneyline)
-  const away_ml = asNum(pickAny(row, ["q_away_ml", "quantum_away_ml", "away_quantum_ml", "away_ml_quantum", "away_ml_fair", "away_fair_ml"]));
-  const home_ml = asNum(pickAny(row, ["q_home_ml", "quantum_home_ml", "home_quantum_ml", "home_ml_quantum", "home_ml_fair", "home_fair_ml"]));
-
-  // Spread / total quantum display (line + odds)
-  const away_spread_line = asNum(pickAny(row, ["q_away_spread_line", "away_spread_line", "proj_spread_away", "away_line"]));
-  const away_spread_odds = asNum(pickAny(row, ["q_away_spread_odds", "away_spread_odds", "away_spread_fair_odds", "away_fair_spread_odds"]));
-
-  const home_spread_line = asNum(pickAny(row, ["q_home_spread_line", "home_spread_line", "proj_spread_home", "home_line"]));
-  const home_spread_odds = asNum(pickAny(row, ["q_home_spread_odds", "home_spread_odds", "home_spread_fair_odds", "home_fair_spread_odds"]));
-
-  const total_line = asNum(pickAny(row, ["q_total_line", "total_line", "proj_total", "projected_total", "mu_total"]));
-  const over_odds = asNum(pickAny(row, ["q_over_odds", "over_odds", "total_over_odds", "over_fair_odds", "q_total_over_odds"]));
-  const under_odds = asNum(pickAny(row, ["q_under_odds", "under_odds", "total_under_odds", "under_fair_odds", "q_total_under_odds"]));
-
-  const pace = asNum(pickAny(row, ["pace", "proj_pace", "expected_pace"]));
-  const sigma_margin = asNum(pickAny(row, ["sigma_margin", "margin_sigma", "sigma_spread", "spread_sigma"]));
-  const sigma_total = asNum(pickAny(row, ["sigma_total", "total_sigma"]));
-  const updated_at = normalizeIso(pickAny(row, ["updated_at", "ts", "run_ts", "created_at", "inserted_at"]));
-
-  return {
-    away_ml,
-    home_ml,
-
-    away_spread_line,
-    away_spread_odds,
-    home_spread_line,
-    home_spread_odds,
-
-    total_line,
-    over_odds,
-    under_odds,
-
-    away_win_pct,
-    home_win_pct,
-    away_score,
-    home_score,
-
-    pace,
-    sigma_margin,
-    sigma_total,
-    updated_at,
-    raw: row,
-  };
-}
-
-function quantumPartsForRow(q: QuantumByEvent, ev: EventOdds, market: Market, side: "AWAY" | "HOME"): CellParts {
-  const r = q.get(ev.eventId);
-  if (!r) return { top: "—" };
-
-  if (market === "ml") {
-    const v = side === "AWAY" ? r.away_ml : r.home_ml;
-    return cellMl(v ?? null);
-  }
-
-  if (market === "spread") {
-    // Prefer explicit away/home spread line+odds. If only one line exists, still render it.
-    const line = side === "AWAY" ? r.away_spread_line : r.home_spread_line;
-    const odds = side === "AWAY" ? r.away_spread_odds : r.home_spread_odds;
-    return cellLineOdds(line ?? null, odds ?? null);
-  }
-
-  // total: away row = Over, home row = Under
-  const line = r.total_line ?? null;
-  const odds = side === "AWAY" ? r.over_odds ?? null : r.under_odds ?? null;
-  return cellLineOdds(line, odds);
-}
-
-/* =========================================================
-   BOOK HEADER PILL
+   BOOK HEADER PILL (white pill like your screenshots)
 ========================================================= */
 
 const BOOK_LOGO_W = 86;
@@ -641,7 +525,15 @@ function BookLogoPill({
 
 function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: boolean }) {
   const fb =
-    bookKey === "dk" ? "DK" : bookKey === "fd" ? "FD" : bookKey === "mgm" ? "MGM" : bookKey === "pin" ? "PIN" : "BOL";
+    bookKey === "dk"
+      ? "DK"
+      : bookKey === "fd"
+      ? "FD"
+      : bookKey === "mgm"
+      ? "MGM"
+      : bookKey === "pin"
+      ? "PIN"
+      : "BOL";
   return (
     <th
       className={[
@@ -668,24 +560,6 @@ function ConsensusValue({ parts }: { parts: CellParts }) {
   );
 }
 
-function QuantumValue({ parts }: { parts: CellParts }) {
-  return (
-    <td
-      className={[
-        "px-2 py-3 text-center tabular-nums font-extrabold text-[13px]",
-        "text-[#f5f5f5]",
-        `border-r ${HDR_BORDER}`,
-      ].join(" ")}
-    >
-      <div className="flex flex-col items-center justify-center leading-tight">
-        <div className="tabular-nums">{parts.top}</div>
-        {parts.bottom != null ? <div className="tabular-nums opacity-95">{parts.bottom}</div> : null}
-        <div className="mt-1 text-[10px] font-bold text-[#808080]">Quantum</div>
-      </div>
-    </td>
-  );
-}
-
 function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
   return (
     <td
@@ -699,7 +573,15 @@ function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boole
   );
 }
 
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+function MiniTeamRow({
+  team,
+  logoUrl,
+  side,
+}: {
+  team: string;
+  logoUrl: string | null;
+  side: "AWAY" | "HOME";
+}) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -725,7 +607,7 @@ function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | 
 }
 
 /* =========================================================
-   SEGMENTED MARKET CONTROL
+   SEGMENTED MARKET CONTROL (board)
 ========================================================= */
 
 function SegButton({
@@ -744,7 +626,9 @@ function SegButton({
       className={[
         "px-3 py-1.5 text-xs font-extrabold transition-colors",
         "border border-[#2a2a2a]",
-        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -771,7 +655,7 @@ function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) =
 }
 
 /* =========================================================
-   HERO CHIPS
+   HERO CHIPS (exact vibe as model screens)
 ========================================================= */
 
 function Chip({ label, value }: { label: string; value: React.ReactNode }) {
@@ -779,77 +663,6 @@ function Chip({ label, value }: { label: string; value: React.ReactNode }) {
     <div className={CHIP}>
       <div className={CHIP_L}>{label}</div>
       <div className={CHIP_V}>{value}</div>
-    </div>
-  );
-}
-
-/* =========================================================
-   MOBILE “MORE” MENU
-========================================================= */
-
-function useOutsideClose<T extends HTMLElement>(onClose: () => void) {
-  const ref = useRef<T | null>(null);
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) onClose();
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [onClose]);
-  return ref;
-}
-
-function MobileMoreMenu({
-  onHistory,
-  onPredictions,
-  onProps,
-}: {
-  onHistory: () => void;
-  onPredictions: () => void;
-  onProps: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useOutsideClose<HTMLDivElement>(() => setOpen(false));
-  return (
-    <div className="relative" ref={ref as any}>
-      <button type="button" onClick={() => setOpen((v) => !v)} className={BTN_GHOST}>
-        More ▾
-      </button>
-      {open && (
-        <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] shadow-[0_16px_60px_rgba(0,0,0,0.45)] overflow-hidden z-20">
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onHistory();
-            }}
-            className="w-full text-left px-3 py-2 text-[12px] font-extrabold text-[#d4af37] hover:bg-white/5"
-          >
-            Line Movement
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onPredictions();
-            }}
-            className="w-full text-left px-3 py-2 text-[12px] font-extrabold text-white hover:bg-white/5"
-          >
-            Predictions
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onProps();
-            }}
-            className="w-full text-left px-3 py-2 text-[12px] font-extrabold text-white hover:bg-white/5"
-          >
-            Player Props
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -863,28 +676,19 @@ function EventCardMobile({
   market,
   booksOpen,
   onToggleBooks,
-  onOpenModalMovement,
-  onOpenModalPredictions,
-  onOpenModalProps,
-  quantum,
+  onOpenDetails,
 }: {
   ev: EventOdds;
   market: Market;
   booksOpen: boolean;
   onToggleBooks: () => void;
-  onOpenModalMovement: (ev: EventOdds) => void;
-  onOpenModalPredictions: (ev: EventOdds) => void;
-  onOpenModalProps: (ev: EventOdds) => void;
-  quantum: QuantumByEvent;
+  onOpenDetails: (ev: EventOdds) => void;
 }) {
   const leftLabel = market === "total" ? "Over" : "Away";
   const rightLabel = market === "total" ? "Under" : "Home";
 
   const awayCons = consensusPartsForRow(ev, market, "AWAY");
   const homeCons = consensusPartsForRow(ev, market, "HOME");
-
-  const awayQ = quantumPartsForRow(quantum, ev, market, "AWAY");
-  const homeQ = quantumPartsForRow(quantum, ev, market, "HOME");
 
   const metaFor = (book: BookKey) =>
     book === "dk"
@@ -906,11 +710,9 @@ function EventCardMobile({
           <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
             {booksOpen ? "Hide Books" : "Show Books"}
           </button>
-          <MobileMoreMenu
-            onHistory={() => onOpenModalMovement(ev)}
-            onPredictions={() => onOpenModalPredictions(ev)}
-            onProps={() => onOpenModalProps(ev)}
-          />
+          <button type="button" onClick={() => onOpenDetails(ev)} className={[BTN_BASE, BTN_ON].join(" ")}>
+            Game Details
+          </button>
         </div>
       </div>
 
@@ -922,7 +724,7 @@ function EventCardMobile({
       <div className="px-4 pb-4">
         <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px] text-white font-extrabold">Consensus vs Quantum</div>
+            <div className="text-[12px] text-white font-extrabold">Consensus</div>
             <div className="text-[11px] text-[#808080] font-semibold">
               {market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}
             </div>
@@ -930,30 +732,15 @@ function EventCardMobile({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-1 text-center">{leftLabel}</div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-md border border-[#1f1f1f] bg-black/30 p-2">
-                  <div className="text-[10px] text-[#808080] font-semibold text-center">Cons</div>
-                  <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
-                </div>
-                <div className="rounded-md border border-[#1f1f1f] bg-black/30 p-2">
-                  <div className="text-[10px] text-[#808080] font-semibold text-center">Quantum</div>
-                  <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayQ)}</div>
-                </div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(awayCons)}
               </div>
             </div>
-
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-1 text-center">{rightLabel}</div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-md border border-[#1f1f1f] bg-black/30 p-2">
-                  <div className="text-[10px] text-[#808080] font-semibold text-center">Cons</div>
-                  <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
-                </div>
-                <div className="rounded-md border border-[#1f1f1f] bg-black/30 p-2">
-                  <div className="text-[10px] text-[#808080] font-semibold text-center">Quantum</div>
-                  <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeQ)}</div>
-                </div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(homeCons)}
               </div>
             </div>
           </div>
@@ -1001,42 +788,28 @@ function EventCardMobile({
 function EventTwoRows({
   ev,
   market,
-  onOpenModalMovement,
-  onOpenModalPredictions,
-  onOpenModalProps,
-  quantum,
+  onOpenDetails,
 }: {
   ev: EventOdds;
   market: Market;
-  onOpenModalMovement: (ev: EventOdds) => void;
-  onOpenModalPredictions: (ev: EventOdds) => void;
-  onOpenModalProps: (ev: EventOdds) => void;
-  quantum: QuantumByEvent;
+  onOpenDetails: (ev: EventOdds) => void;
 }) {
   const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
   const homeConsensus = consensusPartsForRow(ev, market, "HOME");
 
-  const awayQuantum = quantumPartsForRow(quantum, ev, market, "AWAY");
-  const homeQuantum = quantumPartsForRow(quantum, ev, market, "HOME");
-
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
-        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
+        <td
+          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
+          rowSpan={2}
+        >
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => onOpenModalMovement(ev)} className={LINK_GOLD}>
-                Line Movement
-              </button>
-              <button type="button" onClick={() => onOpenModalPredictions(ev)} className={BTN_GHOST}>
-                Predictions
-              </button>
-              <button type="button" onClick={() => onOpenModalProps(ev)} className={BTN_GHOST}>
-                Props
-              </button>
-            </div>
+            <button type="button" onClick={() => onOpenDetails(ev)} className={[BTN_BASE, BTN_ON].join(" ")}>
+              Game Details
+            </button>
           </div>
 
           <div className="space-y-3">
@@ -1046,7 +819,6 @@ function EventTwoRows({
         </td>
 
         <ConsensusValue parts={awayConsensus} />
-        <QuantumValue parts={awayQuantum} />
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "dk")} borderLeft />
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "fd")} />
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "mgm")} />
@@ -1056,7 +828,6 @@ function EventTwoRows({
 
       <tr className={["hover:bg-white/5 transition-colors", `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue parts={homeConsensus} />
-        <QuantumValue parts={homeQuantum} />
         <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
         <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
         <BookValue parts={partsForBookSide(ev, market, "HOME", "mgm")} />
@@ -1065,17 +836,15 @@ function EventTwoRows({
       </tr>
 
       <tr>
-        <td colSpan={8} className="h-2 bg-transparent" />
+        <td colSpan={7} className="h-2 bg-transparent" />
       </tr>
     </>
   );
 }
 
 /* =========================================================
-   MODAL SHELL + TABS
+   MODAL SHELL
 ========================================================= */
-
-type ModalTab = "movement" | "predictions" | "props";
 
 function ModalShell({
   title,
@@ -1123,46 +892,39 @@ function ModalShell({
   );
 }
 
-function ModalTabs({
-  tab,
-  setTab,
+/* =========================================================
+   GAME DETAILS MODAL (tabs)
+========================================================= */
+
+type DetailsTab = "line" | "pred" | "props";
+
+function TabBtn({
+  active,
+  onClick,
+  children,
 }: {
-  tab: ModalTab;
-  setTab: (t: ModalTab) => void;
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 mb-3">
-      <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-        <button
-          type="button"
-          onClick={() => setTab("movement")}
-          className={`px-3 py-1.5 text-xs font-extrabold ${tab === "movement" ? "bg-[#d4af37] text-black" : "text-white"}`}
-        >
-          Line Movement
-        </button>
-        <div className="w-px bg-[#2a2a2a]" />
-        <button
-          type="button"
-          onClick={() => setTab("predictions")}
-          className={`px-3 py-1.5 text-xs font-extrabold ${tab === "predictions" ? "bg-[#d4af37] text-black" : "text-white"}`}
-        >
-          Predictions
-        </button>
-        <div className="w-px bg-[#2a2a2a]" />
-        <button
-          type="button"
-          onClick={() => setTab("props")}
-          className={`px-3 py-1.5 text-xs font-extrabold ${tab === "props" ? "bg-[#d4af37] text-black" : "text-white"}`}
-        >
-          Player Props
-        </button>
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-1.5 text-xs font-extrabold rounded-lg border transition-colors",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
+      ].join(" ")}
+    >
+      {children}
+    </button>
   );
 }
 
 /* =========================================================
-   HISTORY (SIDE-BY-SIDE)
+   LINE MOVEMENT (side-by-side charts)
 ========================================================= */
 
 type HistoryRow = {
@@ -1175,16 +937,14 @@ type HistoryRow = {
 type HistoryPoint = {
   ts: string; // iso
   label: string; // CT formatted
-  [key: string]: any; // book series values: "dk", "fd", ...
+  [key: string]: any; // values per book; plus book__line
 };
 
 function buildSeries(points: HistoryRow[]): HistoryPoint[] {
   const byTs = new Map<string, HistoryPoint>();
   for (const r of points) {
     const key = r.ts;
-    if (!byTs.has(key)) {
-      byTs.set(key, { ts: key, label: fmtCTDateTimeLong(key) });
-    }
+    if (!byTs.has(key)) byTs.set(key, { ts: key, label: fmtCTDateTimeLong(key) });
     const p = byTs.get(key)!;
     p[r.book] = r.odds;
     p[`${r.book}__line`] = r.line;
@@ -1196,106 +956,171 @@ function buildSeries(points: HistoryRow[]): HistoryPoint[] {
   });
 }
 
-function HistoryTooltip({ active, payload, label, title }: any) {
+function HistoryTooltip({
+  active,
+  payload,
+  label,
+  market,
+}: any) {
   if (!active || !payload?.length) return null;
 
-  const tsLabel = label || payload?.[0]?.payload?.label || "—";
+  const base = payload?.[0]?.payload ?? {};
+  const tsLabel = label || base?.label || "—";
+
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 shadow-[0_16px_60px_rgba(0,0,0,0.45)]">
       <div className="text-[11px] text-[#d0d0d0] font-extrabold">{tsLabel} CT</div>
-      {title ? <div className="mt-0.5 text-[10px] text-[#808080] font-semibold">{title}</div> : null}
-      <div className="mt-2 space-y-1">
+
+      <div className="mt-1 space-y-1">
         {payload
           .filter((p: any) => BOOKS.includes(p.dataKey))
           .map((p: any) => {
             const bk = p.dataKey as BookKey;
-            const v = p.value;
+            const odds = p.value as number | null | undefined;
+
+            const line = base?.[`${bk}__line`] ?? null;
+
             return (
               <div key={bk} className="flex items-center justify-between gap-3 text-[11px]">
                 <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
                   {BOOK_LABEL[bk]}
                 </div>
-                <div className="text-white font-extrabold tabular-nums">{v == null ? "—" : String(v)}</div>
+
+                <div className="text-white font-extrabold tabular-nums">
+                  {market === "ml"
+                    ? odds == null
+                      ? "—"
+                      : String(odds)
+                    : line == null && odds == null
+                    ? "—"
+                    : `${line == null ? "—" : String(line)}  (${odds == null ? "—" : String(odds)})`}
+                </div>
               </div>
             );
           })}
+      </div>
+
+      <div className="mt-2 text-[10px] text-[#808080] font-semibold">
+        {market === "ml"
+          ? "Moneyline Odds History"
+          : market === "spread"
+          ? "Spread (line + odds) History"
+          : "Total (line + odds) History"}
       </div>
     </div>
   );
 }
 
-function parseHistoryRows(found: any[], market: Market, side: "AWAY" | "HOME"): HistoryRow[] {
-  const sideKey = side.toLowerCase(); // away/home
+async function fetchOddsHistoryAnyTable({
+  sportKey,
+  eventId,
+}: {
+  sportKey: string;
+  eventId: string;
+}): Promise<{ rows: any[]; table: string | null; error: string | null }> {
+  const candidates = ["odds_history", "odds_log", "odds_snapshots", "odds_snapshot_history"];
+  let lastErr: string | null = null;
+
+  for (const t of candidates) {
+    const { data, error } = await supabase
+      .from(t)
+      .select("*")
+      .eq("sport_key", sportKey)
+      .eq("event_id", eventId)
+      .order("ts", { ascending: true });
+
+    if (!error && data) return { rows: data, table: t, error: null };
+    lastErr = error?.message ?? lastErr;
+  }
+
+  return { rows: [], table: null, error: lastErr ?? "No matching history table found." };
+}
+
+function parseHistoryRows({
+  raw,
+  market,
+  wantSide,
+}: {
+  raw: any[];
+  market: Market;
+  wantSide: "AWAY" | "HOME";
+}): HistoryRow[] {
+  const sideKey = wantSide.toLowerCase(); // away/home
   const wantOverUnder = market === "total";
 
   const parsed: HistoryRow[] = [];
 
-  for (const r of found) {
+  for (const r of raw) {
     const ts = pickTs(r);
     const bk = bookKeyFromRaw(pickBook(r));
     if (!ts || !bk) continue;
 
-    // market matching: try common keys
     const marketRaw = String(pickAny(r, ["market", "market_key", "bet_type", "type"]) ?? "").toLowerCase();
     const isMl = marketRaw.includes("h2h") || marketRaw.includes("moneyline") || marketRaw === "ml";
     const isSpread = marketRaw.includes("spread");
     const isTotal = marketRaw.includes("total") || marketRaw.includes("ou") || marketRaw.includes("over_under");
 
+    // If the table has market keys, respect them; if not present, allow pass-through.
     if (marketRaw) {
       if (market === "ml" && !isMl) continue;
       if (market === "spread" && !isSpread) continue;
       if (market === "total" && !isTotal) continue;
     }
 
-    // side matching
     const sideRaw = pickSide(r);
     const ouRaw = pickOU(r);
 
     let sideOk = true;
 
     if (wantOverUnder) {
-      const need = side === "AWAY" ? "over" : "under";
+      // total uses Over/Under; our UI maps AWAY->Over, HOME->Under
+      const need = wantSide === "AWAY" ? "over" : "under";
       if (ouRaw) sideOk = ouRaw.includes(need);
+      else if (sideRaw) sideOk = sideRaw.includes(need); // fallback
     } else {
       if (sideRaw) sideOk = sideRaw.includes(sideKey);
     }
 
     if (!sideOk) continue;
 
-    const odds = pickOdds(r);
-    const line = pickLine(r);
-
-    parsed.push({ ts, book: bk, odds, line });
+    parsed.push({
+      ts,
+      book: bk,
+      odds: pickOdds(r),
+      line: pickLine(r),
+    });
   }
 
   return parsed;
 }
 
-function HistoryChart({
-  title,
-  points,
+function SideBySideLineCharts({
+  leftTitle,
+  rightTitle,
+  leftPoints,
+  rightPoints,
+  market,
 }: {
-  title: string;
-  points: HistoryPoint[];
+  leftTitle: string;
+  rightTitle: string;
+  leftPoints: HistoryPoint[];
+  rightPoints: HistoryPoint[];
+  market: Market;
 }) {
-  return (
+  const chart = (title: string, pts: HistoryPoint[]) => (
     <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-3">
       <div className="text-[12px] text-white font-extrabold mb-2">{title}</div>
-      {!points.length ? (
+
+      {!pts.length ? (
         <div className="text-sm text-[#808080] p-4">No odds history available for this side.</div>
       ) : (
-        <div className="h-[300px]">
+        <div className="h-[280px]">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={points} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+            <LineChart data={pts} margin={{ top: 10, right: 18, left: 0, bottom: 10 }}>
               <CartesianGrid stroke="#222222" strokeDasharray="3 3" />
-              <XAxis
-                dataKey="label"
-                tick={{ fill: "#9a9a9a", fontSize: 10 }}
-                interval="preserveStartEnd"
-                minTickGap={18}
-              />
+              <XAxis dataKey="label" tick={{ fill: "#9a9a9a", fontSize: 10 }} interval="preserveStartEnd" minTickGap={18} />
               <YAxis tick={{ fill: "#9a9a9a", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
-              <Tooltip content={<HistoryTooltip title={title} />} />
+              <Tooltip content={<HistoryTooltip market={market} />} />
               <Legend wrapperStyle={{ color: "#d0d0d0", fontSize: 11 }} />
               {BOOKS.map((bk) => (
                 <Line
@@ -1313,331 +1138,87 @@ function HistoryChart({
           </ResponsiveContainer>
         </div>
       )}
+
       <div className="mt-2 text-[11px] text-[#808080]">
-        Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>.
+        {market === "ml" ? (
+          <>
+            Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>.
+          </>
+        ) : (
+          <>
+            Tooltip includes <span className="text-white font-extrabold">line + odds</span> and{" "}
+            <span className="text-white font-extrabold">date + time (CT)</span>.
+          </>
+        )}
       </div>
     </div>
   );
-}
-
-function LineMovementPanel({
-  sportKey,
-  ev,
-}: {
-  sportKey: string;
-  ev: EventOdds;
-}) {
-  const [market, setMarket] = useState<Market>("ml");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [found, setFound] = useState<any[] | null>(null);
-
-  useEffect(() => {
-    setError("");
-    setLoading(true);
-
-    const fetchHistory = async () => {
-      // Try likely history tables (resilient across schema changes).
-      const candidates = ["odds_history", "odds_log", "odds_snapshots", "odds_snapshot_history"];
-
-      let lastErr: string | null = null;
-      let dataFound: any[] | null = null;
-
-      for (const t of candidates) {
-        const { data, error } = await supabase
-          .from(t)
-          .select("*")
-          .eq("sport_key", sportKey)
-          .eq("event_id", ev.eventId)
-          .order("ts", { ascending: true });
-
-        if (!error && data) {
-          dataFound = data;
-          lastErr = null;
-          break;
-        }
-        lastErr = error?.message ?? lastErr;
-      }
-
-      if (!dataFound) {
-        setFound([]);
-        setError(lastErr ?? "No history available (no matching table).");
-        setLoading(false);
-        return;
-      }
-
-      setFound(dataFound);
-      setLoading(false);
-    };
-
-    fetchHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sportKey, ev.eventId]);
-
-  const awayLabel = market === "total" ? "Over" : ev.away?.team ?? "Away";
-  const homeLabel = market === "total" ? "Under" : ev.home?.team ?? "Home";
-
-  const rowsAway = useMemo(() => (found ? parseHistoryRows(found, market, "AWAY") : []), [found, market]);
-  const rowsHome = useMemo(() => (found ? parseHistoryRows(found, market, "HOME") : []), [found, market]);
-
-  const pointsAway = useMemo(() => buildSeries(rowsAway), [rowsAway]);
-  const pointsHome = useMemo(() => buildSeries(rowsHome), [rowsHome]);
 
   return (
-    <div>
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-          <button
-            type="button"
-            className={`px-3 py-1.5 text-xs font-extrabold ${market === "ml" ? "bg-[#d4af37] text-black" : "text-white"} `}
-            onClick={() => setMarket("ml")}
-          >
-            Moneyline
-          </button>
-          <div className="w-px bg-[#2a2a2a]" />
-          <button
-            type="button"
-            className={`px-3 py-1.5 text-xs font-extrabold ${market === "spread" ? "bg-[#d4af37] text-black" : "text-white"} `}
-            onClick={() => setMarket("spread")}
-          >
-            Spread
-          </button>
-          <div className="w-px bg-[#2a2a2a]" />
-          <button
-            type="button"
-            className={`px-3 py-1.5 text-xs font-extrabold ${market === "total" ? "bg-[#d4af37] text-black" : "text-white"} `}
-            onClick={() => setMarket("total")}
-          >
-            Total
-          </button>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="text-sm text-[#808080] p-4">Loading history…</div>
-      ) : error ? (
-        <div className="text-sm text-red-400 p-4">No odds history available: {error}</div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <HistoryChart title={`${awayLabel} • ${market.toUpperCase()}`} points={pointsAway} />
-          <HistoryChart title={`${homeLabel} • ${market.toUpperCase()}`} points={pointsHome} />
-        </div>
-      )}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {chart(leftTitle, leftPoints)}
+      {chart(rightTitle, rightPoints)}
     </div>
   );
 }
 
 /* =========================================================
-   PREDICTIONS PANEL (Monte Carlo side-by-side)
+   PREDICTIONS (monte_carlo_results)
 ========================================================= */
 
-function pctFmt(p: number | null | undefined) {
-  if (p == null || !Number.isFinite(p)) return "—";
-  return `${p.toFixed(1)}%`;
+type MonteCarloRow = {
+  event_id: string;
+  commence_time?: string | null;
+  matchup?: string | null;
+  home_team?: string | null;
+  away_team?: string | null;
+
+  projected_home_points?: number | null;
+  projected_away_points?: number | null;
+
+  home_win_prob?: number | null;
+  away_win_prob?: number | null;
+
+  projected_margin_home?: number | null;
+  projected_total?: number | null;
+
+  spread_line_home?: number | null;
+  home_cover_prob?: number | null;
+  cover_push_prob?: number | null;
+  away_cover_prob?: number | null;
+
+  total_line?: number | null;
+  over_prob?: number | null;
+  total_push_prob?: number | null;
+  under_prob?: number | null;
+
+  sigma_margin_game?: number | null;
+  sigma_total_game?: number | null;
+};
+
+function toNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
-function numFmt(n: number | null | undefined, d = 1) {
-  if (n == null || !Number.isFinite(n)) return "—";
-  return n.toFixed(d);
+function pct(v: number | null | undefined) {
+  if (v == null) return "—";
+  // handle both 0-1 or 0-100 inputs robustly
+  const x = v > 1.5 ? v / 100 : v;
+  return `${(x * 100).toFixed(1)}%`;
 }
 
-function PredictionsPanel({
-  ev,
-  quantum,
-  market,
-}: {
-  ev: EventOdds;
-  quantum: QuantumByEvent;
-  market: Market;
-}) {
-  const r = quantum.get(ev.eventId) ?? null;
-
-  const awayTeam = ev.away?.team ?? "Away";
-  const homeTeam = ev.home?.team ?? "Home";
-
-  const awayLogo = ev.away?.logoUrl ?? null;
-  const homeLogo = ev.home?.logoUrl ?? null;
-
-  const awayScore = r?.away_score ?? null;
-  const homeScore = r?.home_score ?? null;
-
-  const awayWin = r?.away_win_pct ?? null;
-  const homeWin = r?.home_win_pct ?? null;
-
-  const winner =
-    awayWin != null && homeWin != null
-      ? awayWin >= homeWin
-        ? "away"
-        : "home"
-      : null;
-
-  const winCirclePct = winner === "away" ? awayWin : winner === "home" ? homeWin : null;
-  const winCircleColor =
-    winner === "away"
-      ? "border-emerald-400 text-emerald-300"
-      : winner === "home"
-      ? "border-emerald-400 text-emerald-300"
-      : "border-[#2a2a2a] text-white";
-
-  // Show line/odds based on current market selection for a little context.
-  const qAway = quantumPartsForRow(quantum, ev, market, "AWAY");
-  const qHome = quantumPartsForRow(quantum, ev, market, "HOME");
-
-  const pace = r?.pace ?? null;
-  const sMargin = r?.sigma_margin ?? null;
-  const sTotal = r?.sigma_total ?? null;
-
-  return (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-      <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-4">
-        <div className="text-white font-extrabold text-sm">Monte Carlo • Predictions</div>
-        <div className="text-[11px] text-[#808080] font-semibold">
-          Updated: <span className="text-white font-extrabold">{fmtCTDateTime(r?.updated_at ?? null)}</span>
-        </div>
-      </div>
-
-      <div className="p-4">
-        {/* Top row: Away | Center | Home */}
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_320px_1fr] gap-3 items-stretch">
-          {/* Away panel */}
-          <div className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
-            <div className="flex items-center gap-3">
-              {awayLogo ? (
-                <img
-                  src={awayLogo}
-                  alt={`${awayTeam} logo`}
-                  className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                  loading="lazy"
-                  onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                />
-              ) : (
-                <div className="w-12 h-12 rounded-md bg-white/5 border border-[#2a2a2a]" />
-              )}
-              <div className="min-w-0">
-                <div className="text-white font-extrabold text-[15px] truncate">{awayTeam}</div>
-                <div className={`text-[12px] font-extrabold ${winner === "away" ? "text-emerald-400" : "text-red-400"}`}>
-                  Win%: {pctFmt(awayWin)}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="rounded-xl border border-[#1f1f1f] bg-black/20 p-3">
-                <div className="text-[10px] text-[#808080] font-semibold">Proj Score</div>
-                <div className="text-white font-extrabold tabular-nums text-[18px]">{numFmt(awayScore, 1)}</div>
-              </div>
-              <div className="rounded-xl border border-[#1f1f1f] bg-black/20 p-3">
-                <div className="text-[10px] text-[#808080] font-semibold">Quantum ({market.toUpperCase()})</div>
-                <div className="text-white font-extrabold tabular-nums text-[14px]">{renderCellParts(qAway)}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Center panel */}
-          <div className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 flex flex-col items-center justify-center">
-            <div className="text-[11px] text-[#808080] font-semibold mb-2">Projected Score</div>
-            <div className="text-white font-extrabold tabular-nums text-[30px] leading-none">
-              {awayScore == null || homeScore == null ? "—" : `${numFmt(awayScore, 0)} — ${numFmt(homeScore, 0)}`}
-            </div>
-
-            <div className="mt-4 flex flex-col items-center">
-              <div
-                className={[
-                  "w-28 h-28 rounded-full border-4 flex items-center justify-center",
-                  winCircleColor,
-                  "bg-black/10",
-                ].join(" ")}
-              >
-                <div className="text-center">
-                  <div className="text-[10px] text-[#808080] font-bold">Win%</div>
-                  <div className="text-[22px] font-extrabold tabular-nums">{pctFmt(winCirclePct)}</div>
-                </div>
-              </div>
-
-              <div className="mt-3 flex items-center gap-3 text-[12px] font-extrabold">
-                <span className={winner === "away" ? "text-emerald-400" : "text-red-400"}>
-                  {awayTeam}: {pctFmt(awayWin)}
-                </span>
-                <span className="text-[#4a4a4a]">•</span>
-                <span className={winner === "home" ? "text-emerald-400" : "text-red-400"}>
-                  {homeTeam}: {pctFmt(homeWin)}
-                </span>
-              </div>
-
-              <div className="mt-3 grid grid-cols-3 gap-2 w-full">
-                <div className="rounded-xl border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                  <div className="text-[10px] text-[#808080] font-semibold">Pace</div>
-                  <div className="text-white font-extrabold tabular-nums text-[12px]">{numFmt(pace, 1)}</div>
-                </div>
-                <div className="rounded-xl border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                  <div className="text-[10px] text-[#808080] font-semibold">σ Margin</div>
-                  <div className="text-white font-extrabold tabular-nums text-[12px]">{numFmt(sMargin, 2)}</div>
-                </div>
-                <div className="rounded-xl border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                  <div className="text-[10px] text-[#808080] font-semibold">σ Total</div>
-                  <div className="text-white font-extrabold tabular-nums text-[12px]">{numFmt(sTotal, 2)}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Home panel */}
-          <div className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
-            <div className="flex items-center gap-3">
-              {homeLogo ? (
-                <img
-                  src={homeLogo}
-                  alt={`${homeTeam} logo`}
-                  className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                  loading="lazy"
-                  onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                />
-              ) : (
-                <div className="w-12 h-12 rounded-md bg-white/5 border border-[#2a2a2a]" />
-              )}
-              <div className="min-w-0">
-                <div className="text-white font-extrabold text-[15px] truncate">{homeTeam}</div>
-                <div className={`text-[12px] font-extrabold ${winner === "home" ? "text-emerald-400" : "text-red-400"}`}>
-                  Win%: {pctFmt(homeWin)}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="rounded-xl border border-[#1f1f1f] bg-black/20 p-3">
-                <div className="text-[10px] text-[#808080] font-semibold">Proj Score</div>
-                <div className="text-white font-extrabold tabular-nums text-[18px]">{numFmt(homeScore, 1)}</div>
-              </div>
-              <div className="rounded-xl border border-[#1f1f1f] bg-black/20 p-3">
-                <div className="text-[10px] text-[#808080] font-semibold">Quantum ({market.toUpperCase()})</div>
-                <div className="text-white font-extrabold tabular-nums text-[14px]">{renderCellParts(qHome)}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Raw JSON (collapsed-ish) */}
-        <details className="mt-4">
-          <summary className="cursor-pointer text-[11px] font-extrabold text-[#d4af37] hover:underline">
-            Show raw Monte Carlo row
-          </summary>
-          <pre className="mt-2 text-[11px] text-[#cfcfcf] bg-black/30 border border-[#2a2a2a] rounded-xl p-3 overflow-auto">
-{JSON.stringify(r?.raw ?? null, null, 2)}
-          </pre>
-        </details>
-
-        {!r ? (
-          <div className="mt-3 text-[12px] text-red-400 font-semibold">
-            No Monte Carlo row found for this event_id. (Quantum column will show —.)
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
+function winColor(a: number | null, b: number | null) {
+  const ax = a == null ? null : a > 1.5 ? a / 100 : a;
+  const bx = b == null ? null : b > 1.5 ? b / 100 : b;
+  if (ax == null || bx == null) return { a: "text-white", b: "text-white" };
+  if (ax > bx) return { a: "text-emerald-400", b: "text-red-400" };
+  if (bx > ax) return { a: "text-red-400", b: "text-emerald-400" };
+  return { a: "text-white", b: "text-white" };
 }
 
 /* =========================================================
-   PLAYER PROPS PANEL (same functionality, now tabbed)
+   PLAYER PROPS (aggregate 1 row per player; all books in row)
 ========================================================= */
 
 type PropMarket = "Points" | "Rebounds" | "Assists" | "3 Pointers";
@@ -1650,20 +1231,6 @@ function canonPropMarket(m: PropMarket) {
   return ["threes", "3pm", "player_threes", "3_pointers", "3-pointers"];
 }
 
-type PropRow = {
-  player_name: string;
-  team: string | null;
-  position: string | null;
-  picture_url: string | null;
-
-  market: string;
-  side: string; // over/under
-  line: number | null;
-  odds: number | null;
-  bookmaker: string | null;
-  ts: string | null;
-};
-
 function normalizeSideOU(s: string | null): "over" | "under" | null {
   if (!s) return null;
   const v = s.toLowerCase();
@@ -1672,48 +1239,256 @@ function normalizeSideOU(s: string | null): "over" | "under" | null {
   return null;
 }
 
-function PlayerPropsPanel({
+type PropCell = { odds: number | null; line: number | null; ts: string | null };
+type PropAggRow = {
+  player_name: string;
+  team: string | null;
+  position: string | null;
+  picture_url: string | null;
+
+  // one row per player; store per-book values for over + under
+  over: Record<BookKey, PropCell>;
+  under: Record<BookKey, PropCell>;
+
+  // display line = median latest line across books/sides (usually same)
+  display_line: number | null;
+};
+
+function emptyPropCell(): PropCell {
+  return { odds: null, line: null, ts: null };
+}
+function emptyPropSide(): Record<BookKey, PropCell> {
+  return { dk: emptyPropCell(), fd: emptyPropCell(), mgm: emptyPropCell(), pin: emptyPropCell(), bol: emptyPropCell() };
+}
+
+function bestCell(a: PropCell, b: PropCell): PropCell {
+  // keep newest ts (if present), else keep a if it has odds
+  const ta = a.ts ? new Date(a.ts).getTime() : 0;
+  const tb = b.ts ? new Date(b.ts).getTime() : 0;
+  if (tb > ta) return b;
+  if (ta > tb) return a;
+  // tie: keep the one with odds
+  if (b.odds != null && a.odds == null) return b;
+  return a;
+}
+
+function fmtLineOdds(line: number | null, odds: number | null) {
+  if (line == null && odds == null) return "—";
+  if (line == null) return `(${odds == null ? "—" : odds})`;
+  if (odds == null) return String(line);
+  return `${line} (${odds})`;
+}
+
+/* =========================================================
+   GAME DETAILS MODAL (implementation)
+========================================================= */
+
+function GameDetailsModal({
   sportKey,
   ev,
+  onClose,
 }: {
   sportKey: string;
   ev: EventOdds;
+  onClose: () => void;
 }) {
-  const [market, setMarket] = useState<PropMarket>("Points");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [rows, setRows] = useState<PropRow[]>([]);
+  const [tab, setTab] = useState<DetailsTab>("line");
 
+  // line movement state
+  const [lmMarket, setLmMarket] = useState<Market>("ml");
+  const [lmLoading, setLmLoading] = useState(true);
+  const [lmError, setLmError] = useState("");
+  const [lmAwayRows, setLmAwayRows] = useState<HistoryRow[]>([]);
+  const [lmHomeRows, setLmHomeRows] = useState<HistoryRow[]>([]);
+
+  // predictions state
+  const [predLoading, setPredLoading] = useState(true);
+  const [predError, setPredError] = useState("");
+  const [predRow, setPredRow] = useState<MonteCarloRow | null>(null);
+
+  // props state
+  const [propMarket, setPropMarket] = useState<PropMarket>("Points");
+  const [propsLoading, setPropsLoading] = useState(true);
+  const [propsError, setPropsError] = useState("");
+  const [propsAgg, setPropsAgg] = useState<PropAggRow[]>([]);
+
+  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
+
+  // Load line movement whenever tab= line (or market changes)
   useEffect(() => {
-    setLoading(true);
-    setError("");
+    if (tab !== "line") return;
 
-    const fetchProps = async () => {
+    let alive = true;
+    setLmLoading(true);
+    setLmError("");
+
+    (async () => {
+      const res = await fetchOddsHistoryAnyTable({ sportKey, eventId: ev.eventId });
+
+      if (!alive) return;
+
+      if (res.error || !res.table) {
+        setLmAwayRows([]);
+        setLmHomeRows([]);
+        setLmError(res.error ?? "No odds history available.");
+        setLmLoading(false);
+        return;
+      }
+
+      const away = parseHistoryRows({ raw: res.rows, market: lmMarket, wantSide: "AWAY" });
+      const home = parseHistoryRows({ raw: res.rows, market: lmMarket, wantSide: "HOME" });
+
+      setLmAwayRows(away);
+      setLmHomeRows(home);
+      setLmLoading(false);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [tab, sportKey, ev.eventId, lmMarket]);
+
+  // Load predictions once (when tab=pred)
+  useEffect(() => {
+    if (tab !== "pred") return;
+
+    let alive = true;
+    setPredLoading(true);
+    setPredError("");
+    setPredRow(null);
+
+    (async () => {
+      // monte_carlo_results per your CSV
+      // (be tolerant about column presence; sport_key may or may not exist)
+      const q = supabase.from("monte_carlo_results").select("*").eq("event_id", ev.eventId);
+      const { data, error } = await q.limit(1);
+
+      if (!alive) return;
+
+      if (error) {
+        setPredError(error.message);
+        setPredLoading(false);
+        return;
+      }
+
+      const r = (data?.[0] ?? null) as any;
+      if (!r) {
+        setPredError("No Monte Carlo row found for this event.");
+        setPredLoading(false);
+        return;
+      }
+
+      const row: MonteCarloRow = {
+        event_id: String(r.event_id ?? ev.eventId),
+        commence_time: r.commence_time ?? r.commenceTime ?? null,
+        matchup: r.matchup ?? null,
+        home_team: r.home_team ?? r.homeTeam ?? null,
+        away_team: r.away_team ?? r.awayTeam ?? null,
+
+        projected_home_points: toNum(r.projected_home_points),
+        projected_away_points: toNum(r.projected_away_points),
+
+        home_win_prob: toNum(r.home_win_prob),
+        away_win_prob: toNum(r.away_win_prob),
+
+        projected_margin_home: toNum(r.projected_margin_home),
+        projected_total: toNum(r.projected_total),
+
+        spread_line_home: toNum(r.spread_line_home),
+        home_cover_prob: toNum(r.home_cover_prob),
+        cover_push_prob: toNum(r.cover_push_prob),
+        away_cover_prob: toNum(r.away_cover_prob),
+
+        total_line: toNum(r.total_line),
+        over_prob: toNum(r.over_prob),
+        total_push_prob: toNum(r.total_push_prob),
+        under_prob: toNum(r.under_prob),
+
+        sigma_margin_game: toNum(r.sigma_margin_game),
+        sigma_total_game: toNum(r.sigma_total_game),
+      };
+
+      setPredRow(row);
+      setPredLoading(false);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [tab, ev.eventId]);
+
+  // Load props whenever tab=props (or propMarket changes)
+  useEffect(() => {
+    if (tab !== "props") return;
+
+    let alive = true;
+    setPropsLoading(true);
+    setPropsError("");
+    setPropsAgg([]);
+
+    (async () => {
+      // 1) snapshot rows for this event
       const snap = await supabase
         .from("player_props_snapshot")
         .select("*")
         .eq("sport_key", sportKey)
         .eq("event_id", ev.eventId);
 
+      if (!alive) return;
+
       if (snap.error) {
-        setError(snap.error.message);
-        setRows([]);
-        setLoading(false);
+        setPropsError(snap.error.message);
+        setPropsLoading(false);
         return;
       }
 
       const raw = snap.data ?? [];
 
-      const names = Array.from(
-        new Set(
-          raw
-            .map((r: any) => (r.player_name ?? r.player ?? r.name ?? null))
-            .filter((x: any) => typeof x === "string" && x.trim().length > 0)
-            .map((x: string) => x.trim())
-        )
-      );
+      // 2) filter to market
+      const wanted = canonPropMarket(propMarket);
 
-      let metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
+      const norm = raw
+        .map((r: any) => {
+          const player_name = String(r.player_name ?? r.player ?? r.name ?? "").trim();
+          if (!player_name) return null;
+
+          const mRaw = String(r.market ?? r.market_key ?? r.marketRaw ?? r.prop_type ?? "").toLowerCase();
+          if (mRaw) {
+            const ok = wanted.some((k) => mRaw.includes(k));
+            if (!ok) return null;
+          } else {
+            // if no market field exists, we can't safely include it
+            return null;
+          }
+
+          const book = bookKeyFromRaw(String(r.bookmaker ?? r.book ?? r.sportsbook ?? r.provider ?? ""));
+          if (!book) return null;
+
+          const side = normalizeSideOU(String(r.side ?? r.bet_side ?? r.over_under ?? r.ou ?? "")) ?? null;
+          if (!side) return null;
+
+          const line = pickLine(r);
+          const odds = pickOdds(r);
+          const ts = normalizeIso(r.ts ?? r.snapshot_ts ?? r.inserted_at ?? null);
+
+          const team = (r.team ?? r.player_team ?? null) as string | null;
+
+          return { player_name, team, book, side, line, odds, ts };
+        })
+        .filter(Boolean) as Array<{
+        player_name: string;
+        team: string | null;
+        book: BookKey;
+        side: "over" | "under";
+        line: number | null;
+        odds: number | null;
+        ts: string | null;
+      }>;
+
+      // 3) enrich meta from player_prop_ev_latest
+      const names = Array.from(new Set(norm.map((x) => x.player_name)));
+      const metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
+
       if (names.length) {
         const meta = await supabase
           .from("player_prop_ev_latest")
@@ -1733,218 +1508,461 @@ function PlayerPropsPanel({
         }
       }
 
-      const wanted = canonPropMarket(market);
+      // 4) aggregate to ONE ROW PER PLAYER (over+under; all books in row)
+      const byPlayer = new Map<string, PropAggRow>();
 
-      const out: PropRow[] = [];
-      for (const r of raw as any[]) {
-        const player_name = String(r.player_name ?? r.player ?? r.name ?? "").trim();
-        if (!player_name) continue;
+      for (const r of norm) {
+        const cur =
+          byPlayer.get(r.player_name) ??
+          ({
+            player_name: r.player_name,
+            team: metaMap.get(r.player_name)?.team ?? r.team ?? null,
+            position: metaMap.get(r.player_name)?.position ?? null,
+            picture_url: metaMap.get(r.player_name)?.picture_url ?? null,
+            over: emptyPropSide(),
+            under: emptyPropSide(),
+            display_line: null,
+          } as PropAggRow);
 
-        const mRaw = String(r.market ?? r.market_key ?? r.marketRaw ?? r.prop_type ?? "").toLowerCase();
-        if (mRaw) {
-          const ok = wanted.some((k) => mRaw.includes(k));
-          if (!ok) continue;
+        // ensure meta stays filled
+        const mm = metaMap.get(r.player_name);
+        if (mm) {
+          cur.team = mm.team ?? cur.team;
+          cur.position = mm.position ?? cur.position;
+          cur.picture_url = mm.picture_url ?? cur.picture_url;
         }
 
-        const side = normalizeSideOU(String(r.side ?? r.bet_side ?? r.over_under ?? r.ou ?? "")) ?? "over";
-        const line = (() => {
-          const v = r.line ?? r.points ?? r.point ?? r.total ?? r.value ?? null;
-          const n = Number(v);
-          return Number.isFinite(n) ? n : null;
-        })();
-        const odds = (() => {
-          const v = r.odds ?? r.price ?? r.american_odds ?? r.book_odds ?? null;
-          const n = Number(v);
-          return Number.isFinite(n) ? n : null;
-        })();
+        const cell: PropCell = { odds: r.odds, line: r.line, ts: r.ts };
 
-        const bookmaker = String(r.bookmaker ?? r.book ?? r.sportsbook ?? "").trim() || null;
-        const ts = normalizeIso(r.ts ?? r.snapshot_ts ?? r.inserted_at ?? r.created_at ?? null);
+        if (r.side === "over") {
+          cur.over[r.book] = bestCell(cur.over[r.book], cell);
+        } else {
+          cur.under[r.book] = bestCell(cur.under[r.book], cell);
+        }
 
-        const meta = metaMap.get(player_name) ?? { position: null, picture_url: null, team: null };
-
-        out.push({
-          player_name,
-          team: meta.team ?? (r.team ?? null),
-          position: meta.position,
-          picture_url: meta.picture_url,
-
-          market: market,
-          side,
-          line,
-          odds,
-          bookmaker,
-          ts,
-        });
+        byPlayer.set(r.player_name, cur);
       }
 
-      out.sort((a, b) => {
-        const p = a.player_name.localeCompare(b.player_name);
-        if (p !== 0) return p;
-        const s = (a.side ?? "").localeCompare(b.side ?? "");
-        if (s !== 0) return s;
-        const ta = a.ts ? new Date(a.ts).getTime() : 0;
-        const tb = b.ts ? new Date(b.ts).getTime() : 0;
-        return tb - ta;
+      // 5) compute display line
+      const out = Array.from(byPlayer.values()).map((row) => {
+        const lines: number[] = [];
+
+        for (const bk of BOOKS) {
+          const ol = row.over[bk]?.line;
+          const ul = row.under[bk]?.line;
+          if (typeof ol === "number") lines.push(ol);
+          if (typeof ul === "number") lines.push(ul);
+        }
+
+        row.display_line = median(lines) ?? (lines[0] ?? null);
+        return row;
       });
 
-      setRows(out);
-      setLoading(false);
+      out.sort((a, b) => a.player_name.localeCompare(b.player_name));
+
+      if (!alive) return;
+      setPropsAgg(out);
+      setPropsLoading(false);
+    })();
+
+    return () => {
+      alive = false;
     };
+  }, [tab, sportKey, ev.eventId, propMarket]);
 
-    fetchProps();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sportKey, ev.eventId, market]);
+  const awayTeam = ev.away?.team ?? predRow?.away_team ?? "Away";
+  const homeTeam = ev.home?.team ?? predRow?.home_team ?? "Home";
+  const awayLogo = ev.away?.logoUrl ?? null;
+  const homeLogo = ev.home?.logoUrl ?? null;
 
-  return (
-    <div>
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-          {PROP_MARKETS.map((m) => (
-            <button
-              key={m}
-              type="button"
-              className={`px-3 py-1.5 text-xs font-extrabold ${market === m ? "bg-[#d4af37] text-black" : "text-white"} `}
-              onClick={() => setMarket(m)}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-      </div>
+  const winCols = winColor(predRow?.away_win_prob ?? null, predRow?.home_win_prob ?? null);
 
-      {loading ? (
-        <div className="text-sm text-[#808080] p-4">Loading props…</div>
-      ) : error ? (
-        <div className="text-sm text-red-400 p-4">Supabase error: {error}</div>
-      ) : !rows.length ? (
-        <div className="text-sm text-[#808080] p-4">No props found for this game/market.</div>
-      ) : (
-        <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between">
-            <div className="text-white font-extrabold text-sm">{market}</div>
-            <div className="text-[11px] text-[#808080] font-semibold">
-              {rows.length} rows • Snapshot time:{" "}
-              <span className="text-white font-extrabold">{fmtCTDateTime(rows[0]?.ts)}</span>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[#232323] bg-[#0b0b0b]">
-                  <th className="text-left px-4 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
-                  <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
-                  <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Side</th>
-                  <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
-                  <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Odds</th>
-                  <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Book</th>
-                  <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Time (CT)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, idx) => (
-                  <tr key={`${r.player_name}-${idx}`} className="border-b border-[#141414] hover:bg-white/5">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        {r.picture_url ? (
-                          <img
-                            src={r.picture_url}
-                            alt={r.player_name}
-                            className="w-9 h-9 rounded-full object-cover border border-[#2a2a2a]"
-                            loading="lazy"
-                            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                          />
-                        ) : (
-                          <div className="w-9 h-9 rounded-full bg-white/5 border border-[#2a2a2a]" />
-                        )}
-
-                        <div className="min-w-0">
-                          <div className="text-white font-extrabold text-[13px] truncate">{r.player_name}</div>
-                          <div className="text-[11px] text-[#808080] font-semibold">{r.position ?? "—"}</div>
-                        </div>
-                      </div>
-                    </td>
-
-                    <td className="px-3 py-3 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
-
-                    <td className="px-3 py-3 text-center">
-                      <span className={`text-[12px] font-extrabold ${r.side === "over" ? "text-emerald-400" : "text-red-400"}`}>
-                        {r.side.toUpperCase()}
-                      </span>
-                    </td>
-
-                    <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
-                      {r.line == null ? "—" : r.line}
-                    </td>
-
-                    <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
-                      {r.odds == null ? "—" : r.odds}
-                    </td>
-
-                    <td className="px-3 py-3 text-[#d0d0d0] font-extrabold text-[12px]">
-                      {r.bookmaker ?? "—"}
-                    </td>
-
-                    <td className="px-3 py-3 text-[#d0d0d0] font-semibold text-[12px]">
-                      {fmtCTDateTime(r.ts)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="px-4 py-3 text-[11px] text-[#808080]">
-            Odds: <span className="text-white font-extrabold">player_props_snapshot</span> • Meta:{" "}
-            <span className="text-white font-extrabold">player_prop_ev_latest</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* =========================================================
-   UNIFIED EVENT MODAL (tabs inside)
-========================================================= */
-
-function EventModal({
-  sportKey,
-  ev,
-  quantum,
-  initialTab,
-  onClose,
-}: {
-  sportKey: string;
-  ev: EventOdds;
-  quantum: QuantumByEvent;
-  initialTab: ModalTab;
-  onClose: () => void;
-}) {
-  const [tab, setTab] = useState<ModalTab>(initialTab);
-  const [market, setMarket] = useState<Market>("ml");
-
-  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
+  const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
+  const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
 
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      <ModalTabs tab={tab} setTab={setTab} />
+      {/* Tabs */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
+          Line Movement
+        </TabBtn>
+        <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
+          Predictions
+        </TabBtn>
+        <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
+          Player Props
+        </TabBtn>
+      </div>
 
-      {/* keep the market selector available for movement + predictions */}
-      {tab !== "props" ? (
-        <div className="flex flex-wrap items-center gap-2 mb-3">
-          <div className="text-[11px] text-[#808080] font-semibold mr-1">Market:</div>
-          <Segmented value={market} onChange={setMarket} />
+      {/* LINE MOVEMENT TAB */}
+      {tab === "line" && (
+        <div>
+          {/* Single market selector ONLY here */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                onClick={() => setLmMarket("ml")}
+              >
+                Moneyline
+              </button>
+              <div className="w-px bg-[#2a2a2a]" />
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                onClick={() => setLmMarket("spread")}
+              >
+                Spread
+              </button>
+              <div className="w-px bg-[#2a2a2a]" />
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                onClick={() => setLmMarket("total")}
+              >
+                Total
+              </button>
+            </div>
+
+            <div className="text-[11px] text-[#808080] font-semibold">
+              {lmMarket === "total" ? (
+                <>
+                  Left = <span className="text-white font-extrabold">Over</span>, Right ={" "}
+                  <span className="text-white font-extrabold">Under</span>
+                </>
+              ) : (
+                <>
+                  Left = <span className="text-white font-extrabold">Away</span>, Right ={" "}
+                  <span className="text-white font-extrabold">Home</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {lmLoading ? (
+            <div className="text-sm text-[#808080] p-4">Loading odds history…</div>
+          ) : lmError ? (
+            <div className="text-sm text-red-400 p-4">No odds history available: {lmError}</div>
+          ) : (
+            <SideBySideLineCharts
+              leftTitle={
+                lmMarket === "total" ? `Over • ${awayTeam}` : `Away • ${awayTeam}`
+              }
+              rightTitle={
+                lmMarket === "total" ? `Under • ${homeTeam}` : `Home • ${homeTeam}`
+              }
+              leftPoints={lmAwayPoints}
+              rightPoints={lmHomePoints}
+              market={lmMarket}
+            />
+          )}
         </div>
-      ) : null}
+      )}
 
-      {tab === "movement" ? (
-        <LineMovementPanel sportKey={sportKey} ev={ev} />
-      ) : tab === "predictions" ? (
-        <PredictionsPanel ev={ev} quantum={quantum} market={market} />
-      ) : (
-        <PlayerPropsPanel sportKey={sportKey} ev={ev} />
+      {/* PREDICTIONS TAB */}
+      {tab === "pred" && (
+        <div>
+          {predLoading ? (
+            <div className="text-sm text-[#808080] p-4">Loading Monte Carlo predictions…</div>
+          ) : predError ? (
+            <div className="text-sm text-red-400 p-4">Supabase error: {predError}</div>
+          ) : !predRow ? (
+            <div className="text-sm text-[#808080] p-4">No predictions available for this game.</div>
+          ) : (
+            <div className="space-y-3">
+              {/* Top summary: side-by-side teams + projected score center + win% circle */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-4">
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_220px_1fr] gap-4 items-center">
+                  {/* Away */}
+                  <div className="flex items-center gap-3">
+                    {awayLogo ? (
+                      <img
+                        src={awayLogo}
+                        alt={`${awayTeam} logo`}
+                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        loading="lazy"
+                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
+                      <div className={["text-[12px] font-extrabold tabular-nums", winCols.a].join(" ")}>
+                        {pct(predRow.away_win_prob)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Center */}
+                  <div className="flex items-center justify-center">
+                    <div className="w-[180px] rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-3 text-center">
+                      <div className="text-[10px] text-[#808080] font-semibold">Projected Score</div>
+                      <div className="mt-1 text-white font-extrabold text-[26px] tabular-nums">
+                        {(predRow.projected_away_points ?? null) == null
+                          ? "—"
+                          : predRow.projected_away_points?.toFixed(1)}{" "}
+                        -{" "}
+                        {(predRow.projected_home_points ?? null) == null
+                          ? "—"
+                          : predRow.projected_home_points?.toFixed(1)}
+                      </div>
+
+                      <div className="mt-2 flex items-center justify-center">
+                        {/* Win% circle (shows winner color emphasis) */}
+                        <div className="w-16 h-16 rounded-full border-4 border-[#d4af37] flex items-center justify-center bg-black/25">
+                          <div className="text-center leading-tight">
+                            <div className="text-[10px] text-[#808080] font-semibold">Win</div>
+                            <div className="text-[12px] text-white font-extrabold tabular-nums">
+                              {Math.max(
+                                (predRow.away_win_prob ?? 0) > 1.5 ? (predRow.away_win_prob ?? 0) : (predRow.away_win_prob ?? 0) * 100,
+                                (predRow.home_win_prob ?? 0) > 1.5 ? (predRow.home_win_prob ?? 0) : (predRow.home_win_prob ?? 0) * 100
+                              ).toFixed(1)}
+                              %
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
+                          <div className="text-[10px] text-[#808080] font-semibold">Proj Total</div>
+                          <div className="text-white font-extrabold tabular-nums text-[12px]">
+                            {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                          </div>
+                        </div>
+                        <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
+                          <div className="text-[10px] text-[#808080] font-semibold">Proj Margin (H)</div>
+                          <div className="text-white font-extrabold tabular-nums text-[12px]">
+                            {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Home */}
+                  <div className="flex items-center gap-3 justify-start md:justify-end">
+                    <div className="min-w-0 text-right">
+                      <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
+                      <div className={["text-[12px] font-extrabold tabular-nums", winCols.b].join(" ")}>
+                        {pct(predRow.home_win_prob)}
+                      </div>
+                    </div>
+                    {homeLogo ? (
+                      <img
+                        src={homeLogo}
+                        alt={`${homeTeam} logo`}
+                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        loading="lazy"
+                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Markets: Spread / Total probabilities */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-4">
+                  <div className="text-white font-extrabold text-[13px] mb-2">Spread</div>
+                  <div className="text-[11px] text-[#808080] font-semibold">
+                    Line (Home): <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
+                      <div className="text-[10px] text-[#808080] font-semibold">{homeTeam} Cover</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.home_cover_prob)}</div>
+                    </div>
+                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
+                      <div className="text-[10px] text-[#808080] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.cover_push_prob)}</div>
+                    </div>
+                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
+                      <div className="text-[10px] text-[#808080] font-semibold">{awayTeam} Cover</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.away_cover_prob)}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-[11px] text-[#808080]">
+                    σ Margin: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_margin_game ?? "—"}</span>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-4">
+                  <div className="text-white font-extrabold text-[13px] mb-2">Total</div>
+                  <div className="text-[11px] text-[#808080] font-semibold">
+                    Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
+                      <div className="text-[10px] text-[#808080] font-semibold">Over</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.over_prob)}</div>
+                    </div>
+                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
+                      <div className="text-[10px] text-[#808080] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.total_push_prob)}</div>
+                    </div>
+                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
+                      <div className="text-[10px] text-[#808080] font-semibold">Under</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.under_prob)}</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-[11px] text-[#808080]">
+                    σ Total: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_total_game ?? "—"}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-[11px] text-[#808080]">
+                Source: <span className="text-white font-extrabold">monte_carlo_results</span> (event_id match)
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* PLAYER PROPS TAB */}
+      {tab === "props" && (
+        <div>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+              {PROP_MARKETS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`px-3 py-1.5 text-xs font-extrabold ${propMarket === m ? "bg-[#d4af37] text-black" : "text-white"}`}
+                  onClick={() => setPropMarket(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <div className="text-[11px] text-[#808080] font-semibold">
+              One row per player • Over/Under grouped • Books in columns
+            </div>
+          </div>
+
+          {propsLoading ? (
+            <div className="text-sm text-[#808080] p-4">Loading props…</div>
+          ) : propsError ? (
+            <div className="text-sm text-red-400 p-4">Supabase error: {propsError}</div>
+          ) : !propsAgg.length ? (
+            <div className="text-sm text-[#808080] p-4">No props found for this game/market.</div>
+          ) : (
+            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between">
+                <div className="text-white font-extrabold text-sm">{propMarket}</div>
+                <div className="text-[11px] text-[#808080] font-semibold">{propsAgg.length} players</div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#232323] bg-[#0b0b0b]">
+                      <th className="text-left px-4 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
+                      <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
+                      <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
+
+                      <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
+                      <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
+                    </tr>
+                    <tr className="border-b border-[#1a1a1a] bg-[#0b0b0b]">
+                      <th />
+                      <th />
+                      <th />
+                      <th className="px-3 pb-3">
+                        <div className="grid grid-cols-5 gap-2 justify-items-center">
+                          {BOOKS.map((b) => (
+                            <div key={`ovh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
+                              {b.toUpperCase()}
+                            </div>
+                          ))}
+                        </div>
+                      </th>
+                      <th className="px-3 pb-3">
+                        <div className="grid grid-cols-5 gap-2 justify-items-center">
+                          {BOOKS.map((b) => (
+                            <div key={`unh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
+                              {b.toUpperCase()}
+                            </div>
+                          ))}
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {propsAgg.map((r) => (
+                      <tr key={r.player_name} className="border-b border-[#141414] hover:bg-white/5">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {r.picture_url ? (
+                              <img
+                                src={r.picture_url}
+                                alt={r.player_name}
+                                className="w-9 h-9 rounded-full object-cover border border-[#2a2a2a]"
+                                loading="lazy"
+                                onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                              />
+                            ) : (
+                              <div className="w-9 h-9 rounded-full bg-white/5 border border-[#2a2a2a]" />
+                            )}
+
+                            <div className="min-w-0">
+                              <div className="text-white font-extrabold text-[13px] truncate">{r.player_name}</div>
+                              <div className="text-[11px] text-[#808080] font-semibold">{r.position ?? "—"}</div>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-3 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
+
+                        <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
+                          {r.display_line == null ? "—" : r.display_line}
+                        </td>
+
+                        {/* Over strip */}
+                        <td className="px-3 py-3">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                                {fmtLineOdds(r.over[b].line ?? r.display_line, r.over[b].odds)}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+
+                        {/* Under strip */}
+                        <td className="px-3 py-3">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                                {fmtLineOdds(r.under[b].line ?? r.display_line, r.under[b].odds)}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="px-4 py-3 text-[11px] text-[#808080]">
+                Odds from <span className="text-white font-extrabold">player_props_snapshot</span>. Player photo/position/team from{" "}
+                <span className="text-white font-extrabold">player_prop_ev_latest</span>. Aggregation keeps newest per (player, side, book).
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </ModalShell>
   );
@@ -1962,18 +1980,14 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [error, setError] = useState("");
   const [lastUpdatedIso, setLastUpdatedIso] = useState<string | null>(null);
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalTab, setModalTab] = useState<ModalTab>("movement");
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [activeEvent, setActiveEvent] = useState<EventOdds | null>(null);
 
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
 
-  const [quantum, setQuantum] = useState<QuantumByEvent>(new Map());
-
   async function load() {
     setError("");
 
-    // odds board
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
@@ -2024,40 +2038,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       return ta - tb;
     });
 
-    // Monte Carlo / Quantum (best effort): pull rows for this sport and build event_id map.
-    // If your table name differs, add it to candidates.
-    const mcCandidates = ["monte_carlo_results", "montecarlo_results", "mc_results"];
-    let mcFound: any[] | null = null;
-    let mcLatest: string | null = null;
-
-    for (const t of mcCandidates) {
-      const res = await supabase
-        .from(t)
-        .select("*")
-        .eq("sport_key", sportKey);
-
-      if (!res.error && res.data) {
-        mcFound = res.data;
-        break;
-      }
-    }
-
-    if (mcFound) {
-      const map: QuantumByEvent = new Map();
-      for (const row of mcFound) {
-        const eventId = String(pickAny(row, ["event_id", "eventId", "id"]) ?? "").trim();
-        if (!eventId) continue;
-        const q = mapMonteCarloRowToQuantum(row);
-        map.set(eventId, q);
-        mcLatest = maxIso(mcLatest, q.updated_at ?? null);
-      }
-      setQuantum(map);
-      globalLatest = maxIso(globalLatest, mcLatest);
-    } else {
-      setQuantum(new Map());
-    }
-
-    // include latest props snapshot time (non-blocking)
+    // optional: include latest props snapshot time if available (non-blocking)
     let propsLatest: string | null = null;
     try {
       const propsRes = await supabase
@@ -2070,9 +2051,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         .limit(1);
 
       if (!propsRes.error) {
-        const r = (propsRes.data?.[0] ?? null) as
-          | { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null }
-          | null;
+        const r = (propsRes.data?.[0] ?? null) as { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null } | null;
         propsLatest = normalizeIso(r?.ts ?? r?.snapshot_ts ?? r?.inserted_at ?? null);
       }
     } catch {
@@ -2096,9 +2075,8 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     setSelectedDate("");
     setMobileOpenMap({});
     setMarket("ml");
-    setModalOpen(false);
+    setDetailsOpen(false);
     setActiveEvent(null);
-    setModalTab("movement");
   }, [sportKey]);
 
   const availableDates = useMemo(() => {
@@ -2178,16 +2156,15 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   const sportChip = sportKey.toUpperCase();
   const marketLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
 
-  const openModal = (ev: EventOdds, tab: ModalTab) => {
+  const openDetails = (ev: EventOdds) => {
     setActiveEvent(ev);
-    setModalTab(tab);
-    setModalOpen(true);
+    setDetailsOpen(true);
   };
 
   return (
     <div className="w-full">
       <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X}`}>
-        {/* ✅ HERO */}
+        {/* ✅ HERO — matches Model/MonteCarlo structure */}
         <div className="pt-4 md:pt-6">
           <div className={HERO_WRAP}>
             <div className={HERO_INNER}>
@@ -2203,12 +2180,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                   </h2>
 
                   <div className={HERO_SUB}>
-                    Consensus + <span className="text-white font-extrabold">Quantum</span> side-by-side, then books.
-                    Open the modal for side-by-side line movement and full Monte Carlo predictions.
+                    One board per slate. Books shown side-by-side with consensus. Open Game Details for movement, predictions, and props.
                   </div>
                 </div>
 
-                {/* RIGHT */}
+                {/* ✅ RIGHT SIDE — Live badge like MonteCarlo */}
                 <div className="hidden md:flex flex-col items-end gap-2">
                   <div className={LIVE_BADGE}>
                     <span className={LIVE_TX}>Live</span>
@@ -2222,7 +2198,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 </div>
               </div>
 
-              {/* CHIPS */}
+              {/* ✅ CHIPS ROW */}
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <Chip label="Sport" value={sportChip} />
                 <Chip label="Games" value={events.length} />
@@ -2237,7 +2213,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 </div>
               </div>
 
-              {/* CONTROLS */}
+              {/* ✅ CONTROLS */}
               <div className="mt-4 flex flex-col gap-3">
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                   {availableDates.map((d) => (
@@ -2259,6 +2235,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               </div>
             </div>
 
+            {/* Divider */}
             <div className="h-px bg-[#232323]" />
 
             {/* CONTENT */}
@@ -2279,11 +2256,10 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         ev={ev}
                         market={market}
                         booksOpen={!!mobileOpenMap[ev.eventId]}
-                        onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
-                        onOpenModalMovement={(e) => openModal(e, "movement")}
-                        onOpenModalPredictions={(e) => openModal(e, "predictions")}
-                        onOpenModalProps={(e) => openModal(e, "props")}
-                        quantum={quantum}
+                        onToggleBooks={() =>
+                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                        }
+                        onOpenDetails={openDetails}
                       />
                     ))}
                   </div>
@@ -2305,7 +2281,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         <colgroup>
                           <col style={{ width: COL_MATCHUP }} />
                           <col style={{ width: COL_CONSENSUS }} />
-                          <col style={{ width: COL_QUANTUM }} />
                           <col style={{ width: COL_BOOK }} />
                           <col style={{ width: COL_BOOK }} />
                           <col style={{ width: COL_BOOK }} />
@@ -2316,21 +2291,26 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         <thead className="sticky top-0 z-20">
                           <tr className={`border-b ${HDR_BORDER}`}>
                             <th
-                              className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}
+                              className={[
+                                "text-left px-4 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "sticky left-0 z-30 text-[13px] font-extrabold",
+                              ].join(" ")}
                             >
                               Matchup
                             </th>
 
                             <th
-                              className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}
+                              className={[
+                                "text-center px-3 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "z-20 text-[13px] font-extrabold border-l",
+                                HDR_BORDER,
+                              ].join(" ")}
                             >
                               Consensus
-                            </th>
-
-                            <th
-                              className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}
-                            >
-                              Quantum
                             </th>
 
                             <BookHeader bookKey="dk" borderLeft />
@@ -2343,15 +2323,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <tbody>
                           {events.map((ev) => (
-                            <EventTwoRows
-                              key={ev.eventId}
-                              ev={ev}
-                              market={market}
-                              onOpenModalMovement={(e) => openModal(e, "movement")}
-                              onOpenModalPredictions={(e) => openModal(e, "predictions")}
-                              onOpenModalProps={(e) => openModal(e, "props")}
-                              quantum={quantum}
-                            />
+                            <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenDetails={openDetails} />
                           ))}
                         </tbody>
                       </table>
@@ -2363,15 +2335,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           </div>
         </div>
 
-        {/* Unified modal */}
-        {modalOpen && activeEvent && (
-          <EventModal
-            sportKey={sportKey}
-            ev={activeEvent}
-            quantum={quantum}
-            initialTab={modalTab}
-            onClose={() => setModalOpen(false)}
-          />
+        {/* Modal */}
+        {detailsOpen && activeEvent && (
+          <GameDetailsModal sportKey={sportKey} ev={activeEvent} onClose={() => setDetailsOpen(false)} />
         )}
 
         <div className="h-12" />
