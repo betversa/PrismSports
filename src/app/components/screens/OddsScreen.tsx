@@ -983,7 +983,7 @@ function LineMovementModal({
     const fetchHistory = async () => {
       // We’ll try a few likely tables in order.
       // This keeps it resilient across schema changes without breaking builds.
-      const candidates = ["odds_history", "odds_log", "odds_snapshots", "odds_movement"];
+      const candidates = ["odds_history", "odds_log", "odds_snapshots", "odds_snapshot_history"];
 
       let lastErr: string | null = null;
       let found: any[] | null = null;
