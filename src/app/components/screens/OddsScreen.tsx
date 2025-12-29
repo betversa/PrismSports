@@ -2171,28 +2171,31 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
               <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="text-white font-extrabold text-[13px]">Model Probabilities</div>
-                  <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                    Proj Total:{" "}
-                    <span className="text-white font-extrabold tabular-nums">
-                      {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
-                    </span>{" "}
-                    <span className="text-[#808080] mx-2">|</span>
-                    Margin (H):{" "}
-                    <span className="text-white font-extrabold tabular-nums">
-                      {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="text-white font-extrabold text-[12px]">Spread</div>
+
+                  <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
+                    <span>
+                      Line (Home):{" "}
+                      <span className="text-white font-extrabold tabular-nums">
+                        {predRow.spread_line_home ?? "—"}
+                      </span>
+                    </span>
+
+                    {/* white vertical divider */}
+                    <span className="mx-3 h-4 w-px bg-white/80" />
+
+                    <span>
+                      Margin (H):{" "}
+                      <span className="text-white font-extrabold tabular-nums">
+                        {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                      </span>
                     </span>
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-white font-extrabold text-[12px]">Spread</div>
-                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                        Line (Home):{" "}
-                        <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
-                      </div>
-                    </div>
 
                     <div className="mt-2 grid grid-cols-3 gap-2">
                       <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
@@ -2210,13 +2213,29 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-white font-extrabold text-[12px]">Total</div>
-                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                        Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
-                      </div>
-                    </div>
+                  <div className="flex items-center justify-between">
+                  <div className="text-white font-extrabold text-[12px]">Total</div>
+
+                  <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
+                    <span>
+                      Line:{" "}
+                      <span className="text-white font-extrabold tabular-nums">
+                        {predRow.total_line ?? "—"}
+                      </span>
+                    </span>
+
+                    {/* white vertical divider */}
+                    <span className="mx-3 h-4 w-px bg-white/80" />
+
+                    <span>
+                      Proj Total:{" "}
+                      <span className="text-white font-extrabold tabular-nums">
+                        {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+
 
                     <div className="mt-2 grid grid-cols-3 gap-2">
                       <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
