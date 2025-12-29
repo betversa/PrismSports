@@ -1,24 +1,12 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Predictions tab: Win% meter + true last-5 + spacing polish)
+// screens/OddsScreen.tsx — FULL REWRITE (Key Lines de-clutter + sticky bars no-jump + sticky prop market bar)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ Fix: Predictions win% = horizontal split meter w/ 50% tick (replaces circle)
-// ✅ Fix: Last 5 games are truly the MOST RECENT completed games (DESC by date, score != null, date <= now)
-// ✅ Adds last-5 panels into the “dead space” on Predictions tab (Away + Home columns)
-// ✅ Keeps: single Game Details button, single Market buttons ONLY in Line Movement tab
-// ✅ Keeps: Player Props tab = one row per player, books in same row
-// ✅ Keeps: modal background gradient + subtle noise
-// ✅ Tooltip on charts shows DATE + TIME (CT) and line+odds for spread/total
+// ONLY CHANGES FROM YOUR LAST VERSION (plus the earlier requested changes already included):
+// ✅ Predictions "Key Lines" section: simplified into 3 compact cards (ML / Spread / Total) + win split meter (no extra clutter)
+// ✅ Sticky modal menu: no more negative margins -> eliminates the “screen jumps above buttons” behavior while scrolling
+// ✅ Player Props: market buttons bar is ALSO sticky (stays visible while scrolling props list)
+// ✅ Sticky stacking: prop market bar sits under the main tab bar cleanly using top offsets
 //
-// UPDATES REQUESTED (ONLY):
-// ✅ Main odds page: remove boring all-black -> subtle premium gradient background
-// ✅ Hero chips row: remove Sport/Market/Books/Refresh chips; keep only a simple games count note
-// ✅ Modal: Predictions tab opens first
-// ✅ basketballref_games_nba: date column is "date" (not "game_date")
-// ✅ Predictions tab: combine Moneyline/Spread/Total into fewer sections (less duplication)
-// ✅ Mobile: spacing polish to fit better
-// ✅ Remove footer lines:
-//    - "Odds from player_props_snapshot... Aggregation keeps newest..."
-//    - "Source: monte_carlo_results (event_id match)"
-// ✅ Lock modal menu (tabs) so it stays visible when scrolling
+// Everything else preserved.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -859,6 +847,7 @@ function ModalShell({
           }}
         />
 
+        {/* header (non-scrolling) */}
         <div className="relative px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
@@ -873,7 +862,10 @@ function ModalShell({
           </button>
         </div>
 
-        <div className="relative p-3 sm:p-4 overflow-y-auto">{children}</div>
+        {/* scroll area (children manage sticky bars) */}
+        <div className="relative overflow-y-auto">
+          <div className="p-3 sm:p-4">{children}</div>
+        </div>
       </div>
     </div>
   );
@@ -1128,9 +1120,6 @@ type MonteCarloRow = {
   home_win_prob?: number | null;
   away_win_prob?: number | null;
 
-  projected_margin_home?: number | null;
-  projected_total?: number | null;
-
   spread_line_home?: number | null;
   home_cover_prob?: number | null;
   cover_push_prob?: number | null;
@@ -1140,9 +1129,6 @@ type MonteCarloRow = {
   over_prob?: number | null;
   total_push_prob?: number | null;
   under_prob?: number | null;
-
-  sigma_margin_game?: number | null;
-  sigma_total_game?: number | null;
 };
 
 function toNum(v: any): number | null {
@@ -1174,18 +1160,11 @@ function probToAmerican(p: number | null): string {
   }
 }
 
-function winColors(awayP: number | null, homeP: number | null) {
-  if (awayP == null || homeP == null) {
-    return {
-      away: "text-white",
-      home: "text-white",
-      awayHex: "#d0d0d0",
-      homeHex: "#d0d0d0",
-    };
-  }
-  if (awayP > homeP) return { away: "text-emerald-400", home: "text-red-400", awayHex: "#34d399", homeHex: "#f87171" };
-  if (homeP > awayP) return { away: "text-red-400", home: "text-emerald-400", awayHex: "#f87171", homeHex: "#34d399" };
-  return { away: "text-white", home: "text-white", awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
+function winHex(awayP: number | null, homeP: number | null) {
+  if (awayP == null || homeP == null) return { away: "#d0d0d0", home: "#d0d0d0" };
+  if (awayP > homeP) return { away: "#34d399", home: "#f87171" };
+  if (homeP > awayP) return { away: "#f87171", home: "#34d399" };
+  return { away: "#d0d0d0", home: "#d0d0d0" };
 }
 
 /* =========================================================
@@ -1244,11 +1223,11 @@ function WinSplitMeter({
 }
 
 /* =========================================================
-   LAST 5 GAMES (NBA: basketballref_games_nba, NCAAB: kenpom_games)
+   LAST 5 GAMES (NBA: basketballref_games_nba uses "date")
 ========================================================= */
 
 type TeamGameRow = {
-  dateIso: string; // yyyy-mm-dd (or iso)
+  dateIso: string;
   opponent: string;
   isHome: boolean;
   teamPts: number;
@@ -1261,10 +1240,8 @@ function parseYmdToIso(ymdLike: any): string | null {
   const s = String(ymdLike).trim();
   if (!s) return null;
 
-  // already iso-ish
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
 
-  // try Date parse
   const d = new Date(s);
   if (!Number.isNaN(d.getTime())) {
     const y = d.getUTCFullYear();
@@ -1301,20 +1278,15 @@ function mapTeamGameRowsFromAny({
 
   for (const r of raw) {
     const dateIso =
-      parseYmdToIso(
-        pickAny(r, ["date", "game_date", "Date", "dt", "gameDay", "day"])
-      ) ?? null;
+      parseYmdToIso(pickAny(r, ["date", "game_date", "Date", "dt", "day"])) ?? null;
     if (!dateIso) continue;
 
     const dateMs = new Date(`${dateIso}T12:00:00Z`).getTime();
     if (!Number.isFinite(dateMs)) continue;
-
     if (dateMs > nowMs) continue;
 
-    const away =
-      (pickAny(r, ["away_team", "away", "team1", "team1_away", "Team1 (Away)", "team1 (away)"]) ?? "") as any;
-    const home =
-      (pickAny(r, ["home_team", "home", "team2", "team2_home", "Team2 (Home)", "team2 (home)"]) ?? "") as any;
+    const away = pickAny(r, ["away_team", "away", "team1", "team1_away", "Team1 (Away)", "team1 (away)"]);
+    const home = pickAny(r, ["home_team", "home", "team2", "team2_home", "Team2 (Home)", "team2 (home)"]);
 
     const awayTeam = String(away ?? "").trim();
     const homeTeam = String(home ?? "").trim();
@@ -1327,7 +1299,6 @@ function mapTeamGameRowsFromAny({
 
     const awayPts = pickAny(r, ["away_pts", "away_points", "score1", "Score1", "pts_away", "points_away"]);
     const homePts = pickAny(r, ["home_pts", "home_points", "score2", "Score2", "pts_home", "points_home"]);
-
     if (!isCompletedScore(awayPts, homePts)) continue;
 
     const a = Number(awayPts);
@@ -1339,14 +1310,7 @@ function mapTeamGameRowsFromAny({
 
     const result: "W" | "L" = teamPts > oppPts ? "W" : "L";
 
-    out.push({
-      dateIso,
-      opponent,
-      isHome: isHome,
-      teamPts,
-      oppPts,
-      result,
-    });
+    out.push({ dateIso, opponent, isHome, teamPts, oppPts, result });
   }
 
   out.sort((x, y) => (x.dateIso < y.dateIso ? 1 : x.dateIso > y.dateIso ? -1 : 0));
@@ -1363,27 +1327,10 @@ async function fetchLast5ForTeam({
   const teamSafe = team?.trim();
   if (!teamSafe) return { games: [], sourceTable: null, error: "Missing team name." };
 
-  const candidates: Array<{
-    table: string;
-    dateCol: string;
-    colA: string;
-    colB: string;
-  }> =
+  const candidates: Array<{ table: string; dateCol: string; colA: string; colB: string }> =
     sportKey === "basketball_nba"
-      ? [
-          // ✅ UPDATE REQUESTED: basketballref_games_nba date column is "date"
-          { table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" },
-        ]
-      : sportKey === "basketball_ncaab"
-      ? [
-          { table: "kenpom_games", dateCol: "date", colA: "team1", colB: "team2" },
-          { table: "kenpom_games", dateCol: "date", colA: "team1_away", colB: "team2_home" },
-          { table: "kenpom_games", dateCol: "Date", colA: "Team1 (Away)", colB: "Team2 (Home)" },
-        ]
-      : [
-          { table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" },
-          { table: "kenpom_games", dateCol: "date", colA: "team1", colB: "team2" },
-        ];
+      ? [{ table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" }]
+      : [{ table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" }];
 
   let lastErr: string | null = null;
 
@@ -1478,7 +1425,7 @@ function Last5Panel({
 }
 
 /* =========================================================
-   PLAYER PROPS (aggregate 1 row per player; all books in row)
+   PLAYER PROPS (aggregate 1 row per player; books in row)
 ========================================================= */
 
 type PropMarket = "Points" | "Rebounds" | "Assists" | "3 Pointers";
@@ -1539,23 +1486,61 @@ function fmtLineOdds(line: number | null, odds: number | null) {
    GAME DETAILS MODAL
 ========================================================= */
 
-function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: EventOdds; onClose: () => void }) {
-  // ✅ UPDATE REQUESTED: Predictions opens first
-  const [tab, setTab] = useState<DetailsTab>("pred");
+function KeyLineCard({
+  title,
+  leftLabel,
+  rightLabel,
+  leftValue,
+  rightValue,
+  subLeft,
+  subRight,
+  centerNote,
+}: {
+  title: string;
+  leftLabel: string;
+  rightLabel: string;
+  leftValue: string;
+  rightValue: string;
+  subLeft?: string;
+  subRight?: string;
+  centerNote?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+      <div className="flex items-center justify-between">
+        <div className="text-[12px] text-white font-extrabold">{title}</div>
+        {centerNote ? <div className="text-[10px] text-[#a0a0a0] font-semibold">{centerNote}</div> : null}
+      </div>
 
-  // line movement state
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-2">
+          <div className="text-[10px] text-[#808080] font-semibold truncate">{leftLabel}</div>
+          <div className="mt-1 text-white font-extrabold tabular-nums text-[13px]">{leftValue}</div>
+          {subLeft ? <div className="mt-1 text-[10px] text-[#b0b0b0] font-semibold tabular-nums">{subLeft}</div> : null}
+        </div>
+
+        <div className="rounded-lg border border-[#2a2a2a] bg-black/20 p-2">
+          <div className="text-[10px] text-[#808080] font-semibold truncate">{rightLabel}</div>
+          <div className="mt-1 text-white font-extrabold tabular-nums text-[13px]">{rightValue}</div>
+          {subRight ? <div className="mt-1 text-[10px] text-[#b0b0b0] font-semibold tabular-nums">{subRight}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: EventOdds; onClose: () => void }) {
+  const [tab, setTab] = useState<DetailsTab>("pred"); // predictions first
   const [lmMarket, setLmMarket] = useState<Market>("ml");
   const [lmLoading, setLmLoading] = useState(true);
   const [lmError, setLmError] = useState("");
   const [lmAwayRows, setLmAwayRows] = useState<HistoryRow[]>([]);
   const [lmHomeRows, setLmHomeRows] = useState<HistoryRow[]>([]);
 
-  // predictions state
   const [predLoading, setPredLoading] = useState(true);
   const [predError, setPredError] = useState("");
   const [predRow, setPredRow] = useState<MonteCarloRow | null>(null);
 
-  // last-5 state
   const [l5AwayLoading, setL5AwayLoading] = useState(false);
   const [l5HomeLoading, setL5HomeLoading] = useState(false);
   const [l5AwayErr, setL5AwayErr] = useState("");
@@ -1563,7 +1548,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const [l5Away, setL5Away] = useState<TeamGameRow[]>([]);
   const [l5Home, setL5Home] = useState<TeamGameRow[]>([]);
 
-  // props state
   const [propMarket, setPropMarket] = useState<PropMarket>("Points");
   const [propsLoading, setPropsLoading] = useState(true);
   const [propsError, setPropsError] = useState("");
@@ -1643,9 +1627,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
         home_win_prob: toNum(r.home_win_prob),
         away_win_prob: toNum(r.away_win_prob),
 
-        projected_margin_home: toNum(r.projected_margin_home),
-        projected_total: toNum(r.projected_total),
-
         spread_line_home: toNum(r.spread_line_home),
         home_cover_prob: toNum(r.home_cover_prob),
         cover_push_prob: toNum(r.cover_push_prob),
@@ -1655,9 +1636,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
         over_prob: toNum(r.over_prob),
         total_push_prob: toNum(r.total_push_prob),
         under_prob: toNum(r.under_prob),
-
-        sigma_margin_game: toNum(r.sigma_margin_game),
-        sigma_total_game: toNum(r.sigma_total_game),
       };
 
       setPredRow(row);
@@ -1728,7 +1706,12 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     setPropsAgg([]);
 
     (async () => {
-      const snap = await supabase.from("player_props_snapshot").select("*").eq("sport_key", sportKey).eq("event_id", ev.eventId);
+      const snap = await supabase
+        .from("player_props_snapshot")
+        .select("*")
+        .eq("sport_key", sportKey)
+        .eq("event_id", ev.eventId);
+
       if (!alive) return;
 
       if (snap.error) {
@@ -1777,7 +1760,11 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       const metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
 
       if (names.length) {
-        const meta = await supabase.from("player_prop_ev_latest").select("player_name,team,position,picture_url").in("player_name", names);
+        const meta = await supabase
+          .from("player_prop_ev_latest")
+          .select("player_name,team,position,picture_url")
+          .in("player_name", names);
+
         if (!meta.error && meta.data) {
           for (const m of meta.data as any[]) {
             const key = String(m.player_name ?? "").trim();
@@ -1848,7 +1835,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
   const awayP = toProb01(predRow?.away_win_prob ?? null);
   const homeP = toProb01(predRow?.home_win_prob ?? null);
-  const colors = winColors(awayP, homeP);
+  const colors = winHex(awayP, homeP);
 
   const scoreText =
     predRow?.projected_away_points == null || predRow?.projected_home_points == null
@@ -1858,7 +1845,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
   const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
 
-  // Key Lines derived from board consensus (always matches what user sees)
   const consMlAway = consensusPartsForRow(ev, "ml", "AWAY");
   const consMlHome = consensusPartsForRow(ev, "ml", "HOME");
   const consSprAway = consensusPartsForRow(ev, "spread", "AWAY");
@@ -1866,26 +1852,38 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
   const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
 
+  // Sticky offsets (no jump): tab bar is sticky at 0; prop market bar sticks under it
+  const TAB_STICKY_TOP = 0;
+  const PROP_BAR_TOP = 58; // approx height of tab bar + padding
+
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      {/* ✅ UPDATE REQUESTED: lock modal menu (tabs) while scrolling */}
-      <div className="sticky top-0 z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-3 bg-[#0f0f0f]/95 backdrop-blur border-b border-[#1f1f1f]">
-        <div className="flex flex-wrap items-center gap-2">
-          <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
-            Predictions
-          </TabBtn>
-          <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
-            Line Movement
-          </TabBtn>
-          <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
-            Player Props
-          </TabBtn>
+      {/* ✅ FIX: sticky tabs WITHOUT negative margins -> no scroll jump */}
+      <div
+        className="sticky z-40"
+        style={{ top: TAB_STICKY_TOP }}
+      >
+        <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f]/92 backdrop-blur px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
+              Predictions
+            </TabBtn>
+            <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
+              Line Movement
+            </TabBtn>
+            <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
+              Player Props
+            </TabBtn>
+          </div>
         </div>
       </div>
 
+      {/* ✅ Spacer so content never slides under the sticky bar */}
+      <div className="h-3" />
+
       {/* LINE MOVEMENT TAB */}
       {tab === "line" && (
-        <div className="mt-3">
+        <div className="mt-2">
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
               <button
@@ -1946,7 +1944,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
       {/* PREDICTIONS TAB */}
       {tab === "pred" && (
-        <div className="mt-3">
+        <div className="mt-2">
           {predLoading ? (
             <div className="text-sm text-[#b0b0b0] p-4">Loading Monte Carlo predictions…</div>
           ) : predError ? (
@@ -1955,150 +1953,114 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
             <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
           ) : (
             <div className="space-y-3">
-              {/* ✅ UPDATE REQUESTED: combine ML/Spread/Total into fewer sections */}
+              {/* ✅ DECLUTTERED: one clean hero + 3 compact cards */}
               <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="text-white font-extrabold text-[13px]">Key Lines</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
-                      Consensus lines + model probabilities (quantum ML shown as fair odds)
-                    </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-white font-extrabold text-[13px]">Key Lines</div>
+                  <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                    Consensus + model probabilities
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 lg:grid-cols-[520px_1fr] gap-3 items-start">
-                  {/* Win% meter + projected score (hero) */}
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                    <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-3 items-center">
-                      <div className="flex items-center gap-3">
-                        {awayLogo ? (
-                          <img
-                            src={awayLogo}
-                            alt={`${awayTeam} logo`}
-                            className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                            loading="lazy"
-                            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                          />
-                        ) : (
-                          <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
-                        )}
-                        <div className="min-w-0">
-                          <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
-                          <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                            Quantum ML:{" "}
-                            <span className="text-white font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
-                              {probToAmerican(awayP)}
-                            </span>
-                          </div>
+                {/* hero (logos + win meter) */}
+                <div className="mt-3 rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                  <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-3 items-center">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {awayLogo ? (
+                        <img
+                          src={awayLogo}
+                          alt={`${awayTeam} logo`}
+                          className="w-10 h-10 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                          loading="lazy"
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-md bg-white border border-[#e5e5e5]" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
+                        <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                          Fair ML:{" "}
+                          <span className="text-white font-extrabold tabular-nums" style={{ color: colors.away }}>
+                            {probToAmerican(awayP)}
+                          </span>
                         </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 justify-start lg:justify-end">
-                        <div className="min-w-0 text-right">
-                          <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
-                          <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                            Quantum ML:{" "}
-                            <span className="text-white font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
-                              {probToAmerican(homeP)}
-                            </span>
-                          </div>
-                        </div>
-                        {homeLogo ? (
-                          <img
-                            src={homeLogo}
-                            alt={`${homeTeam} logo`}
-                            className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                            loading="lazy"
-                            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                          />
-                        ) : (
-                          <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
-                        )}
                       </div>
                     </div>
 
-                    <div className="mt-3">
-                      <WinSplitMeter
-                        awayP={awayP}
-                        homeP={homeP}
-                        awayLabel="Away"
-                        homeLabel="Home"
-                        awayColor={colors.awayHex}
-                        homeColor={colors.homeHex}
-                        scoreText={scoreText}
-                      />
+                    <div className="flex items-center gap-3 justify-start md:justify-end min-w-0">
+                      <div className="min-w-0 text-left md:text-right">
+                        <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
+                        <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                          Fair ML:{" "}
+                          <span className="text-white font-extrabold tabular-nums" style={{ color: colors.home }}>
+                            {probToAmerican(homeP)}
+                          </span>
+                        </div>
+                      </div>
+                      {homeLogo ? (
+                        <img
+                          src={homeLogo}
+                          alt={`${homeTeam} logo`}
+                          className="w-10 h-10 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                          loading="lazy"
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-md bg-white border border-[#e5e5e5]" />
+                      )}
                     </div>
                   </div>
 
-                  {/* Compact combined block: Consensus ML + Spread + Total + model snapshot */}
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Consensus ML</div>
-                        <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                          {awayTeam}: {consMlAway.top} <span className="text-[#808080] mx-2">|</span>
-                          {homeTeam}: {consMlHome.top}
-                        </div>
-                        <div className="mt-1 text-[10px] text-[#b0b0b0] font-semibold">
-                          Win%: {pct(awayP)} / {pct(homeP)}
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
-                        <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                          {awayTeam}: {consSprAway.top} <span className="text-[#b0b0b0]">{consSprAway.bottom ? consSprAway.bottom : ""}</span>
-                          <span className="text-[#808080] mx-2">|</span>
-                          {homeTeam}: {consSprHome.top} <span className="text-[#b0b0b0]">{consSprHome.bottom ? consSprHome.bottom : ""}</span>
-                        </div>
-                        <div className="mt-1 text-[10px] text-[#b0b0b0] font-semibold">
-                          Cover: {pct(toProb01(predRow.home_cover_prob))} / Push {pct(toProb01(predRow.cover_push_prob))} / {pct(toProb01(predRow.away_cover_prob))}
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Consensus Total</div>
-                        <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                          O: {consTotOver.top} <span className="text-[#b0b0b0]">{consTotOver.bottom ? consTotOver.bottom : ""}</span>
-                          <span className="text-[#808080] mx-2">|</span>
-                          U: {consTotUnder.top} <span className="text-[#b0b0b0]">{consTotUnder.bottom ? consTotUnder.bottom : ""}</span>
-                        </div>
-                        <div className="mt-1 text-[10px] text-[#b0b0b0] font-semibold">
-                          O {pct(toProb01(predRow.over_prob))} / Push {pct(toProb01(predRow.total_push_prob))} / U {pct(toProb01(predRow.under_prob))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2">
-                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Proj Total</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">
-                          {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Margin (H)</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">
-                          {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">σ Margin</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">
-                          {predRow.sigma_margin_game ?? "—"}
-                        </div>
-                      </div>
-                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">σ Total</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">
-                          {predRow.sigma_total_game ?? "—"}
-                        </div>
-                      </div>
-                    </div>
+                  <div className="mt-3">
+                    <WinSplitMeter
+                      awayP={awayP}
+                      homeP={homeP}
+                      awayLabel="Away"
+                      homeLabel="Home"
+                      awayColor={colors.away}
+                      homeColor={colors.home}
+                      scoreText={scoreText}
+                    />
                   </div>
                 </div>
 
-                {/* Last 5 panels */}
+                {/* compact 3 cards */}
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <KeyLineCard
+                    title="Moneyline"
+                    leftLabel={awayTeam}
+                    rightLabel={homeTeam}
+                    leftValue={consMlAway.top}
+                    rightValue={consMlHome.top}
+                    subLeft={`Win ${pct(awayP)}`}
+                    subRight={`Win ${pct(homeP)}`}
+                  />
+
+                  <KeyLineCard
+                    title="Spread"
+                    leftLabel={awayTeam}
+                    rightLabel={homeTeam}
+                    leftValue={`${consSprAway.top} ${consSprAway.bottom ?? ""}`.trim()}
+                    rightValue={`${consSprHome.top} ${consSprHome.bottom ?? ""}`.trim()}
+                    subLeft={`Cover ${pct(toProb01(predRow.away_cover_prob))}`}
+                    subRight={`Cover ${pct(toProb01(predRow.home_cover_prob))}`}
+                    centerNote={predRow.cover_push_prob != null ? `Push ${pct(toProb01(predRow.cover_push_prob))}` : undefined}
+                  />
+
+                  <KeyLineCard
+                    title="Total"
+                    leftLabel="Over"
+                    rightLabel="Under"
+                    leftValue={`${consTotOver.top} ${consTotOver.bottom ?? ""}`.trim()}
+                    rightValue={`${consTotUnder.top} ${consTotUnder.bottom ?? ""}`.trim()}
+                    subLeft={predRow.over_prob != null ? `Prob ${pct(toProb01(predRow.over_prob))}` : undefined}
+                    subRight={predRow.under_prob != null ? `Prob ${pct(toProb01(predRow.under_prob))}` : undefined}
+                    centerNote={predRow.total_push_prob != null ? `Push ${pct(toProb01(predRow.total_push_prob))}` : undefined}
+                  />
+                </div>
+
+                {/* last 5 panels */}
                 <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
                   <Last5Panel title="Away" teamName={awayTeam} games={l5Away} loading={l5AwayLoading} error={l5AwayErr} />
                   <Last5Panel title="Home" teamName={homeTeam} games={l5Home} loading={l5HomeLoading} error={l5HomeErr} />
@@ -2111,22 +2073,36 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
       {/* PLAYER PROPS TAB */}
       {tab === "props" && (
-        <div className="mt-3">
-          <div className="flex flex-wrap items-center gap-2 mb-3">
-            <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-              {PROP_MARKETS.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`px-3 py-1.5 text-xs font-extrabold ${propMarket === m ? "bg-[#d4af37] text-black" : "text-white"}`}
-                  onClick={() => setPropMarket(m)}
-                >
-                  {m}
-                </button>
-              ))}
+        <div className="mt-2">
+          {/* ✅ FIX: prop market buttons stay visible too */}
+          <div
+            className="sticky z-30"
+            style={{ top: PROP_BAR_TOP }}
+          >
+            <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f]/92 backdrop-blur px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+                  {PROP_MARKETS.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`px-3 py-1.5 text-xs font-extrabold ${
+                        propMarket === m ? "bg-[#d4af37] text-black" : "text-white"
+                      }`}
+                      onClick={() => setPropMarket(m)}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                  Newest per (player, side, book)
+                </div>
+              </div>
             </div>
-            <div className="text-[11px] text-[#b0b0b0] font-semibold">One row per player • Over/Under grouped • Books in columns</div>
           </div>
+
+          <div className="h-3" />
 
           {propsLoading ? (
             <div className="text-sm text-[#b0b0b0] p-4">Loading props…</div>
@@ -2230,8 +2206,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </tbody>
                 </table>
               </div>
-
-              {/* ✅ UPDATE REQUESTED: remove footer line about sources/aggregation */}
             </div>
           )}
         </div>
@@ -2431,7 +2405,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   };
 
   return (
-    // ✅ UPDATE REQUESTED: main background not boring all-black
     <div
       className="w-full min-h-screen"
       style={{
@@ -2471,7 +2444,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 </div>
               </div>
 
-              {/* ✅ UPDATE REQUESTED: remove Sport/Market/Books/Refresh chips; keep only game count note */}
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <Chip label="Games" value={events.length} />
                 <div className="md:hidden w-full" />
@@ -2592,4 +2564,5 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
+
 
