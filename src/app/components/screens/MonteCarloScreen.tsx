@@ -1,4 +1,4 @@
-// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.3)
+// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.3-hardened)
 // ✅ Mobile stays EXACTLY like v4.2 (cards + collapsible details w/ abbr headers)
 // ✅ Desktop: NO details box anymore
 //    - Adds 4 extra right-side metric columns next to Proj Score / Win%:
@@ -322,16 +322,16 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /** =========================================================
-    DESKTOP (NEW: headers + inline columns, NO details area)
+    DESKTOP (headers + inline columns, NO details area)
 ========================================================= */
 
 const DESK_COLS = {
   score: 64,
   win: 64,
-  pm: 96, // proj margin
-  pt: 110, // proj total
-  cs: 120, // cons spread
-  ct: 120, // cons total
+  pm: 96,
+  pt: 110,
+  cs: 120,
+  ct: 120,
 };
 
 function DesktopHeaderRow() {
@@ -360,14 +360,7 @@ function DesktopHeaderRow() {
   );
 }
 
-function DesktopTeamRow({
-  row,
-  variant,
-}: {
-  row: TeamRow;
-  variant: "AWAY" | "HOME";
-}) {
-  // Per-team display values
+function DesktopTeamRow({ row, variant }: { row: TeamRow; variant: "AWAY" | "HOME" }) {
   const projMarginCell = (
     <>
       {fmtSigned1(row.projMarginTeam)}{" "}
@@ -471,7 +464,6 @@ function DesktopEventBlock({ ev }: { ev: EventBundle }) {
             <div className="text-[12px] text-[#cfcfcf] font-extrabold truncate">{timeLabel}</div>
           </div>
 
-          {/* headers aligned to columns */}
           <div className="ml-auto">
             <DesktopHeaderRow />
           </div>
@@ -530,6 +522,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
         if (ab) am.set(k, ab.toUpperCase());
       }
 
+      if (!alive) return;
       setLogoMap(lm);
       setAbbrMap(am);
     })();
@@ -660,6 +653,9 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
       }
 
       const rows = (data ?? []) as OddsSnapshotRow[];
+
+      // We want ONE contribution per (event_id, market, bookmaker, side),
+      // preferring the most recent TS (because rows are ts DESC already).
       const seen = new Set<string>();
 
       const spreadHomeLines: Map<string, number[]> = new Map();
@@ -683,6 +679,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
 
         if (!eventId || !market || !side) continue;
 
+        // Track latest snapshot timestamp per event (rows are DESC, but keep this robust)
         if (r.ts) {
           const prev = bestTsByEvent.get(eventId);
           if (!prev || new Date(r.ts).getTime() > new Date(prev).getTime()) bestTsByEvent.set(eventId, r.ts);
@@ -696,16 +693,14 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
           if (side === "home") {
             if (line != null) pushMap(spreadHomeLines, eventId, line);
             if (odds != null) pushMap(spreadHomeOdds, eventId, odds);
-          }
-          if (side === "away") {
+          } else if (side === "away") {
             if (odds != null) pushMap(spreadAwayOdds, eventId, odds);
           }
         } else if (market === "totals") {
           if (side === "over") {
             if (line != null) pushMap(totalLines, eventId, line);
             if (odds != null) pushMap(totalOverOdds, eventId, odds);
-          }
-          if (side === "under") {
+          } else if (side === "under") {
             if (odds != null) pushMap(totalUnderOdds, eventId, odds);
           }
         }
@@ -726,6 +721,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
         });
       }
 
+      if (!alive) return;
       setConsensusMap(m);
       setLoadingConsensus(false);
     }
@@ -867,7 +863,9 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
         {/* Header */}
         <div className="pt-4 md:pt-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
-            <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">Monte Carlo</h2>
+            <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
+              Monte Carlo
+            </h2>
             <div className="text-xs text-[#8a8a8a] mt-1">
               Sport: <span className="text-white font-extrabold">{sportKey}</span>
               {run?.created_at ? (
@@ -940,7 +938,9 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                             >
                               {ev.away.projPoints.toFixed(1)}
                             </div>
-                            <div className="font-bold text-[10px] text-[#bdbdbd]">{formatPct(ev.away.winProbTeam)}</div>
+                            <div className="font-bold text-[10px] text-[#bdbdbd]">
+                              {formatPct(ev.away.winProbTeam)}
+                            </div>
                           </div>
                         </div>
 
@@ -964,7 +964,9 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                             >
                               {ev.home.projPoints.toFixed(1)}
                             </div>
-                            <div className="font-bold text-[10px] text-[#bdbdbd]">{formatPct(ev.home.winProbTeam)}</div>
+                            <div className="font-bold text-[10px] text-[#bdbdbd]">
+                              {formatPct(ev.home.winProbTeam)}
+                            </div>
                           </div>
                         </div>
 
