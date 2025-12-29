@@ -1563,7 +1563,15 @@ function fmtLineOdds(line: number | null, odds: number | null) {
    GAME DETAILS MODAL
 ========================================================= */
 
-function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: EventOdds; onClose: () => void }) {
+function GameDetailsModal({
+  sportKey,
+  ev,
+  onClose,
+}: {
+  sportKey: string;
+  ev: EventOdds;
+  onClose: () => void;
+}) {
   // ✅ Predictions tab opens first
   const [tab, setTab] = useState<DetailsTab>("pred");
 
@@ -1593,52 +1601,13 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const [propsError, setPropsError] = useState("");
   const [propsAgg, setPropsAgg] = useState<PropAggRow[]>([]);
 
-  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
+  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(
+    ev.commenceTime
+  )} CT`;
 
-  // ✅ STICKY: compute exact offsets so props headers stay sticky across devices (no hard-coded magic numbers)
-  const tabBarRef = useRef<HTMLDivElement | null>(null);
-  const propBarRef = useRef<HTMLDivElement | null>(null);
-  const propsHeaderRef = useRef<HTMLDivElement | null>(null);
-  const propsHdrRow1Ref = useRef<HTMLTableRowElement | null>(null);
-
-  const [propsSticky, setPropsSticky] = useState({
-    tabH: 0,
-    propTop: 0,
-    headerTop: 0,
-    tableTop: 0,
-    hdrRow1H: 46,
-  });
-
-  useLayoutEffect(() => {
-    if (tab !== "props") return;
-
-    let raf = 0;
-
-    const measure = () => {
-      const tabH = Math.round(tabBarRef.current?.getBoundingClientRect().height ?? 0);
-      const propH = Math.round(propBarRef.current?.getBoundingClientRect().height ?? 0);
-      const headH = Math.round(propsHeaderRef.current?.getBoundingClientRect().height ?? 0);
-      const row1H = Math.max(40, Math.round(propsHdrRow1Ref.current?.getBoundingClientRect().height ?? 46));
-
-      setPropsSticky({
-        tabH,
-        propTop: tabH,
-        headerTop: tabH + propH,
-        tableTop: tabH + propH + headH,
-        hdrRow1H: row1H,
-      });
-    };
-
-    raf = window.requestAnimationFrame(measure);
-    window.addEventListener("resize", measure);
-
-    return () => {
-      window.cancelAnimationFrame(raf);
-      window.removeEventListener("resize", measure);
-    };
-  }, [tab, propMarket, propsAgg.length]);
-
-  // Line movement fetch
+  /* -------------------------
+     Line movement fetch
+  ------------------------- */
   useEffect(() => {
     if (tab !== "line") return;
     let alive = true;
@@ -1671,7 +1640,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     };
   }, [tab, sportKey, ev.eventId, lmMarket]);
 
-  // Predictions fetch (+ last 5)
+  /* -------------------------
+     Predictions fetch (+ last 5)
+  ------------------------- */
   useEffect(() => {
     if (tab !== "pred") return;
     let alive = true;
@@ -1681,7 +1652,12 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     setPredRow(null);
 
     (async () => {
-      const { data, error } = await supabase.from("monte_carlo_results").select("*").eq("event_id", ev.eventId).limit(1);
+      const { data, error } = await supabase
+        .from("monte_carlo_results")
+        .select("*")
+        .eq("event_id", ev.eventId)
+        .limit(1);
+
       if (!alive) return;
 
       if (error) {
@@ -1722,6 +1698,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
         over_prob: toNum(r.over_prob),
         total_push_prob: toNum(r.total_push_prob),
         under_prob: toNum(r.under_prob),
+
+        projected_margin_home: toNum(r.projected_margin_home),
+        projected_total: toNum(r.projected_total),
       };
 
       setPredRow(row);
@@ -1782,7 +1761,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     };
   }, [tab, ev.eventId, sportKey, ev.away?.team, ev.home?.team]);
 
-  // Props fetch
+  /* -------------------------
+     Props fetch
+  ------------------------- */
   useEffect(() => {
     if (tab !== "props") return;
     let alive = true;
@@ -1792,7 +1773,12 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     setPropsAgg([]);
 
     (async () => {
-      const snap = await supabase.from("player_props_snapshot").select("*").eq("sport_key", sportKey).eq("event_id", ev.eventId);
+      const snap = await supabase
+        .from("player_props_snapshot")
+        .select("*")
+        .eq("sport_key", sportKey)
+        .eq("event_id", ev.eventId);
+
       if (!alive) return;
 
       if (snap.error) {
@@ -1841,12 +1827,20 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       const metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
 
       if (names.length) {
-        const meta = await supabase.from("player_prop_ev_latest").select("player_name,team,position,picture_url").in("player_name", names);
+        const meta = await supabase
+          .from("player_prop_ev_latest")
+          .select("player_name,team,position,picture_url")
+          .in("player_name", names);
+
         if (!meta.error && meta.data) {
           for (const m of meta.data as any[]) {
             const key = String(m.player_name ?? "").trim();
             if (!key) continue;
-            metaMap.set(key, { position: m.position ?? null, picture_url: m.picture_url ?? null, team: m.team ?? null });
+            metaMap.set(key, {
+              position: m.position ?? null,
+              picture_url: m.picture_url ?? null,
+              team: m.team ?? null,
+            });
           }
         }
       }
@@ -1905,6 +1899,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     };
   }, [tab, sportKey, ev.eventId, propMarket]);
 
+  /* -------------------------
+     Derived UI values
+  ------------------------- */
   const awayTeam = ev.away?.team ?? predRow?.away_team ?? "Away";
   const homeTeam = ev.home?.team ?? predRow?.home_team ?? "Home";
   const awayLogo = ev.away?.logoUrl ?? null;
@@ -1933,10 +1930,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
       {/* ✅ Sticky tabs bar */}
-      <div
-        ref={tabBarRef}
-        className="sticky top-0 z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-3 sm:pt-4 pb-3 border-b border-[#232323] bg-[#0b0b0b]/85 backdrop-blur-[6px]"
-      >
+      <div className="sticky top-0 z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-3 sm:pt-4 pb-3 border-b border-[#232323] bg-[#0b0b0b]/85 backdrop-blur-[6px]">
         <div className="flex flex-wrap items-center gap-2">
           <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
             Predictions
@@ -1959,7 +1953,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                className={`px-3 py-1.5 text-xs font-extrabold ${
+                  lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"
+                }`}
                 onClick={(e) => {
                   setLmMarket("ml");
                   (e.currentTarget as HTMLButtonElement).blur();
@@ -1971,7 +1967,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                className={`px-3 py-1.5 text-xs font-extrabold ${
+                  lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"
+                }`}
                 onClick={(e) => {
                   setLmMarket("spread");
                   (e.currentTarget as HTMLButtonElement).blur();
@@ -1983,7 +1981,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                className={`px-3 py-1.5 text-xs font-extrabold ${
+                  lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"
+                }`}
                 onClick={(e) => {
                   setLmMarket("total");
                   (e.currentTarget as HTMLButtonElement).blur();
@@ -2040,9 +2040,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-white font-extrabold text-[13px]">Key Lines</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
-                      Consensus lines in one place
-                    </div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">Consensus lines in one place</div>
                   </div>
                 </div>
 
@@ -2080,7 +2078,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
               {/* Win% meter */}
               <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
-                {/* ✅ MOBILE: small logos + names ABOVE bar (both teams above the bar) */}
+                {/* ✅ MOBILE: small logos + names ABOVE bar */}
                 <div className="lg:hidden">
                   <div className="grid grid-cols-2 gap-3 mb-3">
                     <div className="flex items-center gap-2 min-w-0">
@@ -2141,7 +2139,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   />
                 </div>
 
-                {/* ✅ DESKTOP: keep existing layout */}
+                {/* ✅ DESKTOP: unchanged */}
                 <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
                   <div className="flex items-center gap-3">
                     {awayLogo ? (
@@ -2217,12 +2215,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
                       <span>
                         Margin Line (H):{" "}
-                        <span className="text-white font-extrabold tabular-nums">
-                          {predRow.spread_line_home ?? "—"}
-                        </span>
+                        <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
                       </span>
 
-                      {/* white vertical divider */}
                       <span className="mx-3 h-4 w-px bg-white/80" />
 
                       <span>
@@ -2258,7 +2253,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </div>
                 </div>
 
-                {/* SECTION DIVIDER */}
                 <div className="my-4 h-px bg-white/10" />
 
                 {/* TOTAL */}
@@ -2268,13 +2262,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
                     <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
                       <span>
-                        Total Line:{" "}
-                        <span className="text-white font-extrabold tabular-nums">
-                          {predRow.total_line ?? "—"}
-                        </span>
+                        Total Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
                       </span>
 
-                      {/* white vertical divider */}
                       <span className="mx-3 h-4 w-px bg-white/80" />
 
                       <span>
@@ -2325,18 +2315,16 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       {tab === "props" && (
         <div className="pt-3">
           {/* ✅ Sticky prop market buttons */}
-          <div
-            ref={propBarRef}
-            className="sticky z-20 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 pt-2 border-b border-[#1f1f1f] bg-[#0b0b0b]/85 backdrop-blur-[6px]"
-            style={{ top: propsSticky.propTop }}
-          >
+          <div className="sticky top-[60px] z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 pt-2 border-b border-[#1f1f1f] bg-[#0b0b0b]/85 backdrop-blur-[6px]">
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
                 {PROP_MARKETS.map((m) => (
                   <button
                     key={m}
                     type="button"
-                    className={`px-3 py-1.5 text-xs font-extrabold ${propMarket === m ? "bg-[#d4af37] text-black" : "text-white"}`}
+                    className={`px-3 py-1.5 text-xs font-extrabold ${
+                      propMarket === m ? "bg-[#d4af37] text-black" : "text-white"
+                    }`}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={(e) => {
                       setPropMarket(m);
@@ -2360,68 +2348,75 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
             <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
           ) : (
             <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
-              {/* ✅ STICKY: Points header + count */}
+              {/* ✅ ONE sticky header stack that stays in-flow so it does NOT cover body rows */}
               <div
-                ref={propsHeaderRef}
-                className="sticky z-20 px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between bg-[#0b0b0b]/92 backdrop-blur-[6px]"
-                style={{ top: propsSticky.headerTop }}
+                className="sticky z-20 bg-[#0b0b0b]/92 backdrop-blur-[6px] border-b border-[#2a2a2a]"
+                style={{ top: 118 }}
               >
-                <div className="text-white font-extrabold text-sm">{propMarket}</div>
-                <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
+                {/* Points / count */}
+                <div className="px-4 py-3 flex items-center justify-between">
+                  <div className="text-white font-extrabold text-sm">{propMarket}</div>
+                  <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
+                </div>
+
+                {/* Header rows */}
+                <div className="overflow-x-auto">
+                  <table className="w-full table-fixed">
+                    <colgroup>
+                      <col style={{ width: 260 }} />
+                      <col style={{ width: 110 }} />
+                      <col style={{ width: 90 }} />
+                      <col />
+                      <col />
+                    </colgroup>
+
+                    <thead>
+                      <tr className="border-t border-[#232323] bg-[#0b0b0b]">
+                        <th className="text-left px-4 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
+                        <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
+                        <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
+                        <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
+                        <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
+                      </tr>
+
+                      <tr className="border-t border-[#1a1a1a] bg-[#0b0b0b]">
+                        <th />
+                        <th />
+                        <th />
+                        <th className="px-3 pb-3">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div key={`ovh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
+                                {b.toUpperCase()}
+                              </div>
+                            ))}
+                          </div>
+                        </th>
+                        <th className="px-3 pb-3">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div key={`unh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
+                                {b.toUpperCase()}
+                              </div>
+                            ))}
+                          </div>
+                        </th>
+                      </tr>
+                    </thead>
+                  </table>
+                </div>
               </div>
 
+              {/* Body table */}
               <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    {/* ✅ STICKY HEADER ROW 1 */}
-                    <tr
-                      ref={propsHdrRow1Ref}
-                      className="border-b border-[#232323] bg-[#0b0b0b]"
-                      style={{
-                        position: "sticky" as any,
-                        top: propsSticky.tableTop,
-                        zIndex: 30,
-                      }}
-                    >
-                      <th className="text-left px-4 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
-                      <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
-                      <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
-                      <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
-                      <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
-                    </tr>
-
-                    {/* ✅ STICKY HEADER ROW 2 */}
-                    <tr
-                      className="border-b border-[#1a1a1a] bg-[#0b0b0b]"
-                      style={{
-                        position: "sticky" as any,
-                        top: propsSticky.tableTop + propsSticky.hdrRow1H,
-                        zIndex: 29,
-                      }}
-                    >
-                      <th />
-                      <th />
-                      <th />
-                      <th className="px-3 pb-3">
-                        <div className="grid grid-cols-5 gap-2 justify-items-center">
-                          {BOOKS.map((b) => (
-                            <div key={`ovh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
-                              {b.toUpperCase()}
-                            </div>
-                          ))}
-                        </div>
-                      </th>
-                      <th className="px-3 pb-3">
-                        <div className="grid grid-cols-5 gap-2 justify-items-center">
-                          {BOOKS.map((b) => (
-                            <div key={`unh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
-                              {b.toUpperCase()}
-                            </div>
-                          ))}
-                        </div>
-                      </th>
-                    </tr>
-                  </thead>
+                <table className="w-full table-fixed">
+                  <colgroup>
+                    <col style={{ width: 260 }} />
+                    <col style={{ width: 110 }} />
+                    <col style={{ width: 90 }} />
+                    <col />
+                    <col />
+                  </colgroup>
 
                   <tbody>
                     {propsAgg.map((r) => (
@@ -2477,8 +2472,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </tbody>
                 </table>
               </div>
-
-              {/* ✅ removed the extra footer sentences per your request */}
             </div>
           )}
         </div>
