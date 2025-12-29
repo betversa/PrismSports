@@ -1397,93 +1397,240 @@ async function fetchLast5Games({
 }: {
   sportKey: string;
   teamName: string;
-}): Promise<RecentGame[]> {
-  if (!teamName) return [];
+}): Promise<
+  Array<{
+    date: string | null;
+    opp: string;
+    isHome: boolean;
+    teamPts: number | null;
+    oppPts: number | null;
+    result: "W" | "L" | "—";
+    scoreText: string;
+  }>
+> {
+  const tn = (teamName ?? "").trim();
+  if (!tn) return [];
 
+  const todayYmd = ctTodayYmd(); // YYYY-MM-DD in CT
+
+  // -----------------------
+  // NBA (basketballref_games_nba)
+  // -----------------------
   if (sportKey === "basketball_nba") {
+    // We pull a larger window (e.g., 30) then filter to "completed" games
+    // so scheduled/future rows with null/0-0 don't pollute last 5.
     const { data, error } = await supabase
       .from("basketballref_games_nba")
-      .select("date, away_team, home_team, away_pts, home_pts, overtime, notes")
-      .or(`away_team.ilike.%${teamName}%,home_team.ilike.%${teamName}%`)
+      .select("date, away_team, home_team, away_pts, home_pts")
+      .or(`away_team.ilike.%${tn}%,home_team.ilike.%${tn}%`)
+      // Exclude missing scores
+      .not("away_pts", "is", null)
+      .not("home_pts", "is", null)
+      // Exclude future dates (assumes date is YYYY-MM-DD or comparable date-like)
+      .lte("date", todayYmd)
       .order("date", { ascending: false })
-      .limit(5);
+      .limit(40);
 
     if (error || !data) return [];
 
-    return (data as any[]).map((r) => {
-      const away = safeStr(r.away_team);
-      const home = safeStr(r.home_team);
-      const isHome = home.toLowerCase() === teamName.toLowerCase();
+    // Filter out "0-0 placeholder" rows if they exist
+    const completed = (data as any[])
+      .filter((r) => {
+        const a = Number(r.away_pts);
+        const h = Number(r.home_pts);
+        return Number.isFinite(a) && Number.isFinite(h) && (a > 0 || h > 0);
+      })
+      .slice(0, 5);
+
+    return completed.map((r) => {
+      const away = String(r.away_team ?? "").trim();
+      const home = String(r.home_team ?? "").trim();
+
+      const isHome = home.toLowerCase() === tn.toLowerCase();
       const opp = isHome ? away : home;
 
-      const awayPts = safeNum(r.away_pts);
-      const homePts = safeNum(r.home_pts);
+      const awayPts = Number(r.away_pts);
+      const homePts = Number(r.home_pts);
 
       const teamPts = isHome ? homePts : awayPts;
       const oppPts = isHome ? awayPts : homePts;
 
-      let result: RecentGame["result"] = "—";
-      if (teamPts != null && oppPts != null) result = teamPts > oppPts ? "W" : "L";
-
-      const scoreText = teamPts == null || oppPts == null ? "—" : `${teamPts}-${oppPts}`;
+      const result: "W" | "L" | "—" =
+        Number.isFinite(teamPts) && Number.isFinite(oppPts)
+          ? teamPts > oppPts
+            ? "W"
+            : "L"
+          : "—";
 
       return {
-        date: r.date ?? null,
+        date: (r.date ?? null) as string | null,
         opp,
         isHome,
-        teamPts,
-        oppPts,
+        teamPts: Number.isFinite(teamPts) ? teamPts : null,
+        oppPts: Number.isFinite(oppPts) ? oppPts : null,
         result,
-        scoreText,
+        scoreText:
+          Number.isFinite(teamPts) && Number.isFinite(oppPts)
+            ? `${teamPts}-${oppPts}`
+            : "—",
       };
     });
   }
 
+  // -----------------------
+  // NCAAB (kenpom_games)
+  // -----------------------
   if (sportKey === "basketball_ncaab") {
-    // Attempt literal-column table (as in your CSV):
-    // Date, Team1 (Away), Score1, Team2 (Home), Score2, Neutral, Location, Season
+    // Note: column names can differ; we "select *" safely and map flexibly.
+    // We still filter to completed games by requiring numeric scores > 0.
     const { data, error } = await supabase
       .from("kenpom_games")
       .select("*")
-      .or(`"Team1 (Away)".ilike.%${teamName}%,"Team2 (Home)".ilike.%${teamName}%`)
-      .order("Date", { ascending: false })
-      .limit(5);
-
-    // If your DB uses snake_case, replace the query above with:
-    // .or(`team1_away.ilike.%${teamName}%,team2_home.ilike.%${teamName}%`)
-    // .order("date", { ascending: false })
+      .or(`team.ilike.%${tn}%,opponent.ilike.%${tn}%,home_team.ilike.%${tn}%,away_team.ilike.%${tn}%`)
+      .order("date", { ascending: false })
+      .limit(80);
 
     if (error || !data) return [];
 
-    return (data as any[]).map((r) => {
-      const away = safeStr(r["Team1 (Away)"] ?? r.team1_away ?? r.away_team);
-      const home = safeStr(r["Team2 (Home)"] ?? r.team2_home ?? r.home_team);
-      const isHome = home.toLowerCase() === teamName.toLowerCase();
-      const opp = isHome ? away : home;
+    // Helpers for flexible field names
+    const pickAny = (row: any, keys: string[]) => {
+      for (const k of keys) if (row?.[k] != null) return row[k];
+      return null;
+    };
 
-      const awayPts = safeNum(r.Score1 ?? r.score1 ?? r.away_pts);
-      const homePts = safeNum(r.Score2 ?? r.score2 ?? r.home_pts);
+    const toNum = (v: any): number | null => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
 
-      const teamPts = isHome ? homePts : awayPts;
-      const oppPts = isHome ? awayPts : homePts;
+    const toStr = (v: any): string => String(v ?? "").trim();
 
-      let result: RecentGame["result"] = "—";
-      if (teamPts != null && oppPts != null) result = teamPts > oppPts ? "W" : "L";
+    // Try to interpret each row into a standard "game result"
+    const parsed = (data as any[])
+      .map((r) => {
+        const date =
+          (pickAny(r, ["date", "game_date", "dt", "day"]) ?? null) as
+            | string
+            | null;
 
-      const scoreText = teamPts == null || oppPts == null ? "—" : `${teamPts}-${oppPts}`;
+        // Prefer explicit home/away schema if present
+        const awayTeam = toStr(pickAny(r, ["away_team", "away", "team_away"]));
+        const homeTeam = toStr(pickAny(r, ["home_team", "home", "team_home"]));
 
-      return {
-        date: r.Date ?? r.date ?? null,
-        opp,
-        isHome,
-        teamPts,
-        oppPts,
-        result,
-        scoreText,
-      };
-    });
+        const awayPts = toNum(pickAny(r, ["away_pts", "away_score", "pts_away", "score_away"]));
+        const homePts = toNum(pickAny(r, ["home_pts", "home_score", "pts_home", "score_home"]));
+
+        // Alternate schema: team/opponent with a home/away flag
+        const team = toStr(pickAny(r, ["team", "team_name"]));
+        const opp = toStr(pickAny(r, ["opponent", "opp", "opponent_name"]));
+        const teamPtsAlt = toNum(pickAny(r, ["team_score", "team_pts", "pts", "score_for"]));
+        const oppPtsAlt = toNum(pickAny(r, ["opp_score", "opp_pts", "score_against"]));
+        const locRaw = toStr(pickAny(r, ["location", "loc", "home_away", "site"])).toLowerCase(); // e.g. "H", "A", "Home", "@"
+        const isHomeAlt =
+          locRaw === "h" ||
+          locRaw.includes("home") ||
+          locRaw === "" ||
+          locRaw === "neutral"; // neutral treated as "home" false later if needed
+
+        // Decide which schema we have
+        const hasHomeAwaySchema = awayTeam && homeTeam;
+
+        // If we have home/away teams, use that
+        if (hasHomeAwaySchema) {
+          const tnLower = tn.toLowerCase();
+          const isHome = homeTeam.toLowerCase().includes(tnLower);
+          const isAway = awayTeam.toLowerCase().includes(tnLower);
+          if (!isHome && !isAway) return null;
+
+          // Completed game requires scores
+          if (awayPts == null || homePts == null) return null;
+          if ((awayPts ?? 0) <= 0 && (homePts ?? 0) <= 0) return null;
+
+          const teamPts = isHome ? homePts : awayPts;
+          const oppPts = isHome ? awayPts : homePts;
+          const opponent = isHome ? awayTeam : homeTeam;
+
+          const result: "W" | "L" | "—" =
+            teamPts != null && oppPts != null ? (teamPts > oppPts ? "W" : "L") : "—";
+
+          return {
+            date,
+            opp: opponent,
+            isHome,
+            teamPts,
+            oppPts,
+            result,
+            scoreText: teamPts != null && oppPts != null ? `${teamPts}-${oppPts}` : "—",
+          };
+        }
+
+        // Else try team/opponent schema
+        if (!team || !opp) return null;
+
+        const tnLower = tn.toLowerCase();
+        const isThisTeam = team.toLowerCase().includes(tnLower) || opp.toLowerCase().includes(tnLower);
+        if (!isThisTeam) return null;
+
+        // If the row is reversed (tn appears in opponent), swap
+        const rowHasTeamAsTN = team.toLowerCase().includes(tnLower);
+
+        const finalTeam = rowHasTeamAsTN ? team : opp;
+        const finalOpp = rowHasTeamAsTN ? opp : team;
+
+        const finalTeamPts = rowHasTeamAsTN ? teamPtsAlt : oppPtsAlt;
+        const finalOppPts = rowHasTeamAsTN ? oppPtsAlt : teamPtsAlt;
+
+        // Completed game requires scores
+        if (finalTeamPts == null || finalOppPts == null) return null;
+        if ((finalTeamPts ?? 0) <= 0 && (finalOppPts ?? 0) <= 0) return null;
+
+        const result: "W" | "L" | "—" =
+          finalTeamPts != null && finalOppPts != null
+            ? finalTeamPts > finalOppPts
+              ? "W"
+              : "L"
+            : "—";
+
+        // If location implies away (e.g. "@"), set isHome=false
+        const isHome = rowHasTeamAsTN ? isHomeAlt : !isHomeAlt;
+
+        return {
+          date,
+          opp: finalOpp,
+          isHome,
+          teamPts: finalTeamPts,
+          oppPts: finalOppPts,
+          result,
+          scoreText:
+            finalTeamPts != null && finalOppPts != null
+              ? `${finalTeamPts}-${finalOppPts}`
+              : "—",
+        };
+      })
+      .filter(Boolean) as Array<{
+      date: string | null;
+      opp: string;
+      isHome: boolean;
+      teamPts: number | null;
+      oppPts: number | null;
+      result: "W" | "L" | "—";
+      scoreText: string;
+    }>;
+
+    // Filter to past/known dates if date exists
+    const completed = parsed
+      .filter((g) => {
+        if (!g.date) return true; // if no date field, still allow (but rare)
+        // if date is YYYY-MM-DD, keep <= today
+        if (/^\d{4}-\d{2}-\d{2}$/.test(g.date)) return g.date <= todayYmd;
+        return true;
+      })
+      .slice(0, 5);
+
+    return completed;
   }
 
+  // Default: no data source configured
   return [];
 }
 
