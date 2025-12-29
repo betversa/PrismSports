@@ -1,15 +1,19 @@
 /**
- * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v5.2: ENGINE_POWER Margins)
- * --------------------------------------------------------------------------------
+ * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v5.3: ENGINE_POWER Margins + TOTALS 3-WAY BLEND)
+ * ----------------------------------------------------------------------------------------------
  * Snapshot tables:
  *   ✅ monte_carlo_results: one row per (sport_key, event_id), overwritten each run
  *   ✅ monte_carlo_runs: history (one row per run)
  *   ✅ ev_plays: cleared per sport each run, then rebuilt
  *
- * NEW in v5.2:
- *   ✅ SPREAD / ML margins now use engine_power (per-game) + HCA
- *      - Fixes “all dogs” bias caused by Off/Def pace-compressed margins in blowouts
- *   ✅ Totals still use Off/Def blend + pace (unchanged)
+ * Margin model (spreads/ML):
+ *   ✅ marginMean = (home_engine_power - away_engine_power) + home_true_hca
+ *
+ * Totals model:
+ *   ✅ 3-way blend with auto-renormalization if a component is missing:
+ *      - Off/Def + pace total (per-100 -> per-game via paceGame/100)  [default weight 0.40]
+ *      - PF/PA matchup total (per-game)                              [default weight 0.10]
+ *      - Avg total points (per-game)                                 [default weight 0.50]
  *
  * Retains v5.1 features:
  *   ✅ Devig method SWITCH (normalize vs MPTO/Power)
@@ -39,16 +43,23 @@ type EventRow = {
 type TeamRatingRow = {
   canonical: string;
 
-  // per-100 ratings (used for totals)
+  // per-100 ratings (used in totals component #1)
   engine_adj_off: number | null;
   engine_adj_def: number | null;
 
   // per-game power (used for margin mean)
   engine_power: number | null;
 
+  // per-game totals components
+  pf_points: number | null; // points for
+  pa_points: number | null; // points against
+  avg_total_points: number | null;
+
   true_hca: number | null; // points per game
-  sigma_margin_100: number | null; // per-100
-  sigma_total_100: number | null; // per-100
+
+  // per-100 sigmas (scaled by paceFactor for game sigma)
+  sigma_margin_100: number | null;
+  sigma_total_100: number | null;
 };
 
 type MarketKey = "h2h" | "spreads" | "totals";
@@ -189,10 +200,6 @@ const SOFT_BOOKS = (process.env.EV_SOFT_BOOKS || "draftkings,fanduel,betmgm")
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-// Base blend weights (we will make these dynamic in tails)
-const QUANTUM_SHARP_WEIGHT_BASE = Number(process.env.QUANTUM_SHARP_WEIGHT ?? "0.8");
-const QUANTUM_MC_WEIGHT_BASE = Number(process.env.QUANTUM_MC_WEIGHT ?? "0.2");
-
 const KELLY_MULTIPLIER = Number(process.env.KELLY_MULTIPLIER ?? "0.25");
 
 const LINE_TOL = Number(process.env.LINE_TOL ?? "1e-6");
@@ -203,7 +210,7 @@ const MIN_EV_PCT = Number(process.env.MIN_EV_PCT ?? "0");
  * - if sides are "close" (near 50/50), use equal-margin devig (normalize)
  * - else use MPTO / Power devig
  */
-const DEVIG_DIFF_SWITCH = Number(process.env.DEVIG_DIFF_SWITCH ?? "0.10"); // ~55/45
+const DEVIG_DIFF_SWITCH = Number(process.env.DEVIG_DIFF_SWITCH ?? "0.10");
 
 /**
  * Tail safety:
@@ -229,7 +236,15 @@ const PACE_W_LAST1 = Number(process.env.PACE_W_LAST1 ?? "0.10");
 const PACE_W_SPLIT = Number(process.env.PACE_W_SPLIT ?? "0.10");
 
 /**
- * Totals model weights (baseline-free Off/Def blend)
+ * Totals component weights (auto-renormalized if a component is missing)
+ * You asked for: PF/PA=0.1 and Off/Def+pace=0.4, leaving AvgTotal=0.5.
+ */
+const TOTAL_W_OFFDEF_PACE = Number(process.env.TOTAL_W_OFFDEF_PACE ?? "0.40");
+const TOTAL_W_PFPA = Number(process.env.TOTAL_W_PFPA ?? "0.10");
+const TOTAL_W_AVG_TOTAL = Number(process.env.TOTAL_W_AVG_TOTAL ?? "0.50");
+
+/**
+ * Off/Def totals blend weights (inside the Off/Def+pace component)
  */
 const PTS_BLEND_WEIGHT_OFF = Number(process.env.PTS_BLEND_WEIGHT_OFF ?? "0.50"); // 0..1
 const PTS_BLEND_WEIGHT_DEF = 1 - PTS_BLEND_WEIGHT_OFF;
@@ -338,7 +353,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
 
-    // ✅ v5.2: pass lines (optional) only for trace; model margin now uses engine_power regardless of line
     const input = buildInputsPaceAware(sportKey, homeR, awayR, paceGame);
 
     const sim = simulateGameWithProbs(SIMS, input, {
@@ -348,6 +362,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       marginHomeWinNegativeStore: MARGIN_HOME_WIN_NEGATIVE,
     });
 
+    // Convert (margin,total) to points
     const homePts = sim.projectedTotal / 2 + sim.projectedMarginHome_model / 2;
     const awayPts = sim.projectedTotal - homePts;
 
@@ -363,7 +378,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           pace_away_poss_per_game: paceAway,
           pace_game_poss_per_game: paceGame,
 
-          // ratings used for totals
+          // ratings used for totals component #1
           home_engine_adj_off_100: num(homeR.engine_adj_off, 0),
           home_engine_adj_def_100: num(homeR.engine_adj_def, 0),
           away_engine_adj_off_100: num(awayR.engine_adj_off, 0),
@@ -374,12 +389,29 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           away_engine_power_game: num(awayR.engine_power, 0),
           home_true_hca_pts: num(homeR.true_hca, 0),
 
+          // totals components #2/#3 inputs
+          home_pf_points: toNullNum(homeR.pf_points),
+          home_pa_points: toNullNum(homeR.pa_points),
+          home_avg_total_points: toNullNum(homeR.avg_total_points),
+          away_pf_points: toNullNum(awayR.pf_points),
+          away_pa_points: toNullNum(awayR.pa_points),
+          away_avg_total_points: toNullNum(awayR.avg_total_points),
+
           model: {
             margin_mean_source: "engine_power (per-game) + HCA",
-            totals_source: "Off/Def blend (per-100) scaled by pace",
-            pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
-            pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
+            totals_source: "3-way blend: off/def+pace + pf/pa + avg_total_points",
+            totals_weights: {
+              w_offdef_pace: TOTAL_W_OFFDEF_PACE,
+              w_pfpa: TOTAL_W_PFPA,
+              w_avg_total: TOTAL_W_AVG_TOTAL,
+            },
+            offdef_blend: {
+              pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
+              pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
+            },
           },
+
+          totals_components: input.totalsComponents,
 
           margin_mean_pts: input.marginMean,
           total_mean_pts: input.totalMean,
@@ -474,10 +506,14 @@ function buildRunConfig(sportKey: string) {
     pace_clamp: paceClampForSport(sportKey),
 
     rating_model: {
-      // ✅ v5.2 update:
       margin_mean: "engine_power (per-game) + HCA",
-      total_mean: "baseline-free Off/Def blend (per-100) scaled by paceGame/100",
-      totals_blend: {
+      total_mean: "3-way blend: (off/def+pace) + (pf/pa matchup) + (avg_total_points)",
+      totals_weights: {
+        w_offdef_pace: TOTAL_W_OFFDEF_PACE,
+        w_pfpa: TOTAL_W_PFPA,
+        w_avg_total: TOTAL_W_AVG_TOTAL,
+      },
+      offdef_component_blend: {
         pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
         pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
       },
@@ -562,22 +598,28 @@ function averageNonNull(arr: Array<number | null | undefined>): number | null {
 }
 
 /* =========================================================
-   MODEL (PACE-AWARE)
-   - v5.2: marginMean uses engine_power (per-game) + HCA
-   - totals remain Off/Def blend (per-100) scaled by pace
+   MODEL
+   - marginMean uses engine_power (per-game) + HCA
+   - totalMean uses 3-way blend:
+       (1) off/def + pace (per-100 -> per-game)
+       (2) pf/pa matchup
+       (3) avg_total_points
 ========================================================= */
 
 function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
-  // totals (per-100) inputs
+  const paceFactor = paceGame / 100;
+
+  // ---------- Totals component #1: Off/Def (per-100) -> per-game via pace ----------
   const homeOff100 = num(home.engine_adj_off, 0);
   const homeDef100 = num(home.engine_adj_def, 0);
   const awayOff100 = num(away.engine_adj_off, 0);
   const awayDef100 = num(away.engine_adj_def, 0);
 
   const defFallback = sportKey === "basketball_nba" ? 112 : 100;
+  const offFallback = sportKey === "basketball_nba" ? 112 : 100;
 
-  const homeOff = homeOff100 > 0 ? homeOff100 : sportKey === "basketball_nba" ? 112 : 100;
-  const awayOff = awayOff100 > 0 ? awayOff100 : sportKey === "basketball_nba" ? 112 : 100;
+  const homeOff = homeOff100 > 0 ? homeOff100 : offFallback;
+  const awayOff = awayOff100 > 0 ? awayOff100 : offFallback;
   const homeDef = homeDef100 > 0 ? homeDef100 : defFallback;
   const awayDef = awayDef100 > 0 ? awayDef100 : defFallback;
 
@@ -587,28 +629,98 @@ function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamR
   const homePts100 = wOff * homeOff + wDef * awayDef;
   const awayPts100 = wOff * awayOff + wDef * homeDef;
 
-  const paceFactor = paceGame / 100;
+  const homePts_offdef = homePts100 * paceFactor;
+  const awayPts_offdef = awayPts100 * paceFactor;
+  const total_offdef_pace = Math.max(0, homePts_offdef + awayPts_offdef);
 
-  const homePts = homePts100 * paceFactor;
-  const awayPts = awayPts100 * paceFactor;
+  // ---------- Totals component #2: PF/PA matchup (per-game) ----------
+  // home expected points ≈ avg(home PF, away PA)
+  // away expected points ≈ avg(away PF, home PA)
+  const homePF = toNullNum(home.pf_points);
+  const homePA = toNullNum(home.pa_points);
+  const awayPF = toNullNum(away.pf_points);
+  const awayPA = toNullNum(away.pa_points);
 
-  // ✅ v5.2: margin from power (per-game) + HCA
+  const homePts_pfpa = avgNullable(homePF, awayPA);
+  const awayPts_pfpa = avgNullable(awayPF, homePA);
+  const total_pfpa = homePts_pfpa != null && awayPts_pfpa != null ? Math.max(0, homePts_pfpa + awayPts_pfpa) : null;
+
+  // ---------- Totals component #3: Avg total points (per-game) ----------
+  const homeAvgTot = toNullNum(home.avg_total_points);
+  const awayAvgTot = toNullNum(away.avg_total_points);
+  const total_avg_total = avgNullable(homeAvgTot, awayAvgTot);
+
+  // ---------- Blend totals components with auto-renorm ----------
+  const totalMean = blendTotals({
+    offdef_pace: total_offdef_pace,
+    pfpa: total_pfpa,
+    avg_total: total_avg_total,
+    w_offdef_pace: TOTAL_W_OFFDEF_PACE,
+    w_pfpa: TOTAL_W_PFPA,
+    w_avg_total: TOTAL_W_AVG_TOTAL,
+  });
+
+  // ---------- Margin mean (engine_power + HCA) ----------
   const homePow = num(home.engine_power, 0);
   const awayPow = num(away.engine_power, 0);
   const hcaPts = num(home.true_hca, 0);
-
   const marginMean = (homePow - awayPow) + hcaPts;
 
-  // totals unchanged
-  const totalMean = Math.max(0, homePts + awayPts);
-
+  // ---------- Sigmas (still per-100 scaled by paceFactor; floors applied) ----------
   const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
   const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
 
   const sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMargin100 * paceFactor);
   const sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotal100 * paceFactor);
 
-  return { marginMean, totalMean, sigmaMarginGame, sigmaTotalGame };
+  return {
+    marginMean,
+    totalMean,
+    sigmaMarginGame,
+    sigmaTotalGame,
+    totalsComponents: {
+      total_offdef_pace,
+      total_pfpa,
+      total_avg_total,
+      weights: {
+        w_offdef_pace: TOTAL_W_OFFDEF_PACE,
+        w_pfpa: TOTAL_W_PFPA,
+        w_avg_total: TOTAL_W_AVG_TOTAL,
+      },
+    },
+  };
+}
+
+function blendTotals(args: {
+  offdef_pace: number; // always available (we have fallbacks)
+  pfpa: number | null;
+  avg_total: number | null;
+  w_offdef_pace: number;
+  w_pfpa: number;
+  w_avg_total: number;
+}) {
+  const parts: Array<{ v: number | null; w: number }> = [
+    { v: Number.isFinite(args.offdef_pace) ? args.offdef_pace : null, w: args.w_offdef_pace },
+    { v: args.pfpa, w: args.w_pfpa },
+    { v: args.avg_total, w: args.w_avg_total },
+  ];
+
+  const avail = parts.filter((p) => p.v != null && Number.isFinite(p.v!) && p.w > 0);
+  if (!avail.length) return Math.max(0, args.offdef_pace || 0);
+
+  const wSum = avail.reduce((s, p) => s + p.w, 0);
+  if (wSum <= 0) return avail[0].v!;
+
+  let total = 0;
+  for (const p of avail) total += (p.w / wSum) * (p.v as number);
+  return Math.max(0, total);
+}
+
+function avgNullable(a: number | null, b: number | null): number | null {
+  if (a == null && b == null) return null;
+  if (a == null) return b;
+  if (b == null) return a;
+  return (a + b) / 2;
 }
 
 /* =========================================================
@@ -665,7 +777,9 @@ function simulateGameWithProbs(
   const projectedMarginHome_model = sumM / sims;
   const projectedTotal = sumT / sims;
 
-  const projectedMarginHome_stored = opts.marginHomeWinNegativeStore ? -projectedMarginHome_model : projectedMarginHome_model;
+  const projectedMarginHome_stored = opts.marginHomeWinNegativeStore
+    ? -projectedMarginHome_model
+    : projectedMarginHome_model;
 
   const homeWinProb = homeWins / sims;
   const awayWinProb = awayWins / sims;
@@ -736,6 +850,7 @@ async function rebuildEvPlaysForSport(
         const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
         if (!sharp) continue;
 
+        // Tail-safe blending: use sharp more in tails, and shrink MC toward sharp in tails
         const tail = tailness(sharp.prob);
         const wSharp = clamp(
           TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail,
@@ -757,6 +872,7 @@ async function rebuildEvPlaysForSport(
           const bookOdds = toNullNum(offer.odds);
           if (bookOdds == null) continue;
 
+          // line matching for spreads/totals
           if (market === "spreads" || market === "totals") {
             if (refLine == null) continue;
 
@@ -767,6 +883,7 @@ async function rebuildEvPlaysForSport(
             if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
           }
 
+          // Tail guardrail: if long odds + model way above sharp, skip
           if (TAIL_GUARD_ENABLED) {
             const isLong = bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
             const gap = Math.abs(mcProb - sharp.prob);
@@ -877,10 +994,11 @@ async function fetchTeamRatingsForSport(sportKey: string, canonicals: string[]):
   for (let i = 0; i < canonicals.length; i += chunkSize) {
     const c = canonicals.slice(i, i + chunkSize);
 
-    // ✅ v5.2: include engine_power
     const { data, error } = await supabase
       .from("team_ratings")
-      .select("canonical,engine_adj_off,engine_adj_def,engine_power,true_hca,sigma_margin_100,sigma_total_100")
+      .select(
+        "canonical,engine_adj_off,engine_adj_def,engine_power,pf_points,pa_points,avg_total_points,true_hca,sigma_margin_100,sigma_total_100"
+      )
       .eq("sport_key", sportKey)
       .in("canonical", c);
 
@@ -937,7 +1055,7 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
   const m = new Map<string, OddsSnapshotRow>();
   for (const r of rows) {
     const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
-    if (m.has(k)) continue;
+    if (m.has(k)) continue; // rows already ordered desc by ts
     m.set(k, r);
   }
   return m;
@@ -988,6 +1106,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
 
   for (const [k2, arr] of buckets.entries()) out.set(k2, mean(arr));
 
+  // Fill missing symmetric sides if possible
   for (const id of eventIds) {
     const homeKey = `${id}|spreads|home`;
     const awayKey = `${id}|spreads|away`;
@@ -1244,7 +1363,7 @@ function avg(a: number, b: number) {
 }
 
 function mean(arr: number[]) {
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
+  return arr.reduce((s, x) => s + x, 0) / arr.length;
 }
 
 function round2(x: number) {
@@ -1269,7 +1388,7 @@ function randn() {
     v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
-  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * 2.0 * v);
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 }
 
 /* =========================================================
