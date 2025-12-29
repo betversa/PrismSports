@@ -16,7 +16,7 @@
 // ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across odds rows + props snapshot ts (without opening modal)
 // ✅ FIX: props book logos appear in white pill (readable even if logo is black)
 // ✅ FIX: player_props_snapshot.player_id removed (column does not exist)
-// ✅ NEW (this rewrite): Visual continuity with other screens (same shell, buttons, section cards, typography cadence)
+// ✅ NEW: Visual continuity with other screens (same shell, buttons, section cards, typography cadence)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -109,7 +109,12 @@ const BOOK_LOGO_H = 24;
 const PAGE_MAX_W = "max-w-[1320px]";
 const PAGE_X = "px-4 md:px-8";
 
-const PANEL = "rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]";
+/**
+ * Continuity shell: same “card” depth + borders as Overview/Model.
+ * This rewrite tweaks hierarchy/spacing but preserves all behavior/data logic.
+ */
+const PANEL =
+  "rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]";
 const PANEL_INNER = "border border-[#2a2a2a] bg-black/20 rounded-xl overflow-hidden";
 
 const MUTED = "text-[#8a8a8a]";
@@ -117,8 +122,7 @@ const MUTED2 = "text-[#6a6a6a]";
 const EDGE = "border-[#2a2a2a]";
 const EDGE2 = "border-[#232323]";
 
-const BTN_BASE =
-  "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors whitespace-nowrap";
+const BTN_BASE = "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors whitespace-nowrap";
 const BTN_ON = "bg-[#d4af37] text-black border-[#d4af37]";
 const BTN_OFF = "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]";
 const BTN_GHOST =
@@ -527,7 +531,12 @@ function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boole
 
 function ConsensusValue({ parts }: { parts: CellParts }) {
   return (
-    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", `border-r ${HDR_BORDER}`].join(" ")}>
+    <td
+      className={[
+        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
+        `border-r ${HDR_BORDER}`,
+      ].join(" ")}
+    >
       {renderCellParts(parts)}
     </td>
   );
@@ -1206,8 +1215,7 @@ function PlayerPropsModal({
 
           {(r.team || r.opponent) && (
             <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-              {r.team ?? "—"}{" "}
-              {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+              {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
             </div>
           )}
         </div>
@@ -1323,8 +1331,7 @@ function PlayerPropsModal({
 
                       {(r.team || r.opponent) && (
                         <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-                          {r.team ?? "—"}{" "}
-                          {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
+                          {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
                         </div>
                       )}
                     </div>
@@ -1332,9 +1339,7 @@ function PlayerPropsModal({
 
                   <div className="text-right">
                     <div className="text-[10px] text-[#808080] font-semibold">Cons</div>
-                    <div className="text-white font-extrabold tabular-nums">
-                      {r.lineConsensus == null ? "—" : r.lineConsensus}
-                    </div>
+                    <div className="text-white font-extrabold tabular-nums">{r.lineConsensus == null ? "—" : r.lineConsensus}</div>
                   </div>
                 </div>
 
@@ -1626,11 +1631,7 @@ function LineMovementModal({
   return (
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <button
-          className={[BTN_BASE, activeMarket === "ml" ? BTN_ON : BTN_OFF].join(" ")}
-          onClick={() => setActiveMarket("ml")}
-          type="button"
-        >
+        <button className={[BTN_BASE, activeMarket === "ml" ? BTN_ON : BTN_OFF].join(" ")} onClick={() => setActiveMarket("ml")} type="button">
           Moneyline
         </button>
         <button
@@ -1640,11 +1641,7 @@ function LineMovementModal({
         >
           Spread
         </button>
-        <button
-          className={[BTN_BASE, activeMarket === "total" ? BTN_ON : BTN_OFF].join(" ")}
-          onClick={() => setActiveMarket("total")}
-          type="button"
-        >
+        <button className={[BTN_BASE, activeMarket === "total" ? BTN_ON : BTN_OFF].join(" ")} onClick={() => setActiveMarket("total")} type="button">
           Total
         </button>
       </div>
@@ -1656,37 +1653,13 @@ function LineMovementModal({
       ) : (
         <div className="space-y-4">
           {activeMarket === "ml" && (
-            <HistoryChartPairOddsOnly
-              title="Moneyline (Odds)"
-              uiMarket="ml"
-              books={books}
-              seriesA={mlAway}
-              seriesB={mlHome}
-              panelTitleA="AWAY"
-              panelTitleB="HOME"
-            />
+            <HistoryChartPairOddsOnly title="Moneyline (Odds)" uiMarket="ml" books={books} seriesA={mlAway} seriesB={mlHome} panelTitleA="AWAY" panelTitleB="HOME" />
           )}
           {activeMarket === "spread" && (
-            <HistoryChartPairOddsOnly
-              title="Spread (Odds)"
-              uiMarket="spread"
-              books={books}
-              seriesA={spAway}
-              seriesB={spHome}
-              panelTitleA="AWAY"
-              panelTitleB="HOME"
-            />
+            <HistoryChartPairOddsOnly title="Spread (Odds)" uiMarket="spread" books={books} seriesA={spAway} seriesB={spHome} panelTitleA="AWAY" panelTitleB="HOME" />
           )}
           {activeMarket === "total" && (
-            <HistoryChartPairOddsOnly
-              title="Total (Odds)"
-              uiMarket="total"
-              books={books}
-              seriesA={toOver}
-              seriesB={toUnder}
-              panelTitleA="OVER"
-              panelTitleB="UNDER"
-            />
+            <HistoryChartPairOddsOnly title="Total (Odds)" uiMarket="total" books={books} seriesA={toOver} seriesB={toUnder} panelTitleA="OVER" panelTitleB="UNDER" />
           )}
         </div>
       )}
@@ -1821,15 +1794,11 @@ function EventCardMobile({
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(awayCons)}
-              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(homeCons)}
-              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
             </div>
           </div>
         </div>
@@ -1899,21 +1868,11 @@ function EventTwoRows({
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onOpenHistory(ev)}
-                className={LINK_GOLD}
-                title="View line movement history"
-              >
+              <button type="button" onClick={() => onOpenHistory(ev)} className={LINK_GOLD} title="View line movement history">
                 History
               </button>
 
-              <button
-                type="button"
-                onClick={() => onOpenProps(ev)}
-                className={BTN_GHOST}
-                title="View player props"
-              >
+              <button type="button" onClick={() => onOpenProps(ev)} className={BTN_GHOST} title="View player props">
                 Props
               </button>
             </div>
@@ -2168,9 +2127,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
             <div className="min-w-0">
               <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
-              <div className={`text-xs ${MUTED} mt-1`}>
-                {headerLabel} · 5 books · refresh 60s
-              </div>
+              <div className={`text-xs ${MUTED} mt-1`}>{headerLabel} · 5 books · refresh 60s</div>
 
               {/* Mobile last updated */}
               <div className="md:hidden mt-2 text-[11px] text-[#6a6a6a] font-semibold">
@@ -2188,7 +2145,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
             </div>
           </div>
 
-          {/* Controls section (same spacing cadence as other screens) */}
+          {/* Controls */}
           <div className="mt-4 flex flex-col gap-3">
             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
               {availableDates.map((d) => (
@@ -2262,26 +2219,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <thead className="sticky top-0 z-20">
                     <tr className={`border-b ${HDR_BORDER}`}>
-                      <th
-                        className={[
-                          "text-left px-4 py-3",
-                          HDR_LEFT_BG,
-                          HDR_TEXT,
-                          "sticky left-0 z-30 text-[13px] font-extrabold",
-                        ].join(" ")}
-                      >
+                      <th className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}>
                         Matchup
                       </th>
 
-                      <th
-                        className={[
-                          "text-center px-3 py-3",
-                          HDR_LEFT_BG,
-                          HDR_TEXT,
-                          "z-20 text-[13px] font-extrabold border-l",
-                          HDR_BORDER,
-                        ].join(" ")}
-                      >
+                      <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}>
                         Consensus
                       </th>
 
@@ -2295,13 +2237,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                   <tbody>
                     {events.map((ev) => (
-                      <EventTwoRows
-                        key={ev.eventId}
-                        ev={ev}
-                        market={market}
-                        onOpenHistory={openHistory}
-                        onOpenProps={openProps}
-                      />
+                      <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} onOpenProps={openProps} />
                     ))}
                   </tbody>
                 </table>
@@ -2315,12 +2251,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
         {/* Player Props modal */}
         {propsOpen && propsEvent?.eventId && (
-          <PlayerPropsModal
-            ev={propsEvent}
-            sportKey={sportKey}
-            onClose={closeProps}
-            onLastUpdated={(iso) => setLastUpdatedIso((prev) => maxIso(prev, iso))}
-          />
+          <PlayerPropsModal ev={propsEvent} sportKey={sportKey} onClose={closeProps} onLastUpdated={(iso) => setLastUpdatedIso((prev) => maxIso(prev, iso))} />
         )}
 
         <div className="h-12" />
@@ -2328,5 +2259,3 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
-
-
