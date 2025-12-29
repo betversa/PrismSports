@@ -16,6 +16,7 @@
 // ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across odds rows + props snapshot ts (without opening modal)
 // ✅ FIX: props book logos appear in white pill (readable even if logo is black)
 // ✅ FIX: player_props_snapshot.player_id removed (column does not exist)
+// ✅ UPDATE: History hover now shows DATE + TIME (Axis stays time-only for readability)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -607,7 +608,18 @@ function seriesColor(bookmaker: string) {
   return BOOK_SERIES_COLOR[k] ?? "#9ca3af";
 }
 
-function fmtCTShortLabel(iso: string) {
+function fmtCTAxisTimeLabel(iso: string) {
+  const n = normalizeIso(iso) ?? iso;
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function fmtCTTooltipDateTimeLabel(iso: string) {
   const n = normalizeIso(iso) ?? iso;
   const d = new Date(n);
   if (Number.isNaN(d.getTime())) return iso;
@@ -648,7 +660,10 @@ function medianProbOfKeys(point: any, keys: string[]) {
 
 type ChartPoint = {
   ts: string;
+  /** x-axis (time-only) */
   t: string;
+  /** tooltip label (date + time) */
+  dt: string;
   mw: number | null;
   sharp: boolean;
   pinProb?: number | null;
@@ -677,7 +692,13 @@ function buildChartSeriesOddsOnly(rows: HistoryRow[], uiMarket: Market, books: s
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
-    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
+    const p: ChartPoint = {
+      ts: bin,
+      t: fmtCTAxisTimeLabel(bin),
+      dt: fmtCTTooltipDateTimeLabel(bin),
+      mw: null,
+      sharp: false,
+    };
 
     for (const b of books) {
       const row = byBook.get(b);
@@ -741,7 +762,7 @@ function useIsMobile(bp = 640) {
     const on = () => setIsMobile(mq.matches);
     on();
     mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener?.("change", on);
+    return () => mq.removeEventListener("change", on);
   }, [bp]);
   return isMobile;
 }
@@ -1410,7 +1431,7 @@ function HistoryChartPairOddsOnly({
                     <YAxis yAxisId="mw" orientation="right" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 42 : 46} />
 
                     <Tooltip
-                      content={({ active, payload, label }) => {
+                      content={({ active, payload }) => {
                         if (!active || !payload?.length) return null;
 
                         const row: any = payload[0]?.payload;
@@ -1427,7 +1448,9 @@ function HistoryChartPairOddsOnly({
 
                         return (
                           <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[340px]">
-                            <div className="font-extrabold text-white mb-1">{label}</div>
+                            <div className="font-extrabold text-white mb-1">
+                              {row?.dt ?? row?.t ?? "—"}
+                            </div>
 
                             {row?.mw != null && (
                               <div className="mb-1">
@@ -2334,5 +2357,4 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
-
 
