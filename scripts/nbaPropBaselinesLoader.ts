@@ -1,14 +1,15 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.5: SHARP FALLBACKS + MODEL-ONLY)
-// ------------------------------------------------------------------------------------
-// ✅ FIX: pin_spread_line / pin_total_line are pulled by (event_id + team) not team-only
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.6: SNAPSHOT ENRICH + SHARP FALLBACKS + MODEL-ONLY)
+// ------------------------------------------------------------------------------------------------------
+// ✅ FIX: pin_spread_line / pin_total_line pulled by (event_id + team) not team-only
 // ✅ SHARP LOGIC:
-//      1) Prefer Pinnacle paired lines (over+under at same line) nearest to soft line
+//      1) Prefer Pinnacle paired lines nearest soft line
 //      2) If Pinnacle missing -> use BetOnlineAG paired lines
-//      3) If both missing (or translate fails) -> MODEL-ONLY fallback (still inserts)
-// ✅ Keeps your v3.4 logic: synthetic sharp at soft line via translation + hybrid devig
-// ✅ Uses odds_wide_latest rows keyed by event_id|canonical_team (canonicalized through team_map aliases)
+//      3) If both missing OR translate fails -> MODEL-ONLY fallback (still inserts)
+// ✅ NEW: Enrich player_props_snapshot with position + picture_url (so UI can read snapshot only)
+//      - Adds columns if missing (safe)
+//      - Updates rows for FUTURE events only (safe + fast)
 // ✅ Outputs ONLY SOFT books into player_prop_ev_latest (DK/FD/MGM)
 //
 // Run: npm run nba:props:ev:build
@@ -54,6 +55,10 @@ const DEVIG_SKEW_EQ_MAX = 0.06; // <= 6% skew => equal margin
 const DEVIG_SKEW_MPTO_MIN = 0.18; // >= 18% skew => MPTO
 const DEVIG_MPTO_POWER_LO = 0.5;
 const DEVIG_MPTO_POWER_HI = 3.0;
+
+// Snapshot enrichment controls
+const ENRICH_SNAPSHOT = true; // set false if you ever want to skip
+const SNAP_UPDATE_CHUNK = 500;
 
 /* =========================================================
    TYPES
@@ -118,6 +123,10 @@ type PropsRow = {
   odds: number;
 
   bookmaker: string;
+
+  // NEW in v3.6 (optional fields now stored in snapshot)
+  position?: string | null;
+  picture_url?: string | null;
 };
 
 type SharpPair = {
@@ -216,6 +225,12 @@ function weightedAvg(a: number | null, b: number | null, c: number | null): numb
   return wsum ? sum / wsum : null;
 }
 
+function chunk<T>(arr: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
 /* =========================================================
    HYBRID DEVIG (Equal Margin ↔ MPTO)
 ========================================================= */
@@ -255,7 +270,11 @@ function devigHybrid(pOverImp: number, pUnderImp: number) {
   if (skew <= DEVIG_SKEW_EQ_MAX) return { ...eq, method: "equal_margin" as const, alpha: 0 };
   if (skew >= DEVIG_SKEW_MPTO_MIN) return { ...mp, method: "mpto" as const, alpha: 1 };
 
-  const alpha = clamp((skew - DEVIG_SKEW_EQ_MAX) / (DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX), 0, 1);
+  const alpha = clamp(
+    (skew - DEVIG_SKEW_EQ_MAX) / (DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX),
+    0,
+    1
+  );
   const pO = clamp(eq.p_over * (1 - alpha) + mp.p_over * alpha, 1e-6, 1 - 1e-6);
   return { p_over: pO, p_under: 1 - pO, method: "blend" as const, alpha };
 }
@@ -528,6 +547,128 @@ function translateSharpOverToTarget(opts: {
 }
 
 /* =========================================================
+   SUPABASE HELPERS (DDL-safe snapshot enrichment)
+========================================================= */
+
+async function tryAddSnapshotColumns(supabase: any) {
+  // We avoid hard-failing if you haven't granted RPC/DDL; just log.
+  // Preferred: create this RPC in Supabase once:
+  //   create or replace function public.exec_sql(sql text) returns void
+  //   language plpgsql security definer as $$ begin execute sql; end $$;
+  //
+  // Then allow service role to call it.
+  //
+  // If you don't want RPCs: just run the ALTER TABLE manually once (recommended).
+  const ddl = `
+    alter table public.player_props_snapshot
+      add column if not exists position text,
+      add column if not exists picture_url text;
+  `;
+
+  try {
+    const { error } = await supabase.rpc("exec_sql", { sql: ddl });
+    if (error) {
+      console.log("[snapshot] exec_sql not available / failed (ok):", error.message);
+    } else {
+      console.log("[snapshot] ensured columns: position, picture_url");
+    }
+  } catch (e: any) {
+    console.log("[snapshot] exec_sql rpc missing (ok):", e?.message || e);
+  }
+}
+
+async function enrichSnapshotForFutureEvents(opts: {
+  supabase: any;
+  nowIso: string;
+  allowedEventIds: string[];
+  baselineByName: Map<string, PlayerBaseline>;
+}) {
+  const { supabase, nowIso, allowedEventIds, baselineByName } = opts;
+
+  // Pull FUTURE snapshot rows missing position/picture_url
+  // NOTE: We only need event_id + player_name + (position/picture_url)
+  // and we update by (event_id + player_name) for the slate.
+  const rows: Array<{ event_id: string; player_name: string; position: string | null; picture_url: string | null }> =
+    [];
+
+  const EVENT_CHUNK = 200;
+  for (const eidChunk of chunk(allowedEventIds, EVENT_CHUNK)) {
+    const { data, error } = await supabase
+      .from("player_props_snapshot")
+      .select("event_id,player_name,position,picture_url,commence_time,sport_key")
+      .eq("sport_key", SPORT_KEY)
+      .in("event_id", eidChunk)
+      .gt("commence_time", nowIso);
+
+    if (error) throw error;
+    if (data?.length) rows.push(...(data as any[]));
+  }
+
+  if (!rows.length) return { updated: 0, missing_baseline: 0 };
+
+  const updates: Array<{
+    event_id: string;
+    player_name: string;
+    position: string | null;
+    picture_url: string | null;
+  }> = [];
+
+  let missing_baseline = 0;
+
+  for (const r of rows) {
+    const name = String(r.player_name || "").trim();
+    if (!name) continue;
+
+    const base = baselineByName.get(normName(name));
+    if (!base) {
+      missing_baseline++;
+      continue;
+    }
+
+    const pos = base.position ?? null;
+    const pic = base.picture_url ?? null;
+
+    const needsPos = r.position == null && pos != null;
+    const needsPic = r.picture_url == null && pic != null;
+
+    if (!needsPos && !needsPic) continue;
+
+    updates.push({
+      event_id: String(r.event_id),
+      player_name: name,
+      position: r.position ?? pos,
+      picture_url: r.picture_url ?? pic,
+    });
+  }
+
+  if (!updates.length) return { updated: 0, missing_baseline };
+
+  // We update in small batches by event_id to avoid huge fan-out.
+  // This uses individual updates (safe without needing a composite PK).
+  // If you DO have a primary key (id), swap to id-based updates for speed.
+  let updated = 0;
+
+  for (const batch of chunk(updates, SNAP_UPDATE_CHUNK)) {
+    // Update each row (event_id + player_name)
+    // NOTE: This is N updates; usually fine (few hundred to a couple thousand).
+    // If performance becomes a problem, we can add an RPC to bulk-update with a temp table.
+    for (const u of batch) {
+      const { error } = await supabase
+        .from("player_props_snapshot")
+        .update({ position: u.position, picture_url: u.picture_url })
+        .eq("sport_key", SPORT_KEY)
+        .eq("event_id", u.event_id)
+        .eq("player_name", u.player_name);
+
+      if (error) throw error;
+      updated++;
+    }
+  }
+
+  return { updated, missing_baseline };
+}
+
+/* =========================================================
    MAIN
 ========================================================= */
 
@@ -568,19 +709,22 @@ async function main() {
 
   /* -------------------------------------------------------
      2) Pull props snapshot for FUTURE events (ALL books!)
+        ✅ now includes position/picture_url if present
   -------------------------------------------------------- */
   const props: PropsRow[] = [];
   const eventIdList = Array.from(allowedEventIds);
   const EVENT_CHUNK = 200;
 
   for (let i = 0; i < eventIdList.length; i += EVENT_CHUNK) {
-    const chunk = eventIdList.slice(i, i + EVENT_CHUNK);
+    const chunkIds = eventIdList.slice(i, i + EVENT_CHUNK);
 
     const { data, error } = await supabase
       .from("player_props_snapshot")
-      .select("sport_key,event_id,commence_time,home_team,away_team,player_name,market,side,line,odds,bookmaker")
+      .select(
+        "sport_key,event_id,commence_time,home_team,away_team,player_name,market,side,line,odds,bookmaker,position,picture_url"
+      )
       .eq("sport_key", SPORT_KEY)
-      .in("event_id", chunk)
+      .in("event_id", chunkIds)
       .gt("commence_time", nowIso);
 
     if (error) throw error;
@@ -698,11 +842,40 @@ async function main() {
   };
 
   /* -------------------------------------------------------
+     4.5) ✅ NEW: Enrich player_props_snapshot with position/picture_url (future slate only)
+  -------------------------------------------------------- */
+  const enrichDiag = { attempted: ENRICH_SNAPSHOT, updated: 0, missing_baseline: 0 };
+
+  if (ENRICH_SNAPSHOT) {
+    // If you already ran the ALTER TABLE manually, you can delete this call.
+    await tryAddSnapshotColumns(supabase);
+
+    const res = await enrichSnapshotForFutureEvents({
+      supabase,
+      nowIso,
+      allowedEventIds: Array.from(allowedEventIds),
+      baselineByName,
+    });
+
+    enrichDiag.updated = res.updated;
+    enrichDiag.missing_baseline = res.missing_baseline;
+
+    // Also patch our in-memory props rows so downstream uses snapshot fields immediately
+    const byBase = baselineByName;
+    for (const pr of props) {
+      if (pr.position && pr.picture_url) continue;
+      const b = byBase.get(normName(pr.player_name || ""));
+      if (!b) continue;
+      pr.position = pr.position ?? b.position ?? null;
+      pr.picture_url = pr.picture_url ?? b.picture_url ?? null;
+    }
+  }
+
+  /* -------------------------------------------------------
      5) Pull odds_wide_latest context
         ✅ FIX: key by event_id + canonical team
   -------------------------------------------------------- */
 
-  // IMPORTANT: odds_wide_latest must have event_id and team
   const { data: oddsRows, error: oErr } = await supabase
     .from("odds_wide_latest")
     .select("event_id, team, pin_spread_line, pin_total_line")
@@ -797,7 +970,6 @@ async function main() {
     baseKey: string,
     targetLine: number
   ): { book: SharpBook; pair: SharpPair } | null {
-    // Preference: Pinnacle first, then BetOnlineAG
     const pin = nearestSharpPair(baseKey, targetLine, "pinnacle");
     if (pin) return { book: "pinnacle", pair: pin };
 
@@ -823,9 +995,7 @@ async function main() {
     used_betonline: 0,
     used_model_only: 0,
 
-    dropped_translate_failed: 0,
-    dropped_no_context_line: 0,
-
+    translate_failed_model_only: 0,
     inserted: 0,
   };
 
@@ -887,13 +1057,10 @@ async function main() {
           : null
         : null;
 
-    // ✅ FIXED context lookup (event_id + canonical team)
+    // context lookup (event_id + canonical team)
     const ow = oddsByEventTeam.get(`${eid}|${base.canonical}`) ?? null;
     const pin_spread_line = ow?.pin_spread_line ?? null;
     const pin_total_line = ow?.pin_total_line ?? null;
-
-    // (optional) gate if you want to drop missing context entirely:
-    // if (pin_spread_line == null && pin_total_line == null) { diag.dropped_no_context_line++; continue; }
 
     const minutes_factor = minutesFactorFromSpread(pin_spread_line);
     const pace_factor = pin_total_line != null ? clamp(pin_total_line / NBA_AVG_TOTAL, 0.9, 1.1) : null;
@@ -957,7 +1124,7 @@ async function main() {
       continue;
     }
 
-    // Sharp (Pinnacle -> BetOnlineAG -> model-only)
+    // Sharp fallback (Pinnacle -> BetOnline -> model-only)
     const baseKey = idxKey(r.event_id, r.player_name, r.market);
     const sharpPick = bestAvailableSharpPair(baseKey, line);
 
@@ -982,8 +1149,8 @@ async function main() {
       });
 
       if (pOverTarget == null) {
-        // Translation failed -> model-only fallback (still insert)
-        diag.dropped_translate_failed++;
+        // translate fails -> model-only
+        diag.translate_failed_model_only++;
         p_sharp = null;
         sharp_source = "model_only";
         has_sharp = false;
@@ -1002,7 +1169,7 @@ async function main() {
       has_sharp = false;
     }
 
-    // Quantum blend (if no sharp, use model only)
+    // Quantum blend (no sharp => model-only)
     const p_quantum =
       has_sharp && p_sharp != null
         ? clamp(p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP, 0, 1)
@@ -1028,8 +1195,10 @@ async function main() {
 
       fp_id: base.fp_id,
       player_name: base.player_name,
-      position: base.position,
-      picture_url: base.picture_url,
+
+      // ✅ prefer snapshot’s stored fields (now enriched), fallback to baseline
+      position: (r.position ?? null) ?? base.position ?? null,
+      picture_url: (r.picture_url ?? null) ?? base.picture_url ?? null,
 
       market: marketOut,
       side,
@@ -1037,7 +1206,7 @@ async function main() {
       book,
       odds,
 
-      // ✅ context (keyed correctly)
+      // context
       pin_spread_line,
       pin_total_line,
       implied_team_total,
@@ -1052,7 +1221,7 @@ async function main() {
       sigma,
       p_model,
 
-      // sharp / quantum
+      // sharp / quantum (keep in ev table; UI can ignore)
       has_sharp,
       sharp_source,
       p_sharp,
@@ -1088,22 +1257,23 @@ async function main() {
         ok: true,
         run_id,
         inserted_rows: out.length,
+        snapshot_enrichment: enrichDiag,
         dropped: {
           dropped_bad_side_or_odds: diag.dropped_bad_side_or_odds,
           dropped_no_baseline: diag.dropped_no_baseline,
           dropped_no_team: diag.dropped_no_team,
           dropped_no_model: diag.dropped_no_model,
-          dropped_translate_failed: diag.dropped_translate_failed,
-          dropped_no_context_line: diag.dropped_no_context_line,
         },
         sharp_usage: {
           used_pinnacle: diag.used_pinnacle,
           used_betonline: diag.used_betonline,
           used_model_only: diag.used_model_only,
+          translate_failed_model_only: diag.translate_failed_model_only,
         },
         notes: {
           context_fix: "odds_wide_latest indexed by (event_id + canonical team)",
           sharp_fallbacks: "pinnacle -> betonlineag -> model_only",
+          snapshot_fix: "position + picture_url are now stored on player_props_snapshot",
           devig: {
             eq_if_skew_le: DEVIG_SKEW_EQ_MAX,
             mpto_if_skew_ge: DEVIG_SKEW_MPTO_MIN,
