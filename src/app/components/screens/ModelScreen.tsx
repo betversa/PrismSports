@@ -1870,11 +1870,33 @@ function LegendDot({ label, color }: { label: string; color: string }) {
   );
 }
 
-function StatChip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function StatChip({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
   return (
-    <div className={["rounded-lg border px-2 py-2 text-center", accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f"]].join(" ")}>
+    <div
+      className={[
+        "rounded-lg border px-2 py-2 text-center",
+        accent
+          ? "bg-[#d4af37]/10 border-[#d4af37]/25"
+          : "bg-[#0a0a0a] border-[#1f1f1f"] // <-- ensure this string closes, then only ONE ]
+      ].join(" ")}
+    >
       <div className="text-[10px] text-[#606060]">{label}</div>
-      <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
+      <div
+        className={[
+          "mt-0.5 font-semibold tabular-nums",
+          accent ? "text-[#d4af37]" : "text-white",
+        ].join(" ")}
+      >
+        {value}
+      </div>
     </div>
   );
 }
