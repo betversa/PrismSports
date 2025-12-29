@@ -1,8 +1,9 @@
-// components/Header.tsx — FULL REWRITE (Mobile darker + Desktop tagline line fixed)
+// components/Header.tsx — FULL REWRITE (Mobile darker + Desktop tagline underline hugs text + Logo.png)
 // ---------------------------------------------------------------------------------------------------
 // ✅ Mobile: add MORE black (stronger glass) while keeping full spectrum visible
-// ✅ Desktop: tagline accent line now spans the full brand column reliably (no shrink/clamp weirdness)
+// ✅ Desktop FIX: tagline underline now matches the *tagline text width* (not the whole column)
 // ✅ Clicking logo -> Overview
+// ✅ Logo path updated: /logos/Logo.png
 // ✅ Everything else unchanged
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -72,9 +73,9 @@ const BLACK_GLASS_DESKTOP = {
 };
 
 const BLACK_GLASS_MOBILE = {
-  top: "rgba(0,0,0,0.40)",
-  mid: "rgba(0,0,0,0.68)",
-  bottom: "rgba(0,0,0,0.88)",
+  top: "rgba(0,0,0,0.46)",
+  mid: "rgba(0,0,0,0.74)",
+  bottom: "rgba(0,0,0,0.90)",
 };
 
 /** =========================
@@ -323,7 +324,6 @@ export function Header({
           className="absolute inset-0 md:hidden"
           style={{
             background: [
-              // spectrum band (still subtle) across the top so all colors show on narrow screens
               `linear-gradient(90deg,
                 ${PRISM_MOBILE.blue} 0%,
                 ${PRISM_MOBILE.teal} 16%,
@@ -333,13 +333,10 @@ export function Header({
                 ${PRISM_MOBILE.red} 82%,
                 ${PRISM_MOBILE.violet} 100%
               )`,
-              // slight blooms for depth
               `radial-gradient(520px 180px at 18% 0%, ${PRISM_MOBILE.blue}, transparent 62%)`,
               `radial-gradient(520px 180px at 52% 0%, ${PRISM_MOBILE.gold}, transparent 64%)`,
               `radial-gradient(520px 200px at 88% 0%, ${PRISM_MOBILE.red}, transparent 66%)`,
-              // stronger black glass (your request)
               `linear-gradient(180deg, ${BLACK_GLASS_MOBILE.top}, ${BLACK_GLASS_MOBILE.mid} 52%, ${BLACK_GLASS_MOBILE.bottom} 100%)`,
-              // sheen
               `linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0) 100%)`,
             ].join(", "),
           }}
@@ -413,27 +410,28 @@ export function Header({
                 />
               </button>
 
-              {/* ✅ Desktop line fix: ensure this column can actually be full width */}
+              {/* ✅ FIX: underline hugs the tagline text width on desktop */}
               <div className="flex-1 min-w-0 w-full">
-                <div
-                  className={[
-                    "text-[#9a9a9a] font-medium tracking-wide leading-snug",
-                    "text-[11px] sm:text-[12px] md:text-[12px]",
-                    "line-clamp-2",
-                    "sm:line-clamp-1 sm:truncate",
-                  ].join(" ")}
-                >
-                  {TAGLINE}
-                </div>
+                <div className="inline-block w-fit max-w-full">
+                  <div
+                    className={[
+                      "text-[#9a9a9a] font-medium tracking-wide leading-snug",
+                      "text-[11px] sm:text-[12px] md:text-[12px]",
+                      "truncate",
+                    ].join(" ")}
+                    title={TAGLINE}
+                  >
+                    {TAGLINE}
+                  </div>
 
-                {/* ✅ Full width on desktop too: force block + w-full */}
-                <span
-                  className="block mt-1 h-[2px] w-full rounded-full opacity-60 md:opacity-45"
-                  style={{
-                    background:
-                      "linear-gradient(90deg, rgba(0,146,255,0.52), rgba(0,200,120,0.52), rgba(212,175,55,0.70), rgba(255,140,0,0.52), rgba(255,60,60,0.42), rgba(170,70,255,0.42))",
-                  }}
-                />
+                  <span
+                    className="block mt-1 h-[2px] w-full rounded-full opacity-60 md:opacity-45"
+                    style={{
+                      background:
+                        "linear-gradient(90deg, rgba(0,146,255,0.52), rgba(0,200,120,0.52), rgba(212,175,55,0.70), rgba(255,140,0,0.52), rgba(255,60,60,0.42), rgba(170,70,255,0.42))",
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
