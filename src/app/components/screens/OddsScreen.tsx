@@ -2180,7 +2180,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
                     <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
                       <span>
-                        Line (Home):{" "}
+                        Margin Line (H):{" "}
                         <span className="text-white font-extrabold tabular-nums">
                           {predRow.spread_line_home ?? "—"}
                         </span>
@@ -2190,7 +2190,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                       <span className="mx-3 h-4 w-px bg-white/80" />
 
                       <span>
-                        Margin (H):{" "}
+                        Proj Margin (H):{" "}
                         <span className="text-white font-extrabold tabular-nums">
                           {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
                         </span>
@@ -2232,7 +2232,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
                       <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
                         <span>
-                        Line:{" "}
+                        Total Line:{" "}
                         <span className="text-white font-extrabold tabular-nums">
                           {predRow.total_line ?? "—"}
                         </span>
