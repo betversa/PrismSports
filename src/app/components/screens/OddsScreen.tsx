@@ -1927,55 +1927,55 @@ function GameDetailsModal({
      Derived UI values
   ------------------------- */
 
-const awayTeam = ev.away?.team ?? predRow?.away_team ?? "Away";
-const homeTeam = ev.home?.team ?? predRow?.home_team ?? "Home";
-const awayLogo = ev.away?.logoUrl ?? null;
-const homeLogo = ev.home?.logoUrl ?? null;
+  const awayTeam = ev.away?.team ?? predRow?.away_team ?? "Away";
+  const homeTeam = ev.home?.team ?? predRow?.home_team ?? "Home";
+  const awayLogo = ev.away?.logoUrl ?? null;
+  const homeLogo = ev.home?.logoUrl ?? null;
 
-const awayP = toProb01(predRow?.away_win_prob ?? null);
-const homeP = toProb01(predRow?.home_win_prob ?? null);
-const colors = winColors(awayP, homeP);
+  const awayP = toProb01(predRow?.away_win_prob ?? null);
+  const homeP = toProb01(predRow?.home_win_prob ?? null);
+  const colors = winColors(awayP, homeP);
 
-const scoreText =
-  predRow?.projected_away_points == null || predRow?.projected_home_points == null
-    ? "—"
-    : `${predRow.projected_away_points.toFixed(1)} - ${predRow.projected_home_points.toFixed(1)}`;
+  const scoreText =
+    predRow?.projected_away_points == null || predRow?.projected_home_points == null
+      ? "—"
+      : `${predRow.projected_away_points.toFixed(1)} - ${predRow.projected_home_points.toFixed(1)}`;
 
-const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
-const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
+  const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
+  const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
 
-// Key Lines derived from board consensus (always matches what user sees)
-const consMlAway = consensusPartsForRow(ev, "ml", "AWAY");
-const consMlHome = consensusPartsForRow(ev, "ml", "HOME");
-const consSprAway = consensusPartsForRow(ev, "spread", "AWAY");
-const consSprHome = consensusPartsForRow(ev, "spread", "HOME");
-const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
-const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
+  // Key Lines derived from board consensus (always matches what user sees)
+  const consMlAway = consensusPartsForRow(ev, "ml", "AWAY");
+  const consMlHome = consensusPartsForRow(ev, "ml", "HOME");
+  const consSprAway = consensusPartsForRow(ev, "spread", "AWAY");
+  const consSprHome = consensusPartsForRow(ev, "spread", "HOME");
+  const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
+  const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
 
-return (
-  <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-    {/* ✅ Sticky tabs bar — tighter + no “window” above it */}
-    <div
-      ref={tabsBarRef}
-      className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#232323]
-                 bg-[#0b0b0b] shadow-[0_12px_30px_rgba(0,0,0,0.55)]"
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
-          Predictions
-        </TabBtn>
-        <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
-          Line Movement
-        </TabBtn>
-        <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
-          Player Props
-        </TabBtn>
+  return (
+    <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
+      {/* ✅ Sticky tabs bar — tighter + no “window” above it */}
+      <div
+        ref={tabsBarRef}
+        className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#232323]
+                   bg-[#0b0b0b] shadow-[0_12px_30px_rgba(0,0,0,0.55)]"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
+            Predictions
+          </TabBtn>
+          <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
+            Line Movement
+          </TabBtn>
+          <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
+            Player Props
+          </TabBtn>
+        </div>
       </div>
-    </div>
 
-    {/* LINE MOVEMENT TAB */}
-    {tab === "line" && (
-      <div className="pt-0">
+      {/* LINE MOVEMENT TAB */}
+      {tab === "line" && (
+        <div className="pt-0">
         {/* single market selector ONLY here */}
         <div className="flex flex-wrap items-center gap-2 mb-3">
           <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
