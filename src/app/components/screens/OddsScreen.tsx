@@ -2208,6 +2208,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                         <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.away_cover_prob))}</div>
                       </div>
                     </div>
+                  </div>
 
                   <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
                     <div className="flex items-center justify-between">
@@ -2231,6 +2232,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                         <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
                       </div>
                     </div>
+
                   </div>
                 </div>
               </div>
@@ -2784,4 +2786,5 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
+
 
