@@ -1,9 +1,9 @@
-// components/Header.tsx — FULL REWRITE (Mobile spectrum visibility fix)
+// components/Header.tsx — FULL REWRITE (Mobile darker + Desktop tagline line fixed)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Fix: Mobile header now shows the full prism spectrum (previously too subtle / clipped on small widths)
-// ✅ Still black-forward + subtle (no loud rainbow), but colors are visible on mobile
-// ✅ Clicking the logo returns to Overview
-// ✅ Full-width tagline accent line kept
+// ✅ Mobile: add MORE black (stronger glass) while keeping full spectrum visible
+// ✅ Desktop: tagline accent line now spans the full brand column reliably (no shrink/clamp weirdness)
+// ✅ Clicking logo -> Overview
+// ✅ Everything else unchanged
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
@@ -41,9 +41,8 @@ const DROPDOWN_CLOSE_DELAY_MS = 240;
 const TAGLINE = "Sports Models · Projections · Analysis";
 
 /**
- * Mobile vs Desktop spectrum:
- * - Mobile needs slightly higher alpha + tighter placement so the full range is visible in a narrow header.
- * - Desktop stays extra subtle.
+ * Spectrum is subtle. Mobile needs a bit more alpha than desktop to show full range,
+ * but we’ll add stronger black glass to keep it “mostly black.”
  */
 const PRISM_DESKTOP = {
   blue: "rgba(0, 146, 255, 0.08)",
@@ -56,16 +55,16 @@ const PRISM_DESKTOP = {
 };
 
 const PRISM_MOBILE = {
-  blue: "rgba(0, 146, 255, 0.12)",
-  teal: "rgba(0, 201, 255, 0.10)",
-  green: "rgba(0, 200, 120, 0.11)",
-  gold: "rgba(212, 175, 55, 0.13)",
-  orange: "rgba(255, 140, 0, 0.11)",
-  red: "rgba(255, 60, 60, 0.10)",
-  violet: "rgba(170, 70, 255, 0.10)",
+  blue: "rgba(0, 146, 255, 0.11)",
+  teal: "rgba(0, 201, 255, 0.09)",
+  green: "rgba(0, 200, 120, 0.10)",
+  gold: "rgba(212, 175, 55, 0.12)",
+  orange: "rgba(255, 140, 0, 0.10)",
+  red: "rgba(255, 60, 60, 0.09)",
+  violet: "rgba(170, 70, 255, 0.09)",
 };
 
-// Black “glass” remains dominant (mobile slightly lighter so colors show)
+// Black glass (mobile DARKER per your request)
 const BLACK_GLASS_DESKTOP = {
   top: "rgba(0,0,0,0.38)",
   mid: "rgba(0,0,0,0.60)",
@@ -73,9 +72,9 @@ const BLACK_GLASS_DESKTOP = {
 };
 
 const BLACK_GLASS_MOBILE = {
-  top: "rgba(0,0,0,0.26)",
-  mid: "rgba(0,0,0,0.52)",
-  bottom: "rgba(0,0,0,0.78)",
+  top: "rgba(0,0,0,0.40)",
+  mid: "rgba(0,0,0,0.68)",
+  bottom: "rgba(0,0,0,0.88)",
 };
 
 /** =========================
@@ -196,7 +195,6 @@ function HoverDropdown({
     setOpen(true);
   };
 
-  // Dropdown stays subtle like desktop (don’t need mobile boosting here)
   const P = PRISM_DESKTOP;
   const B = BLACK_GLASS_DESKTOP;
 
@@ -319,17 +317,13 @@ export function Header({
 
   return (
     <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
-      {/* We render TWO overlays:
-          - Mobile overlay (stronger, positioned to show all colors on narrow widths)
-          - Desktop overlay (more subtle)
-      */}
       <div className="pointer-events-none absolute inset-0">
-        {/* MOBILE overlay */}
+        {/* MOBILE overlay (full spectrum visible + MORE black) */}
         <div
           className="absolute inset-0 md:hidden"
           style={{
             background: [
-              // Tight banding across the top so the whole spectrum appears in a narrow viewport
+              // spectrum band (still subtle) across the top so all colors show on narrow screens
               `linear-gradient(90deg,
                 ${PRISM_MOBILE.blue} 0%,
                 ${PRISM_MOBILE.teal} 16%,
@@ -339,19 +333,19 @@ export function Header({
                 ${PRISM_MOBILE.red} 82%,
                 ${PRISM_MOBILE.violet} 100%
               )`,
-              // A couple subtle “bloom” spots so it feels dimensional
-              `radial-gradient(520px 180px at 20% 0%, ${PRISM_MOBILE.blue}, transparent 62%)`,
-              `radial-gradient(520px 180px at 55% 0%, ${PRISM_MOBILE.gold}, transparent 64%)`,
-              `radial-gradient(520px 200px at 90% 0%, ${PRISM_MOBILE.red}, transparent 66%)`,
-              // Black glass to keep it dark
+              // slight blooms for depth
+              `radial-gradient(520px 180px at 18% 0%, ${PRISM_MOBILE.blue}, transparent 62%)`,
+              `radial-gradient(520px 180px at 52% 0%, ${PRISM_MOBILE.gold}, transparent 64%)`,
+              `radial-gradient(520px 200px at 88% 0%, ${PRISM_MOBILE.red}, transparent 66%)`,
+              // stronger black glass (your request)
               `linear-gradient(180deg, ${BLACK_GLASS_MOBILE.top}, ${BLACK_GLASS_MOBILE.mid} 52%, ${BLACK_GLASS_MOBILE.bottom} 100%)`,
-              // Sheen
-              `linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015) 55%, rgba(0,0,0,0) 100%)`,
+              // sheen
+              `linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0) 100%)`,
             ].join(", "),
           }}
         />
 
-        {/* DESKTOP overlay */}
+        {/* DESKTOP overlay (extra subtle) */}
         <div
           className="absolute inset-0 hidden md:block"
           style={{
@@ -369,16 +363,16 @@ export function Header({
           }}
         />
 
-        {/* Top hairline (mobile slightly stronger) */}
+        {/* Top hairline */}
         <div
-          className="absolute left-0 right-0 top-0 h-[1px] opacity-70 md:opacity-55"
+          className="absolute left-0 right-0 top-0 h-[1px] opacity-72 md:opacity-55"
           style={{
             background:
               "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.40), rgba(0,200,120,0.40), rgba(212,175,55,0.45), rgba(255,140,0,0.40), rgba(255,60,60,0.35), rgba(170,70,255,0.35), rgba(0,0,0,0))",
           }}
         />
 
-        {/* Gold anchor line */}
+        {/* Gold anchor */}
         <div
           className="absolute left-0 right-0 bottom-0 h-[1px] opacity-65"
           style={{
@@ -400,6 +394,7 @@ export function Header({
           </button>
 
           <div className="flex flex-col items-start gap-2 min-w-0">
+            {/* Brand row */}
             <div className="flex items-center gap-3 min-w-0 w-full">
               <button
                 type="button"
@@ -418,7 +413,8 @@ export function Header({
                 />
               </button>
 
-              <div className="flex-1 min-w-0">
+              {/* ✅ Desktop line fix: ensure this column can actually be full width */}
+              <div className="flex-1 min-w-0 w-full">
                 <div
                   className={[
                     "text-[#9a9a9a] font-medium tracking-wide leading-snug",
@@ -430,16 +426,18 @@ export function Header({
                   {TAGLINE}
                 </div>
 
-                <div
-                  className="mt-1 h-[2px] w-full rounded-full opacity-55 md:opacity-45"
+                {/* ✅ Full width on desktop too: force block + w-full */}
+                <span
+                  className="block mt-1 h-[2px] w-full rounded-full opacity-60 md:opacity-45"
                   style={{
                     background:
-                      "linear-gradient(90deg, rgba(0,146,255,0.55), rgba(0,200,120,0.55), rgba(212,175,55,0.70), rgba(255,140,0,0.55), rgba(255,60,60,0.45), rgba(170,70,255,0.45))",
+                      "linear-gradient(90deg, rgba(0,146,255,0.52), rgba(0,200,120,0.52), rgba(212,175,55,0.70), rgba(255,140,0,0.52), rgba(255,60,60,0.42), rgba(170,70,255,0.42))",
                   }}
                 />
               </div>
             </div>
 
+            {/* Desktop nav */}
             <nav className="hidden md:flex items-center gap-7 pb-2 pt-1">
               <HoverDropdown
                 label="Odds"
@@ -487,5 +485,3 @@ export function Header({
     </header>
   );
 }
-
-
