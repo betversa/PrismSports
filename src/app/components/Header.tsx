@@ -29,7 +29,21 @@ type HeaderProps = {
 type UiSport = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
 const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
+/**
+ * Prism palette tuned to the logo spectrum.
+ * (Keep GOLD for underline + selected accents, but add the full rainbow glow for backgrounds.)
+ */
 const GOLD = "#d4af37";
+
+// Spectrum accents (approx logo hues)
+const PRISM_BLUE = "rgba(  0, 146, 255, 0.18)";
+const PRISM_TEAL = "rgba(  0, 201, 255, 0.14)";
+const PRISM_GREEN = "rgba(  0, 200, 120, 0.16)";
+const PRISM_GOLD = "rgba(212, 175,  55, 0.18)";
+const PRISM_ORANGE = "rgba(255, 140,   0, 0.16)";
+const PRISM_RED = "rgba(255,  60,  60, 0.14)";
+const PRISM_VIOLET = "rgba(170,  70, 255, 0.14)";
+
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
 const DROPDOWN_CLOSE_DELAY_MS = 240;
 
@@ -184,13 +198,26 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
+          {/* Prism-spectrum background wash */}
           <div
-            className="pointer-events-none absolute inset-0 opacity-80"
+            className="pointer-events-none absolute inset-0 opacity-90"
             style={{
-              background:
-                "radial-gradient(700px 160px at 20% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 140px at 90% 20%, rgba(255,255,255,0.05), transparent 55%)",
+              background: [
+                // top glow bands (spectrum)
+                `radial-gradient(620px 170px at 12% 0%, ${PRISM_BLUE}, transparent 58%)`,
+                `radial-gradient(520px 160px at 32% 0%, ${PRISM_TEAL}, transparent 62%)`,
+                `radial-gradient(560px 180px at 50% 0%, ${PRISM_GREEN}, transparent 60%)`,
+                `radial-gradient(560px 180px at 66% 0%, ${PRISM_GOLD}, transparent 62%)`,
+                `radial-gradient(620px 190px at 82% 0%, ${PRISM_ORANGE}, transparent 62%)`,
+                // subtle corner warmth + violet depth
+                `radial-gradient(520px 220px at 98% 35%, ${PRISM_RED}, transparent 60%)`,
+                `radial-gradient(680px 260px at 70% 110%, ${PRISM_VIOLET}, transparent 58%)`,
+                // faint sheen
+                `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.00) 55%)`,
+              ].join(", "),
             }}
           />
+
           <div className="relative">
             {SPORTS.map((ui) => {
               const db = uiToDbSport(ui);
@@ -217,7 +244,6 @@ function HoverDropdown({
                 >
                   <span className="text-[14px] font-medium leading-tight">{title}</span>
 
-                  {/* ✅ Removed right-side SELECTED label entirely */}
                   {!enabled ? (
                     <span className="font-semibold text-[11px]" style={{ color: GOLD }}>
                       COMING SOON
@@ -266,20 +292,46 @@ export function Header({
   const predsActive = activeScreen === "monte-carlo";
 
   return (
-    <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
+    <header
+      ref={headerRef}
+      className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]"
+    >
+      {/* Prism-spectrum header background */}
       <div className="pointer-events-none absolute inset-0">
         <div
-          className="absolute inset-0 opacity-80"
+          className="absolute inset-0 opacity-90"
           style={{
-            background:
-              "radial-gradient(900px 220px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(700px 200px at 82% 10%, rgba(255,255,255,0.05), transparent 60%)",
+            background: [
+              // spectrum glow across the top edge
+              `radial-gradient(900px 240px at 12% 0%, ${PRISM_BLUE}, transparent 62%)`,
+              `radial-gradient(820px 240px at 30% 0%, ${PRISM_TEAL}, transparent 64%)`,
+              `radial-gradient(880px 260px at 48% 0%, ${PRISM_GREEN}, transparent 62%)`,
+              `radial-gradient(900px 260px at 62% 0%, ${PRISM_GOLD}, transparent 64%)`,
+              `radial-gradient(920px 280px at 78% 0%, ${PRISM_ORANGE}, transparent 64%)`,
+              `radial-gradient(860px 260px at 92% 10%, ${PRISM_RED}, transparent 66%)`,
+              // violet depth from below (subtle)
+              `radial-gradient(900px 340px at 60% 120%, ${PRISM_VIOLET}, transparent 58%)`,
+              // soft glass sheen
+              `linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0) 100%)`,
+            ].join(", "),
           }}
         />
+
+        {/* Thin top highlight line (spectrum instead of only gold) */}
         <div
           className="absolute left-0 right-0 top-0 h-[1px]"
           style={{
             background:
-              "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.55), rgba(212,175,55,0.0))",
+              "linear-gradient(90deg, rgba(0,146,255,0.0), rgba(0,146,255,0.55), rgba(0,200,120,0.55), rgba(212,175,55,0.55), rgba(255,140,0,0.55), rgba(255,60,60,0.55), rgba(170,70,255,0.55), rgba(170,70,255,0.0))",
+          }}
+        />
+
+        {/* Bottom “gold spine” kept (brand anchor) */}
+        <div
+          className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
+          style={{
+            background:
+              "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.45), rgba(212,175,55,0.0))",
           }}
         />
       </div>
@@ -298,12 +350,24 @@ export function Header({
           <div className="flex flex-col items-start gap-2 min-w-0">
             {/* Brand row: logo + tagline */}
             <div className="flex items-center gap-3 min-w-0 w-full">
-              <img
-                src="/logos/mainlogo.png"
-                alt="PrismSports"
-                className="h-14 sm:h-16 md:h-20 w-auto object-contain select-none flex-shrink-0"
-                draggable={false}
-              />
+              {/* ✅ Clicking logo returns to Overview */}
+              <button
+                type="button"
+                onClick={() => onNavigate?.("overview")}
+                className="group flex items-center rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+                style={{ boxShadow: "0 0 0 rgba(0,0,0,0)" }}
+                aria-label="Go to Overview"
+              >
+                <img
+                  src="/logos/Logo.png"
+                  alt="PrismSports"
+                  className={[
+                    "h-14 sm:h-16 md:h-20 w-auto object-contain select-none flex-shrink-0",
+                    "transition-transform duration-200 group-hover:scale-[1.01]",
+                  ].join(" ")}
+                  draggable={false}
+                />
+              </button>
 
               <div className="flex-1 min-w-0">
                 <div
@@ -316,6 +380,15 @@ export function Header({
                 >
                   {TAGLINE}
                 </div>
+
+                {/* subtle spectrum micro-accent under tagline */}
+                <div
+                  className="mt-1 h-[2px] w-[160px] max-w-full rounded-full opacity-70"
+                  style={{
+                    background:
+                      "linear-gradient(90deg, rgba(0,146,255,0.8), rgba(0,200,120,0.8), rgba(212,175,55,0.85), rgba(255,140,0,0.8), rgba(255,60,60,0.75), rgba(170,70,255,0.75))",
+                  }}
+                />
               </div>
             </div>
 
@@ -346,8 +419,16 @@ export function Header({
               <div className="h-5 w-px bg-[#2a2a2a]" />
 
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
-              <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
-              <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
+              <NavItem
+                label="Results"
+                active={activeScreen === "results"}
+                onClick={() => onNavigate?.("results")}
+              />
+              <NavItem
+                label="Settings"
+                active={activeScreen === "settings"}
+                onClick={() => onNavigate?.("settings")}
+              />
             </nav>
           </div>
         </div>
@@ -356,7 +437,8 @@ export function Header({
           <div
             className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
             style={{
-              background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))",
             }}
           >
             <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
