@@ -203,18 +203,27 @@ function HoverDropdown({
             className="pointer-events-none absolute inset-0 opacity-90"
             style={{
               background: [
-                // top glow bands (spectrum)
                 `radial-gradient(620px 170px at 12% 0%, ${PRISM_BLUE}, transparent 58%)`,
                 `radial-gradient(520px 160px at 32% 0%, ${PRISM_TEAL}, transparent 62%)`,
                 `radial-gradient(560px 180px at 50% 0%, ${PRISM_GREEN}, transparent 60%)`,
                 `radial-gradient(560px 180px at 66% 0%, ${PRISM_GOLD}, transparent 62%)`,
                 `radial-gradient(620px 190px at 82% 0%, ${PRISM_ORANGE}, transparent 62%)`,
-                // subtle corner warmth + violet depth
                 `radial-gradient(520px 220px at 98% 35%, ${PRISM_RED}, transparent 60%)`,
                 `radial-gradient(680px 260px at 70% 110%, ${PRISM_VIOLET}, transparent 58%)`,
-                // faint sheen
                 `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.00) 55%)`,
               ].join(", "),
+            }}
+          />
+
+          {/* Subtle shimmer for dropdown */}
+          <div
+            className="pointer-events-none absolute inset-[-40%] opacity-[0.10]"
+            style={{
+              background:
+                "linear-gradient(120deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%)",
+              transform: "translateX(-35%) rotate(6deg)",
+              animation: "prismShimmer 10s ease-in-out infinite",
+              mixBlendMode: "screen",
             }}
           />
 
@@ -296,24 +305,45 @@ export function Header({
       ref={headerRef}
       className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]"
     >
+      {/* keyframes (scoped to header) */}
+      <style>{`
+        @keyframes prismShimmer {
+          0%   { transform: translateX(-42%) rotate(6deg); }
+          50%  { transform: translateX(42%) rotate(6deg); }
+          100% { transform: translateX(-42%) rotate(6deg); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .prism-shimmer-disable { animation: none !important; }
+        }
+      `}</style>
+
       {/* Prism-spectrum header background */}
       <div className="pointer-events-none absolute inset-0">
         <div
           className="absolute inset-0 opacity-90"
           style={{
             background: [
-              // spectrum glow across the top edge
               `radial-gradient(900px 240px at 12% 0%, ${PRISM_BLUE}, transparent 62%)`,
               `radial-gradient(820px 240px at 30% 0%, ${PRISM_TEAL}, transparent 64%)`,
               `radial-gradient(880px 260px at 48% 0%, ${PRISM_GREEN}, transparent 62%)`,
               `radial-gradient(900px 260px at 62% 0%, ${PRISM_GOLD}, transparent 64%)`,
               `radial-gradient(920px 280px at 78% 0%, ${PRISM_ORANGE}, transparent 64%)`,
               `radial-gradient(860px 260px at 92% 10%, ${PRISM_RED}, transparent 66%)`,
-              // violet depth from below (subtle)
               `radial-gradient(900px 340px at 60% 120%, ${PRISM_VIOLET}, transparent 58%)`,
-              // soft glass sheen
               `linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0) 100%)`,
             ].join(", "),
+          }}
+        />
+
+        {/* Subtle shimmer sweep across the header */}
+        <div
+          className="prism-shimmer-disable absolute inset-[-60%] opacity-[0.08]"
+          style={{
+            background:
+              "linear-gradient(115deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 48%, rgba(255,255,255,0) 100%)",
+            transform: "translateX(-40%) rotate(6deg)",
+            animation: "prismShimmer 12s ease-in-out infinite",
+            mixBlendMode: "screen",
           }}
         />
 
@@ -355,11 +385,10 @@ export function Header({
                 type="button"
                 onClick={() => onNavigate?.("overview")}
                 className="group flex items-center rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-                style={{ boxShadow: "0 0 0 rgba(0,0,0,0)" }}
                 aria-label="Go to Overview"
               >
                 <img
-                  src="/logos/Logo.png"
+                  src="/logos/mainlogo.png"
                   alt="PrismSports"
                   className={[
                     "h-14 sm:h-16 md:h-20 w-auto object-contain select-none flex-shrink-0",
@@ -419,16 +448,8 @@ export function Header({
               <div className="h-5 w-px bg-[#2a2a2a]" />
 
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
-              <NavItem
-                label="Results"
-                active={activeScreen === "results"}
-                onClick={() => onNavigate?.("results")}
-              />
-              <NavItem
-                label="Settings"
-                active={activeScreen === "settings"}
-                onClick={() => onNavigate?.("settings")}
-              />
+              <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
+              <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
             </nav>
           </div>
         </div>
@@ -437,8 +458,7 @@ export function Header({
           <div
             className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
             style={{
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))",
+              background: "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))",
             }}
           >
             <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
