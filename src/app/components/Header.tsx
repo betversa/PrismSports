@@ -403,7 +403,7 @@ export function Header({
                 aria-label="Go to Overview"
               >
                 <img
-                  src="/logos/mainlogo.png"
+                  src="/logos/Logo.png"
                   alt="PrismSports"
                   className={[
                     "h-14 sm:h-16 md:h-20 w-auto object-contain select-none flex-shrink-0",
