@@ -1601,6 +1601,33 @@ function GameDetailsModal({
     ev.commenceTime
   )} CT`;
 
+  /* =========================================================
+     ✅ FIX: sticky stacking (no “gap” where body shows between headers)
+     - Measure tabs bar + prop bar heights dynamically
+     - Use that as the sticky top for the props table header slab
+  ========================================================= */
+  const tabsBarRef = useRef<HTMLDivElement | null>(null);
+  const propBarRef = useRef<HTMLDivElement | null>(null);
+  const [tabsBarH, setTabsBarH] = useState(0);
+  const [propsHeaderTop, setPropsHeaderTop] = useState(0);
+
+  useLayoutEffect(() => {
+    if (tab !== "props") return;
+
+    const measure = () => {
+      const tabsH = tabsBarRef.current?.getBoundingClientRect().height ?? 0;
+      const propH = propBarRef.current?.getBoundingClientRect().height ?? 0;
+
+      setTabsBarH(Math.ceil(tabsH));
+      // +8px safety buffer prevents “peek through” during momentum scroll
+      setPropsHeaderTop(Math.ceil(tabsH + propH + 8));
+    };
+
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [tab, propMarket, propsAgg.length]);
+
   /* -------------------------
      Line movement fetch
   ------------------------- */
@@ -1920,15 +1947,13 @@ function GameDetailsModal({
   const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
   const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
 
-  // Sticky offsets (tab bar is sticky top:0 inside ModalShell scroll area)
-  const STICKY_TABS_TOP = 0;
-  const STICKY_PROP_MARKETS_TOP = 60; // sits below tabs
-  const STICKY_PROPS_HEADER_TOP = 118; // sits below tabs + market buttons
-
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      {/* ✅ Sticky tabs bar */}
-      <div className="sticky top-0 z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-3 sm:pt-4 pb-3 border-b border-[#232323] bg-[#0b0b0b]/85 backdrop-blur-[6px]">
+      {/* ✅ Sticky tabs bar (opaque + shadow to prevent seeing content between bars) */}
+      <div
+        ref={tabsBarRef}
+        className="sticky top-0 z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-3 sm:pt-4 pb-3 border-b border-[#232323] bg-[#0b0b0b] shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
+      >
         <div className="flex flex-wrap items-center gap-2">
           <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
             Predictions
@@ -2313,10 +2338,11 @@ function GameDetailsModal({
       {/* PLAYER PROPS TAB */}
       {tab === "props" && (
         <div className="pt-3">
-          {/* ✅ Sticky prop market buttons (must NOT be inside overflow-hidden) */}
+          {/* ✅ Sticky prop market buttons (opaque + shadow) */}
           <div
-            className="sticky z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 pt-2 border-b border-[#1f1f1f] bg-[#0b0b0b]/85 backdrop-blur-[6px]"
-            style={{ top: STICKY_PROP_MARKETS_TOP }}
+            ref={propBarRef}
+            className="sticky z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 pt-2 border-b border-[#1f1f1f] bg-[#0b0b0b] shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
+            style={{ top: tabsBarH }}
           >
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
@@ -2349,21 +2375,20 @@ function GameDetailsModal({
           ) : !propsAgg.length ? (
             <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
           ) : (
-            // ✅ IMPORTANT: no overflow-hidden on the sticky ancestor
-            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px]">
-              {/* ✅ Sticky header stack (market title + counts + column headers) */}
+            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
+              {/* ✅ ONE solid, opaque sticky slab for: market+count + column headers + book headers */}
               <div
-                className="sticky z-20 bg-[#0b0b0b]/92 backdrop-blur-[6px] border-b border-[#2a2a2a]"
-                style={{ top: STICKY_PROPS_HEADER_TOP }}
+                className="sticky z-30 bg-[#0b0b0b] border-b border-[#2a2a2a] shadow-[0_12px_30px_rgba(0,0,0,0.55)]"
+                style={{ top: propsHeaderTop }}
               >
-                {/* Market + count */}
-                <div className="px-4 py-3 flex items-center justify-between">
+                {/* market / count (tighter padding so no “window”) */}
+                <div className="px-4 py-2 flex items-center justify-between">
                   <div className="text-white font-extrabold text-sm">{propMarket}</div>
                   <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
                 </div>
 
-                {/* Header table (horizontal scroll lives INSIDE, not on sticky wrapper) */}
-                <div className="overflow-x-auto">
+                {/* Header tables */}
+                <div className="overflow-x-auto bg-[#0b0b0b]">
                   <table className="w-full table-fixed">
                     <colgroup>
                       <col style={{ width: 260 }} />
@@ -2386,27 +2411,19 @@ function GameDetailsModal({
                         <th />
                         <th />
                         <th />
-                        <th className="px-3 pb-3">
+                        <th className="px-3 pb-2">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div
-                                key={`ovh-${b}`}
-                                className="text-[10px] font-extrabold"
-                                style={{ color: BOOK_STROKES[b] }}
-                              >
+                              <div key={`ovh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
                                 {b.toUpperCase()}
                               </div>
                             ))}
                           </div>
                         </th>
-                        <th className="px-3 pb-3">
+                        <th className="px-3 pb-2">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div
-                                key={`unh-${b}`}
-                                className="text-[10px] font-extrabold"
-                                style={{ color: BOOK_STROKES[b] }}
-                              >
+                              <div key={`unh-${b}`} className="text-[10px] font-extrabold" style={{ color: BOOK_STROKES[b] }}>
                                 {b.toUpperCase()}
                               </div>
                             ))}
@@ -2418,7 +2435,7 @@ function GameDetailsModal({
                 </div>
               </div>
 
-              {/* Body (horizontal scroll only; no overflow ancestor that breaks sticky) */}
+              {/* Body table */}
               <div className="overflow-x-auto">
                 <table className="w-full table-fixed">
                   <colgroup>
@@ -2462,10 +2479,7 @@ function GameDetailsModal({
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div
-                                key={`ov-${r.player_name}-${b}`}
-                                className="text-[12px] text-white font-extrabold tabular-nums"
-                              >
+                              <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
                                 {fmtLineOdds(r.over[b].line ?? r.display_line, r.over[b].odds)}
                               </div>
                             ))}
@@ -2475,10 +2489,7 @@ function GameDetailsModal({
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div
-                                key={`un-${r.player_name}-${b}`}
-                                className="text-[12px] text-white font-extrabold tabular-nums"
-                              >
+                              <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
                                 {fmtLineOdds(r.under[b].line ?? r.display_line, r.under[b].odds)}
                               </div>
                             ))}
@@ -2489,9 +2500,6 @@ function GameDetailsModal({
                   </tbody>
                 </table>
               </div>
-
-              {/* rounded bottom spacer */}
-              <div className="h-1" />
             </div>
           )}
         </div>
