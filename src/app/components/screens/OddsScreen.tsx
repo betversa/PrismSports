@@ -4,6 +4,8 @@
 // ✅ Predictions “Key Lines”: remove Quantum ML block (consensus only; quantum ML already shown by team logos)
 // ✅ Mobile Predictions: smaller logos + team names in a compact row ABOVE the win% bar (both teams above the bar)
 // ✅ Everything else unchanged from your provided script
+//
+// NOTE: Fixes the build error by correctly closing GameDetailsModal (missing closing brace previously).
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -111,7 +113,6 @@ const BTN_GHOST =
   "text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]";
 
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
-const HDR_BOOK_BG = "bg-[#1c1c1c]";
 const HDR_TEXT = "text-[#d0d0d0]";
 const HDR_BORDER = "border-[#232323]";
 
@@ -805,7 +806,12 @@ function EventTwoRows({
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "bol")} />
       </tr>
 
-      <tr className={["hover:bg-white/5 transition-colors", `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`].join(" ")}>
+      <tr
+        className={[
+          "hover:bg-white/5 transition-colors",
+          `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`,
+        ].join(" ")}
+      >
         <ConsensusValue parts={homeConsensus} />
         <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
         <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
@@ -1048,7 +1054,7 @@ function parseHistoryRows({
 
   for (const r of raw) {
     const ts = pickTs(r);
-    const bk = bookKeyFromRaw(pickBook(r));
+    const bk = bookKeyFromRaw(pickBook(r) ? String(pickBook(r)) : null);
     if (!ts || !bk) continue;
 
     const marketRaw = String(pickAny(r, ["market", "market_key", "bet_type", "type"]) ?? "").toLowerCase();
@@ -1211,15 +1217,13 @@ function probToAmerican(p: number | null): string {
 function winColors(awayP: number | null, homeP: number | null) {
   if (awayP == null || homeP == null) {
     return {
-      away: "text-white",
-      home: "text-white",
       awayHex: "#d0d0d0",
       homeHex: "#d0d0d0",
     };
   }
-  if (awayP > homeP) return { away: "text-emerald-400", home: "text-red-400", awayHex: "#34d399", homeHex: "#f87171" };
-  if (homeP > awayP) return { away: "text-red-400", home: "text-emerald-400", awayHex: "#f87171", homeHex: "#34d399" };
-  return { away: "text-white", home: "text-white", awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
+  if (awayP > homeP) return { awayHex: "#34d399", homeHex: "#f87171" };
+  if (homeP > awayP) return { awayHex: "#f87171", homeHex: "#34d399" };
+  return { awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
 }
 
 /* =========================================================
@@ -1559,6 +1563,10 @@ function fmtLineOdds(line: number | null, odds: number | null) {
   return `${line} (${odds})`;
 }
 
+/* =========================================================
+   GAME DETAILS MODAL
+========================================================= */
+
 function GameDetailsModal({
   sportKey,
   ev,
@@ -1603,8 +1611,6 @@ function GameDetailsModal({
 
   /* =========================================================
      ✅ FIX: sticky stacking (no “gap” where body shows between headers)
-     - Measure tabs bar + prop bar heights dynamically
-     - Use that as the sticky top for the props table header slab
   ========================================================= */
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const propBarRef = useRef<HTMLDivElement | null>(null);
@@ -1619,12 +1625,11 @@ function GameDetailsModal({
       const propH = propBarRef.current?.getBoundingClientRect().height ?? 0;
 
       setTabsBarH(Math.ceil(tabsH));
-      // +8px safety buffer prevents “peek through” during momentum scroll
+      // +1px safety buffer
       setPropsHeaderTop(Math.ceil(tabsH + propH + 1));
     };
 
     measure();
-    // ResizeObserver is more reliable than window resize for dynamic content heights
     const ro = new ResizeObserver(measure);
     if (tabsBarRef.current) ro.observe(tabsBarRef.current);
     if (propBarRef.current) ro.observe(propBarRef.current);
@@ -1976,224 +1981,187 @@ function GameDetailsModal({
       {/* LINE MOVEMENT TAB */}
       {tab === "line" && (
         <div className="pt-0">
-        {/* single market selector ONLY here */}
-        <div className="flex flex-wrap items-center gap-2 mb-3">
-          <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              className={`px-3 py-1.5 text-xs font-extrabold ${
-                lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"
-              }`}
-              onClick={(e) => {
-                setLmMarket("ml");
-                (e.currentTarget as HTMLButtonElement).blur();
-              }}
-            >
-              Moneyline
-            </button>
-            <div className="w-px bg-[#2a2a2a]" />
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              className={`px-3 py-1.5 text-xs font-extrabold ${
-                lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"
-              }`}
-              onClick={(e) => {
-                setLmMarket("spread");
-                (e.currentTarget as HTMLButtonElement).blur();
-              }}
-            >
-              Spread
-            </button>
-            <div className="w-px bg-[#2a2a2a]" />
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              className={`px-3 py-1.5 text-xs font-extrabold ${
-                lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"
-              }`}
-              onClick={(e) => {
-                setLmMarket("total");
-                (e.currentTarget as HTMLButtonElement).blur();
-              }}
-            >
-              Total
-            </button>
-          </div>
-
-          <div className="text-[11px] text-[#b0b0b0] font-semibold">
-            {lmMarket === "total" ? (
-              <>
-                Left = <span className="text-white font-extrabold">Over</span>, Right ={" "}
-                <span className="text-white font-extrabold">Under</span>
-              </>
-            ) : (
-              <>
-                Left = <span className="text-white font-extrabold">Away</span>, Right ={" "}
-                <span className="text-white font-extrabold">Home</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {lmLoading ? (
-          <div className="text-sm text-[#b0b0b0] p-4">Loading odds history…</div>
-        ) : lmError ? (
-          <div className="text-sm text-red-400 p-4">No odds history available: {lmError}</div>
-        ) : (
-          <SideBySideLineCharts
-            leftTitle={lmMarket === "total" ? `Over • ${awayTeam}` : `Away • ${awayTeam}`}
-            rightTitle={lmMarket === "total" ? `Under • ${homeTeam}` : `Home • ${homeTeam}`}
-            leftPoints={lmAwayPoints}
-            rightPoints={lmHomePoints}
-            market={lmMarket}
-          />
-        )}
-      </div>
-    )}
-
-    {/* PREDICTIONS TAB */}
-    {tab === "pred" && (
-      <div className="pt-3">
-        {predLoading ? (
-          <div className="text-sm text-[#b0b0b0] p-4">Loading Monte Carlo predictions…</div>
-        ) : predError ? (
-          <div className="text-sm text-red-400 p-4">Supabase error: {predError}</div>
-        ) : !predRow ? (
-          <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
-        ) : (
-          <div className="space-y-3">
-            {/* ✅ Key Lines: remove Quantum ML block; keep consensus lines only */}
-            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="text-white font-extrabold text-[13px]">Key Lines</div>
-                  <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">Consensus lines in one place</div>
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
-                <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                  <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus ML</div>
-                  <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                    {awayTeam}: {consMlAway.top} • {homeTeam}: {consMlHome.top}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                  <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
-                  <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                    {awayTeam}: {consSprAway.top}{" "}
-                    {consSprAway.bottom ? <span className="text-[#b0b0b0]">{consSprAway.bottom}</span> : null}
-                    <span className="text-[#808080] mx-2">|</span>
-                    {homeTeam}: {consSprHome.top}{" "}
-                    {consSprHome.bottom ? <span className="text-[#b0b0b0]">{consSprHome.bottom}</span> : null}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                  <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Total</div>
-                  <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                    Over: {consTotOver.top}{" "}
-                    {consTotOver.bottom ? <span className="text-[#b0b0b0]">{consTotOver.bottom}</span> : null}
-                    <span className="text-[#808080] mx-2">|</span>
-                    Under: {consTotUnder.top}{" "}
-                    {consTotUnder.bottom ? <span className="text-[#b0b0b0]">{consTotUnder.bottom}</span> : null}
-                  </div>
-                </div>
-              </div>
+          {/* single market selector ONLY here */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                className={`px-3 py-1.5 text-xs font-extrabold ${
+                  lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"
+                }`}
+                onClick={(e) => {
+                  setLmMarket("ml");
+                  (e.currentTarget as HTMLButtonElement).blur();
+                }}
+              >
+                Moneyline
+              </button>
+              <div className="w-px bg-[#2a2a2a]" />
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                className={`px-3 py-1.5 text-xs font-extrabold ${
+                  lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"
+                }`}
+                onClick={(e) => {
+                  setLmMarket("spread");
+                  (e.currentTarget as HTMLButtonElement).blur();
+                }}
+              >
+                Spread
+              </button>
+              <div className="w-px bg-[#2a2a2a]" />
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                className={`px-3 py-1.5 text-xs font-extrabold ${
+                  lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"
+                }`}
+                onClick={(e) => {
+                  setLmMarket("total");
+                  (e.currentTarget as HTMLButtonElement).blur();
+                }}
+              >
+                Total
+              </button>
             </div>
 
-            {/* Win% meter */}
-            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
-              {/* ✅ MOBILE: small logos + names ABOVE bar */}
-              <div className="lg:hidden">
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {awayLogo ? (
-                      <img
-                        src={awayLogo}
-                        alt={`${awayTeam} logo`}
-                        className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                        loading="lazy"
-                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                      />
-                    ) : (
-                      <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="text-white font-extrabold text-[12px] truncate">{awayTeam}</div>
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">
-                        QML:{" "}
-                        <span className="font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
-                          {probToAmerican(awayP)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+            <div className="text-[11px] text-[#b0b0b0] font-semibold">
+              {lmMarket === "total" ? (
+                <>
+                  Left = <span className="text-white font-extrabold">Over</span>, Right ={" "}
+                  <span className="text-white font-extrabold">Under</span>
+                </>
+              ) : (
+                <>
+                  Left = <span className="text-white font-extrabold">Away</span>, Right ={" "}
+                  <span className="text-white font-extrabold">Home</span>
+                </>
+              )}
+            </div>
+          </div>
 
-                  <div className="flex items-center gap-2 justify-end min-w-0">
-                    <div className="min-w-0 text-right">
-                      <div className="text-white font-extrabold text-[12px] truncate">{homeTeam}</div>
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">
-                        QML:{" "}
-                        <span className="font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
-                          {probToAmerican(homeP)}
-                        </span>
-                      </div>
-                    </div>
-                    {homeLogo ? (
-                      <img
-                        src={homeLogo}
-                        alt={`${homeTeam} logo`}
-                        className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                        loading="lazy"
-                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                      />
-                    ) : (
-                      <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
-                    )}
+          {lmLoading ? (
+            <div className="text-sm text-[#b0b0b0] p-4">Loading odds history…</div>
+          ) : lmError ? (
+            <div className="text-sm text-red-400 p-4">No odds history available: {lmError}</div>
+          ) : (
+            <SideBySideLineCharts
+              leftTitle={lmMarket === "total" ? `Over • ${awayTeam}` : `Away • ${awayTeam}`}
+              rightTitle={lmMarket === "total" ? `Under • ${homeTeam}` : `Home • ${homeTeam}`}
+              leftPoints={lmAwayPoints}
+              rightPoints={lmHomePoints}
+              market={lmMarket}
+            />
+          )}
+        </div>
+      )}
+
+      {/* PREDICTIONS TAB */}
+      {tab === "pred" && (
+        <div className="pt-3">
+          {predLoading ? (
+            <div className="text-sm text-[#b0b0b0] p-4">Loading Monte Carlo predictions…</div>
+          ) : predError ? (
+            <div className="text-sm text-red-400 p-4">Supabase error: {predError}</div>
+          ) : !predRow ? (
+            <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
+          ) : (
+            <div className="space-y-3">
+              {/* ✅ Key Lines: remove Quantum ML block; keep consensus lines only */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-white font-extrabold text-[13px]">Key Lines</div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">Consensus lines in one place</div>
                   </div>
                 </div>
 
-                <WinSplitMeter
-                  awayP={awayP}
-                  homeP={homeP}
-                  awayLabel="Away"
-                  homeLabel="Home"
-                  awayColor={colors.awayHex}
-                  homeColor={colors.homeHex}
-                  scoreText={scoreText}
-                />
+                <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus ML</div>
+                    <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
+                      {awayTeam}: {consMlAway.top} • {homeTeam}: {consMlHome.top}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
+                    <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
+                      {awayTeam}: {consSprAway.top}{" "}
+                      {consSprAway.bottom ? <span className="text-[#b0b0b0]">{consSprAway.bottom}</span> : null}
+                      <span className="text-[#808080] mx-2">|</span>
+                      {homeTeam}: {consSprHome.top}{" "}
+                      {consSprHome.bottom ? <span className="text-[#b0b0b0]">{consSprHome.bottom}</span> : null}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Total</div>
+                    <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
+                      Over: {consTotOver.top}{" "}
+                      {consTotOver.bottom ? <span className="text-[#b0b0b0]">{consTotOver.bottom}</span> : null}
+                      <span className="text-[#808080] mx-2">|</span>
+                      Under: {consTotUnder.top}{" "}
+                      {consTotUnder.bottom ? <span className="text-[#b0b0b0]">{consTotUnder.bottom}</span> : null}
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {/* ✅ DESKTOP: unchanged */}
-              <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
-                <div className="flex items-center gap-3">
-                  {awayLogo ? (
-                    <img
-                      src={awayLogo}
-                      alt={`${awayTeam} logo`}
-                      className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                      loading="lazy"
-                      onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                    />
-                  ) : (
-                    <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                      Quantum ML:{" "}
-                      <span className="text-white font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
-                        {probToAmerican(awayP)}
-                      </span>
+              {/* Win% meter */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
+                {/* ✅ MOBILE: small logos + names ABOVE bar */}
+                <div className="lg:hidden">
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {awayLogo ? (
+                        <img
+                          src={awayLogo}
+                          alt={`${awayTeam} logo`}
+                          className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                          loading="lazy"
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-white font-extrabold text-[12px] truncate">{awayTeam}</div>
+                        <div className="text-[10px] text-[#b0b0b0] font-semibold">
+                          QML:{" "}
+                          <span className="font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
+                            {probToAmerican(awayP)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 justify-end min-w-0">
+                      <div className="min-w-0 text-right">
+                        <div className="text-white font-extrabold text-[12px] truncate">{homeTeam}</div>
+                        <div className="text-[10px] text-[#b0b0b0] font-semibold">
+                          QML:{" "}
+                          <span className="font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
+                            {probToAmerican(homeP)}
+                          </span>
+                        </div>
+                      </div>
+                      {homeLogo ? (
+                        <img
+                          src={homeLogo}
+                          alt={`${homeTeam} logo`}
+                          className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                          loading="lazy"
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
+                      )}
                     </div>
                   </div>
-                </div>
 
-                <div className="w-full">
                   <WinSplitMeter
                     awayP={awayP}
                     homeP={homeP}
@@ -2205,186 +2173,287 @@ function GameDetailsModal({
                   />
                 </div>
 
-                <div className="flex items-center gap-3 justify-start lg:justify-end">
-                  <div className="min-w-0 text-right">
-                    <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                      Quantum ML:{" "}
-                      <span className="text-white font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
-                        {probToAmerican(homeP)}
+                {/* ✅ DESKTOP: unchanged */}
+                <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
+                  <div className="flex items-center gap-3">
+                    {awayLogo ? (
+                      <img
+                        src={awayLogo}
+                        alt={`${awayTeam} logo`}
+                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        loading="lazy"
+                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
+                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                        Quantum ML:{" "}
+                        <span className="text-white font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
+                          {probToAmerican(awayP)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="w-full">
+                    <WinSplitMeter
+                      awayP={awayP}
+                      homeP={homeP}
+                      awayLabel="Away"
+                      homeLabel="Home"
+                      awayColor={colors.awayHex}
+                      homeColor={colors.homeHex}
+                      scoreText={scoreText}
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-3 justify-start lg:justify-end">
+                    <div className="min-w-0 text-right">
+                      <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
+                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                        Quantum ML:{" "}
+                        <span className="text-white font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
+                          {probToAmerican(homeP)}
+                        </span>
+                      </div>
+                    </div>
+                    {homeLogo ? (
+                      <img
+                        src={homeLogo}
+                        alt={`${homeTeam} logo`}
+                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        loading="lazy"
+                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ✅ Combined Spread + Total into one panel */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-white font-extrabold text-[13px]">Model Probabilities</div>
+                </div>
+
+                {/* SPREAD */}
+                <div className="mt-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-white font-extrabold text-[12px]">Spread</div>
+
+                    <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
+                      <span>
+                        Margin Line (H):{" "}
+                        <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                      </span>
+
+                      <span className="mx-3 h-4 w-px bg-white/80" />
+
+                      <span>
+                        Proj Margin (H):{" "}
+                        <span className="text-white font-extrabold tabular-nums">
+                          {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                        </span>
                       </span>
                     </div>
                   </div>
-                  {homeLogo ? (
-                    <img
-                      src={homeLogo}
-                      alt={`${homeTeam} logo`}
-                      className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                      loading="lazy"
-                      onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                    />
-                  ) : (
-                    <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
-                  )}
+
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeTeam}</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.home_cover_prob))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.cover_push_prob))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayTeam}</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.away_cover_prob))}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            {/* ✅ Combined Spread + Total into one panel */}
-            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-white font-extrabold text-[13px]">Model Probabilities</div>
-              </div>
+                <div className="my-4 h-px bg-white/10" />
 
-              {/* SPREAD */}
-              <div className="mt-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-white font-extrabold text-[12px]">Spread</div>
+                {/* TOTAL */}
+                <div>
+                  <div className="flex items-center justify-between">
+                    <div className="text-white font-extrabold text-[12px]">Total</div>
 
-                  <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
-                    <span>
-                      Margin Line (H):{" "}
-                      <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
-                    </span>
-
-                    <span className="mx-3 h-4 w-px bg-white/80" />
-
-                    <span>
-                      Proj Margin (H):{" "}
-                      <span className="text-white font-extrabold tabular-nums">
-                        {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                    <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
+                      <span>
+                        Total Line:{" "}
+                        <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
                       </span>
-                    </span>
-                  </div>
-                </div>
 
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                  <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                    <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeTeam}</div>
-                    <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.home_cover_prob))}</div>
-                  </div>
+                      <span className="mx-3 h-4 w-px bg-white/80" />
 
-                  <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                    <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
-                    <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.cover_push_prob))}</div>
-                  </div>
-
-                  <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                    <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayTeam}</div>
-                    <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.away_cover_prob))}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="my-4 h-px bg-white/10" />
-
-              {/* TOTAL */}
-              <div>
-                <div className="flex items-center justify-between">
-                  <div className="text-white font-extrabold text-[12px]">Total</div>
-
-                  <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
-                    <span>
-                      Total Line:{" "}
-                      <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
-                    </span>
-
-                    <span className="mx-3 h-4 w-px bg-white/80" />
-
-                    <span>
-                      Proj Total:{" "}
-                      <span className="text-white font-extrabold tabular-nums">
-                        {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                      <span>
+                        Proj Total:{" "}
+                        <span className="text-white font-extrabold tabular-nums">
+                          {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                        </span>
                       </span>
-                    </span>
-                  </div>
-                </div>
-
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                  <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                    <div className="text-[10px] text-[#b0b0b0] font-semibold">Over</div>
-                    <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.over_prob))}</div>
+                    </div>
                   </div>
 
-                  <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                    <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
-                    <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.total_push_prob))}</div>
-                  </div>
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Over</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.over_prob))}
+                      </div>
+                    </div>
 
-                  <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                    <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
-                    <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.total_push_prob))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {pct(toProb01(predRow.under_prob))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* Last 5 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Last5Panel title="Away" teamName={awayTeam} games={l5Away} loading={l5AwayLoading} error={l5AwayErr} />
-              <Last5Panel title="Home" teamName={homeTeam} games={l5Home} loading={l5HomeLoading} error={l5HomeErr} />
+              {/* Last 5 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Last5Panel title="Away" teamName={awayTeam} games={l5Away} loading={l5AwayLoading} error={l5AwayErr} />
+                <Last5Panel title="Home" teamName={homeTeam} games={l5Home} loading={l5HomeLoading} error={l5HomeErr} />
+              </div>
             </div>
-          </div>
-        )}
-      </div>
-    )}
-
-    {/* PLAYER PROPS TAB */}
-    {tab === "props" && (
-      <div className="pt-3">
-        {/* ✅ Sticky prop market buttons (tighter + fully opaque) */}
-        <div
-          ref={propBarRef}
-          className="sticky z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#1f1f1f]
-                     bg-[#0b0b0b] shadow-[0_12px_30px_rgba(0,0,0,0.55)]"
-          style={{ top: tabsBarH }}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-              {PROP_MARKETS.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`px-3 py-1.5 text-xs font-extrabold ${
-                    propMarket === m ? "bg-[#d4af37] text-black" : "text-white"
-                  }`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={(e) => {
-                    setPropMarket(m);
-                    (e.currentTarget as HTMLButtonElement).blur();
-                  }}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-
-            <div className="text-[11px] text-[#b0b0b0] font-semibold">Newest per (player, side, book)</div>
-          </div>
+          )}
         </div>
+      )}
 
-        {propsLoading ? (
-          <div className="text-sm text-[#b0b0b0] p-4">Loading props…</div>
-        ) : propsError ? (
-          <div className="text-sm text-red-400 p-4">Supabase error: {propsError}</div>
-        ) : !propsAgg.length ? (
-          <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
-        ) : (
-          <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
-            {/* ✅ ONE unified horizontal scroll container for BOTH header+body */}
-            <div className="overflow-x-auto">
-              {/* ✅ Sticky header slab (market+count + column headers + book headers) */}
-              <div
-                className="sticky z-40 bg-[#0b0b0b] border-b border-[#2a2a2a] shadow-[0_14px_34px_rgba(0,0,0,0.62)]"
-                style={{ top: Math.max(0, propsHeaderTop) }}
-              >
-                {/* market / count — tighter */}
-                <div className="px-4 py-2 flex items-center justify-between">
-                  <div className="text-white font-extrabold text-sm">{propMarket}</div>
-                  <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
+      {/* PLAYER PROPS TAB */}
+      {tab === "props" && (
+        <div className="pt-3">
+          {/* ✅ Sticky prop market buttons */}
+          <div
+            ref={propBarRef}
+            className="sticky z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#1f1f1f]
+                     bg-[#0b0b0b] shadow-[0_12px_30px_rgba(0,0,0,0.55)]"
+            style={{ top: tabsBarH }}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+                {PROP_MARKETS.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`px-3 py-1.5 text-xs font-extrabold ${
+                      propMarket === m ? "bg-[#d4af37] text-black" : "text-white"
+                    }`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      setPropMarket(m);
+                      (e.currentTarget as HTMLButtonElement).blur();
+                    }}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+
+              <div className="text-[11px] text-[#b0b0b0] font-semibold">Newest per (player, side, book)</div>
+            </div>
+          </div>
+
+          {propsLoading ? (
+            <div className="text-sm text-[#b0b0b0] p-4">Loading props…</div>
+          ) : propsError ? (
+            <div className="text-sm text-red-400 p-4">Supabase error: {propsError}</div>
+          ) : !propsAgg.length ? (
+            <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
+          ) : (
+            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
+              {/* ✅ ONE unified horizontal scroll container for BOTH header+body */}
+              <div className="overflow-x-auto">
+                {/* ✅ Sticky header slab */}
+                <div
+                  className="sticky z-40 bg-[#0b0b0b] border-b border-[#2a2a2a] shadow-[0_14px_34px_rgba(0,0,0,0.62)]"
+                  style={{ top: Math.max(0, propsHeaderTop) }}
+                >
+                  <div className="px-4 py-2 flex items-center justify-between">
+                    <div className="text-white font-extrabold text-sm">{propMarket}</div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
+                  </div>
+
+                  <table className="w-full table-fixed">
+                    <colgroup>
+                      <col style={{ width: 260 }} />
+                      <col style={{ width: 110 }} />
+                      <col style={{ width: 90 }} />
+                      <col />
+                      <col />
+                    </colgroup>
+
+                    <thead>
+                      <tr className="border-t border-[#232323] bg-[#0b0b0b]">
+                        <th className="text-left px-4 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
+                        <th className="text-left px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
+                        <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
+                        <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
+                        <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
+                      </tr>
+
+                      <tr className="border-t border-[#1a1a1a] bg-[#0b0b0b]">
+                        <th />
+                        <th />
+                        <th />
+                        <th className="px-3 pb-1">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div
+                                key={`ovh-${b}`}
+                                className="text-[10px] font-extrabold leading-none"
+                                style={{ color: BOOK_STROKES[b] }}
+                              >
+                                {b.toUpperCase()}
+                              </div>
+                            ))}
+                          </div>
+                        </th>
+                        <th className="px-3 pb-1">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div
+                                key={`unh-${b}`}
+                                className="text-[10px] font-extrabold leading-none"
+                                style={{ color: BOOK_STROKES[b] }}
+                              >
+                                {b.toUpperCase()}
+                              </div>
+                            ))}
+                          </div>
+                        </th>
+                      </tr>
+                    </thead>
+                  </table>
                 </div>
 
-                {/* Header table (NO overflow wrapper here) */}
+                {/* Body table */}
                 <table className="w-full table-fixed">
                   <colgroup>
                     <col style={{ width: 260 }} />
@@ -2394,121 +2463,68 @@ function GameDetailsModal({
                     <col />
                   </colgroup>
 
-                  <thead>
-                    <tr className="border-t border-[#232323] bg-[#0b0b0b]">
-                      <th className="text-left px-4 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
-                      <th className="text-left px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
-                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
-                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
-                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
-                    </tr>
+                  <tbody>
+                    {propsAgg.map((r) => (
+                      <tr key={r.player_name} className="border-b border-[#141414] hover:bg-white/5">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {r.picture_url ? (
+                              <img
+                                src={r.picture_url}
+                                alt={r.player_name}
+                                className="w-9 h-9 rounded-full object-cover border border-[#2a2a2a]"
+                                loading="lazy"
+                                onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                              />
+                            ) : (
+                              <div className="w-9 h-9 rounded-full bg-white/5 border border-[#2a2a2a]" />
+                            )}
 
-                    <tr className="border-t border-[#1a1a1a] bg-[#0b0b0b]">
-                      <th />
-                      <th />
-                      <th />
-                      <th className="px-3 pb-1">
-                        <div className="grid grid-cols-5 gap-2 justify-items-center">
-                          {BOOKS.map((b) => (
-                            <div
-                              key={`ovh-${b}`}
-                              className="text-[10px] font-extrabold leading-none"
-                              style={{ color: BOOK_STROKES[b] }}
-                            >
-                              {b.toUpperCase()}
+                            <div className="min-w-0">
+                              <div className="text-white font-extrabold text-[13px] truncate">{r.player_name}</div>
+                              <div className="text-[11px] text-[#b0b0b0] font-semibold">{r.position ?? "—"}</div>
                             </div>
-                          ))}
-                        </div>
-                      </th>
-                      <th className="px-3 pb-1">
-                        <div className="grid grid-cols-5 gap-2 justify-items-center">
-                          {BOOKS.map((b) => (
-                            <div
-                              key={`unh-${b}`}
-                              className="text-[10px] font-extrabold leading-none"
-                              style={{ color: BOOK_STROKES[b] }}
-                            >
-                              {b.toUpperCase()}
-                            </div>
-                          ))}
-                        </div>
-                      </th>
-                    </tr>
-                  </thead>
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-3 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
+
+                        <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
+                          {r.display_line == null ? "—" : r.display_line}
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                                {fmtLineOdds(r.over[b].line ?? r.display_line, r.over[b].odds)}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <div className="grid grid-cols-5 gap-2 justify-items-center">
+                            {BOOKS.map((b) => (
+                              <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                                {fmtLineOdds(r.under[b].line ?? r.display_line, r.under[b].odds)}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
-
-              {/* Body table (same colgroup, directly follows header; no second overflow-x) */}
-              <table className="w-full table-fixed">
-                <colgroup>
-                  <col style={{ width: 260 }} />
-                  <col style={{ width: 110 }} />
-                  <col style={{ width: 90 }} />
-                  <col />
-                  <col />
-                </colgroup>
-
-                <tbody>
-                  {propsAgg.map((r) => (
-                    <tr key={r.player_name} className="border-b border-[#141414] hover:bg-white/5">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          {r.picture_url ? (
-                            <img
-                              src={r.picture_url}
-                              alt={r.player_name}
-                              className="w-9 h-9 rounded-full object-cover border border-[#2a2a2a]"
-                              loading="lazy"
-                              onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
-                            />
-                          ) : (
-                            <div className="w-9 h-9 rounded-full bg-white/5 border border-[#2a2a2a]" />
-                          )}
-
-                          <div className="min-w-0">
-                            <div className="text-white font-extrabold text-[13px] truncate">{r.player_name}</div>
-                            <div className="text-[11px] text-[#b0b0b0] font-semibold">{r.position ?? "—"}</div>
-                          </div>
-                        </div>
-                      </td>
-
-                      <td className="px-3 py-3 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
-
-                      <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
-                        {r.display_line == null ? "—" : r.display_line}
-                      </td>
-
-                      <td className="px-3 py-3">
-                        <div className="grid grid-cols-5 gap-2 justify-items-center">
-                          {BOOKS.map((b) => (
-                            <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
-                              {fmtLineOdds(r.over[b].line ?? r.display_line, r.over[b].odds)}
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-
-                      <td className="px-3 py-3">
-                        <div className="grid grid-cols-5 gap-2 justify-items-center">
-                          {BOOKS.map((b) => (
-                            <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
-                              {fmtLineOdds(r.under[b].line ?? r.display_line, r.under[b].odds)}
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
-          </div>
-        )}
-      </div>
-    )}
-  </ModalShell>
-);
-}
+          )}
+        </div>
+      )}
+    </ModalShell>
+  );
+} // ✅ CRITICAL: closes GameDetailsModal (prevents “Unexpected export”)
+
 /* =========================================================
    SCREEN
 ========================================================= */
@@ -2592,7 +2608,10 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         .limit(1);
 
       if (!propsRes.error) {
-        const r = (propsRes.data?.[0] ?? null) as { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null } | null;
+        const r =
+          (propsRes.data?.[0] ?? null) as
+            | { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null }
+            | null;
         propsLatest = normalizeIso(r?.ts ?? r?.snapshot_ts ?? r?.inserted_at ?? null);
       }
     } catch {
@@ -2693,8 +2712,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       : sportKey === "baseball_mlb"
       ? "MLB Odds"
       : "Odds";
-
-  const marketLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
 
   const openDetails = (ev: EventOdds) => {
     setActiveEvent(ev);
@@ -2846,11 +2863,26 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <thead className="sticky top-0 z-20">
                           <tr className={`border-b ${HDR_BORDER}`}>
-                            <th className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}>
+                            <th
+                              className={[
+                                "text-left px-4 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "sticky left-0 z-30 text-[13px] font-extrabold",
+                              ].join(" ")}
+                            >
                               Matchup
                             </th>
 
-                            <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}>
+                            <th
+                              className={[
+                                "text-center px-3 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "z-20 text-[13px] font-extrabold border-l",
+                                HDR_BORDER,
+                              ].join(" ")}
+                            >
                               Consensus
                             </th>
 
@@ -2886,4 +2918,5 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
+
 
