@@ -1,23 +1,17 @@
-// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.4 Visual Continuity)
-// -------------------------------------------------------------------------------------------------
-// GOAL: Make Monte Carlo visually consistent with Overview/Odds/Model (same shell, rhythm, cards).
-//
-// ✅ Mobile: same core UX (cards + Details toggle + 2-team rows + collapsible details)
-// ✅ Desktop: no details box; metrics inline columns w/ headers (Proj Margin / Total / Cons Spread / Cons Total)
-// ✅ Uses team_map for (canonical, Abbreviation, "Logo URL")
-// ✅ Consensus derived from odds_snapshot (spreads/totals) for event_ids
-// ✅ Filters by sportKey using monte_carlo_runs.sport_key + monte_carlo_results.sport_key
-//
-// Visual upgrades:
-// ✅ Unified page header (icon + title + subtitle + chips)
-// ✅ Unified surface wrapper + consistent shadows/borders
-// ✅ Event cards match Odds/Overview vibe (top bar, spacing, typography)
-// ✅ Empty / loading states styled like the other pages
+// screens/MonteCarlo/MonteCarloScreen.tsx — FULL REWRITE (v4.4)
+// ✅ Mobile stays EXACTLY like v4.2 behavior (cards + collapsible details w/ abbr headers)
+// ✅ Desktop restyled to MATCH Picks page feel:
+//    - Picks-style "hero" section (badge + title + subtitle + stat pills)
+//    - Unified table-card layout (header row + clean separators) for better continuity
+// ✅ Desktop: NO details box; shows inline columns:
+//    Proj Score | Win% | Proj Margin | Proj Total | Cons Spread | Cons Total
+// ✅ Logos + abbreviations mapped robustly from team_map (canonical, Abbreviation, "Logo URL")
+// ✅ Consensus derived from odds_snapshot (spreads/totals) for displayed event_ids
+// ✅ Filters by selected sport (sportKey prop) using monte_carlo_runs.sport_key + monte_carlo_results.sport_key
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import type { SportKey } from "../../App";
-import { Sparkles, BarChart3 } from "lucide-react";
 
 /** ---------------- Types ---------------- */
 type MonteCarloRun = {
@@ -156,7 +150,7 @@ function formatTs(ts: string) {
 function formatStartStamp(ts: string) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+  return d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function formatAmerican(odds: number | null) {
@@ -215,20 +209,6 @@ function fmtOU(line: number | null, kind: "o" | "u") {
   return `${kind}${(Math.round(line * 10) / 10).toFixed(1)}`;
 }
 
-/** ---------------- Small UI helpers ---------------- */
-function Chip({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[#2a2a2a] bg-black/20">
-      <span className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a]">{label}</span>
-      <span className="text-[11px] font-extrabold text-white tabular-nums">{value}</span>
-    </div>
-  );
-}
-
-function SkeletonLine({ w }: { w: string }) {
-  return <div className={`h-3 rounded bg-white/5 border border-white/5 ${w}`} />;
-}
-
 /** ---------------- Logo component (robust fallback) ---------------- */
 function LogoBox({ team, url, size }: { team: string; url: string | null; size: number }) {
   const [ok, setOk] = React.useState(true);
@@ -237,7 +217,7 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
     return (
       <div
         style={{ width: size, height: size }}
-        className="rounded-md bg-white/10 border border-[#2a2a2a]"
+        className="rounded-md bg-white border border-[#e5e5e5]"
         aria-label={`${team} logo placeholder`}
       />
     );
@@ -248,7 +228,7 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
       src={url}
       alt={`${team} logo`}
       style={{ width: size, height: size }}
-      className="rounded-md object-contain bg-white border border-[#2a2a2a] p-1"
+      className="rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
       loading="lazy"
       referrerPolicy="no-referrer"
       onError={() => setOk(false)}
@@ -256,8 +236,36 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
   );
 }
 
+/** ---------------- Picks-style UI bits ---------------- */
+function BadgePill({ label }: { label: string }) {
+  return (
+    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#2a2a2a] bg-black/30">
+      <span className="inline-block w-2 h-2 rounded-full bg-[#d1a515]" />
+      <span className="text-[11px] font-extrabold text-[#d7d7d7]">{label}</span>
+    </div>
+  );
+}
+
+function StatPill({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#2a2a2a] bg-black/20">
+      <span className="text-[11px] font-semibold text-[#8a8a8a]">{label}</span>
+      <span className="text-[11px] font-extrabold text-white tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function RightPill({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#2a2a2a] bg-black/25">
+      <span className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a]">{label}</span>
+      <span className="text-[11px] font-extrabold text-white tabular-nums">{value}</span>
+    </div>
+  );
+}
+
 /** =========================================================
-    MOBILE (same UX, improved continuity styling)
+    MOBILE (UNCHANGED behavior)
 ========================================================= */
 
 function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
@@ -289,7 +297,7 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
       : `u${home.consTotalLine.toFixed(1)} (${formatAmerican(home.consTotalUnderOdds)})`;
 
   const headerRow = (
-    <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-white/5">
+    <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414]">
       <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide"> </div>
       <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
         {away.teamAbbr}
@@ -301,7 +309,7 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   );
 
   const row = (label: string, a: React.ReactNode, h: React.ReactNode) => (
-    <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-white/5 last:border-b-0">
+    <div className="grid grid-cols-3 gap-2 items-center py-2 border-b border-[#141414] last:border-b-0">
       <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
       <div className="text-[11px] text-white font-bold tabular-nums text-right">{a}</div>
       <div className="text-[11px] text-white font-bold tabular-nums text-right">{h}</div>
@@ -309,32 +317,30 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
   );
 
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-      <div className="px-4 py-2 border-b border-white/5 text-[11px] text-white font-extrabold">
-        Details
-      </div>
+    <div className="rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
+      <div className="px-4 py-2 border-b border-[#141414] text-[11px] text-white font-extrabold">Details</div>
       <div className="px-4">
         {headerRow}
         {row(
           "Proj Margin",
           <>
             {projMarginAway}{" "}
-            <span className="text-[#9a9a9a] font-semibold text-[10px]">({formatPct(away.coverProbTeam)})</span>
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(away.coverProbTeam)})</span>
           </>,
           <>
             {projMarginHome}{" "}
-            <span className="text-[#9a9a9a] font-semibold text-[10px]">({formatPct(home.coverProbTeam)})</span>
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(home.coverProbTeam)})</span>
           </>
         )}
         {row(
           "Proj Total",
           <>
             o{away.projTotal.toFixed(1)}{" "}
-            <span className="text-[#9a9a9a] font-semibold text-[10px]">({formatPct(away.overProb)})</span>
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(away.overProb)})</span>
           </>,
           <>
             u{home.projTotal.toFixed(1)}{" "}
-            <span className="text-[#9a9a9a] font-semibold text-[10px]">({formatPct(home.underProb)})</span>
+            <span className="text-[#808080] font-semibold text-[10px]">({formatPct(home.underProb)})</span>
           </>
         )}
         {row("Cons Spread", consSpreadAway, consSpreadHome)}
@@ -345,159 +351,158 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /** =========================================================
-    DESKTOP (continuity: top bar + column headers)
+    DESKTOP (Picks-style table card)
 ========================================================= */
 
 const DESK_COLS = {
-  score: 72,
-  win: 72,
-  pm: 112,
-  pt: 120,
-  cs: 130,
-  ct: 130,
+  score: 92,
+  win: 76,
+  pm: 150,
+  pt: 150,
+  cs: 150,
+  ct: 150,
 };
 
-function DesktopHeaderRow() {
-  const hdr = "text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a]";
+function DesktopTableHeader() {
+  const hdr = "text-[10px] font-extrabold uppercase tracking-wide text-[#6f6f6f]";
   return (
-    <div className="ml-auto flex items-end gap-4 tabular-nums shrink-0">
-      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.score }}>
-        Proj Score
-      </div>
-      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.win }}>
-        Win%
-      </div>
-      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pm }}>
-        Proj Margin
-      </div>
-      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.pt }}>
-        Proj Total
-      </div>
-      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.cs }}>
-        Cons Spread
-      </div>
-      <div className={[hdr, "text-right"].join(" ")} style={{ width: DESK_COLS.ct }}>
-        Cons Total
-      </div>
+    <div className="grid items-end gap-3" style={{ gridTemplateColumns: `1fr ${DESK_COLS.score}px ${DESK_COLS.win}px ${DESK_COLS.pm}px ${DESK_COLS.pt}px ${DESK_COLS.cs}px ${DESK_COLS.ct}px` }}>
+      <div className={hdr}>Matchup</div>
+      <div className={[hdr, "text-right"].join(" ")}>Proj Score</div>
+      <div className={[hdr, "text-right"].join(" ")}>Win%</div>
+      <div className={[hdr, "text-right"].join(" ")}>Proj Margin</div>
+      <div className={[hdr, "text-right"].join(" ")}>Proj Total</div>
+      <div className={[hdr, "text-right"].join(" ")}>Cons Spread</div>
+      <div className={[hdr, "text-right"].join(" ")}>Cons Total</div>
     </div>
   );
 }
 
-function DesktopTeamRow({ row, variant }: { row: TeamRow; variant: "AWAY" | "HOME" }) {
+function DesktopTeamLine({
+  row,
+  isTopRow,
+  showMatchup,
+}: {
+  row: TeamRow;
+  isTopRow: boolean;
+  showMatchup: boolean;
+}) {
+  const isAway = row.side === "AWAY";
+
   const projMarginCell = (
-    <>
+    <div className="text-right font-bold text-[12px] text-white tabular-nums">
       {fmtSigned1(row.projMarginTeam)}{" "}
-      <span className="text-[#9a9a9a] font-semibold text-[11px]">({formatPct(row.coverProbTeam)})</span>
-    </>
+      <span className="text-[#808080] font-semibold text-[11px]">({formatPct(row.coverProbTeam)})</span>
+    </div>
   );
 
-  const projTotalCell =
-    variant === "AWAY" ? (
-      <>
-        {fmtOU(row.projTotal, "o")}{" "}
-        <span className="text-[#9a9a9a] font-semibold text-[11px]">({formatPct(row.overProb)})</span>
-      </>
-    ) : (
-      <>
-        {fmtOU(row.projTotal, "u")}{" "}
-        <span className="text-[#9a9a9a] font-semibold text-[11px]">({formatPct(row.underProb)})</span>
-      </>
-    );
+  const projTotalCell = (
+    <div className="text-right font-bold text-[12px] text-white tabular-nums">
+      {isAway ? fmtOU(row.projTotal, "o") : fmtOU(row.projTotal, "u")}{" "}
+      <span className="text-[#808080] font-semibold text-[11px]">
+        ({formatPct(isAway ? row.overProb : row.underProb)})
+      </span>
+    </div>
+  );
 
-  const consSpreadCell =
-    row.consSpreadLineTeam == null ? (
-      "—"
-    ) : (
-      <>
-        {fmtSigned1(row.consSpreadLineTeam)}{" "}
-        <span className="text-[#9a9a9a] font-semibold text-[11px]">({formatAmerican(row.consSpreadOddsTeam)})</span>
-      </>
-    );
+  const consSpreadCell = (
+    <div className="text-right font-bold text-[12px] text-white tabular-nums">
+      {row.consSpreadLineTeam == null ? (
+        "—"
+      ) : (
+        <>
+          {fmtSigned1(row.consSpreadLineTeam)}{" "}
+          <span className="text-[#808080] font-semibold text-[11px]">({formatAmerican(row.consSpreadOddsTeam)})</span>
+        </>
+      )}
+    </div>
+  );
 
-  const consTotalCell =
-    row.consTotalLine == null ? (
-      "—"
-    ) : (
-      <>
-        {variant === "AWAY" ? "o" : "u"}
-        {row.consTotalLine.toFixed(1)}{" "}
-        <span className="text-[#9a9a9a] font-semibold text-[11px]">
-          ({formatAmerican(variant === "AWAY" ? row.consTotalOverOdds : row.consTotalUnderOdds)})
-        </span>
-      </>
-    );
+  const consTotalCell = (
+    <div className="text-right font-bold text-[12px] text-white tabular-nums">
+      {row.consTotalLine == null ? (
+        "—"
+      ) : (
+        <>
+          {isAway ? "o" : "u"}
+          {row.consTotalLine.toFixed(1)}{" "}
+          <span className="text-[#808080] font-semibold text-[11px]">
+            ({formatAmerican(isAway ? row.consTotalOverOdds : row.consTotalUnderOdds)})
+          </span>
+        </>
+      )}
+    </div>
+  );
 
-  return (
-    <div className="flex items-center gap-4 min-w-0">
-      <LogoBox team={row.teamName} url={row.logoUrl} size={42} />
-
+  const matchupCell = (
+    <div className="min-w-0 flex items-center gap-3">
+      <LogoBox team={row.teamName} url={row.logoUrl} size={44} />
       <div className="min-w-0 leading-tight">
         <div className="text-[13px] text-white font-extrabold truncate" title={row.teamName}>
           {row.teamName}
         </div>
         <div className="text-[10px] text-[#7a7a7a] font-semibold">
-          {variant} · {row.teamAbbr}
-        </div>
-      </div>
-
-      <div className="ml-auto flex items-baseline gap-4 tabular-nums shrink-0">
-        <div
-          className={[
-            "text-right font-extrabold text-[16px]",
-            row.isProjectedWinner ? "text-green-400" : "text-white",
-          ].join(" ")}
-          style={{ width: DESK_COLS.score }}
-        >
-          {row.projPoints.toFixed(1)}
-        </div>
-
-        <div className="text-right font-bold text-[12px] text-[#bdbdbd]" style={{ width: DESK_COLS.win }}>
-          {formatPct(row.winProbTeam)}
-        </div>
-
-        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.pm }}>
-          {projMarginCell}
-        </div>
-
-        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.pt }}>
-          {projTotalCell}
-        </div>
-
-        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.cs }}>
-          {consSpreadCell}
-        </div>
-
-        <div className="text-right font-bold text-[12px] text-white" style={{ width: DESK_COLS.ct }}>
-          {consTotalCell}
+          {row.side} · {row.teamAbbr}
         </div>
       </div>
     </div>
   );
-}
 
-function DesktopEventBlock({ ev }: { ev: EventBundle }) {
-  const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
+  const scoreCell = (
+    <div
+      className={[
+        "text-right font-extrabold text-[16px] tabular-nums",
+        row.isProjectedWinner ? "text-green-400" : "text-white",
+      ].join(" ")}
+    >
+      {row.projPoints.toFixed(1)}
+    </div>
+  );
+
+  const winCell = (
+    <div className="text-right font-bold text-[12px] text-[#bdbdbd] tabular-nums">{formatPct(row.winProbTeam)}</div>
+  );
 
   return (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_18px_70px_rgba(0,0,0,0.38)]">
-      <div className="px-5 py-4 border-b border-white/5 bg-black/20">
-        <div className="flex items-end justify-between gap-6">
+    <div
+      className={[
+        "grid items-center gap-3",
+        isTopRow ? "pt-3" : "pb-3",
+        !isTopRow ? "border-t border-[#1f1f1f]" : "",
+      ].join(" ")}
+      style={{
+        gridTemplateColumns: `1fr ${DESK_COLS.score}px ${DESK_COLS.win}px ${DESK_COLS.pm}px ${DESK_COLS.pt}px ${DESK_COLS.cs}px ${DESK_COLS.ct}px`,
+      }}
+    >
+      <div className="min-w-0">
+        {showMatchup ? (
           <div className="min-w-0">
-            <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a]">
-              Matchup
-            </div>
-            <div className="text-[12px] text-[#cfcfcf] font-extrabold truncate">{timeLabel}</div>
+            {matchupCell}
           </div>
-
-          <DesktopHeaderRow />
-        </div>
+        ) : (
+          // keep alignment (blank matchup on 2nd row is fine, but we still show team block)
+          matchupCell
+        )}
       </div>
+      {scoreCell}
+      {winCell}
+      {projMarginCell}
+      {projTotalCell}
+      {consSpreadCell}
+      {consTotalCell}
+    </div>
+  );
+}
 
-      <div className="px-5 py-4 space-y-3">
-        <DesktopTeamRow row={ev.away} variant="AWAY" />
-        <div className="h-px bg-white/5" />
-        <DesktopTeamRow row={ev.home} variant="HOME" />
+function DesktopEventGroup({ ev, showDivider }: { ev: EventBundle; showDivider: boolean }) {
+  const timeLabel = ev.away.commenceTime ? formatStartStamp(ev.away.commenceTime) : "TBD";
+  return (
+    <div className={["px-5", showDivider ? "border-t border-[#2a2a2a]" : ""].join(" ")}>
+      <div className="py-3">
+        <div className="text-[11px] text-[#9a9a9a] font-extrabold truncate">{timeLabel}</div>
       </div>
+      <DesktopTeamLine row={ev.away} isTopRow={true} showMatchup={true} />
+      <DesktopTeamLine row={ev.home} isTopRow={false} showMatchup={false} />
     </div>
   );
 }
@@ -676,8 +681,6 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
       }
 
       const rows = (data ?? []) as OddsSnapshotRow[];
-
-      // one per (event,market,book,side) preferring newest ts (rows are ts DESC)
       const seen = new Set<string>();
 
       const spreadHomeLines: Map<string, number[]> = new Map();
@@ -714,14 +717,16 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
           if (side === "home") {
             if (line != null) pushMap(spreadHomeLines, eventId, line);
             if (odds != null) pushMap(spreadHomeOdds, eventId, odds);
-          } else if (side === "away") {
+          }
+          if (side === "away") {
             if (odds != null) pushMap(spreadAwayOdds, eventId, odds);
           }
         } else if (market === "totals") {
           if (side === "over") {
             if (line != null) pushMap(totalLines, eventId, line);
             if (odds != null) pushMap(totalOverOdds, eventId, odds);
-          } else if (side === "under") {
+          }
+          if (side === "under") {
             if (odds != null) pushMap(totalUnderOdds, eventId, odds);
           }
         }
@@ -877,93 +882,76 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
 
   const loading = loadingRun || loadingResults;
 
-  const consensusTs = useMemo(() => {
-    const ts = events
-      .map((e) => consensusMap.get(e.eventId)?.ts ?? null)
-      .filter(Boolean) as string[];
-    if (!ts.length) return null;
-    // show the newest timestamp among displayed events
-    const newest = ts.reduce((a, b) => (new Date(a).getTime() > new Date(b).getTime() ? a : b));
-    return newest;
+  const consensusStamp = useMemo(() => {
+    // show a single “best” consensus ts for the header (latest among event consensus stamps)
+    const stamps: number[] = [];
+    for (const ev of events) {
+      const c = consensusMap.get(ev.eventId);
+      if (c?.ts) {
+        const t = new Date(c.ts).getTime();
+        if (Number.isFinite(t)) stamps.push(t);
+      }
+    }
+    if (!stamps.length) return null;
+    const max = Math.max(...stamps);
+    return new Date(max).toLocaleString();
   }, [events, consensusMap]);
 
   return (
     <div className="w-full">
       <div className="max-w-[1320px] mx-auto px-4 md:px-8">
-        {/* HERO (match other pages) */}
-        <div className="pt-5 md:pt-7">
-          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl border border-[#2a2a2a] bg-black/30 flex items-center justify-center">
-                  <BarChart3 size={18} className="text-white/90" />
-                </div>
+        {/* Picks-style hero card */}
+        <div className="pt-4 md:pt-6">
+          <div className="rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]">
+            <div className="px-5 md:px-6 py-5 md:py-6 bg-gradient-to-r from-black/30 via-transparent to-black/10">
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                 <div className="min-w-0">
-                  <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight truncate">
-                    Monte Carlo
-                  </h2>
-                  <div className="text-xs text-[#8a8a8a] mt-1 flex flex-wrap items-center gap-2">
-                    <span>
-                      Sport: <span className="text-white font-extrabold">{sportKey}</span>
-                    </span>
-                    {run?.created_at ? (
-                      <span className="text-[#5a5a5a]">· Latest run: {formatTs(run.created_at)}</span>
-                    ) : null}
-                    {loadingConsensus ? <span className="text-[#5a5a5a]">· Loading consensus…</span> : null}
+                  <BadgePill label="Prism Model Projections" />
+                  <div className="mt-3">
+                    <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
+                      Monte Carlo
+                    </h2>
+                    <div className="text-[12px] text-[#8a8a8a] mt-1">
+                      Projections + cover/OU probabilities, with consensus medians across books.
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <StatPill label="Sport" value={<span className="uppercase">{sportKey}</span>} />
+                    <StatPill label="Games" value={events.length} />
+                    <StatPill
+                      label="Latest Run"
+                      value={run?.created_at ? formatTs(run.created_at) : "—"}
+                    />
+                    <StatPill label="Consensus" value={consensusStamp ?? "—"} />
                   </div>
                 </div>
+
+                {/* Right-side pills (match Picks controls vibe) */}
+                <div className="flex md:flex-col items-start md:items-end gap-2 md:gap-2">
+                  <RightPill label="Games" value={events.length} />
+                  <RightPill label="Consensus" value={consensusStamp ?? "—"} />
+                  {loadingConsensus ? <RightPill label="Status" value="Loading…" /> : null}
+                </div>
               </div>
 
-              {/* subtle “quality” hint like other pages */}
-              <div className="mt-3 flex items-center gap-2 text-[11px] text-[#9a9a9a]">
-                <Sparkles size={14} className="text-white/50" />
-                <span className="font-semibold">
-                  Projections + cover/OU probabilities, with consensus medians across books.
-                </span>
-              </div>
-            </div>
-
-            {/* chips like Overview/Model */}
-            <div className="flex flex-wrap md:justify-end gap-2">
-              <Chip label="Games" value={loading ? "—" : events.length} />
-              <Chip
-                label="Consensus"
-                value={consensusTs ? formatTs(consensusTs) : loadingConsensus ? "Loading…" : "—"}
-              />
+              {error ? (
+                <div className="mt-4 bg-black/30 border border-[#3a2a2a] rounded-xl p-4 text-xs text-red-300">
+                  Supabase error: {error}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
 
-        {error ? (
-          <div className="mt-5 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-200">
-            Supabase error: {error}
-          </div>
-        ) : null}
-
-        {/* SURFACE WRAPPER (matches other pages) */}
-        <div className="mt-6 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_18px_70px_rgba(0,0,0,0.42)]">
-          {/* Mobile */}
+        {/* Main content card (table/list) */}
+        <div className="mt-5 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]">
+          {/* MOBILE (UNCHANGED behavior) */}
           <div className="md:hidden">
             {loading ? (
-              <div className="p-4">
-                <div className="text-xs text-[#808080] mb-3">Loading Monte Carlo results…</div>
-                <div className="space-y-3">
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3 space-y-3">
-                    <SkeletonLine w="w-32" />
-                    <SkeletonLine w="w-full" />
-                    <SkeletonLine w="w-5/6" />
-                  </div>
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3 space-y-3">
-                    <SkeletonLine w="w-28" />
-                    <SkeletonLine w="w-full" />
-                    <SkeletonLine w="w-4/6" />
-                  </div>
-                </div>
-              </div>
+              <div className="p-4 text-xs text-[#808080]">Loading Monte Carlo results…</div>
             ) : !events.length ? (
-              <div className="p-5 text-sm text-[#808080]">
-                No Monte Carlo rows found for the latest run.
-              </div>
+              <div className="p-4 text-xs text-[#808080]">No Monte Carlo rows found for latest run.</div>
             ) : (
               <div className="p-3 space-y-3">
                 {events.map((ev) => {
@@ -971,18 +959,15 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                   const open = !!openMap[ev.eventId];
 
                   return (
-                    <div
-                      key={ev.eventId}
-                      className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden"
-                    >
-                      <div className="px-3 py-2.5 border-b border-white/5 bg-black/30 flex items-center justify-between">
+                    <div key={ev.eventId} className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden">
+                      <div className="px-3 py-2 border-b border-[#2a2a2a] bg-black/20 flex items-center justify-between">
                         <div className="text-[10px] font-extrabold uppercase tracking-wide text-[#8a8a8a] truncate">
                           {timeLabel}
                         </div>
                         <button
                           type="button"
                           onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                          className="text-[10px] font-extrabold text-white/90 hover:text-white px-2.5 py-[6px] rounded-lg border border-[#2a2a2a] hover:border-[#3a3a3a] bg-black/20"
+                          className="text-[10px] font-extrabold text-white/90 hover:text-white px-2 py-[5px] rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
                         >
                           {open ? "Hide" : "Details"}
                         </button>
@@ -993,7 +978,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                         <div className="flex items-center gap-3 min-w-0">
                           <LogoBox team={ev.away.teamName} url={ev.away.logoUrl} size={34} />
                           <div className="min-w-0 leading-tight">
-                            <div className="text-[12px] text-white font-extrabold truncate" title={ev.away.teamName}>
+                            <div className="text-[11px] text-white font-extrabold truncate" title={ev.away.teamName}>
                               {ev.away.teamName}
                             </div>
                             <div className="text-[9px] text-[#7a7a7a] font-semibold">
@@ -1003,7 +988,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                           <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
                             <div
                               className={[
-                                "font-extrabold text-[14px]",
+                                "font-extrabold text-[13px]",
                                 ev.away.isProjectedWinner ? "text-green-400" : "text-white",
                               ].join(" ")}
                             >
@@ -1017,7 +1002,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                         <div className="flex items-center gap-3 min-w-0">
                           <LogoBox team={ev.home.teamName} url={ev.home.logoUrl} size={34} />
                           <div className="min-w-0 leading-tight">
-                            <div className="text-[12px] text-white font-extrabold truncate" title={ev.home.teamName}>
+                            <div className="text-[11px] text-white font-extrabold truncate" title={ev.home.teamName}>
                               {ev.home.teamName}
                             </div>
                             <div className="text-[9px] text-[#7a7a7a] font-semibold">
@@ -1027,7 +1012,7 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
                           <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
                             <div
                               className={[
-                                "font-extrabold text-[14px]",
+                                "font-extrabold text-[13px]",
                                 ev.home.isProjectedWinner ? "text-green-400" : "text-white",
                               ].join(" ")}
                             >
@@ -1046,40 +1031,30 @@ export function MonteCarloScreen({ sportKey }: { sportKey: SportKey }) {
             )}
           </div>
 
-          {/* Desktop */}
+          {/* DESKTOP (Picks-style table card) */}
           <div className="hidden md:block">
             {loading ? (
-              <div className="p-8">
-                <div className="text-sm text-[#808080] mb-4">Loading Monte Carlo results…</div>
-                <div className="space-y-5">
-                  <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-                    <div className="px-5 py-4 border-b border-white/5 bg-black/30">
-                      <SkeletonLine w="w-40" />
-                    </div>
-                    <div className="p-5 space-y-4">
-                      <SkeletonLine w="w-full" />
-                      <SkeletonLine w="w-5/6" />
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-                    <div className="px-5 py-4 border-b border-white/5 bg-black/30">
-                      <SkeletonLine w="w-40" />
-                    </div>
-                    <div className="p-5 space-y-4">
-                      <SkeletonLine w="w-full" />
-                      <SkeletonLine w="w-4/6" />
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <div className="p-8 text-sm text-[#808080]">Loading Monte Carlo results…</div>
             ) : !events.length ? (
-              <div className="p-8 text-sm text-[#808080]">No Monte Carlo rows found for the latest run.</div>
+              <div className="p-8 text-sm text-[#808080]">No Monte Carlo rows found for latest run.</div>
             ) : (
               <div className="p-6">
-                <div className="space-y-5">
-                  {events.map((ev) => (
-                    <DesktopEventBlock key={ev.eventId} ev={ev} />
-                  ))}
+                {/* Table header strip */}
+                <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+                  <div className="px-5 py-3 border-b border-[#2a2a2a] bg-black/25">
+                    <DesktopTableHeader />
+                  </div>
+
+                  <div className="divide-y divide-[#1b1b1b]">
+                    {events.map((ev, idx) => (
+                      <DesktopEventGroup key={ev.eventId} ev={ev} showDivider={idx !== 0} />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-3 text-[11px] text-[#6f6f6f]">
+                  Tip: Proj Total shows <span className="text-[#bdbdbd] font-semibold">Over</span> probability on the Away row and{" "}
+                  <span className="text-[#bdbdbd] font-semibold">Under</span> probability on the Home row — matching the Picks-style single-line density.
                 </div>
               </div>
             )}
