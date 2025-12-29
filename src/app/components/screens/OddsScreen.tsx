@@ -2703,8 +2703,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/30 px-3 py-1.5">
                   <div className="text-[10px] font-bold text-[#808080]">Games</div>
                   <div className="text-[11px] font-extrabold text-white tabular-nums">{events.length}</div>
-                  <div className="text-[10px] font-semibold text-[#808080] ml-2">•</div>
-                  <div className="text-[10px] font-semibold text-[#b0b0b0]">{marketLabel}</div>
                 </div>
 
                 <div className="md:hidden w-full" />
