@@ -1,7 +1,8 @@
 // screens/OddsScreen.tsx — FULL REWRITE (ONLY requested updates applied)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Player Props modal: headers (Points / “14 players” / Player Team Line Over Under) are STICKY while scrolling
-//    - FIX: no “blank gap” / jump by keeping sticky header OUTSIDE overflow-x container + syncing horizontal scroll
+//    - FIX: no “blank gap” / jump by giving the props table its OWN vertical scroll container
+//      and using a real sticky <thead> (no offset-math / no cloned header / no horizontal-sync transforms)
 // ✅ Predictions “Key Lines”: remove Quantum ML block (consensus only; quantum ML already shown by team logos)
 // ✅ Mobile Predictions: smaller logos + team names in a compact row ABOVE the win% bar (both teams above the bar)
 // ✅ Everything else unchanged from your provided script
@@ -1611,58 +1612,23 @@ function GameDetailsModal({
   )} CT`;
 
   /* =========================================================
-     ✅ Sticky stacking (no “gap” where body shows between headers)
+     ✅ Sticky stacking support for prop market bar
   ========================================================= */
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const propBarRef = useRef<HTMLDivElement | null>(null);
   const [tabsBarH, setTabsBarH] = useState(0);
-  const [propsHeaderTop, setPropsHeaderTop] = useState(0);
 
   useLayoutEffect(() => {
-    if (tab !== "props") return;
-
     const measure = () => {
       const tabsH = tabsBarRef.current?.getBoundingClientRect().height ?? 0;
-      const propH = propBarRef.current?.getBoundingClientRect().height ?? 0;
-
       setTabsBarH(Math.ceil(tabsH));
-      // +1px safety buffer
-      setPropsHeaderTop(Math.ceil(tabsH + propH + 1));
     };
 
     measure();
     const ro = new ResizeObserver(measure);
     if (tabsBarRef.current) ro.observe(tabsBarRef.current);
-    if (propBarRef.current) ro.observe(propBarRef.current);
-
     return () => ro.disconnect();
-  }, [tab]);
-
-  /* =========================================================
-     ✅ Props sticky header FIX:
-     - sticky header must NOT be inside overflow-x container
-     - sync horizontal scroll (scrollLeft) from body -> header inner wrapper
-  ========================================================= */
-  const propsScrollRef = useRef<HTMLDivElement | null>(null);
-  const propsHeaderInnerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (tab !== "props") return;
-
-    const el = propsScrollRef.current;
-    if (!el) return;
-
-    const sync = () => {
-      const x = el.scrollLeft || 0;
-      if (propsHeaderInnerRef.current) {
-        propsHeaderInnerRef.current.style.transform = `translateX(${-x}px)`;
-      }
-    };
-
-    sync();
-    el.addEventListener("scroll", sync, { passive: true });
-    return () => el.removeEventListener("scroll", sync);
-  }, [tab]);
+  }, []);
 
   /* -------------------------
      Line movement fetch
@@ -2379,7 +2345,7 @@ function GameDetailsModal({
           {/* ✅ Sticky prop market buttons */}
           <div
             ref={propBarRef}
-            className="sticky z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#1f1f1f]
+            className="sticky z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#1f1f1f]
                      bg-[#0b0b0b] shadow-[0_12px_30px_rgba(0,0,0,0.55)]"
             style={{ top: tabsBarH }}
           >
@@ -2415,73 +2381,14 @@ function GameDetailsModal({
             <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
           ) : (
             <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
-              {/* ✅ Sticky header (NOT inside overflow-x) */}
+              {/* ✅ Props table owns vertical scroll so sticky header never “floats” with gaps */}
               <div
-                className="sticky z-40 bg-[#0b0b0b] border-b border-[#2a2a2a] shadow-[0_14px_34px_rgba(0,0,0,0.62)]"
-                style={{ top: Math.max(0, propsHeaderTop) }}
+                className="overflow-auto"
+                style={{
+                  // keep the table usable inside the modal without fighting the modal scroller
+                  maxHeight: "calc(92vh - 240px)",
+                }}
               >
-                <div ref={propsHeaderInnerRef} className="will-change-transform">
-                  <div className="px-4 py-2 flex items-center justify-between min-w-[1100px]">
-                    <div className="text-white font-extrabold text-sm">{propMarket}</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
-                  </div>
-
-                  <table className="table-fixed min-w-[1100px] w-[1100px]">
-                    <colgroup>
-                      <col style={{ width: 260 }} />
-                      <col style={{ width: 110 }} />
-                      <col style={{ width: 90 }} />
-                      <col style={{ width: 320 }} />
-                      <col style={{ width: 320 }} />
-                    </colgroup>
-
-                    <thead>
-                      <tr className="border-t border-[#232323] bg-[#0b0b0b]">
-                        <th className="text-left px-4 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
-                        <th className="text-left px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
-                        <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
-                        <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
-                        <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
-                      </tr>
-
-                      <tr className="border-t border-[#1a1a1a] bg-[#0b0b0b]">
-                        <th />
-                        <th />
-                        <th />
-                        <th className="px-3 pb-1">
-                          <div className="grid grid-cols-5 gap-2 justify-items-center">
-                            {BOOKS.map((b) => (
-                              <div
-                                key={`ovh-${b}`}
-                                className="text-[10px] font-extrabold leading-none"
-                                style={{ color: BOOK_STROKES[b] }}
-                              >
-                                {b.toUpperCase()}
-                              </div>
-                            ))}
-                          </div>
-                        </th>
-                        <th className="px-3 pb-1">
-                          <div className="grid grid-cols-5 gap-2 justify-items-center">
-                            {BOOKS.map((b) => (
-                              <div
-                                key={`unh-${b}`}
-                                className="text-[10px] font-extrabold leading-none"
-                                style={{ color: BOOK_STROKES[b] }}
-                              >
-                                {b.toUpperCase()}
-                              </div>
-                            ))}
-                          </div>
-                        </th>
-                      </tr>
-                    </thead>
-                  </table>
-                </div>
-              </div>
-
-              {/* ✅ Body scroll container */}
-              <div ref={propsScrollRef} className="overflow-x-auto">
                 <table className="table-fixed min-w-[1100px] w-[1100px]">
                   <colgroup>
                     <col style={{ width: 260 }} />
@@ -2490,6 +2397,58 @@ function GameDetailsModal({
                     <col style={{ width: 320 }} />
                     <col style={{ width: 320 }} />
                   </colgroup>
+
+                  {/* ✅ True sticky header (Points / players / Player Team Line Over Under) */}
+                  <thead className="sticky top-0 z-30 bg-[#0b0b0b]">
+                    <tr className="border-b border-[#2a2a2a]">
+                      <th colSpan={5} className="px-4 py-2">
+                        <div className="flex items-center justify-between min-w-[1100px]">
+                          <div className="text-white font-extrabold text-sm">{propMarket}</div>
+                          <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
+                        </div>
+                      </th>
+                    </tr>
+
+                    <tr className="border-b border-[#2a2a2a]">
+                      <th className="text-left px-4 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
+                      <th className="text-left px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
+                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
+                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
+                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
+                    </tr>
+
+                    <tr className="border-b border-[#1a1a1a]">
+                      <th />
+                      <th />
+                      <th />
+                      <th className="px-3 pb-2">
+                        <div className="grid grid-cols-5 gap-2 justify-items-center">
+                          {BOOKS.map((b) => (
+                            <div
+                              key={`ovh-${b}`}
+                              className="text-[10px] font-extrabold leading-none"
+                              style={{ color: BOOK_STROKES[b] }}
+                            >
+                              {b.toUpperCase()}
+                            </div>
+                          ))}
+                        </div>
+                      </th>
+                      <th className="px-3 pb-2">
+                        <div className="grid grid-cols-5 gap-2 justify-items-center">
+                          {BOOKS.map((b) => (
+                            <div
+                              key={`unh-${b}`}
+                              className="text-[10px] font-extrabold leading-none"
+                              style={{ color: BOOK_STROKES[b] }}
+                            >
+                              {b.toUpperCase()}
+                            </div>
+                          ))}
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
 
                   <tbody>
                     {propsAgg.map((r) => (
@@ -2524,7 +2483,10 @@ function GameDetailsModal({
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                              <div
+                                key={`ov-${r.player_name}-${b}`}
+                                className="text-[12px] text-white font-extrabold tabular-nums"
+                              >
                                 {fmtLineOdds(r.over[b].line ?? r.display_line, r.over[b].odds)}
                               </div>
                             ))}
@@ -2534,7 +2496,10 @@ function GameDetailsModal({
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                              <div
+                                key={`un-${r.player_name}-${b}`}
+                                className="text-[12px] text-white font-extrabold tabular-nums"
+                              >
                                 {fmtLineOdds(r.under[b].line ?? r.display_line, r.under[b].odds)}
                               </div>
                             ))}
