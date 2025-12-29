@@ -1,13 +1,13 @@
-// components/Header.tsx — FULL REWRITE (Subtle Prism spectrum + black-forward, logo click -> Overview)
+// components/Header.tsx — FULL REWRITE (Mobile spectrum visibility fix)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Color update: spectrum is MUCH more subtle + black remains dominant (no loud rainbow wash)
-// ✅ Keeps GOLD as the underline/accent
-// ✅ Clicking the logo returns to Overview (onNavigate?.("overview"))
-// ✅ Everything else kept the same behavior
+// ✅ Fix: Mobile header now shows the full prism spectrum (previously too subtle / clipped on small widths)
+// ✅ Still black-forward + subtle (no loud rainbow), but colors are visible on mobile
+// ✅ Clicking the logo returns to Overview
+// ✅ Full-width tagline accent line kept
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
-import type { SportKey } from "../App"; // <-- adjust if your path differs (e.g. "../../App")
+import type { SportKey } from "../App";
 
 type Screen =
   | "overview"
@@ -24,7 +24,6 @@ type HeaderProps = {
   activeScreen?: Screen;
   onHeightChange?: (px: number) => void;
 
-  // ✅ drive sport selection from App.tsx
   oddsSportKey: SportKey;
   onPickOddsSport: (k: SportKey) => void;
 
@@ -39,14 +38,14 @@ const GOLD = "#d4af37";
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
 const DROPDOWN_CLOSE_DELAY_MS = 240;
 
-// ✅ simple, distinct from dratings
 const TAGLINE = "Sports Models · Projections · Analysis";
 
 /**
- * Subtle prism palette — black-forward.
- * (Lower alpha values so the header stays “mostly black” with faint spectrum hints.)
+ * Mobile vs Desktop spectrum:
+ * - Mobile needs slightly higher alpha + tighter placement so the full range is visible in a narrow header.
+ * - Desktop stays extra subtle.
  */
-const PRISM = {
+const PRISM_DESKTOP = {
   blue: "rgba(0, 146, 255, 0.08)",
   teal: "rgba(0, 201, 255, 0.06)",
   green: "rgba(0, 200, 120, 0.07)",
@@ -56,10 +55,28 @@ const PRISM = {
   violet: "rgba(170, 70, 255, 0.06)",
 };
 
-// Black glass layers used to “sink” the spectrum into the background
-const BLACK_GLASS_TOP = "rgba(0,0,0,0.35)";
-const BLACK_GLASS_MID = "rgba(0,0,0,0.55)";
-const BLACK_GLASS_BOTTOM = "rgba(0,0,0,0.78)";
+const PRISM_MOBILE = {
+  blue: "rgba(0, 146, 255, 0.12)",
+  teal: "rgba(0, 201, 255, 0.10)",
+  green: "rgba(0, 200, 120, 0.11)",
+  gold: "rgba(212, 175, 55, 0.13)",
+  orange: "rgba(255, 140, 0, 0.11)",
+  red: "rgba(255, 60, 60, 0.10)",
+  violet: "rgba(170, 70, 255, 0.10)",
+};
+
+// Black “glass” remains dominant (mobile slightly lighter so colors show)
+const BLACK_GLASS_DESKTOP = {
+  top: "rgba(0,0,0,0.38)",
+  mid: "rgba(0,0,0,0.60)",
+  bottom: "rgba(0,0,0,0.82)",
+};
+
+const BLACK_GLASS_MOBILE = {
+  top: "rgba(0,0,0,0.26)",
+  mid: "rgba(0,0,0,0.52)",
+  bottom: "rgba(0,0,0,0.78)",
+};
 
 /** =========================
  * SPORT MAPPING
@@ -81,7 +98,6 @@ function uiToDbSport(s: UiSport): SportKey {
   }
 }
 
-/** Enable only what you have live */
 function isEnabled(db: SportKey) {
   return db === "basketball_ncaab" || db === "basketball_nba";
 }
@@ -180,6 +196,10 @@ function HoverDropdown({
     setOpen(true);
   };
 
+  // Dropdown stays subtle like desktop (don’t need mobile boosting here)
+  const P = PRISM_DESKTOP;
+  const B = BLACK_GLASS_DESKTOP;
+
   return (
     <div ref={wrapRef} className="relative" onMouseEnter={openNow} onMouseLeave={scheduleClose}>
       <button
@@ -209,27 +229,22 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          {/* Subtle prism + black glass */}
           <div
             className="pointer-events-none absolute inset-0"
             style={{
               background: [
-                // faint spectrum hints
-                `radial-gradient(520px 160px at 18% 0%, ${PRISM.blue}, transparent 62%)`,
-                `radial-gradient(520px 160px at 34% 0%, ${PRISM.teal}, transparent 64%)`,
-                `radial-gradient(560px 180px at 50% 0%, ${PRISM.green}, transparent 64%)`,
-                `radial-gradient(560px 180px at 66% 0%, ${PRISM.gold}, transparent 66%)`,
-                `radial-gradient(560px 180px at 80% 0%, ${PRISM.orange}, transparent 66%)`,
-                `radial-gradient(560px 220px at 98% 30%, ${PRISM.red}, transparent 68%)`,
-                `radial-gradient(720px 300px at 70% 120%, ${PRISM.violet}, transparent 62%)`,
-                // black glass layers to keep it dark
-                `linear-gradient(180deg, ${BLACK_GLASS_TOP}, ${BLACK_GLASS_MID} 55%, ${BLACK_GLASS_BOTTOM} 100%)`,
-                // tiny sheen so it still feels “premium”
+                `radial-gradient(520px 160px at 18% 0%, ${P.blue}, transparent 62%)`,
+                `radial-gradient(520px 160px at 34% 0%, ${P.teal}, transparent 64%)`,
+                `radial-gradient(560px 180px at 50% 0%, ${P.green}, transparent 64%)`,
+                `radial-gradient(560px 180px at 66% 0%, ${P.gold}, transparent 66%)`,
+                `radial-gradient(560px 180px at 80% 0%, ${P.orange}, transparent 66%)`,
+                `radial-gradient(560px 220px at 98% 30%, ${P.red}, transparent 68%)`,
+                `radial-gradient(720px 300px at 70% 120%, ${P.violet}, transparent 62%)`,
+                `linear-gradient(180deg, ${B.top}, ${B.mid} 55%, ${B.bottom} 100%)`,
                 `linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.00) 60%)`,
               ].join(", "),
             }}
           />
-
           <div className="relative">
             {SPORTS.map((ui) => {
               const db = uiToDbSport(ui);
@@ -255,7 +270,6 @@ function HoverDropdown({
                   ].join(" ")}
                 >
                   <span className="text-[14px] font-medium leading-tight">{title}</span>
-
                   {!enabled ? (
                     <span className="font-semibold text-[11px]" style={{ color: GOLD }}>
                       COMING SOON
@@ -304,42 +318,67 @@ export function Header({
   const predsActive = activeScreen === "monte-carlo";
 
   return (
-    <header
-      ref={headerRef}
-      className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]"
-    >
-      {/* Subtle prism spectrum + black glass (header stays dark) */}
+    <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
+      {/* We render TWO overlays:
+          - Mobile overlay (stronger, positioned to show all colors on narrow widths)
+          - Desktop overlay (more subtle)
+      */}
       <div className="pointer-events-none absolute inset-0">
+        {/* MOBILE overlay */}
         <div
-          className="absolute inset-0"
+          className="absolute inset-0 md:hidden"
           style={{
             background: [
-              // very faint spectrum near the top edge (kept subtle)
-              `radial-gradient(900px 240px at 14% 0%, ${PRISM.blue}, transparent 66%)`,
-              `radial-gradient(820px 240px at 30% 0%, ${PRISM.teal}, transparent 68%)`,
-              `radial-gradient(880px 260px at 48% 0%, ${PRISM.green}, transparent 68%)`,
-              `radial-gradient(900px 260px at 62% 0%, ${PRISM.gold}, transparent 70%)`,
-              `radial-gradient(920px 280px at 78% 0%, ${PRISM.orange}, transparent 70%)`,
-              `radial-gradient(860px 260px at 92% 10%, ${PRISM.red}, transparent 72%)`,
-              `radial-gradient(900px 340px at 60% 120%, ${PRISM.violet}, transparent 66%)`,
-              // black glass to make sure it never turns “colorful”
-              `linear-gradient(180deg, ${BLACK_GLASS_TOP}, ${BLACK_GLASS_MID} 52%, ${BLACK_GLASS_BOTTOM} 100%)`,
-              // light sheen
+              // Tight banding across the top so the whole spectrum appears in a narrow viewport
+              `linear-gradient(90deg,
+                ${PRISM_MOBILE.blue} 0%,
+                ${PRISM_MOBILE.teal} 16%,
+                ${PRISM_MOBILE.green} 33%,
+                ${PRISM_MOBILE.gold} 50%,
+                ${PRISM_MOBILE.orange} 66%,
+                ${PRISM_MOBILE.red} 82%,
+                ${PRISM_MOBILE.violet} 100%
+              )`,
+              // A couple subtle “bloom” spots so it feels dimensional
+              `radial-gradient(520px 180px at 20% 0%, ${PRISM_MOBILE.blue}, transparent 62%)`,
+              `radial-gradient(520px 180px at 55% 0%, ${PRISM_MOBILE.gold}, transparent 64%)`,
+              `radial-gradient(520px 200px at 90% 0%, ${PRISM_MOBILE.red}, transparent 66%)`,
+              // Black glass to keep it dark
+              `linear-gradient(180deg, ${BLACK_GLASS_MOBILE.top}, ${BLACK_GLASS_MOBILE.mid} 52%, ${BLACK_GLASS_MOBILE.bottom} 100%)`,
+              // Sheen
+              `linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015) 55%, rgba(0,0,0,0) 100%)`,
+            ].join(", "),
+          }}
+        />
+
+        {/* DESKTOP overlay */}
+        <div
+          className="absolute inset-0 hidden md:block"
+          style={{
+            background: [
+              `radial-gradient(900px 240px at 14% 0%, ${PRISM_DESKTOP.blue}, transparent 66%)`,
+              `radial-gradient(820px 240px at 30% 0%, ${PRISM_DESKTOP.teal}, transparent 68%)`,
+              `radial-gradient(880px 260px at 48% 0%, ${PRISM_DESKTOP.green}, transparent 68%)`,
+              `radial-gradient(900px 260px at 62% 0%, ${PRISM_DESKTOP.gold}, transparent 70%)`,
+              `radial-gradient(920px 280px at 78% 0%, ${PRISM_DESKTOP.orange}, transparent 70%)`,
+              `radial-gradient(860px 260px at 92% 10%, ${PRISM_DESKTOP.red}, transparent 72%)`,
+              `radial-gradient(900px 340px at 60% 120%, ${PRISM_DESKTOP.violet}, transparent 66%)`,
+              `linear-gradient(180deg, ${BLACK_GLASS_DESKTOP.top}, ${BLACK_GLASS_DESKTOP.mid} 52%, ${BLACK_GLASS_DESKTOP.bottom} 100%)`,
               `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0) 100%)`,
             ].join(", "),
           }}
         />
 
-        {/* Super subtle spectrum hairline (not loud) */}
+        {/* Top hairline (mobile slightly stronger) */}
         <div
-          className="absolute left-0 right-0 top-0 h-[1px] opacity-55"
+          className="absolute left-0 right-0 top-0 h-[1px] opacity-70 md:opacity-55"
           style={{
             background:
-              "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.35), rgba(0,200,120,0.35), rgba(212,175,55,0.40), rgba(255,140,0,0.35), rgba(255,60,60,0.30), rgba(170,70,255,0.30), rgba(0,0,0,0))",
+              "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.40), rgba(0,200,120,0.40), rgba(212,175,55,0.45), rgba(255,140,0,0.40), rgba(255,60,60,0.35), rgba(170,70,255,0.35), rgba(0,0,0,0))",
           }}
         />
 
-        {/* Gold anchor line stays (brand) */}
+        {/* Gold anchor line */}
         <div
           className="absolute left-0 right-0 bottom-0 h-[1px] opacity-65"
           style={{
@@ -361,9 +400,7 @@ export function Header({
           </button>
 
           <div className="flex flex-col items-start gap-2 min-w-0">
-            {/* Brand row: logo + tagline */}
             <div className="flex items-center gap-3 min-w-0 w-full">
-              {/* ✅ Clicking logo returns to Overview */}
               <button
                 type="button"
                 onClick={() => onNavigate?.("overview")}
@@ -371,7 +408,7 @@ export function Header({
                 aria-label="Go to Overview"
               >
                 <img
-                  src="/logos/Logo.png"
+                  src="/logos/mainlogo.png"
                   alt="PrismSports"
                   className={[
                     "h-14 sm:h-16 md:h-20 w-auto object-contain select-none flex-shrink-0",
@@ -393,23 +430,21 @@ export function Header({
                   {TAGLINE}
                 </div>
 
-                {/* ultra-subtle spectrum micro-accent (kept dark) */}
                 <div
-                  className="mt-1 h-[2px] w-[150px] max-w-full rounded-full opacity-45"
+                  className="mt-1 h-[2px] w-full rounded-full opacity-55 md:opacity-45"
                   style={{
                     background:
-                      "linear-gradient(90deg, rgba(0,146,255,0.55), rgba(0,200,120,0.55), rgba(212,175,55,0.65), rgba(255,140,0,0.55), rgba(255,60,60,0.45), rgba(170,70,255,0.45))",
+                      "linear-gradient(90deg, rgba(0,146,255,0.55), rgba(0,200,120,0.55), rgba(212,175,55,0.70), rgba(255,140,0,0.55), rgba(255,60,60,0.45), rgba(170,70,255,0.45))",
                   }}
                 />
               </div>
             </div>
 
-            {/* Desktop nav */}
             <nav className="hidden md:flex items-center gap-7 pb-2 pt-1">
               <HoverDropdown
                 label="Odds"
                 suffix="Odds"
-                active={activeScreen === "odds"}
+                active={oddsActive}
                 selectedDbSport={oddsSportKey}
                 onPickDbSport={(k) => {
                   onPickOddsSport(k);
@@ -420,7 +455,7 @@ export function Header({
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
-                active={activeScreen === "monte-carlo"}
+                active={predsActive}
                 selectedDbSport={predSportKey}
                 onPickDbSport={(k) => {
                   onPickPredSport(k);
@@ -452,4 +487,5 @@ export function Header({
     </header>
   );
 }
+
 
