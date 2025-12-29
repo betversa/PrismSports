@@ -1,24 +1,13 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Game Details modal: Line Movement + Predictions + Player Props)
-// -------------------------------------------------------------------------------------------------
-// ✅ Hero section uses SAME structure/spacing as Model + MonteCarlo screens
-// ✅ Desktop: centered max-width “web” layout
-// ✅ Desktop: books ALWAYS shown (no toggle)
-// ✅ Mobile: Show/Hide Books toggle + single Game Details button
-// ✅ ONE button per game: "Game Details" (no separate History / Props / MonteCarlo buttons)
-// ✅ Game Details modal has tabs: Line Movement / Predictions / Player Props
-// ✅ Line Movement tab:
-//    - ONLY place where Market (ML/Spread/Total) buttons exist (single copy)
-//    - Side-by-side charts for Away + Home (Total uses Over + Under)
-//    - Spread/Total hover shows BOTH line + odds (per book)
-// ✅ Predictions tab:
-//    - Pulls from monte_carlo_results (schema per your CSV)
-//    - Side-by-side team panels w/ logos, projected score center, big Win% circle (higher green, lower red)
-// ✅ Player Props tab:
-//    - Odds from player_props_snapshot, meta (pos/pic/team) from player_prop_ev_latest
-//    - ONE ROW PER PLAYER (Over + Under grouped, all books in same row; no duplicate rows per book)
-// ✅ player_props_snapshot has NO created_at (uses ts / snapshot_ts / inserted_at)
+// screens/OddsScreen.tsx — FULL REWRITE (Predictions tab redesigned: 100% split circle + richer header + background)
+// -------------------------------------------------------------------------------------------------------------
+// ✅ Fix: Predictions circle is now a 100% donut split into TWO arcs (Away/Home win%)
+// ✅ Fix: Projected score is INSIDE the donut (not outside), with win% labels around it
+// ✅ Adds “dead space” content at top of Predictions tab (Key Lines + Model Snapshot chips)
+// ✅ Adds subtle modal background (gradient + soft pattern/noise) so it’s not flat black
+// ✅ Keeps: single Game Details button, single Market buttons ONLY in Line Movement tab
+// ✅ Keeps: Player Props tab = one row per player, books in same row
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   ResponsiveContainer,
@@ -73,7 +62,6 @@ const BOOK_LABEL: Record<BookKey, string> = {
   bol: "BetOnline",
 };
 
-// DK green, FD blue, MGM gold, PIN orange, BOL red.
 const BOOK_STROKES: Record<BookKey, string> = {
   dk: "#16a34a",
   fd: "#2563eb",
@@ -97,7 +85,7 @@ const COL_BOOK = 120;
 const PAGE_MAX_W = "max-w-[1320px]";
 const PAGE_X = "px-4 md:px-8";
 
-/** HERO + PANEL styles — intended to match Model/MonteCarlo hero exactly */
+/** HERO + PANEL styles */
 const HERO_WRAP =
   "rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]";
 const HERO_INNER = "p-5 md:p-6";
@@ -127,7 +115,6 @@ const BTN_OFF =
   "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]";
 const BTN_GHOST =
   "text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]";
-const LINK_GOLD = "text-[11px] font-extrabold text-[#d4af37] hover:underline";
 
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
 const HDR_BOOK_BG = "bg-[#1c1c1c]";
@@ -147,21 +134,6 @@ function normalizeIso(raw: string | null | undefined): string | null {
   return s;
 }
 
-function fmtCTDateTime(iso: string | null | undefined) {
-  if (!iso) return "—";
-  const n = normalizeIso(iso);
-  if (!n) return "—";
-  const d = new Date(n);
-  if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    month: "short",
-    day: "2-digit",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(d);
-}
-
 function fmtCTDateTimeLong(iso: string | null | undefined) {
   if (!iso) return "—";
   const n = normalizeIso(iso);
@@ -171,6 +143,21 @@ function fmtCTDateTimeLong(iso: string | null | undefined) {
   return new Intl.DateTimeFormat("en-US", {
     timeZone: CT_TZ,
     weekday: "short",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function fmtCTDateTime(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const n = normalizeIso(iso);
+  if (!n) return "—";
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
     month: "short",
     day: "2-digit",
     hour: "numeric",
@@ -229,7 +216,7 @@ function maxIso(a: string | null, b: string | null) {
 }
 
 /* =========================================================
-   FLEX COLUMN PICKERS (history/props vary)
+   FLEX COLUMN PICKERS
 ========================================================= */
 
 function pickAny(row: any, keys: string[]) {
@@ -338,31 +325,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: {
-        line: row.dk_total_line ?? null,
-        over: row.dk_total_over_odds ?? null,
-        under: row.dk_total_under_odds ?? null,
-      },
-      fd: {
-        line: row.fd_total_line ?? null,
-        over: row.fd_total_over_odds ?? null,
-        under: row.fd_total_under_odds ?? null,
-      },
-      mgm: {
-        line: row.mgm_total_line ?? null,
-        over: row.mgm_total_over_odds ?? null,
-        under: row.mgm_total_under_odds ?? null,
-      },
-      pin: {
-        line: row.pin_total_line ?? null,
-        over: row.pin_total_over_odds ?? null,
-        under: row.pin_total_under_odds ?? null,
-      },
-      bol: {
-        line: row.bol_total_line ?? null,
-        over: row.bol_total_over_odds ?? null,
-        under: row.bol_total_under_odds ?? null,
-      },
+      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
+      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
+      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
+      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
+      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
     },
   };
 }
@@ -472,7 +439,7 @@ function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", 
 }
 
 /* =========================================================
-   BOOK HEADER PILL (white pill like your screenshots)
+   BOOK HEADER PILL
 ========================================================= */
 
 const BOOK_LOGO_W = 86;
@@ -506,10 +473,7 @@ function BookLogoPill({
   const pillW = size === "sm" ? "w-[90px]" : "w-[92px]";
 
   return (
-    <div
-      className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`}
-      title={alt}
-    >
+    <div className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`} title={alt}>
       <img
         src={src}
         alt={alt}
@@ -525,15 +489,7 @@ function BookLogoPill({
 
 function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: boolean }) {
   const fb =
-    bookKey === "dk"
-      ? "DK"
-      : bookKey === "fd"
-      ? "FD"
-      : bookKey === "mgm"
-      ? "MGM"
-      : bookKey === "pin"
-      ? "PIN"
-      : "BOL";
+    bookKey === "dk" ? "DK" : bookKey === "fd" ? "FD" : bookKey === "mgm" ? "MGM" : bookKey === "pin" ? "PIN" : "BOL";
   return (
     <th
       className={[
@@ -562,26 +518,13 @@ function ConsensusValue({ parts }: { parts: CellParts }) {
 
 function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
   return (
-    <td
-      className={[
-        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
-        borderLeft ? `border-l ${HDR_BORDER}` : "",
-      ].join(" ")}
-    >
+    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", borderLeft ? `border-l ${HDR_BORDER}` : ""].join(" ")}>
       {renderCellParts(parts)}
     </td>
   );
 }
 
-function MiniTeamRow({
-  team,
-  logoUrl,
-  side,
-}: {
-  team: string;
-  logoUrl: string | null;
-  side: "AWAY" | "HOME";
-}) {
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -590,9 +533,7 @@ function MiniTeamRow({
           alt={`${team} logo`}
           className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
           loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
+          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
         />
       ) : (
         <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
@@ -610,15 +551,7 @@ function MiniTeamRow({
    SEGMENTED MARKET CONTROL (board)
 ========================================================= */
 
-function SegButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+function SegButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
@@ -626,9 +559,7 @@ function SegButton({
       className={[
         "px-3 py-1.5 text-xs font-extrabold transition-colors",
         "border border-[#2a2a2a]",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
+        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -639,24 +570,14 @@ function SegButton({
 function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) => void }) {
   return (
     <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>
-        Moneyline
-      </SegButton>
+      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>Moneyline</SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>
-        Spread
-      </SegButton>
+      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>Spread</SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "total"} onClick={() => onChange("total")}>
-        Total
-      </SegButton>
+      <SegButton active={value === "total"} onClick={() => onChange("total")}>Total</SegButton>
     </div>
   );
 }
-
-/* =========================================================
-   HERO CHIPS (exact vibe as model screens)
-========================================================= */
 
 function Chip({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -691,15 +612,11 @@ function EventCardMobile({
   const homeCons = consensusPartsForRow(ev, market, "HOME");
 
   const metaFor = (book: BookKey) =>
-    book === "dk"
-      ? { alt: "DraftKings", fb: "DK" }
-      : book === "fd"
-      ? { alt: "FanDuel", fb: "FD" }
-      : book === "mgm"
-      ? { alt: "BetMGM", fb: "MGM" }
-      : book === "pin"
-      ? { alt: "Pinnacle", fb: "PIN" }
-      : { alt: "BetOnline", fb: "BOL" };
+    book === "dk" ? { alt: "DraftKings", fb: "DK" } :
+    book === "fd" ? { alt: "FanDuel", fb: "FD" } :
+    book === "mgm" ? { alt: "BetMGM", fb: "MGM" } :
+    book === "pin" ? { alt: "Pinnacle", fb: "PIN" } :
+    { alt: "BetOnline", fb: "BOL" };
 
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
@@ -733,15 +650,11 @@ function EventCardMobile({
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(awayCons)}
-              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
               <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(homeCons)}
-              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
             </div>
           </div>
         </div>
@@ -785,25 +698,14 @@ function EventCardMobile({
   );
 }
 
-function EventTwoRows({
-  ev,
-  market,
-  onOpenDetails,
-}: {
-  ev: EventOdds;
-  market: Market;
-  onOpenDetails: (ev: EventOdds) => void;
-}) {
+function EventTwoRows({ ev, market, onOpenDetails }: { ev: EventOdds; market: Market; onOpenDetails: (ev: EventOdds) => void }) {
   const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
   const homeConsensus = consensusPartsForRow(ev, market, "HOME");
 
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
-        <td
-          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
-          rowSpan={2}
-        >
+        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
@@ -835,15 +737,13 @@ function EventTwoRows({
         <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
       </tr>
 
-      <tr>
-        <td colSpan={7} className="h-2 bg-transparent" />
-      </tr>
+      <tr><td colSpan={7} className="h-2 bg-transparent" /></tr>
     </>
   );
 }
 
 /* =========================================================
-   MODAL SHELL
+   MODAL SHELL (now with subtle background)
 ========================================================= */
 
 function ModalShell({
@@ -865,6 +765,18 @@ function ModalShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // subtle inline "noise" overlay via SVG data-uri (very light)
+  const noiseSvg = encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="180" height="180">
+      <filter id="n">
+        <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/>
+        <feColorMatrix type="matrix"
+          values="0 0 0 0 0.65  0 0 0 0 0.55  0 0 0 0 0.18  0 0 0 0.08 0"/>
+      </filter>
+      <rect width="100%" height="100%" filter="url(#n)"/>
+    </svg>
+  `);
+
   return (
     <div
       className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 p-2 sm:p-4"
@@ -872,11 +784,28 @@ function ModalShell({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-7xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-        <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
+      <div
+        className="w-full max-w-7xl rounded-2xl border border-[#2a2a2a] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+        style={{
+          background:
+            "radial-gradient(1200px 700px at 15% 10%, rgba(212,175,55,0.10), transparent 55%)," +
+            "radial-gradient(900px 600px at 80% 0%, rgba(16,185,129,0.06), transparent 55%)," +
+            "linear-gradient(180deg, rgba(15,15,15,0.98), rgba(10,10,10,0.98))",
+        }}
+      >
+        {/* soft noise overlay */}
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.10]"
+          style={{
+            backgroundImage: `url("data:image/svg+xml,${noiseSvg}")`,
+            backgroundRepeat: "repeat",
+          }}
+        />
+
+        <div className="relative px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
+            {subtitle && <div className="text-[11px] text-[#a0a0a0] mt-0.5 break-words">{subtitle}</div>}
           </div>
           <button
             className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
@@ -886,7 +815,8 @@ function ModalShell({
             ✕
           </button>
         </div>
-        <div className="p-3 sm:p-4 overflow-y-auto">{children}</div>
+
+        <div className="relative p-3 sm:p-4 overflow-y-auto">{children}</div>
       </div>
     </div>
   );
@@ -898,24 +828,14 @@ function ModalShell({
 
 type DetailsTab = "line" | "pred" | "props";
 
-function TabBtn({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={[
         "px-3 py-1.5 text-xs font-extrabold rounded-lg border transition-colors",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
+        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -927,18 +847,8 @@ function TabBtn({
    LINE MOVEMENT (side-by-side charts)
 ========================================================= */
 
-type HistoryRow = {
-  ts: string;
-  book: BookKey;
-  odds: number | null;
-  line: number | null;
-};
-
-type HistoryPoint = {
-  ts: string; // iso
-  label: string; // CT formatted
-  [key: string]: any; // values per book; plus book__line
-};
+type HistoryRow = { ts: string; book: BookKey; odds: number | null; line: number | null };
+type HistoryPoint = { ts: string; label: string; [key: string]: any };
 
 function buildSeries(points: HistoryRow[]): HistoryPoint[] {
   const byTs = new Map<string, HistoryPoint>();
@@ -956,12 +866,7 @@ function buildSeries(points: HistoryRow[]): HistoryPoint[] {
   });
 }
 
-function HistoryTooltip({
-  active,
-  payload,
-  label,
-  market,
-}: any) {
+function HistoryTooltip({ active, payload, label, market }: any) {
   if (!active || !payload?.length) return null;
 
   const base = payload?.[0]?.payload ?? {};
@@ -977,23 +882,15 @@ function HistoryTooltip({
           .map((p: any) => {
             const bk = p.dataKey as BookKey;
             const odds = p.value as number | null | undefined;
-
             const line = base?.[`${bk}__line`] ?? null;
 
             return (
               <div key={bk} className="flex items-center justify-between gap-3 text-[11px]">
-                <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
-                  {BOOK_LABEL[bk]}
-                </div>
-
+                <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>{BOOK_LABEL[bk]}</div>
                 <div className="text-white font-extrabold tabular-nums">
                   {market === "ml"
-                    ? odds == null
-                      ? "—"
-                      : String(odds)
-                    : line == null && odds == null
-                    ? "—"
-                    : `${line == null ? "—" : String(line)}  (${odds == null ? "—" : String(odds)})`}
+                    ? odds == null ? "—" : String(odds)
+                    : line == null && odds == null ? "—" : `${line == null ? "—" : String(line)}  (${odds == null ? "—" : String(odds)})`}
                 </div>
               </div>
             );
@@ -1001,11 +898,7 @@ function HistoryTooltip({
       </div>
 
       <div className="mt-2 text-[10px] text-[#808080] font-semibold">
-        {market === "ml"
-          ? "Moneyline Odds History"
-          : market === "spread"
-          ? "Spread (line + odds) History"
-          : "Total (line + odds) History"}
+        {market === "ml" ? "Moneyline Odds History" : market === "spread" ? "Spread (line + odds) History" : "Total (line + odds) History"}
       </div>
     </div>
   );
@@ -1045,9 +938,8 @@ function parseHistoryRows({
   market: Market;
   wantSide: "AWAY" | "HOME";
 }): HistoryRow[] {
-  const sideKey = wantSide.toLowerCase(); // away/home
+  const sideKey = wantSide.toLowerCase();
   const wantOverUnder = market === "total";
-
   const parsed: HistoryRow[] = [];
 
   for (const r of raw) {
@@ -1060,7 +952,6 @@ function parseHistoryRows({
     const isSpread = marketRaw.includes("spread");
     const isTotal = marketRaw.includes("total") || marketRaw.includes("ou") || marketRaw.includes("over_under");
 
-    // If the table has market keys, respect them; if not present, allow pass-through.
     if (marketRaw) {
       if (market === "ml" && !isMl) continue;
       if (market === "spread" && !isSpread) continue;
@@ -1073,22 +964,16 @@ function parseHistoryRows({
     let sideOk = true;
 
     if (wantOverUnder) {
-      // total uses Over/Under; our UI maps AWAY->Over, HOME->Under
       const need = wantSide === "AWAY" ? "over" : "under";
       if (ouRaw) sideOk = ouRaw.includes(need);
-      else if (sideRaw) sideOk = sideRaw.includes(need); // fallback
+      else if (sideRaw) sideOk = sideRaw.includes(need);
     } else {
       if (sideRaw) sideOk = sideRaw.includes(sideKey);
     }
 
     if (!sideOk) continue;
 
-    parsed.push({
-      ts,
-      book: bk,
-      odds: pickOdds(r),
-      line: pickLine(r),
-    });
+    parsed.push({ ts, book: bk, odds: pickOdds(r), line: pickLine(r) });
   }
 
   return parsed;
@@ -1108,18 +993,18 @@ function SideBySideLineCharts({
   market: Market;
 }) {
   const chart = (title: string, pts: HistoryPoint[]) => (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-3">
+    <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-3">
       <div className="text-[12px] text-white font-extrabold mb-2">{title}</div>
 
       {!pts.length ? (
-        <div className="text-sm text-[#808080] p-4">No odds history available for this side.</div>
+        <div className="text-sm text-[#a0a0a0] p-4">No odds history available for this side.</div>
       ) : (
         <div className="h-[280px]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={pts} margin={{ top: 10, right: 18, left: 0, bottom: 10 }}>
               <CartesianGrid stroke="#222222" strokeDasharray="3 3" />
-              <XAxis dataKey="label" tick={{ fill: "#9a9a9a", fontSize: 10 }} interval="preserveStartEnd" minTickGap={18} />
-              <YAxis tick={{ fill: "#9a9a9a", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
+              <XAxis dataKey="label" tick={{ fill: "#b0b0b0", fontSize: 10 }} interval="preserveStartEnd" minTickGap={18} />
+              <YAxis tick={{ fill: "#b0b0b0", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
               <Tooltip content={<HistoryTooltip market={market} />} />
               <Legend wrapperStyle={{ color: "#d0d0d0", fontSize: 11 }} />
               {BOOKS.map((bk) => (
@@ -1139,17 +1024,9 @@ function SideBySideLineCharts({
         </div>
       )}
 
-      <div className="mt-2 text-[11px] text-[#808080]">
-        {market === "ml" ? (
-          <>
-            Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>.
-          </>
-        ) : (
-          <>
-            Tooltip includes <span className="text-white font-extrabold">line + odds</span> and{" "}
-            <span className="text-white font-extrabold">date + time (CT)</span>.
-          </>
-        )}
+      <div className="mt-2 text-[11px] text-[#a0a0a0]">
+        Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>
+        {market === "ml" ? "." : <> and <span className="text-white font-extrabold">line + odds</span>.</>}
       </div>
     </div>
   );
@@ -1201,20 +1078,135 @@ function toNum(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function pct(v: number | null | undefined) {
-  if (v == null) return "—";
-  // handle both 0-1 or 0-100 inputs robustly
-  const x = v > 1.5 ? v / 100 : v;
-  return `${(x * 100).toFixed(1)}%`;
+function toProb01(v: number | null | undefined): number | null {
+  if (v == null) return null;
+  const x = v > 1.5 ? v / 100 : v; // robust for 0-100 or 0-1
+  if (!Number.isFinite(x)) return null;
+  return Math.max(0, Math.min(1, x));
 }
 
-function winColor(a: number | null, b: number | null) {
-  const ax = a == null ? null : a > 1.5 ? a / 100 : a;
-  const bx = b == null ? null : b > 1.5 ? b / 100 : b;
-  if (ax == null || bx == null) return { a: "text-white", b: "text-white" };
-  if (ax > bx) return { a: "text-emerald-400", b: "text-red-400" };
-  if (bx > ax) return { a: "text-red-400", b: "text-emerald-400" };
-  return { a: "text-white", b: "text-white" };
+function pct(v01: number | null | undefined) {
+  if (v01 == null) return "—";
+  return `${(v01 * 100).toFixed(1)}%`;
+}
+
+/** Convert a probability (0..1) to "quantum fair odds" (American) */
+function probToAmerican(p: number | null): string {
+  if (p == null || p <= 0 || p >= 1) return "—";
+  if (p >= 0.5) {
+    const a = -Math.round((p / (1 - p)) * 100);
+    return String(a);
+  } else {
+    const a = Math.round(((1 - p) / p) * 100);
+    return `+${a}`;
+  }
+}
+
+function winColors(awayP: number | null, homeP: number | null) {
+  if (awayP == null || homeP == null) return { away: "text-white", home: "text-white", awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
+  if (awayP > homeP) return { away: "text-emerald-400", home: "text-red-400", awayHex: "#34d399", homeHex: "#f87171" };
+  if (homeP > awayP) return { away: "text-red-400", home: "text-emerald-400", awayHex: "#f87171", homeHex: "#34d399" };
+  return { away: "text-white", home: "text-white", awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
+}
+
+/* =========================================================
+   NEW: 100% SPLIT DONUT (Away/Home arcs) with score inside
+========================================================= */
+
+function SplitDonut({
+  awayP,
+  homeP,
+  awayLabel,
+  homeLabel,
+  awayColor,
+  homeColor,
+  scoreText,
+}: {
+  awayP: number | null;
+  homeP: number | null;
+  awayLabel: string;
+  homeLabel: string;
+  awayColor: string;
+  homeColor: string;
+  scoreText: string;
+}) {
+  const a = awayP ?? 0.5;
+  const h = homeP ?? 0.5;
+  const total = a + h || 1;
+  const aN = a / total;
+  const hN = h / total;
+
+  // SVG ring
+  const size = 176;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = 70;
+  const c = 2 * Math.PI * r;
+  const stroke = 14;
+
+  const aLen = c * aN;
+  const hLen = c * hN;
+
+  // Start at 12 o'clock
+  const rotate = -90;
+
+  return (
+    <div className="relative w-[176px] h-[176px]">
+      <svg width={size} height={size} className="block">
+        {/* track */}
+        <g transform={`rotate(${rotate} ${cx} ${cy})`}>
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={stroke} />
+          {/* Away arc */}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={r}
+            fill="none"
+            stroke={awayColor}
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={`${aLen} ${c - aLen}`}
+            strokeDashoffset={0}
+          />
+          {/* Home arc continues after away */}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={r}
+            fill="none"
+            stroke={homeColor}
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={`${hLen} ${c - hLen}`}
+            strokeDashoffset={-aLen}
+          />
+        </g>
+
+        {/* inner glow */}
+        <circle cx={cx} cy={cy} r={r - stroke / 2} fill="rgba(0,0,0,0.28)" />
+      </svg>
+
+      {/* Center content */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-2">
+        <div className="text-[10px] text-[#b0b0b0] font-semibold">Projected Score</div>
+        <div className="mt-1 text-white font-extrabold tabular-nums text-[22px] leading-tight">{scoreText}</div>
+        <div className="mt-2 grid grid-cols-2 gap-2 w-full px-3">
+          <div className="rounded-lg border border-[#2a2a2a] bg-black/25 py-1">
+            <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayLabel}</div>
+            <div className="text-[12px] font-extrabold tabular-nums" style={{ color: awayColor }}>
+              {pct(awayP)}
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#2a2a2a] bg-black/25 py-1">
+            <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeLabel}</div>
+            <div className="text-[12px] font-extrabold tabular-nums" style={{ color: homeColor }}>
+              {pct(homeP)}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* =========================================================
@@ -1246,11 +1238,9 @@ type PropAggRow = {
   position: string | null;
   picture_url: string | null;
 
-  // one row per player; store per-book values for over + under
   over: Record<BookKey, PropCell>;
   under: Record<BookKey, PropCell>;
 
-  // display line = median latest line across books/sides (usually same)
   display_line: number | null;
 };
 
@@ -1262,12 +1252,10 @@ function emptyPropSide(): Record<BookKey, PropCell> {
 }
 
 function bestCell(a: PropCell, b: PropCell): PropCell {
-  // keep newest ts (if present), else keep a if it has odds
   const ta = a.ts ? new Date(a.ts).getTime() : 0;
   const tb = b.ts ? new Date(b.ts).getTime() : 0;
   if (tb > ta) return b;
   if (ta > tb) return a;
-  // tie: keep the one with odds
   if (b.odds != null && a.odds == null) return b;
   return a;
 }
@@ -1280,18 +1268,10 @@ function fmtLineOdds(line: number | null, odds: number | null) {
 }
 
 /* =========================================================
-   GAME DETAILS MODAL (implementation)
+   GAME DETAILS MODAL
 ========================================================= */
 
-function GameDetailsModal({
-  sportKey,
-  ev,
-  onClose,
-}: {
-  sportKey: string;
-  ev: EventOdds;
-  onClose: () => void;
-}) {
+function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: EventOdds; onClose: () => void }) {
   const [tab, setTab] = useState<DetailsTab>("line");
 
   // line movement state
@@ -1314,17 +1294,16 @@ function GameDetailsModal({
 
   const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
 
-  // Load line movement whenever tab= line (or market changes)
+  // Line movement fetch
   useEffect(() => {
     if (tab !== "line") return;
-
     let alive = true;
+
     setLmLoading(true);
     setLmError("");
 
     (async () => {
       const res = await fetchOddsHistoryAnyTable({ sportKey, eventId: ev.eventId });
-
       if (!alive) return;
 
       if (res.error || !res.table) {
@@ -1343,26 +1322,20 @@ function GameDetailsModal({
       setLmLoading(false);
     })();
 
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [tab, sportKey, ev.eventId, lmMarket]);
 
-  // Load predictions once (when tab=pred)
+  // Predictions fetch
   useEffect(() => {
     if (tab !== "pred") return;
-
     let alive = true;
+
     setPredLoading(true);
     setPredError("");
     setPredRow(null);
 
     (async () => {
-      // monte_carlo_results per your CSV
-      // (be tolerant about column presence; sport_key may or may not exist)
-      const q = supabase.from("monte_carlo_results").select("*").eq("event_id", ev.eventId);
-      const { data, error } = await q.limit(1);
-
+      const { data, error } = await supabase.from("monte_carlo_results").select("*").eq("event_id", ev.eventId).limit(1);
       if (!alive) return;
 
       if (error) {
@@ -1412,28 +1385,20 @@ function GameDetailsModal({
       setPredLoading(false);
     })();
 
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [tab, ev.eventId]);
 
-  // Load props whenever tab=props (or propMarket changes)
+  // Props fetch
   useEffect(() => {
     if (tab !== "props") return;
-
     let alive = true;
+
     setPropsLoading(true);
     setPropsError("");
     setPropsAgg([]);
 
     (async () => {
-      // 1) snapshot rows for this event
-      const snap = await supabase
-        .from("player_props_snapshot")
-        .select("*")
-        .eq("sport_key", sportKey)
-        .eq("event_id", ev.eventId);
-
+      const snap = await supabase.from("player_props_snapshot").select("*").eq("sport_key", sportKey).eq("event_id", ev.eventId);
       if (!alive) return;
 
       if (snap.error) {
@@ -1443,8 +1408,6 @@ function GameDetailsModal({
       }
 
       const raw = snap.data ?? [];
-
-      // 2) filter to market
       const wanted = canonPropMarket(propMarket);
 
       const norm = raw
@@ -1453,13 +1416,8 @@ function GameDetailsModal({
           if (!player_name) return null;
 
           const mRaw = String(r.market ?? r.market_key ?? r.marketRaw ?? r.prop_type ?? "").toLowerCase();
-          if (mRaw) {
-            const ok = wanted.some((k) => mRaw.includes(k));
-            if (!ok) return null;
-          } else {
-            // if no market field exists, we can't safely include it
-            return null;
-          }
+          if (!mRaw) return null;
+          if (!wanted.some((k) => mRaw.includes(k))) return null;
 
           const book = bookKeyFromRaw(String(r.bookmaker ?? r.book ?? r.sportsbook ?? r.provider ?? ""));
           if (!book) return null;
@@ -1485,30 +1443,20 @@ function GameDetailsModal({
         ts: string | null;
       }>;
 
-      // 3) enrich meta from player_prop_ev_latest
       const names = Array.from(new Set(norm.map((x) => x.player_name)));
       const metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
 
       if (names.length) {
-        const meta = await supabase
-          .from("player_prop_ev_latest")
-          .select("player_name,team,position,picture_url")
-          .in("player_name", names);
-
+        const meta = await supabase.from("player_prop_ev_latest").select("player_name,team,position,picture_url").in("player_name", names);
         if (!meta.error && meta.data) {
           for (const m of meta.data as any[]) {
             const key = String(m.player_name ?? "").trim();
             if (!key) continue;
-            metaMap.set(key, {
-              position: m.position ?? null,
-              picture_url: m.picture_url ?? null,
-              team: m.team ?? null,
-            });
+            metaMap.set(key, { position: m.position ?? null, picture_url: m.picture_url ?? null, team: m.team ?? null });
           }
         }
       }
 
-      // 4) aggregate to ONE ROW PER PLAYER (over+under; all books in row)
       const byPlayer = new Map<string, PropAggRow>();
 
       for (const r of norm) {
@@ -1524,7 +1472,6 @@ function GameDetailsModal({
             display_line: null,
           } as PropAggRow);
 
-        // ensure meta stays filled
         const mm = metaMap.get(r.player_name);
         if (mm) {
           cur.team = mm.team ?? cur.team;
@@ -1534,26 +1481,20 @@ function GameDetailsModal({
 
         const cell: PropCell = { odds: r.odds, line: r.line, ts: r.ts };
 
-        if (r.side === "over") {
-          cur.over[r.book] = bestCell(cur.over[r.book], cell);
-        } else {
-          cur.under[r.book] = bestCell(cur.under[r.book], cell);
-        }
+        if (r.side === "over") cur.over[r.book] = bestCell(cur.over[r.book], cell);
+        else cur.under[r.book] = bestCell(cur.under[r.book], cell);
 
         byPlayer.set(r.player_name, cur);
       }
 
-      // 5) compute display line
       const out = Array.from(byPlayer.values()).map((row) => {
         const lines: number[] = [];
-
         for (const bk of BOOKS) {
           const ol = row.over[bk]?.line;
           const ul = row.under[bk]?.line;
           if (typeof ol === "number") lines.push(ol);
           if (typeof ul === "number") lines.push(ul);
         }
-
         row.display_line = median(lines) ?? (lines[0] ?? null);
         return row;
       });
@@ -1565,9 +1506,7 @@ function GameDetailsModal({
       setPropsLoading(false);
     })();
 
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [tab, sportKey, ev.eventId, propMarket]);
 
   const awayTeam = ev.away?.team ?? predRow?.away_team ?? "Away";
@@ -1575,84 +1514,61 @@ function GameDetailsModal({
   const awayLogo = ev.away?.logoUrl ?? null;
   const homeLogo = ev.home?.logoUrl ?? null;
 
-  const winCols = winColor(predRow?.away_win_prob ?? null, predRow?.home_win_prob ?? null);
+  const awayP = toProb01(predRow?.away_win_prob ?? null);
+  const homeP = toProb01(predRow?.home_win_prob ?? null);
+  const colors = winColors(awayP, homeP);
+
+  const scoreText =
+    predRow?.projected_away_points == null || predRow?.projected_home_points == null
+      ? "—"
+      : `${predRow.projected_away_points.toFixed(1)} - ${predRow.projected_home_points.toFixed(1)}`;
 
   const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
   const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
+
+  // Key Lines derived from board consensus (so it always matches what user sees)
+  const consMlAway = consensusPartsForRow(ev, "ml", "AWAY");
+  const consMlHome = consensusPartsForRow(ev, "ml", "HOME");
+  const consSprAway = consensusPartsForRow(ev, "spread", "AWAY");
+  const consSprHome = consensusPartsForRow(ev, "spread", "HOME");
+  const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
+  const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
 
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
-          Line Movement
-        </TabBtn>
-        <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
-          Predictions
-        </TabBtn>
-        <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
-          Player Props
-        </TabBtn>
+        <TabBtn active={tab === "line"} onClick={() => setTab("line")}>Line Movement</TabBtn>
+        <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>Predictions</TabBtn>
+        <TabBtn active={tab === "props"} onClick={() => setTab("props")}>Player Props</TabBtn>
       </div>
 
       {/* LINE MOVEMENT TAB */}
       {tab === "line" && (
         <div>
-          {/* Single market selector ONLY here */}
+          {/* single market selector ONLY here */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-              <button
-                type="button"
-                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"}`}
-                onClick={() => setLmMarket("ml")}
-              >
-                Moneyline
-              </button>
+              <button type="button" className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"}`} onClick={() => setLmMarket("ml")}>Moneyline</button>
               <div className="w-px bg-[#2a2a2a]" />
-              <button
-                type="button"
-                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"}`}
-                onClick={() => setLmMarket("spread")}
-              >
-                Spread
-              </button>
+              <button type="button" className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"}`} onClick={() => setLmMarket("spread")}>Spread</button>
               <div className="w-px bg-[#2a2a2a]" />
-              <button
-                type="button"
-                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"}`}
-                onClick={() => setLmMarket("total")}
-              >
-                Total
-              </button>
+              <button type="button" className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"}`} onClick={() => setLmMarket("total")}>Total</button>
             </div>
 
-            <div className="text-[11px] text-[#808080] font-semibold">
-              {lmMarket === "total" ? (
-                <>
-                  Left = <span className="text-white font-extrabold">Over</span>, Right ={" "}
-                  <span className="text-white font-extrabold">Under</span>
-                </>
-              ) : (
-                <>
-                  Left = <span className="text-white font-extrabold">Away</span>, Right ={" "}
-                  <span className="text-white font-extrabold">Home</span>
-                </>
-              )}
+            <div className="text-[11px] text-[#b0b0b0] font-semibold">
+              {lmMarket === "total" ? <>Left = <span className="text-white font-extrabold">Over</span>, Right = <span className="text-white font-extrabold">Under</span></> : <>Left = <span className="text-white font-extrabold">Away</span>, Right = <span className="text-white font-extrabold">Home</span></>}
             </div>
           </div>
 
           {lmLoading ? (
-            <div className="text-sm text-[#808080] p-4">Loading odds history…</div>
+            <div className="text-sm text-[#b0b0b0] p-4">Loading odds history…</div>
           ) : lmError ? (
             <div className="text-sm text-red-400 p-4">No odds history available: {lmError}</div>
           ) : (
             <SideBySideLineCharts
-              leftTitle={
-                lmMarket === "total" ? `Over • ${awayTeam}` : `Away • ${awayTeam}`
-              }
-              rightTitle={
-                lmMarket === "total" ? `Under • ${homeTeam}` : `Home • ${homeTeam}`
-              }
+              leftTitle={lmMarket === "total" ? `Over • ${awayTeam}` : `Away • ${awayTeam}`}
+              rightTitle={lmMarket === "total" ? `Under • ${homeTeam}` : `Home • ${homeTeam}`}
               leftPoints={lmAwayPoints}
               rightPoints={lmHomePoints}
               market={lmMarket}
@@ -1661,28 +1577,90 @@ function GameDetailsModal({
         </div>
       )}
 
-      {/* PREDICTIONS TAB */}
+      {/* PREDICTIONS TAB (REDESIGNED) */}
       {tab === "pred" && (
         <div>
           {predLoading ? (
-            <div className="text-sm text-[#808080] p-4">Loading Monte Carlo predictions…</div>
+            <div className="text-sm text-[#b0b0b0] p-4">Loading Monte Carlo predictions…</div>
           ) : predError ? (
             <div className="text-sm text-red-400 p-4">Supabase error: {predError}</div>
           ) : !predRow ? (
-            <div className="text-sm text-[#808080] p-4">No predictions available for this game.</div>
+            <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
           ) : (
             <div className="space-y-3">
-              {/* Top summary: side-by-side teams + projected score center + win% circle */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-4">
+              {/* "Dead space" fill: Key Lines + Model Snapshot chips */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-white font-extrabold text-[13px]">Key Lines</div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
+                      Consensus + Quantum fair odds (from win probabilities)
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="rounded-xl border border-[#2a2a2a] bg-black/25 px-3 py-2">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Quantum ML</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {awayTeam}: <span style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span> • {homeTeam}: <span style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-[#2a2a2a] bg-black/25 px-3 py-2">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Consensus ML</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">
+                        {awayTeam}: {consMlAway.top} • {homeTeam}: {consMlHome.top}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
+                    <div className="mt-1 text-white font-extrabold tabular-nums">
+                      {awayTeam}: {consSprAway.top} <span className="text-[#b0b0b0]">{consSprAway.bottom ? consSprAway.bottom : ""}</span>
+                      <span className="text-[#808080] mx-2">|</span>
+                      {homeTeam}: {consSprHome.top} <span className="text-[#b0b0b0]">{consSprHome.bottom ? consSprHome.bottom : ""}</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Total</div>
+                    <div className="mt-1 text-white font-extrabold tabular-nums">
+                      Over: {consTotOver.top} <span className="text-[#b0b0b0]">{consTotOver.bottom ? consTotOver.bottom : ""}</span>
+                      <span className="text-[#808080] mx-2">|</span>
+                      Under: {consTotUnder.top} <span className="text-[#b0b0b0]">{consTotUnder.bottom ? consTotUnder.bottom : ""}</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Model Snapshot</div>
+                    <div className="mt-1 grid grid-cols-3 gap-2">
+                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Proj Total</div>
+                        <div className="text-white font-extrabold tabular-nums text-[12px]">{predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}</div>
+                      </div>
+                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Margin (H)</div>
+                        <div className="text-white font-extrabold tabular-nums text-[12px]">{predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}</div>
+                      </div>
+                      <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                        <div className="text-[10px] text-[#b0b0b0] font-semibold">Run</div>
+                        <div className="text-white font-extrabold tabular-nums text-[12px]">{fmtCTDateTime(predRow.commence_time ?? ev.commenceTime)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Main hero row: teams + split donut in the middle */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
                 <div className="grid grid-cols-1 md:grid-cols-[1fr_220px_1fr] gap-4 items-center">
                   {/* Away */}
                   <div className="flex items-center gap-3">
                     {awayLogo ? (
-                      <img
-                        src={awayLogo}
-                        alt={`${awayTeam} logo`}
-                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                        loading="lazy"
+                      <img src={awayLogo} alt={`${awayTeam} logo`} className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1" loading="lazy"
                         onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
@@ -1690,73 +1668,35 @@ function GameDetailsModal({
                     )}
                     <div className="min-w-0">
                       <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
-                      <div className={["text-[12px] font-extrabold tabular-nums", winCols.a].join(" ")}>
-                        {pct(predRow.away_win_prob)}
+                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                        Quantum ML: <span className="text-white font-extrabold tabular-nums" style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Center */}
+                  {/* Center split donut */}
                   <div className="flex items-center justify-center">
-                    <div className="w-[180px] rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-3 text-center">
-                      <div className="text-[10px] text-[#808080] font-semibold">Projected Score</div>
-                      <div className="mt-1 text-white font-extrabold text-[26px] tabular-nums">
-                        {(predRow.projected_away_points ?? null) == null
-                          ? "—"
-                          : predRow.projected_away_points?.toFixed(1)}{" "}
-                        -{" "}
-                        {(predRow.projected_home_points ?? null) == null
-                          ? "—"
-                          : predRow.projected_home_points?.toFixed(1)}
-                      </div>
-
-                      <div className="mt-2 flex items-center justify-center">
-                        {/* Win% circle (shows winner color emphasis) */}
-                        <div className="w-16 h-16 rounded-full border-4 border-[#d4af37] flex items-center justify-center bg-black/25">
-                          <div className="text-center leading-tight">
-                            <div className="text-[10px] text-[#808080] font-semibold">Win</div>
-                            <div className="text-[12px] text-white font-extrabold tabular-nums">
-                              {Math.max(
-                                (predRow.away_win_prob ?? 0) > 1.5 ? (predRow.away_win_prob ?? 0) : (predRow.away_win_prob ?? 0) * 100,
-                                (predRow.home_win_prob ?? 0) > 1.5 ? (predRow.home_win_prob ?? 0) : (predRow.home_win_prob ?? 0) * 100
-                              ).toFixed(1)}
-                              %
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-                          <div className="text-[10px] text-[#808080] font-semibold">Proj Total</div>
-                          <div className="text-white font-extrabold tabular-nums text-[12px]">
-                            {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
-                          </div>
-                        </div>
-                        <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-                          <div className="text-[10px] text-[#808080] font-semibold">Proj Margin (H)</div>
-                          <div className="text-white font-extrabold tabular-nums text-[12px]">
-                            {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <SplitDonut
+                      awayP={awayP}
+                      homeP={homeP}
+                      awayLabel="Away"
+                      homeLabel="Home"
+                      awayColor={colors.awayHex}
+                      homeColor={colors.homeHex}
+                      scoreText={scoreText}
+                    />
                   </div>
 
                   {/* Home */}
                   <div className="flex items-center gap-3 justify-start md:justify-end">
                     <div className="min-w-0 text-right">
                       <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
-                      <div className={["text-[12px] font-extrabold tabular-nums", winCols.b].join(" ")}>
-                        {pct(predRow.home_win_prob)}
+                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                        Quantum ML: <span className="text-white font-extrabold tabular-nums" style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
                       </div>
                     </div>
                     {homeLogo ? (
-                      <img
-                        src={homeLogo}
-                        alt={`${homeTeam} logo`}
-                        className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-                        loading="lazy"
+                      <img src={homeLogo} alt={`${homeTeam} logo`} className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1" loading="lazy"
                         onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
@@ -1766,62 +1706,66 @@ function GameDetailsModal({
                 </div>
               </div>
 
-              {/* Markets: Spread / Total probabilities */}
+              {/* Spread / Total probability cards (same as before but tightened + better background) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-4">
-                  <div className="text-white font-extrabold text-[13px] mb-2">Spread</div>
-                  <div className="text-[11px] text-[#808080] font-semibold">
-                    Line (Home): <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-white font-extrabold text-[13px]">Spread</div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                      Line (Home): <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                    </div>
                   </div>
 
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                      <div className="text-[10px] text-[#808080] font-semibold">{homeTeam} Cover</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.home_cover_prob)}</div>
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeTeam} Cover</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.home_cover_prob))}</div>
                     </div>
-                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                      <div className="text-[10px] text-[#808080] font-semibold">Push</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.cover_push_prob)}</div>
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.cover_push_prob))}</div>
                     </div>
-                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                      <div className="text-[10px] text-[#808080] font-semibold">{awayTeam} Cover</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.away_cover_prob)}</div>
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayTeam} Cover</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.away_cover_prob))}</div>
                     </div>
                   </div>
 
-                  <div className="mt-3 text-[11px] text-[#808080]">
+                  <div className="mt-3 text-[11px] text-[#b0b0b0]">
                     σ Margin: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_margin_game ?? "—"}</span>
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-4">
-                  <div className="text-white font-extrabold text-[13px] mb-2">Total</div>
-                  <div className="text-[11px] text-[#808080] font-semibold">
-                    Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
+                <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-white font-extrabold text-[13px]">Total</div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                      Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
+                    </div>
                   </div>
 
                   <div className="mt-3 grid grid-cols-3 gap-2">
-                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                      <div className="text-[10px] text-[#808080] font-semibold">Over</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.over_prob)}</div>
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Over</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.over_prob))}</div>
                     </div>
-                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                      <div className="text-[10px] text-[#808080] font-semibold">Push</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.total_push_prob)}</div>
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.total_push_prob))}</div>
                     </div>
-                    <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2 text-center">
-                      <div className="text-[10px] text-[#808080] font-semibold">Under</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(predRow.under_prob)}</div>
+                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
+                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
                     </div>
                   </div>
 
-                  <div className="mt-3 text-[11px] text-[#808080]">
+                  <div className="mt-3 text-[11px] text-[#b0b0b0]">
                     σ Total: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_total_game ?? "—"}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="text-[11px] text-[#808080]">
+              <div className="text-[11px] text-[#b0b0b0]">
                 Source: <span className="text-white font-extrabold">monte_carlo_results</span> (event_id match)
               </div>
             </div>
@@ -1845,22 +1789,22 @@ function GameDetailsModal({
                 </button>
               ))}
             </div>
-            <div className="text-[11px] text-[#808080] font-semibold">
+            <div className="text-[11px] text-[#b0b0b0] font-semibold">
               One row per player • Over/Under grouped • Books in columns
             </div>
           </div>
 
           {propsLoading ? (
-            <div className="text-sm text-[#808080] p-4">Loading props…</div>
+            <div className="text-sm text-[#b0b0b0] p-4">Loading props…</div>
           ) : propsError ? (
             <div className="text-sm text-red-400 p-4">Supabase error: {propsError}</div>
           ) : !propsAgg.length ? (
-            <div className="text-sm text-[#808080] p-4">No props found for this game/market.</div>
+            <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
           ) : (
-            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+            <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] overflow-hidden">
               <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between">
                 <div className="text-white font-extrabold text-sm">{propMarket}</div>
-                <div className="text-[11px] text-[#808080] font-semibold">{propsAgg.length} players</div>
+                <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
               </div>
 
               <div className="overflow-x-auto">
@@ -1870,7 +1814,6 @@ function GameDetailsModal({
                       <th className="text-left px-4 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
                       <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
                       <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
-
                       <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
                       <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
                     </tr>
@@ -1918,7 +1861,7 @@ function GameDetailsModal({
 
                             <div className="min-w-0">
                               <div className="text-white font-extrabold text-[13px] truncate">{r.player_name}</div>
-                              <div className="text-[11px] text-[#808080] font-semibold">{r.position ?? "—"}</div>
+                              <div className="text-[11px] text-[#b0b0b0] font-semibold">{r.position ?? "—"}</div>
                             </div>
                           </div>
                         </td>
@@ -1929,7 +1872,6 @@ function GameDetailsModal({
                           {r.display_line == null ? "—" : r.display_line}
                         </td>
 
-                        {/* Over strip */}
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
@@ -1940,7 +1882,6 @@ function GameDetailsModal({
                           </div>
                         </td>
 
-                        {/* Under strip */}
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
@@ -1956,7 +1897,7 @@ function GameDetailsModal({
                 </table>
               </div>
 
-              <div className="px-4 py-3 text-[11px] text-[#808080]">
+              <div className="px-4 py-3 text-[11px] text-[#b0b0b0]">
                 Odds from <span className="text-white font-extrabold">player_props_snapshot</span>. Player photo/position/team from{" "}
                 <span className="text-white font-extrabold">player_prop_ev_latest</span>. Aggregation keeps newest per (player, side, book).
               </div>
@@ -2139,19 +2080,13 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   }, [events]);
 
   const sportLabel =
-    sportKey === "basketball_nba"
-      ? "NBA Odds"
-      : sportKey === "basketball_ncaab"
-      ? "NCAAB Odds"
-      : sportKey === "football_nfl"
-      ? "NFL Odds"
-      : sportKey === "football_ncaaf"
-      ? "NCAAF Odds"
-      : sportKey === "icehockey_nhl"
-      ? "NHL Odds"
-      : sportKey === "baseball_mlb"
-      ? "MLB Odds"
-      : "Odds";
+    sportKey === "basketball_nba" ? "NBA Odds" :
+    sportKey === "basketball_ncaab" ? "NCAAB Odds" :
+    sportKey === "football_nfl" ? "NFL Odds" :
+    sportKey === "football_ncaaf" ? "NCAAF Odds" :
+    sportKey === "icehockey_nhl" ? "NHL Odds" :
+    sportKey === "baseball_mlb" ? "MLB Odds" :
+    "Odds";
 
   const sportChip = sportKey.toUpperCase();
   const marketLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
@@ -2164,33 +2099,21 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   return (
     <div className="w-full">
       <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X}`}>
-        {/* ✅ HERO — matches Model/MonteCarlo structure */}
+        {/* HERO */}
         <div className="pt-4 md:pt-6">
           <div className={HERO_WRAP}>
             <div className={HERO_INNER}>
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <div className={PILL}>
-                    <span className={PILL_DOT} />
-                    <span className={PILL_TX}>Prism Odds Board</span>
-                  </div>
-
-                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
-                    {sportLabel}
-                  </h2>
-
+                  <div className={PILL}><span className={PILL_DOT} /><span className={PILL_TX}>Prism Odds Board</span></div>
+                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
                   <div className={HERO_SUB}>
                     One board per slate. Books shown side-by-side with consensus. Open Game Details for movement, predictions, and props.
                   </div>
                 </div>
 
-                {/* ✅ RIGHT SIDE — Live badge like MonteCarlo */}
                 <div className="hidden md:flex flex-col items-end gap-2">
-                  <div className={LIVE_BADGE}>
-                    <span className={LIVE_TX}>Live</span>
-                    <span className={LIVE_DOT} />
-                  </div>
-
+                  <div className={LIVE_BADGE}><span className={LIVE_TX}>Live</span><span className={LIVE_DOT} /></div>
                   <div className="text-right">
                     <div className="text-[10px] text-[#6a6a6a] font-semibold">Last Updated (CT)</div>
                     <div className="text-xs text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
@@ -2198,31 +2121,22 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 </div>
               </div>
 
-              {/* ✅ CHIPS ROW */}
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <Chip label="Sport" value={sportChip} />
                 <Chip label="Games" value={events.length} />
                 <Chip label="Market" value={marketLabel.toUpperCase()} />
                 <Chip label="Books" value="5" />
                 <Chip label="Refresh" value="60s" />
-
                 <div className="md:hidden w-full" />
                 <div className="md:hidden text-[11px] text-[#6a6a6a] font-semibold">
-                  Last Updated (CT):{" "}
-                  <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
+                  Last Updated (CT): <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
                 </div>
               </div>
 
-              {/* ✅ CONTROLS */}
               <div className="mt-4 flex flex-col gap-3">
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                   {availableDates.map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => setSelectedDate(d)}
-                      className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")}
-                      type="button"
-                    >
+                    <button key={d} onClick={() => setSelectedDate(d)} className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")} type="button">
                       {fmtDateBtn(d)}
                     </button>
                   ))}
@@ -2235,10 +2149,8 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               </div>
             </div>
 
-            {/* Divider */}
             <div className="h-px bg-[#232323]" />
 
-            {/* CONTENT */}
             <div className="p-3 md:p-4">
               {/* MOBILE */}
               <div className="md:hidden">
@@ -2256,9 +2168,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         ev={ev}
                         market={market}
                         booksOpen={!!mobileOpenMap[ev.eventId]}
-                        onToggleBooks={() =>
-                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
-                        }
+                        onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
                         onOpenDetails={openDetails}
                       />
                     ))}
@@ -2290,26 +2200,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <thead className="sticky top-0 z-20">
                           <tr className={`border-b ${HDR_BORDER}`}>
-                            <th
-                              className={[
-                                "text-left px-4 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "sticky left-0 z-30 text-[13px] font-extrabold",
-                              ].join(" ")}
-                            >
+                            <th className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}>
                               Matchup
                             </th>
 
-                            <th
-                              className={[
-                                "text-center px-3 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "z-20 text-[13px] font-extrabold border-l",
-                                HDR_BORDER,
-                              ].join(" ")}
-                            >
+                            <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}>
                               Consensus
                             </th>
 
@@ -2345,4 +2240,3 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
-
