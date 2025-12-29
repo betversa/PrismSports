@@ -1,4 +1,4 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Best visual version of itself)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -11,7 +11,7 @@
 //    - Adds a horizontal reference line for TODAY’S line (the prop line)
 //    - Bars colored by whether that game was OVER (green) / UNDER (red) today’s line
 //    - Hover does NOT shade the whole chart area; it only highlights the bar
-// ✅ Projection label uses μ symbol: "Our Projection: 23.4"
+// ✅ Projection label uses μ symbol
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
 //
 // ✅ Adds Pinnacle odds to line movement (when present)
@@ -210,10 +210,10 @@ const SIDE_COL_PROPS = "side";
 const HISTORY_BOOKS: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
 
 const BOOK_COLOR: Record<AnyBook, string> = {
-  draftkings: "#22c55e",
-  fanduel: "#3b82f6",
-  betmgm: "#d4af37",
-  pinnacle: "#a855f7",
+  draftkings: "#22c55e", // green
+  fanduel: "#3b82f6", // blue
+  betmgm: "#d4af37", // gold
+  pinnacle: "#a855f7", // purple
 };
 
 const OVER_GREEN = "#22c55e";
@@ -319,6 +319,13 @@ function bookShort(book: AnyBook) {
   return "PIN";
 }
 
+function bookFull(book: AnyBook) {
+  if (book === "draftkings") return "DraftKings";
+  if (book === "fanduel") return "FanDuel";
+  if (book === "betmgm") return "BetMGM";
+  return "Pinnacle";
+}
+
 function bookLogoSrc(bookmaker: string): string | null {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings" || b === "dk") return "/books/dksquare.png";
@@ -353,11 +360,7 @@ function fmtLineGame(market: GameMarketKey, line: number | null) {
   return `${line}`;
 }
 
-type PropHistoryMarketKey =
-  | "player_points"
-  | "player_rebounds"
-  | "player_assists"
-  | "player_threes";
+type PropHistoryMarketKey = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
 
 function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | null {
   const m = (marketRaw || "").trim().toLowerCase();
@@ -401,6 +404,18 @@ function fmtPropLine(line: number | null) {
   if (line == null || !Number.isFinite(line)) return "—";
   const rounded = Math.round(line * 100) / 100;
   return `${rounded}`;
+}
+
+function evTone(ev: number) {
+  if (ev >= 7) return "text-emerald-400";
+  if (ev >= 3) return "text-[#d4af37]";
+  return "text-[#b0b0b0]";
+}
+
+function scoreTone(score: number) {
+  if (score >= 90) return { bg: "bg-[#d4af37]/15", border: "border-[#d4af37]/35", text: "text-[#d4af37]" };
+  if (score >= 75) return { bg: "bg-white/5", border: "border-white/10", text: "text-white" };
+  return { bg: "bg-white/0", border: "border-white/0", text: "text-[#a0a0a0]" };
 }
 
 /* =========================================================
@@ -528,6 +543,24 @@ export function ModelScreen() {
   };
   const closeDetails = () => setDetailsOpen(false);
 
+  // ESC to close modal + lock body scroll
+  useEffect(() => {
+    if (!detailsOpen) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDetailsOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [detailsOpen]);
+
   useEffect(() => {
     let mounted = true;
 
@@ -582,11 +615,7 @@ export function ModelScreen() {
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      const settingsQ = supabase
-        .from("app_settings")
-        .select("id,bankroll,kelly_factor,updated_at")
-        .eq("id", 1)
-        .limit(1);
+      const settingsQ = supabase.from("app_settings").select("id,bankroll,kelly_factor,updated_at").eq("id", 1).limit(1);
 
       const [evRes, prRes, sRes] = await Promise.all([evQ, propsQ, settingsQ]);
 
@@ -671,8 +700,7 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
-      base.created_at =
-        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       map.set(key, base);
     }
@@ -736,8 +764,7 @@ export function ModelScreen() {
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
-      base.created_at =
-        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       // preserve mu/line if missing
       if (base.propMeta) {
@@ -746,11 +773,7 @@ export function ModelScreen() {
           base.propMeta.mu = nextMu;
 
         const nextLine = (r.line ?? null) as number | null;
-        if (
-          nextLine != null &&
-          Number.isFinite(nextLine) &&
-          (base.propMeta.line == null || !Number.isFinite(base.propMeta.line))
-        )
+        if (nextLine != null && Number.isFinite(nextLine) && (base.propMeta.line == null || !Number.isFinite(base.propMeta.line)))
           base.propMeta.line = nextLine;
       }
 
@@ -771,6 +794,7 @@ export function ModelScreen() {
 
     if (bookFilter !== "all") {
       if (bookFilter === "pinnacle") {
+        // history only filter: don't remove rows; just clarifies the dropdown option
         list = list;
       } else {
         list = list.filter((p) => !!p.offers[bookFilter]);
@@ -784,88 +808,106 @@ export function ModelScreen() {
   const kellyFactor = clamp(safeNum(settings?.kelly_factor, 0), 0, 1);
   const settingsReady = !!(bankroll && kellyFactor);
 
+  const headerStats = useMemo(() => {
+    const best = filtered[0];
+    const bestEv = best ? best.bestEvPct : 0;
+    const bestScore = best ? best.bestScore : 0;
+    return { bestEv, bestScore };
+  }, [filtered]);
+
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <h2 className="text-xl text-white mb-1">Model Picks</h2>
-          <p className="text-xs text-[#808080]">
-            {filtered.length} plays ·{" "}
-            {kindFilter === "all" ? "All" : kindFilter === "game" ? "Game Lines" : "Player Props"}
-          </p>
+      {/* HERO / HEADER */}
+      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 md:p-5">
+        <div
+          className="pointer-events-none absolute inset-0 opacity-95"
+          style={{
+            background:
+              "radial-gradient(900px 260px at 18% 0%, rgba(212,175,55,0.18), transparent 62%), radial-gradient(700px 240px at 85% 12%, rgba(255,255,255,0.05), transparent 60%)",
+          }}
+        />
+
+        <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div className="min-w-0">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1 text-[11px] text-[#b0b0b0]">
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
+              Prism Model Picks
+            </div>
+
+            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Best +EV Plays</h2>
+
+            <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
+              Aggregated to 1 row per play. Tap/click the <span className="text-white">Pick</span> to open line movement.
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              <Pill label="Plays" value={loading ? "…" : String(filtered.length)} />
+              <Pill label="Best EV" value={loading ? "…" : pct(headerStats.bestEv, 1)} tone={evTone(headerStats.bestEv)} />
+              <Pill label="Best Score" value={loading ? "…" : String(Math.round(headerStats.bestScore))} />
+              <Pill label="Bankroll" value={bankroll ? formatMoney(bankroll) : "—"} />
+              <Pill label="Kelly" value={settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"} />
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="w-full md:w-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-2">
+              <div className="inline-flex items-center bg-[#0b0b0b] border border-[#2a2a2a] rounded-lg overflow-hidden">
+                <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
+                <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
+                <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
+              </div>
+
+              <select
+                value={bookFilter}
+                onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
+                className="px-3 py-2 bg-[#0b0b0b] border border-[#2a2a2a] rounded-lg text-[#d0d0d0] outline-none text-xs"
+              >
+                {SOFT_BOOKS.map((b) => (
+                  <option key={b.key} value={b.key}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <div className="inline-flex items-center bg-[#111] border border-[#2a2a2a] rounded overflow-hidden">
-            <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
-            <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
-            <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
+        {loading ? (
+          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-[#0b0b0b] border border-[#2a2a2a] rounded-lg">
+            Loading EV plays…
           </div>
+        ) : null}
 
-          <select
-            value={bookFilter}
-            onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
-            className="px-2 py-1 bg-[#111] border border-[#2a2a2a] rounded text-[#d0d0d0] outline-none"
-          >
-            {SOFT_BOOKS.map((b) => (
-              <option key={b.key} value={b.key}>
-                {b.label}
-              </option>
-            ))}
-          </select>
-
-          <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Bankroll: <span className="text-[#d4af37]">{bankroll ? formatMoney(bankroll) : "—"}</span>
+        {error ? (
+          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-[#0b0b0b] border border-red-900/50 rounded-lg">
+            Failed to load ev_plays: {error}
           </div>
-          <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080]">
-            Kelly:{" "}
-            <span className="text-[#d4af37]">
-              {settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"}
-            </span>
-          </div>
-        </div>
+        ) : null}
       </div>
 
-      {loading ? (
-        <div className="text-xs text-[#808080] px-3 py-2 bg-[#0f0f0f] border border-[#2a2a2a] rounded">
-          Loading EV plays…
-        </div>
-      ) : null}
-
-      {error ? (
-        <div className="text-xs text-red-400 px-3 py-2 bg-[#0f0f0f] border border-red-900/50 rounded">
-          Failed to load ev_plays: {error}
-        </div>
-      ) : null}
-
       {/* Desktop table */}
-      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg overflow-hidden">
+      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
         <div className="max-h-[70vh] overflow-y-auto">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
                 <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">
-                    Matchup
-                  </th>
+                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">Matchup</th>
                   <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[260px]">Pick</th>
+                  <th className="text-left p-3 text-[#808080] min-w-[280px]">Pick</th>
                   <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
-
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">Quantum</th>
-
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">DK</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">FD</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">MGM</th>
-
+                  <th className="text-center p-3 text-[#808080] min-w-[120px]">Fair Odds</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[120px]">DK</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[120px]">FD</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[120px]">MGM</th>
                   <th className="text-center p-3 text-[#808080] min-w-[110px]">EV</th>
                   <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
                   <th className="text-center p-3 text-[#808080] min-w-[120px]">Bet $</th>
                 </tr>
               </thead>
 
-              <tbody className="divide-y divide-[#1a1a1a]">
+              <tbody className="divide-y divide-[#141414]">
                 {filtered.map((p) => (
                   <PlayRow
                     key={p.playKey}
@@ -879,8 +921,12 @@ export function ModelScreen() {
 
                 {!loading && !filtered.length ? (
                   <tr>
-                    <td colSpan={11} className="p-6 text-center text-xs text-[#808080]">
+                    <td colSpan={11} className="p-10 text-center text-xs text-[#808080]">
                       No positive EV plays found for this filter.
+                      <div className="text-[11px] text-[#606060] mt-1">
+                        If this seems wrong, confirm <span className="text-white">commence_time</span> is in the future and{" "}
+                        <span className="text-white">ev_pct</span> is &gt; 0 for DK/FD/MGM rows.
+                      </div>
                     </td>
                   </tr>
                 ) : null}
@@ -893,7 +939,7 @@ export function ModelScreen() {
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {!loading && !filtered.length ? (
-          <div className="text-xs text-[#808080] px-3 py-8 bg-[#0f0f0f] border border-[#2a2a2a] rounded text-center">
+          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
             No positive EV plays found for this filter.
           </div>
         ) : null}
@@ -940,25 +986,44 @@ function PlayRow({
   onOpenDetails: () => void;
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : NaN;
+  const score = Math.round(safeNum(play.bestScore, 0));
+  const sTone = scoreTone(score);
+
+  const bestOffer = play.bestBook ? play.offers[play.bestBook] : null;
 
   return (
-    <tr className="transition-colors hover:bg-[#0f0f0f]/50">
-      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[340px]">
-        <div className="text-white">
-          {play.matchup ?? "—"}
-          <span className="text-[#606060]"> · </span>
-          <span className="text-[#b0b0b0]">{fmtDateCentral(play.commence_time)}</span>
-          <span className="text-[#606060]"> </span>
-          <span className="text-[#b0b0b0]">{fmtTimeCentral(play.commence_time)}</span>
+    <tr className="transition-colors hover:bg-white/[0.02]">
+      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[360px]">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-white truncate">
+              {play.matchup ?? "—"}
+              <span className="text-[#404040]"> · </span>
+              <span className="text-[#b0b0b0]">{fmtDateCentral(play.commence_time)}</span>
+              <span className="text-[#404040]"> </span>
+              <span className="text-[#b0b0b0]">{fmtTimeCentral(play.commence_time)}</span>
 
-          {play.kind === "prop" ? (
-            <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
-              PROP
-            </span>
+              {play.kind === "prop" ? (
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                  PROP
+                </span>
+              ) : null}
+            </div>
+            <div className="text-[10px] text-[#606060] mt-0.5 truncate">
+              Event: <span className="text-[#404040]">{play.event_id}</span>
+            </div>
+          </div>
+
+          {/* Tiny best-book hint */}
+          {bestOffer ? (
+            <div
+              className="shrink-0 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1"
+              title={`Best book: ${bookFull(bestOffer.book)} (${pct(bestOffer.ev_pct, 1)})`}
+            >
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[bestOffer.book] }} />
+              <span className="text-[10px] text-[#b0b0b0]">{bookShort(bestOffer.book)}</span>
+            </div>
           ) : null}
-        </div>
-        <div className="text-[10px] text-[#606060] mt-0.5">
-          Event: <span className="text-[#404040]">{play.event_id}</span>
         </div>
       </td>
 
@@ -980,15 +1045,22 @@ function PlayRow({
               name={play.pickLabel}
               position={play.propMeta?.position ?? null}
               picture_url={play.propMeta?.picture_url ?? null}
+              sub={`${play.marketLabel} · ${play.sideLabel} ${play.lineLabel}`}
+              mu={play.propMeta?.mu ?? null}
             />
           ) : (
-            <div className="text-white">{play.pickLabel}</div>
+            <div className="min-w-0">
+              <div className="text-white truncate">{play.pickLabel}</div>
+              <div className="text-[10px] text-[#606060] mt-0.5 truncate">
+                {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
+              </div>
+            </div>
           )}
         </button>
       </td>
 
       <td className="p-3 text-center">
-        <div className="text-white">{play.lineLabel}</div>
+        <div className="text-white tabular-nums">{play.lineLabel}</div>
       </td>
 
       <td className="p-3 text-center">
@@ -1006,11 +1078,13 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-center">
-        <div className="text-[#d4af37] tabular-nums">{pct(play.bestEvPct, 1)}</div>
+        <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
       </td>
 
       <td className="p-3 text-center">
-        <ScoreValue value={play.bestScore} />
+        <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
+          {score}
+        </div>
       </td>
 
       <td className="p-3 text-center">
@@ -1039,9 +1113,11 @@ function PlayCard({
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
   const mu = play.propMeta?.mu ?? null;
+  const score = Math.round(safeNum(play.bestScore, 0));
+  const sTone = scoreTone(score);
 
   return (
-    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4">
+    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-white text-sm truncate">
@@ -1058,9 +1134,16 @@ function PlayCard({
         </div>
 
         <div className="shrink-0 text-right">
-          <div className="text-[10px] text-[#606060]">Bet</div>
-          <div className="text-[#d4af37] font-semibold tabular-nums">
-            {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+          <div className="inline-flex items-center gap-2">
+            <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
+              {score}
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] text-[#606060]">Bet</div>
+              <div className="text-[#d4af37] font-semibold tabular-nums">
+                {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1078,15 +1161,13 @@ function PlayCard({
             <div className="min-w-0">
               <div className="text-white text-sm truncate">
                 {play.pickLabel}
-                {play.propMeta?.position ? (
-                  <span className="text-[#808080]"> · {play.propMeta.position}</span>
-                ) : null}
+                {play.propMeta?.position ? <span className="text-[#808080]"> · {play.propMeta.position}</span> : null}
               </div>
               <div className="text-[11px] text-[#808080] mt-0.5 truncate">
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel}
               </div>
               <div className="text-[11px] text-[#b0b0b0] mt-0.5">
-                Our Projection: <span className="text-white">{fmtMu(mu)}</span>
+                μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
               </div>
             </div>
           </div>
@@ -1100,12 +1181,9 @@ function PlayCard({
         )}
       </button>
 
+      {/* Offers strip */}
       <div className="mt-3 grid grid-cols-4 gap-2 items-stretch">
-        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-2 text-center">
-          <div className="text-[10px] text-[#606060]">Quantum</div>
-          <div className="text-white font-semibold tabular-nums">{american(play.quantum_odds)}</div>
-        </div>
-
+        <StatChip label="Fair" value={american(play.quantum_odds)} accent />
         <BookChip offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
         <BookChip offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
         <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
@@ -1114,17 +1192,10 @@ function PlayCard({
       <div className="mt-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] text-[#606060]">EV (best)</div>
-          <div className="text-[#d4af37] font-semibold tabular-nums">{pct(play.bestEvPct, 1)}</div>
+          <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
         </div>
 
-        <div className="text-right">
-          <div className="text-[10px] text-[#606060]">Score</div>
-          <div className="text-sm">
-            <ScoreValue value={play.bestScore} />
-          </div>
-        </div>
-
-        <div className="text-[10px] text-[#606060]">Tap pick for chart</div>
+        <div className="text-[10px] text-[#606060]">Tap pick for charts</div>
       </div>
     </div>
   );
@@ -1156,12 +1227,7 @@ function PlayDetailsModal({
 
   return (
     <div className="fixed inset-0 z-[100]">
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/70"
-        aria-label="Close details modal"
-      />
+      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
 
       <div
         className="absolute inset-0 md:flex md:items-center md:justify-center p-0 md:p-6"
@@ -1170,7 +1236,7 @@ function PlayDetailsModal({
           paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
         }}
       >
-        <div className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-xl rounded-t-xl overflow-hidden flex flex-col max-h-[92vh] md:max-h-[85vh]">
+        <div className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col max-h-[92vh] md:max-h-[85vh]">
           {/* Header */}
           <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
@@ -1190,7 +1256,7 @@ function PlayDetailsModal({
 
                 <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-[#d4af37]">{play.marketLabel}</span>
-                  <span className="text-[#606060]">·</span>
+                  <span className="text-[#404040]">·</span>
                   <span className="text-white">{play.pickLabel}</span>
                   <span className="text-[#808080]">
                     · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
@@ -1199,19 +1265,27 @@ function PlayDetailsModal({
 
                 {play.kind === "prop" ? (
                   <div className="mt-1 text-[11px] text-[#b0b0b0]">
-                    Our Projection: <span className="text-white">{fmtMu(mu)}</span>
+                    μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
                   </div>
                 ) : null}
               </div>
 
               <div className="shrink-0 text-right">
                 <div className="text-[10px] text-[#606060]">Best EV</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">{pct(play.bestEvPct, 1)}</div>
+                <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
                 <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">
-                  {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
-                </div>
+                <div className="text-[#d4af37] font-semibold tabular-nums">{settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}</div>
               </div>
+            </div>
+
+            {/* Legend hint */}
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
+              <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
+              <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
+              <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
+              <LegendDot label="PIN" color={BOOK_COLOR.pinnacle} />
+              <span className="text-[#404040]">·</span>
+              <span>Tooltip shows date + time (CT)</span>
             </div>
           </div>
 
@@ -1226,7 +1300,7 @@ function PlayDetailsModal({
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-1.5 rounded bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
+              className="px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
             >
               Done
             </button>
@@ -1238,7 +1312,7 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History (LINE GRAPH + tooltip includes game/play data)
+   Odds History (LINE GRAPH + tooltip includes date + time CT)
 ========================================================= */
 
 function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
@@ -1258,28 +1332,21 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         if (play.kind === "prop") {
           const player_name = (play.propMeta?.player_name ?? play.pickLabel ?? "").trim();
           const marketKey =
-            historyPropMarketKey(play.propMeta?.market ?? null) ??
-            historyPropMarketKey(play.marketLabel ?? null);
+            historyPropMarketKey(play.propMeta?.market ?? null) ?? historyPropMarketKey(play.marketLabel ?? null);
 
           const sideRaw = (play.propMeta?.side ?? "").trim().toLowerCase();
           const sideCanon = sideRaw === "o" ? "over" : sideRaw === "u" ? "under" : sideRaw;
 
           if (!player_name || !marketKey || !["over", "under"].includes(sideCanon)) {
             if (mounted) {
-              setDebug(
-                `props keys missing: player="${player_name || "—"}" marketKey="${
-                  marketKey || "null"
-                }" side="${sideCanon || "null"}"`
-              );
+              setDebug(`props keys missing: player="${player_name || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`);
             }
             return;
           }
 
           const { data, error } = await supabase
             .from(PROPS_HISTORY_TABLE)
-            .select(
-              `${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`
-            )
+            .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
             .eq(PLAYER_COL_PROPS, player_name)
             .eq(MARKET_COL_PROPS, marketKey)
             .eq(SIDE_COL_PROPS, sideCanon)
@@ -1298,11 +1365,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           setSeries(pts);
 
           if (!pts.length) {
-            setDebug(
-              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(
-                ","
-              )}`
-            );
+            setDebug(`no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`);
           }
           return;
         }
@@ -1313,13 +1376,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         const side = play.gameMeta?.side ?? null;
 
         if (!sport_key || !event_id || !market || !side) {
-          if (mounted) {
-            setDebug(
-              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${
-                market ?? "null"
-              } side=${side ?? "null"}`
-            );
-          }
+          if (mounted) setDebug(`game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`);
           return;
         }
 
@@ -1345,11 +1402,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         setSeries(pts);
 
         if (!pts.length) {
-          setDebug(
-            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(
-              ","
-            )}`
-          );
+          setDebug(`no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`);
         }
       } finally {
         if (mounted) setLoading(false);
@@ -1364,7 +1417,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
   if (loading && !series.length) {
     return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
         <div className="text-xs text-[#808080]">Loading line movement…</div>
       </div>
     );
@@ -1372,7 +1425,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
   if (!series.length) {
     return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
         <div className="text-[10px] text-[#606060] mb-1">Line Movement (this side)</div>
         <div className="text-xs text-[#808080]">No odds history available for this side.</div>
         {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
@@ -1391,9 +1444,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
     const market = play.marketLabel;
     const side = play.sideLabel;
     const line = play.lineLabel;
-    const start = play.commence_time
-      ? `${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}`
-      : "—";
+    const start = play.commence_time ? `${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}` : "—";
 
     const order: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
     const rows = order
@@ -1411,20 +1462,18 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           background: "#0b0b0b",
           border: "1px solid #2a2a2a",
           padding: "10px",
-          borderRadius: 8,
+          borderRadius: 10,
           color: "#d0d0d0",
-          minWidth: 230,
+          minWidth: 250,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
         }}
       >
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>
-          {fmtDateTimeCT(ts)}
-        </div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{fmtDateTimeCT(ts)}</div>
 
         <div style={{ fontSize: 11, color: "#b0b0b0", marginBottom: 8, lineHeight: 1.35 }}>
           <div style={{ color: "#ffffff" }}>{matchup}</div>
           <div>
-            <span style={{ color: "#d4af37" }}>{market}</span>{" "}
-            <span style={{ color: "#606060" }}>·</span>{" "}
+            <span style={{ color: "#d4af37" }}>{market}</span> <span style={{ color: "#606060" }}>·</span>{" "}
             <span style={{ color: "#d0d0d0" }}>
               {side} {line !== "—" ? line : ""}
             </span>
@@ -1433,10 +1482,8 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           {play.kind === "prop" ? (
             <div style={{ color: "#808080" }}>
-              Our Projection:{" "}
-              <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>
-                {fmtMu(play.propMeta?.mu ?? null)}
-              </span>
+              μ Projection:{" "}
+              <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
             </div>
           ) : null}
         </div>
@@ -1445,9 +1492,7 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           {rows.map(({ k, v }) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
               <span style={{ fontSize: 11, color: BOOK_COLOR[k] }}>{bookShort(k)}</span>
-              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>
-                {american(v)}
-              </span>
+              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>{american(v)}</span>
             </div>
           ))}
         </div>
@@ -1456,10 +1501,10 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
   };
 
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
       <div className="text-[10px] text-[#606060] mb-2">Line Movement (this side)</div>
 
-      <div className="h-[260px]">
+      <div className="h-[280px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={series}>
             <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
@@ -1476,12 +1521,15 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
               tick={{ fontSize: 10, fill: "#808080" }}
               axisLine={{ stroke: "#2a2a2a" }}
               tickLine={{ stroke: "#2a2a2a" }}
-              width={56}
+              width={58}
               domain={["auto", "auto"]}
             />
 
             <Tooltip content={TooltipContent} />
-            <Legend />
+            <Legend
+              wrapperStyle={{ fontSize: 11, color: "#808080" }}
+              formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
+            />
 
             {hasAny("draftkings") ? (
               <Line
@@ -1545,9 +1593,6 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
 /* =========================================================
    FantasyPros Game Logs (props only) — BAR CHART
-   ✅ Reference line = today line (prop line)
-   ✅ Bars green if OVER, red if UNDER that line
-   ✅ Hover does NOT shade the whole chart area (cursor transparent)
 ========================================================= */
 
 function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
@@ -1606,16 +1651,9 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const marketKey = historyPropMarketKey(play.propMeta?.market ?? null);
 
   const statKey: "pts" | "reb" | "ast" | "threes" =
-    marketKey === "player_rebounds"
-      ? "reb"
-      : marketKey === "player_assists"
-      ? "ast"
-      : marketKey === "player_threes"
-      ? "threes"
-      : "pts";
+    marketKey === "player_rebounds" ? "reb" : marketKey === "player_assists" ? "ast" : marketKey === "player_threes" ? "threes" : "pts";
 
-  const statLabel =
-    statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
+  const statLabel = statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
 
   const chartData = useMemo(() => {
     // show most recent 10 but plot oldest->newest left-to-right
@@ -1642,8 +1680,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
     const v = safeNum(d[statKey], NaN);
     const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
 
-    const overUnder =
-      line != null && Number.isFinite(v) ? (v >= line ? "OVER" : "UNDER") : undefined;
+    const overUnder = line != null && Number.isFinite(v) ? (v >= line ? "OVER" : "UNDER") : undefined;
 
     return (
       <div
@@ -1651,17 +1688,17 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
           background: "#0b0b0b",
           border: "1px solid #2a2a2a",
           padding: "10px",
-          borderRadius: 8,
+          borderRadius: 10,
           color: "#d0d0d0",
           minWidth: 240,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
         }}
       >
         <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{label}</div>
 
         <div style={{ fontSize: 11, color: "#b0b0b0", lineHeight: 1.35 }}>
           <div>
-            vs <span style={{ color: "#fff" }}>{d.opp}</span> ·{" "}
-            <span style={{ color: "#808080" }}>{d.score}</span>
+            vs <span style={{ color: "#fff" }}>{d.opp}</span> · <span style={{ color: "#808080" }}>{d.score}</span>
           </div>
 
           <div style={{ marginTop: 8, display: "grid", gap: 2 }}>
@@ -1697,7 +1734,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const activeBarStyle = { stroke: "#ffffff", strokeWidth: 1, fillOpacity: 1 };
 
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-3">
+    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
       <div className="flex items-center justify-between gap-3 mb-2">
         <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
         {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
@@ -1707,16 +1744,13 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
         <div className="mb-3">
           <div className="text-[10px] text-[#606060] mb-2">
             Last {chartData.length} games · {statLabel} bars
-            {todayLine != null && Number.isFinite(todayLine) ? (
-              <span className="text-[#808080]"> · Today Line {todayLine}</span>
-            ) : null}
+            {todayLine != null && Number.isFinite(todayLine) ? <span className="text-[#808080]"> · Today Line {todayLine}</span> : null}
           </div>
 
-          <div className="h-[220px]">
+          <div className="h-[230px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} barCategoryGap={12}>
                 <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-
                 <XAxis
                   dataKey="date"
                   tick={{ fontSize: 10, fill: "#808080" }}
@@ -1724,14 +1758,9 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
                   tickLine={{ stroke: "#2a2a2a" }}
                   minTickGap={12}
                 />
-                <YAxis
-                  tick={{ fontSize: 10, fill: "#808080" }}
-                  axisLine={{ stroke: "#2a2a2a" }}
-                  tickLine={{ stroke: "#2a2a2a" }}
-                  width={36}
-                />
+                <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
 
-                {/* ✅ Tooltip cursor transparent so it doesn't highlight the entire block */}
+                {/* ✅ Tooltip cursor transparent so it doesn't shade the whole plot */}
                 <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
 
                 {/* ✅ Today's line reference */}
@@ -1741,12 +1770,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
                     stroke="#d0d0d0"
                     strokeDasharray="4 4"
                     ifOverflow="extendDomain"
-                    label={{
-                      value: "Today Line",
-                      position: "right",
-                      fill: "#808080",
-                      fontSize: 10,
-                    }}
+                    label={{ value: "Today Line", position: "right", fill: "#808080", fontSize: 10 }}
                   />
                 ) : null}
 
@@ -1778,13 +1802,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
             </thead>
             <tbody className="divide-y divide-[#121212]">
               {rows.slice(0, 10).map((r, idx) => {
-                const d = {
-                  min: safeNum(r.min, 0),
-                  pts: safeNum(r.pts, 0),
-                  reb: safeNum(r.reb, 0),
-                  ast: safeNum(r.ast, 0),
-                  threes: safeNum(r.threes, 0),
-                };
+                const d = { min: safeNum(r.min, 0), pts: safeNum(r.pts, 0), reb: safeNum(r.reb, 0), ast: safeNum(r.ast, 0), threes: safeNum(r.threes, 0) };
                 const v = safeNum((d as any)[statKey], NaN);
                 const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
                 const isOver = line != null && Number.isFinite(v) ? v >= line : null;
@@ -1795,12 +1813,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
                     <td className="py-1 pr-2 whitespace-nowrap">{r.opp}</td>
                     <td className="py-1 pr-2 whitespace-nowrap text-[#b0b0b0]">{r.score}</td>
                     <td className="py-1 pr-2 text-right tabular-nums">{d.min}</td>
-                    <td
-                      className="py-1 text-right tabular-nums"
-                      style={{
-                        color: isOver == null ? "#d0d0d0" : isOver ? OVER_GREEN : UNDER_RED,
-                      }}
-                    >
+                    <td className="py-1 text-right tabular-nums" style={{ color: isOver == null ? "#d0d0d0" : isOver ? OVER_GREEN : UNDER_RED }}>
                       {Number.isFinite(v) ? v : "—"}
                     </td>
                   </tr>
@@ -1808,9 +1821,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
               })}
             </tbody>
           </table>
-          <div className="mt-2 text-[10px] text-[#606060]">
-            Showing last {Math.min(10, rows.length)} games
-          </div>
+          <div className="mt-2 text-[10px] text-[#606060]">Showing last {Math.min(10, rows.length)} games</div>
         </div>
       ) : (
         <div className="text-xs text-[#808080]">
@@ -1826,23 +1837,13 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
    UI atoms
 ========================================================= */
 
-function KindPill({
-  active,
-  onClick,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-}) {
+function KindPill({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (
     <button
       onClick={onClick}
       className={[
-        "px-2.5 py-1 text-xs transition-colors",
-        active
-          ? "bg-[#1a1a1a] text-white"
-          : "bg-transparent text-[#808080] hover:text-white hover:bg-[#141414]",
+        "px-3 py-2 text-xs transition-colors",
+        active ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
       ].join(" ")}
       type="button"
     >
@@ -1851,25 +1852,50 @@ function KindPill({
   );
 }
 
+function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1">
+      <div className="text-[11px] text-[#808080]">{label}</div>
+      <div className={["text-[11px] font-medium tabular-nums", tone ? tone : "text-white"].join(" ")}>{value}</div>
+    </div>
+  );
+}
+
+function LegendDot({ label, color }: { label: string; color: string }) {
+  return (
+    <div className="inline-flex items-center gap-1">
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function StatChip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className={["rounded-lg border px-2 py-2 text-center", accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f"]].join(" ")}>
+      <div className="text-[10px] text-[#606060]">{label}</div>
+      <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
+    </div>
+  );
+}
+
 function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   if (!offer) return <div className="text-[#404040]">—</div>;
 
   const logo = bookLogoSrc(offer.book);
+  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book]}]` : "shadow-none";
+
   return (
     <div
       className={[
-        "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded border",
-        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border",
+        isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        ring,
       ].join(" ")}
     >
       <div className="inline-flex items-center justify-center gap-2">
         {logo ? (
-          <img
-            src={logo}
-            alt={bookShort(offer.book)}
-            className="h-5 w-5 opacity-95 shrink-0"
-            draggable={false}
-          />
+          <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
         ) : (
           <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
             {bookShort(offer.book)}
@@ -1877,13 +1903,8 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
         )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div
-        className={
-          isBest
-            ? "text-[#d4af37] text-[10px] tabular-nums"
-            : "text-[#808080] text-[10px] tabular-nums"
-        }
-      >
+
+      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
         {pct(offer.ev_pct, 1)}
       </div>
     </div>
@@ -1893,7 +1914,7 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
 function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   if (!offer) {
     return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded p-2 text-center">
+      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-lg p-2 text-center">
         <div className="text-[10px] text-[#606060]">—</div>
         <div className="text-[#404040]">—</div>
       </div>
@@ -1901,13 +1922,10 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   }
 
   const logo = bookLogoSrc(offer.book);
+  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book]}]` : "shadow-none";
+
   return (
-    <div
-      className={[
-        "rounded p-2 text-center border",
-        isBest ? "bg-[#d4af37]/12 border-[#d4af37]/40" : "bg-[#0a0a0a] border border-[#1f1f1f]",
-      ].join(" ")}
-    >
+    <div className={["rounded-lg p-2 text-center border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
       <div className="flex items-center justify-center gap-2">
         {logo ? (
           <img src={logo} alt={bookShort(offer.book)} className="h-4 w-4 opacity-95" draggable={false} />
@@ -1918,13 +1936,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div
-        className={
-          isBest
-            ? "text-[#d4af37] text-[10px] tabular-nums mt-1"
-            : "text-[#808080] text-[10px] tabular-nums mt-1"
-        }
-      >
+      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
         {pct(offer.ev_pct, 1)}
       </div>
     </div>
@@ -1937,7 +1949,7 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
       <img
         src={url}
         alt={name || "Player"}
-        className="h-8 w-8 rounded-full object-cover border border-[#2a2a2a] bg-[#111] shrink-0"
+        className="h-9 w-9 rounded-full object-cover border border-[#2a2a2a] bg-[#111] shrink-0"
         draggable={false}
         loading="lazy"
         referrerPolicy="no-referrer"
@@ -1956,7 +1968,7 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
     .join("");
 
   return (
-    <div className="h-8 w-8 rounded-full border border-[#2a2a2a] bg-[#111] text-[#808080] flex items-center justify-center text-[11px] shrink-0">
+    <div className="h-9 w-9 rounded-full border border-[#2a2a2a] bg-[#111] text-[#808080] flex items-center justify-center text-[11px] shrink-0">
       {initials || "P"}
     </div>
   );
@@ -1966,10 +1978,14 @@ function PropPickInline({
   name,
   position,
   picture_url,
+  sub,
+  mu,
 }: {
   name: string;
   position: string | null;
   picture_url: string | null;
+  sub?: string;
+  mu?: number | null;
 }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
@@ -1979,23 +1995,19 @@ function PropPickInline({
           {name}
           {position ? <span className="text-[#808080]"> · {String(position).toUpperCase()}</span> : null}
         </div>
+        {sub ? <div className="text-[10px] text-[#606060] mt-0.5 truncate">{sub}</div> : null}
+        <div className="text-[10px] text-[#b0b0b0] mt-0.5">
+          μ Projection: <span className="text-white tabular-nums">{fmtMu(mu ?? null)}</span>
+        </div>
       </div>
     </div>
   );
 }
 
-function ScoreValue({ value }: { value: number }) {
-  const v = Number(value ?? 0);
-  let color = "text-[#606060]";
-  if (v >= 85) color = "text-[#d4af37]";
-  else if (v >= 70) color = "text-white";
-  return <div className={color}>{Math.round(v)}</div>;
-}
-
 function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
   if (!ready || !Number.isFinite(amount) || amount <= 0) return <div className="text-[#404040]">—</div>;
   return (
-    <div className="inline-flex items-center justify-center px-2 py-0.5 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded text-[#d4af37] tabular-nums">
+    <div className="inline-flex items-center justify-center px-2 py-1 bg-[#d4af37]/15 border border-[#d4af37]/35 rounded-lg text-[#d4af37] tabular-nums">
       {formatMoney(amount)}
     </div>
   );
