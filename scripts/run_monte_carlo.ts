@@ -1,18 +1,19 @@
 /**
- * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v5.1: Devig Switch + Tail-Safe EV)
+ * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v5.2: ENGINE_POWER Margins)
  * --------------------------------------------------------------------------------
  * Snapshot tables:
  *   ✅ monte_carlo_results: one row per (sport_key, event_id), overwritten each run
  *   ✅ monte_carlo_runs: history (one row per run)
  *   ✅ ev_plays: cleared per sport each run, then rebuilt
  *
- * NEW in v5.1:
- *   ✅ Devig method SWITCH:
- *      - near 50/50 => Equal-margin devig (normalize)
- *      - lopsided => MPTO / Power devig (solve k: sum(p_i^k)=1)
- *   ✅ Tail-safe EV blending:
- *      - Sharps weighted heavier for favorites/underdogs (tails)
- *      - Optional disagreement guardrail in tails to prevent "model hallucination"
+ * NEW in v5.2:
+ *   ✅ SPREAD / ML margins now use engine_power (per-game) + HCA
+ *      - Fixes “all dogs” bias caused by Off/Def pace-compressed margins in blowouts
+ *   ✅ Totals still use Off/Def blend + pace (unchanged)
+ *
+ * Retains v5.1 features:
+ *   ✅ Devig method SWITCH (normalize vs MPTO/Power)
+ *   ✅ Tail-safe EV blending + optional tail guardrail
  */
 
 import "dotenv/config";
@@ -38,9 +39,12 @@ type EventRow = {
 type TeamRatingRow = {
   canonical: string;
 
-  // per-100 ratings
+  // per-100 ratings (used for totals)
   engine_adj_off: number | null;
   engine_adj_def: number | null;
+
+  // per-game power (used for margin mean)
+  engine_power: number | null;
 
   true_hca: number | null; // points per game
   sigma_margin_100: number | null; // per-100
@@ -196,15 +200,10 @@ const MIN_EV_PCT = Number(process.env.MIN_EV_PCT ?? "0");
 
 /**
  * Devig switching threshold:
- * - if sides are "close" (near 50/50), use equal-margin normalize
- * - else use MPTO/Power devig
- *
- * Interpretation:
- *   diff = |p1 - p2|
- *   - small diff => close market => normalize is fine
- *   - big diff => lopsided => MPTO is more stable
+ * - if sides are "close" (near 50/50), use equal-margin devig (normalize)
+ * - else use MPTO / Power devig
  */
-const DEVIG_DIFF_SWITCH = Number(process.env.DEVIG_DIFF_SWITCH ?? "0.10"); // 0.10 ~= 55/45 vs 70/30 etc
+const DEVIG_DIFF_SWITCH = Number(process.env.DEVIG_DIFF_SWITCH ?? "0.10"); // ~55/45
 
 /**
  * Tail safety:
@@ -218,8 +217,8 @@ const TAIL_SHARP_W_MAX = Number(process.env.TAIL_SHARP_W_MAX ?? "0.95");
  * - If long odds and model >> sharp by too much, skip.
  */
 const TAIL_GUARD_ENABLED = (process.env.TAIL_GUARD_ENABLED ?? "true").toLowerCase() === "true";
-const TAIL_GUARD_LONG_ODDS = Number(process.env.TAIL_GUARD_LONG_ODDS ?? "350"); // +/- threshold for "long"
-const TAIL_GUARD_MAX_GAP = Number(process.env.TAIL_GUARD_MAX_GAP ?? "0.06"); // 6% abs prob gap in tails
+const TAIL_GUARD_LONG_ODDS = Number(process.env.TAIL_GUARD_LONG_ODDS ?? "350");
+const TAIL_GUARD_MAX_GAP = Number(process.env.TAIL_GUARD_MAX_GAP ?? "0.06");
 
 /**
  * Pace weights (auto-renormalized if a component is missing)
@@ -230,8 +229,7 @@ const PACE_W_LAST1 = Number(process.env.PACE_W_LAST1 ?? "0.10");
 const PACE_W_SPLIT = Number(process.env.PACE_W_SPLIT ?? "0.10");
 
 /**
- * Rating blend weights (baseline-free).
- * Default = 50/50, you can tune per sport if you want.
+ * Totals model weights (baseline-free Off/Def blend)
  */
 const PTS_BLEND_WEIGHT_OFF = Number(process.env.PTS_BLEND_WEIGHT_OFF ?? "0.50"); // 0..1
 const PTS_BLEND_WEIGHT_DEF = 1 - PTS_BLEND_WEIGHT_OFF;
@@ -337,10 +335,11 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const paceAway = computeTeamPace(sportKey, awayP, "away");
     const paceGame = averageNonNull([paceHome, paceAway]) ?? defaultPaceForSport(sportKey);
 
-    const input = buildInputsPaceAware(sportKey, homeR, awayR, paceGame);
-
     const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
+
+    // ✅ v5.2: pass lines (optional) only for trace; model margin now uses engine_power regardless of line
+    const input = buildInputsPaceAware(sportKey, homeR, awayR, paceGame);
 
     const sim = simulateGameWithProbs(SIMS, input, {
       spreadLineHome,
@@ -364,13 +363,20 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           pace_away_poss_per_game: paceAway,
           pace_game_poss_per_game: paceGame,
 
+          // ratings used for totals
           home_engine_adj_off_100: num(homeR.engine_adj_off, 0),
           home_engine_adj_def_100: num(homeR.engine_adj_def, 0),
           away_engine_adj_off_100: num(awayR.engine_adj_off, 0),
           away_engine_adj_def_100: num(awayR.engine_adj_def, 0),
+
+          // ✅ rating used for margin
+          home_engine_power_game: num(homeR.engine_power, 0),
+          away_engine_power_game: num(awayR.engine_power, 0),
           home_true_hca_pts: num(homeR.true_hca, 0),
 
           model: {
+            margin_mean_source: "engine_power (per-game) + HCA",
+            totals_source: "Off/Def blend (per-100) scaled by pace",
             pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
             pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
           },
@@ -384,9 +390,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           total_line_consensus: totalLine,
 
           sims: SIMS,
-          stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE
-            ? "negative_means_home_better"
-            : "positive_means_home_better",
+          stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
         }
       : null;
 
@@ -470,10 +474,13 @@ function buildRunConfig(sportKey: string) {
     pace_clamp: paceClampForSport(sportKey),
 
     rating_model: {
-      baseline_assumption: "NONE (baseline-free blend)",
-      pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
-      pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
-      per100_to_game: "paceGame/100",
+      // ✅ v5.2 update:
+      margin_mean: "engine_power (per-game) + HCA",
+      total_mean: "baseline-free Off/Def blend (per-100) scaled by paceGame/100",
+      totals_blend: {
+        pts_blend_weight_off: PTS_BLEND_WEIGHT_OFF,
+        pts_blend_weight_def: PTS_BLEND_WEIGHT_DEF,
+      },
     },
 
     margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
@@ -486,14 +493,12 @@ function buildRunConfig(sportKey: string) {
     ev_soft_books: SOFT_BOOKS,
     ev_sharp_books: SHARP_BOOKS,
 
-    // devig config
     devig_switch: {
       diff_switch: DEVIG_DIFF_SWITCH,
       near_50_method: "equal_margin_normalize",
       lopsided_method: "mpto_power",
     },
 
-    // tail config
     tail: {
       sharp_w_min: TAIL_SHARP_W_MIN,
       sharp_w_max: TAIL_SHARP_W_MAX,
@@ -517,11 +522,7 @@ function paceClampForSport(sportKey: string): { lo: number; hi: number } {
   return { lo: 60, hi: 80 };
 }
 
-function computeTeamPace(
-  sportKey: string,
-  p: PossRow | null,
-  homeAway: "home" | "away"
-): number | null {
+function computeTeamPace(sportKey: string, p: PossRow | null, homeAway: "home" | "away"): number | null {
   if (!p) return null;
 
   const v2025 = toNullNum((p as any)["2025"]);
@@ -561,10 +562,13 @@ function averageNonNull(arr: Array<number | null | undefined>): number | null {
 }
 
 /* =========================================================
-   MODEL (PACE-AWARE, BASELINE-FREE)
+   MODEL (PACE-AWARE)
+   - v5.2: marginMean uses engine_power (per-game) + HCA
+   - totals remain Off/Def blend (per-100) scaled by pace
 ========================================================= */
 
 function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
+  // totals (per-100) inputs
   const homeOff100 = num(home.engine_adj_off, 0);
   const homeDef100 = num(home.engine_adj_def, 0);
   const awayOff100 = num(away.engine_adj_off, 0);
@@ -572,8 +576,8 @@ function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamR
 
   const defFallback = sportKey === "basketball_nba" ? 112 : 100;
 
-  const homeOff = homeOff100 > 0 ? homeOff100 : (sportKey === "basketball_nba" ? 112 : 100);
-  const awayOff = awayOff100 > 0 ? awayOff100 : (sportKey === "basketball_nba" ? 112 : 100);
+  const homeOff = homeOff100 > 0 ? homeOff100 : sportKey === "basketball_nba" ? 112 : 100;
+  const awayOff = awayOff100 > 0 ? awayOff100 : sportKey === "basketball_nba" ? 112 : 100;
   const homeDef = homeDef100 > 0 ? homeDef100 : defFallback;
   const awayDef = awayDef100 > 0 ? awayDef100 : defFallback;
 
@@ -588,10 +592,14 @@ function buildInputsPaceAware(sportKey: string, home: TeamRatingRow, away: TeamR
   const homePts = homePts100 * paceFactor;
   const awayPts = awayPts100 * paceFactor;
 
-  const baseMargin = homePts - awayPts;
+  // ✅ v5.2: margin from power (per-game) + HCA
+  const homePow = num(home.engine_power, 0);
+  const awayPow = num(away.engine_power, 0);
   const hcaPts = num(home.true_hca, 0);
 
-  const marginMean = baseMargin + hcaPts;
+  const marginMean = (homePow - awayPow) + hcaPts;
+
+  // totals unchanged
   const totalMean = Math.max(0, homePts + awayPts);
 
   const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
@@ -728,16 +736,17 @@ async function rebuildEvPlaysForSport(
         const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
         if (!sharp) continue;
 
-        // Dynamic blending in tails: use sharp more when p_sharp far from 0.5
-        const tail = tailness(sharp.prob); // 0 at 0.5, 1 near 0/1
-        const wSharp = clamp(TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail, TAIL_SHARP_W_MIN, TAIL_SHARP_W_MAX);
+        const tail = tailness(sharp.prob);
+        const wSharp = clamp(
+          TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail,
+          TAIL_SHARP_W_MIN,
+          TAIL_SHARP_W_MAX
+        );
         const wMc = 1 - wSharp;
 
-        // Optional: shrink MC toward sharp in tails a bit (prevents "model hallucination")
         const shrink = clamp(0.10 + 0.50 * tail, 0.10, 0.60);
         const mcAdj = clamp01(mcProb * (1 - shrink) + sharp.prob * shrink);
 
-        // final quantum probability (tail-safe)
         const quantumProb = clamp01(wSharp * sharp.prob + wMc * mcAdj);
         const quantumOdds = probToAmericanOdds(quantumProb);
 
@@ -748,7 +757,6 @@ async function rebuildEvPlaysForSport(
           const bookOdds = toNullNum(offer.odds);
           if (bookOdds == null) continue;
 
-          // line matching for spreads/totals
           if (market === "spreads" || market === "totals") {
             if (refLine == null) continue;
 
@@ -759,13 +767,9 @@ async function rebuildEvPlaysForSport(
             if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
           }
 
-          // Tail guardrail: if long odds + model way above sharp, skip
           if (TAIL_GUARD_ENABLED) {
-            const isLong =
-              bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
+            const isLong = bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
             const gap = Math.abs(mcProb - sharp.prob);
-
-            // Only guard when MC is the optimistic one (common failure mode)
             if (isLong && mcProb > sharp.prob && gap > TAIL_GUARD_MAX_GAP) {
               continue;
             }
@@ -843,9 +847,7 @@ async function rebuildEvPlaysForSport(
 async function fetchFutureEvents(startCutoff: Date, sportKey: string): Promise<EventRow[]> {
   const { data, error } = await supabase
     .from("events")
-    .select(
-      "event_id,sport_key,commence_time,api_home_team,api_away_team,canon_home_team,canon_away_team,matchup"
-    )
+    .select("event_id,sport_key,commence_time,api_home_team,api_away_team,canon_home_team,canon_away_team,matchup")
     .eq("sport_key", sportKey)
     .gte("commence_time", startCutoff.toISOString())
     .order("commence_time", { ascending: true });
@@ -875,9 +877,10 @@ async function fetchTeamRatingsForSport(sportKey: string, canonicals: string[]):
   for (let i = 0; i < canonicals.length; i += chunkSize) {
     const c = canonicals.slice(i, i + chunkSize);
 
+    // ✅ v5.2: include engine_power
     const { data, error } = await supabase
       .from("team_ratings")
-      .select("canonical,engine_adj_off,engine_adj_def,true_hca,sigma_margin_100,sigma_total_100")
+      .select("canonical,engine_adj_off,engine_adj_def,engine_power,true_hca,sigma_margin_100,sigma_total_100")
       .eq("sport_key", sportKey)
       .in("canonical", c);
 
@@ -1092,7 +1095,6 @@ function getSharpNoVigProb(
     const bo = toNullNum(b.odds);
     if (ao == null || bo == null) continue;
 
-    // Match spread/total line symmetry to refLine
     if (market === "spreads" || market === "totals") {
       if (refLine == null) continue;
 
@@ -1116,14 +1118,8 @@ function getSharpNoVigProb(
     const p1 = clamp01(americanOddsToProb(ao));
     const p2 = clamp01(americanOddsToProb(bo));
 
-    // Decide devig method by closeness
     const diff = Math.abs(p1 - p2);
-
-    const [nv1] =
-      diff <= DEVIG_DIFF_SWITCH
-        ? noVigEqualMargin(p1, p2)  // near 50/50
-        : noVigMPTO(p1, p2);        // lopsided
-
+    const [nv1] = diff <= DEVIG_DIFF_SWITCH ? noVigEqualMargin(p1, p2) : noVigMPTO(p1, p2);
     probs.push(nv1);
   }
 
@@ -1135,36 +1131,21 @@ function getSharpNoVigProb(
    DEVIG METHODS
 ========================================================= */
 
-/**
- * Equal-margin (classic): normalize so p1+p2=1.
- * Great when market is close to 50/50.
- */
 function noVigEqualMargin(p1: number, p2: number): [number, number] {
   const s = p1 + p2;
   if (s <= 0) return [p1, p2];
   return [p1 / s, p2 / s];
 }
 
-/**
- * MPTO / Power devig:
- * Find k so that p1^k + p2^k = 1
- * then nv_i = p_i^k (since they sum to 1 by construction).
- *
- * Behavior:
- * - For lopsided markets, tends to shrink extremes more realistically.
- */
 function noVigMPTO(p1: number, p2: number): [number, number] {
   const a = clamp(p1, 1e-12, 1 - 1e-12);
   const b = clamp(p2, 1e-12, 1 - 1e-12);
 
   const f = (k: number) => Math.pow(a, k) + Math.pow(b, k) - 1;
 
-  // k in (0, 10) is plenty; k=1 => equal-margin normalize only if a+b=1
   let lo = 0.01;
   let hi = 10;
 
-  // Ensure we have a bracket; f(lo) > 0 typically, f(hi) < 0 typically
-  // If not, fall back to normalize.
   const flo = f(lo);
   const fhi = f(hi);
   if (!(Number.isFinite(flo) && Number.isFinite(fhi)) || flo * fhi > 0) {
@@ -1195,7 +1176,6 @@ function noVigMPTO(p1: number, p2: number): [number, number] {
 ========================================================= */
 
 function tailness(p: number) {
-  // 0 at 0.5, 1 near 0 or 1
   return clamp(Math.abs(p - 0.5) / 0.5, 0, 1);
 }
 
@@ -1203,7 +1183,6 @@ function computeConfidenceScore(evPctVal: number, qProb: number, sharpProb: numb
   const evScore = clamp(evPctVal * 5, 0, 100);
   const probScore = clamp(Math.abs(qProb - 0.5) * 200, 0, 100);
 
-  // Agreement between sharp and MC matters; in tails we penalize disagreement more
   const t = tailness(sharpProb);
   const disagreement = Math.abs(sharpProb - mcProb);
   const agreementScore = 100 - clamp(disagreement * (300 + 200 * t), 0, 100);
@@ -1290,7 +1269,7 @@ function randn() {
     v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
-  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * 2.0 * v);
 }
 
 /* =========================================================
@@ -1301,5 +1280,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
 
