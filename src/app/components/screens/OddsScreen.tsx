@@ -5,14 +5,14 @@
 // ✅ Mobile Predictions: smaller logos + team names in a compact row ABOVE the win% bar (both teams above the bar)
 // ✅ Everything else unchanged from your provided script
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   ResponsiveContainer,
   LineChart,
   Line,
   XAxis,
-  YAxis, 
+  YAxis,
   Tooltip,
   CartesianGrid,
   Legend,
@@ -1177,9 +1177,6 @@ type MonteCarloRow = {
   over_prob?: number | null;
   total_push_prob?: number | null;
   under_prob?: number | null;
-
-  projected_margin_home?: number | null;
-  projected_total?: number | null;
 };
 
 function toNum(v: any): number | null {
@@ -1598,6 +1595,49 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
   const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
 
+  // ✅ STICKY: compute exact offsets so props headers stay sticky across devices (no hard-coded magic numbers)
+  const tabBarRef = useRef<HTMLDivElement | null>(null);
+  const propBarRef = useRef<HTMLDivElement | null>(null);
+  const propsHeaderRef = useRef<HTMLDivElement | null>(null);
+  const propsHdrRow1Ref = useRef<HTMLTableRowElement | null>(null);
+
+  const [propsSticky, setPropsSticky] = useState({
+    tabH: 0,
+    propTop: 0,
+    headerTop: 0,
+    tableTop: 0,
+    hdrRow1H: 46,
+  });
+
+  useLayoutEffect(() => {
+    if (tab !== "props") return;
+
+    let raf = 0;
+
+    const measure = () => {
+      const tabH = Math.round(tabBarRef.current?.getBoundingClientRect().height ?? 0);
+      const propH = Math.round(propBarRef.current?.getBoundingClientRect().height ?? 0);
+      const headH = Math.round(propsHeaderRef.current?.getBoundingClientRect().height ?? 0);
+      const row1H = Math.max(40, Math.round(propsHdrRow1Ref.current?.getBoundingClientRect().height ?? 46));
+
+      setPropsSticky({
+        tabH,
+        propTop: tabH,
+        headerTop: tabH + propH,
+        tableTop: tabH + propH + headH,
+        hdrRow1H: row1H,
+      });
+    };
+
+    raf = window.requestAnimationFrame(measure);
+    window.addEventListener("resize", measure);
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("resize", measure);
+    };
+  }, [tab, propMarket, propsAgg.length]);
+
   // Line movement fetch
   useEffect(() => {
     if (tab !== "line") return;
@@ -1682,9 +1722,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
         over_prob: toNum(r.over_prob),
         total_push_prob: toNum(r.total_push_prob),
         under_prob: toNum(r.under_prob),
-
-        projected_margin_home: toNum(r.projected_margin_home),
-        projected_total: toNum(r.projected_total),
       };
 
       setPredRow(row);
@@ -1893,14 +1930,13 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
   const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
 
-  // Sticky math for Props headers (under sticky tabs + sticky prop market bar)
-  const PROPS_TABLE_STICKY_TOP = 148; // approx: tabs bar (~72) + prop bar (~76)
-  const PROPS_TABLE_HDR_ROW_H = 46;
-
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      {/* ✅ Sticky tabs bar (does NOT shift content on scroll) */}
-      <div className="sticky top-0 z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-3 sm:pt-4 pb-3 border-b border-[#232323] bg-[#0b0b0b]/85 backdrop-blur-[6px]">
+      {/* ✅ Sticky tabs bar */}
+      <div
+        ref={tabBarRef}
+        className="sticky top-0 z-30 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-3 sm:pt-4 pb-3 border-b border-[#232323] bg-[#0b0b0b]/85 backdrop-blur-[6px]"
+      >
         <div className="flex flex-wrap items-center gap-2">
           <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
             Predictions
@@ -2230,8 +2266,8 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   <div className="flex items-center justify-between">
                     <div className="text-white font-extrabold text-[12px]">Total</div>
 
-                      <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
-                        <span>
+                    <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
+                      <span>
                         Total Line:{" "}
                         <span className="text-white font-extrabold tabular-nums">
                           {predRow.total_line ?? "—"}
@@ -2263,7 +2299,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                       <div className="text-white font-extrabold tabular-nums text-[12px]">
                         {pct(toProb01(predRow.total_push_prob))}
                       </div>
-                  </div>
+                    </div>
 
                     <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
                       <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
@@ -2274,7 +2310,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </div>
                 </div>
               </div>
-
 
               {/* Last 5 */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2289,8 +2324,12 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       {/* PLAYER PROPS TAB */}
       {tab === "props" && (
         <div className="pt-3">
-          {/* ✅ Sticky prop market buttons (and prevents scroll-jump) */}
-          <div className="sticky top-[60px] z-20 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 pt-2 border-b border-[#1f1f1f] bg-[#0b0b0b]/85 backdrop-blur-[6px]">
+          {/* ✅ Sticky prop market buttons */}
+          <div
+            ref={propBarRef}
+            className="sticky z-20 -mx-3 sm:-mx-4 px-3 sm:px-4 pb-3 pt-2 border-b border-[#1f1f1f] bg-[#0b0b0b]/85 backdrop-blur-[6px]"
+            style={{ top: propsSticky.propTop }}
+          >
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
                 {PROP_MARKETS.map((m) => (
@@ -2323,8 +2362,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
             <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
               {/* ✅ STICKY: Points header + count */}
               <div
+                ref={propsHeaderRef}
                 className="sticky z-20 px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between bg-[#0b0b0b]/92 backdrop-blur-[6px]"
-                style={{ top: 118 }} // below tabs + within props context
+                style={{ top: propsSticky.headerTop }}
               >
                 <div className="text-white font-extrabold text-sm">{propMarket}</div>
                 <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
@@ -2335,10 +2375,11 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   <thead>
                     {/* ✅ STICKY HEADER ROW 1 */}
                     <tr
+                      ref={propsHdrRow1Ref}
                       className="border-b border-[#232323] bg-[#0b0b0b]"
                       style={{
                         position: "sticky" as any,
-                        top: PROPS_TABLE_STICKY_TOP,
+                        top: propsSticky.tableTop,
                         zIndex: 30,
                       }}
                     >
@@ -2354,7 +2395,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                       className="border-b border-[#1a1a1a] bg-[#0b0b0b]"
                       style={{
                         position: "sticky" as any,
-                        top: PROPS_TABLE_STICKY_TOP + PROPS_TABLE_HDR_ROW_H,
+                        top: propsSticky.tableTop + propsSticky.hdrRow1H,
                         zIndex: 29,
                       }}
                     >
@@ -2823,5 +2864,4 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
-
 
