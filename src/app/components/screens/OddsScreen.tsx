@@ -7,6 +7,7 @@
 // ✅ History modal: ML / Spread / Total ODDS movement charts (date+time CT in tooltip)
 // ✅ Props modal: odds from player_props_snapshot + meta (pos/pic) from player_prop_ev_latest
 // ✅ player_props_snapshot has NO created_at (uses ts / snapshot_ts / inserted_at)
+// ✅ History table ordering is schema-safe (no `.order("ts")` on unknown columns)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -19,7 +20,6 @@ import {
   Tooltip,
   CartesianGrid,
   Legend,
-  ReferenceLine,
 } from "recharts";
 
 /* =========================================================
@@ -64,7 +64,6 @@ const BOOK_LABEL: Record<BookKey, string> = {
   bol: "BetOnline",
 };
 
-// Keep these aligned with your UI theme goals.
 // DK green, FD blue, MGM gold, PIN orange, BOL red.
 const BOOK_STROKES: Record<BookKey, string> = {
   dk: "#16a34a",
@@ -322,11 +321,31 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
-      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
-      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
-      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
-      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
+      dk: {
+        line: row.dk_total_line ?? null,
+        over: row.dk_total_over_odds ?? null,
+        under: row.dk_total_under_odds ?? null,
+      },
+      fd: {
+        line: row.fd_total_line ?? null,
+        over: row.fd_total_over_odds ?? null,
+        under: row.fd_total_under_odds ?? null,
+      },
+      mgm: {
+        line: row.mgm_total_line ?? null,
+        over: row.mgm_total_over_odds ?? null,
+        under: row.mgm_total_under_odds ?? null,
+      },
+      pin: {
+        line: row.pin_total_line ?? null,
+        over: row.pin_total_over_odds ?? null,
+        under: row.pin_total_under_odds ?? null,
+      },
+      bol: {
+        line: row.bol_total_line ?? null,
+        over: row.bol_total_over_odds ?? null,
+        under: row.bol_total_under_odds ?? null,
+      },
     },
   };
 }
@@ -351,11 +370,14 @@ function cellLineOdds(line: number | null, odds: number | null): CellParts {
   if (line == null) return { top: "—" };
   return { top: String(line), bottom: odds == null ? "—" : `(${odds})` };
 }
+
 function renderCellParts(parts: CellParts) {
   return (
     <div className="flex flex-col items-center justify-center leading-tight">
       <div className="tabular-nums">{parts.top}</div>
-      {parts.bottom != null ? <div className="tabular-nums opacity-95">{parts.bottom}</div> : null}
+      {parts.bottom != null ? (
+        <div className="tabular-nums opacity-95">{parts.bottom}</div>
+      ) : null}
     </div>
   );
 }
@@ -468,7 +490,10 @@ function BookLogoPill({
   const pillW = size === "sm" ? "w-[90px]" : "w-[92px]";
 
   return (
-    <div className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`} title={alt}>
+    <div
+      className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`}
+      title={alt}
+    >
       <img
         src={src}
         alt={alt}
@@ -483,7 +508,16 @@ function BookLogoPill({
 }
 
 function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: boolean }) {
-  const fb = bookKey === "dk" ? "DK" : bookKey === "fd" ? "FD" : bookKey === "mgm" ? "MGM" : bookKey === "pin" ? "PIN" : "BOL";
+  const fb =
+    bookKey === "dk"
+      ? "DK"
+      : bookKey === "fd"
+      ? "FD"
+      : bookKey === "mgm"
+      ? "MGM"
+      : bookKey === "pin"
+      ? "PIN"
+      : "BOL";
   return (
     <th
       className={[
@@ -496,7 +530,12 @@ function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: bo
       style={{ width: COL_BOOK }}
     >
       <div className="flex items-center justify-center">
-        <BookLogoPill src={BOOK_LOGOS[bookKey]} alt={BOOK_LABEL[bookKey]} fallbackLabel={fb} size="md" />
+        <BookLogoPill
+          src={BOOK_LOGOS[bookKey]}
+          alt={BOOK_LABEL[bookKey]}
+          fallbackLabel={fb}
+          size="md"
+        />
       </div>
     </th>
   );
@@ -504,7 +543,12 @@ function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: bo
 
 function ConsensusValue({ parts }: { parts: CellParts }) {
   return (
-    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", `border-r ${HDR_BORDER}`].join(" ")}>
+    <td
+      className={[
+        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
+        `border-r ${HDR_BORDER}`,
+      ].join(" ")}
+    >
       {renderCellParts(parts)}
     </td>
   );
@@ -523,7 +567,15 @@ function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boole
   );
 }
 
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+function MiniTeamRow({
+  team,
+  logoUrl,
+  side,
+}: {
+  team: string;
+  logoUrl: string | null;
+  side: "AWAY" | "HOME";
+}) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -568,7 +620,9 @@ function SegButton({
       className={[
         "px-3 py-1.5 text-xs font-extrabold transition-colors",
         "border border-[#2a2a2a]",
-        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -699,7 +753,9 @@ function EventCardMobile({
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
-        <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+        <div className="text-[12px] text-[#cfcfcf] font-semibold">
+          {fmtCTTimeOnly(ev.commenceTime)} CT
+        </div>
 
         <div className="flex items-center gap-2">
           <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
@@ -725,12 +781,20 @@ function EventCardMobile({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
+                {leftLabel}
+              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(awayCons)}
+              </div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
+                {rightLabel}
+              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(homeCons)}
+              </div>
             </div>
           </div>
         </div>
@@ -753,7 +817,12 @@ function EventCardMobile({
                   <div key={bk} className="py-2 border-b border-[#141414] last:border-b-0">
                     <div className="grid grid-cols-[110px_1fr_1fr] items-center gap-3">
                       <div className="flex justify-start">
-                        <BookLogoPill src={BOOK_LOGOS[bk]} alt={meta.alt} fallbackLabel={meta.fb} size="md" />
+                        <BookLogoPill
+                          src={BOOK_LOGOS[bk]}
+                          alt={meta.alt}
+                          fallbackLabel={meta.fb}
+                          size="md"
+                        />
                       </div>
 
                       <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
@@ -791,9 +860,17 @@ function EventTwoRows({
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
-        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
+        <td
+          className={[
+            "p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle",
+            `border-r ${HDR_BORDER}`,
+          ].join(" ")}
+          rowSpan={2}
+        >
           <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+            <div className="text-[12px] text-[#cfcfcf] font-semibold">
+              {fmtCTTimeOnly(ev.commenceTime)} CT
+            </div>
 
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => onOpenHistory(ev)} className={LINK_GOLD}>
@@ -869,7 +946,9 @@ function ModalShell({
         <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
+            {subtitle && (
+              <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>
+            )}
           </div>
           <button
             className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
@@ -906,12 +985,9 @@ function buildSeries(points: HistoryRow[]): HistoryPoint[] {
   const byTs = new Map<string, HistoryPoint>();
   for (const r of points) {
     const key = r.ts;
-    if (!byTs.has(key)) {
-      byTs.set(key, { ts: key, label: fmtCTDateTimeLong(key) });
-    }
+    if (!byTs.has(key)) byTs.set(key, { ts: key, label: fmtCTDateTimeLong(key) });
     const p = byTs.get(key)!;
     p[r.book] = r.odds;
-    // store line per-book too (optional)
     p[`${r.book}__line`] = r.line;
   }
   return Array.from(byTs.values()).sort((a, b) => {
@@ -921,12 +997,7 @@ function buildSeries(points: HistoryRow[]): HistoryPoint[] {
   });
 }
 
-function HistoryTooltip({
-  active,
-  payload,
-  label,
-  market,
-}: any) {
+function HistoryTooltip({ active, payload, label, market }: any) {
   if (!active || !payload?.length) return null;
 
   const tsLabel = label || payload?.[0]?.payload?.label || "—";
@@ -944,15 +1015,17 @@ function HistoryTooltip({
                 <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
                   {BOOK_LABEL[bk]}
                 </div>
-                <div className="text-white font-extrabold tabular-nums">
-                  {v == null ? "—" : String(v)}
-                </div>
+                <div className="text-white font-extrabold tabular-nums">{v == null ? "—" : String(v)}</div>
               </div>
             );
           })}
       </div>
       <div className="mt-2 text-[10px] text-[#808080] font-semibold">
-        {market === "ml" ? "Moneyline Odds History" : market === "spread" ? "Spread Odds History" : "Total Odds History"}
+        {market === "ml"
+          ? "Moneyline Odds History"
+          : market === "spread"
+          ? "Spread Odds History"
+          : "Total Odds History"}
       </div>
     </div>
   );
@@ -972,41 +1045,38 @@ function LineMovementModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [rows, setRows] = useState<HistoryRow[]>([]);
-  const [refLine, setRefLine] = useState<number | null>(null);
 
-  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
+  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(
+    ev.commenceTime
+  )} CT`;
 
   useEffect(() => {
     setError("");
     setLoading(true);
 
     const fetchHistory = async () => {
-      // We’ll try a few likely tables in order.
-      // This keeps it resilient across schema changes without breaking builds.
       const candidates = ["odds_history", "odds_log", "odds_snapshots", "odds_snapshot_history"];
 
       let lastErr: string | null = null;
       let found: any[] | null = null;
 
       for (const t of candidates) {
-        const { data, error } = await supabase
+        const res = await supabase
           .from(t)
           .select("*")
           .eq("sport_key", sportKey)
-          .eq("event_id", ev.eventId)
-          .order("ts", { ascending: true });
+          .eq("event_id", ev.eventId);
 
-        if (!error && data) {
-          found = data;
+        if (!res.error && res.data) {
+          found = res.data;
           lastErr = null;
           break;
         }
-        lastErr = error?.message ?? lastErr;
+        lastErr = res.error?.message ?? lastErr;
       }
 
       if (!found) {
         setRows([]);
-        setRefLine(null);
         setError(lastErr ?? "No history available (no matching table).");
         setLoading(false);
         return;
@@ -1022,15 +1092,19 @@ function LineMovementModal({
         const bk = bookKeyFromRaw(pickBook(r));
         if (!ts || !bk) continue;
 
-        // market matching: try common keys
-        const marketRaw = String(pickAny(r, ["market", "market_key", "bet_type", "type"]) ?? "").toLowerCase();
+        // market matching (soft)
+        const marketRaw = String(
+          pickAny(r, ["market", "market_key", "bet_type", "type"]) ?? ""
+        ).toLowerCase();
         const isMl = marketRaw.includes("h2h") || marketRaw.includes("moneyline") || marketRaw === "ml";
         const isSpread = marketRaw.includes("spread");
         const isTotal = marketRaw.includes("total") || marketRaw.includes("ou") || marketRaw.includes("over_under");
 
-        if (market === "ml" && !isMl && marketRaw) continue;
-        if (market === "spread" && !isSpread && marketRaw) continue;
-        if (market === "total" && !isTotal && marketRaw) continue;
+        if (marketRaw) {
+          if (market === "ml" && !isMl) continue;
+          if (market === "spread" && !isSpread) continue;
+          if (market === "total" && !isTotal) continue;
+        }
 
         // side matching
         const sideRaw = pickSide(r); // away/home OR team name
@@ -1047,28 +1121,17 @@ function LineMovementModal({
 
         if (!sideOk) continue;
 
-        const odds = pickOdds(r);
-        const line = pickLine(r);
-
-        parsed.push({ ts, book: bk, odds, line });
+        parsed.push({ ts, book: bk, odds: pickOdds(r), line: pickLine(r) });
       }
 
-      // Ref line for chart: median of latest lines from rows (if any)
-      let ref: number | null = null;
-      try {
-        const latestByBook = new Map<BookKey, HistoryRow>();
-        for (const rr of parsed) latestByBook.set(rr.book, rr);
-        const lines = Array.from(latestByBook.values())
-          .map((x) => x.line)
-          .filter((x): x is number => typeof x === "number" && Number.isFinite(x));
-        const m = median(lines);
-        ref = m == null ? null : m;
-      } catch {
-        ref = null;
-      }
+      // Sort by ts ascending (schema-safe)
+      parsed.sort((a, b) => {
+        const ta = new Date(normalizeIso(a.ts) ?? a.ts).getTime();
+        const tb = new Date(normalizeIso(b.ts) ?? b.ts).getTime();
+        return ta - tb;
+      });
 
       setRows(parsed);
-      setRefLine(ref);
       setLoading(false);
     };
 
@@ -1077,8 +1140,8 @@ function LineMovementModal({
   }, [sportKey, ev.eventId, market, side]);
 
   const points = useMemo(() => buildSeries(rows), [rows]);
-
-  const sideLabel = market === "total" ? (side === "AWAY" ? "Over" : "Under") : side === "AWAY" ? "Away" : "Home";
+  const sideLabel =
+    market === "total" ? (side === "AWAY" ? "Over" : "Under") : side === "AWAY" ? "Away" : "Home";
 
   return (
     <ModalShell title="Odds History" subtitle={subtitle} onClose={onClose}>
@@ -1086,7 +1149,7 @@ function LineMovementModal({
         <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
           <button
             type="button"
-            className={`px-3 py-1.5 text-xs font-extrabold ${market === "ml" ? "bg-[#d4af37] text-black" : "text-white"} `}
+            className={`px-3 py-1.5 text-xs font-extrabold ${market === "ml" ? "bg-[#d4af37] text-black" : "text-white"}`}
             onClick={() => setMarket("ml")}
           >
             Moneyline
@@ -1094,7 +1157,7 @@ function LineMovementModal({
           <div className="w-px bg-[#2a2a2a]" />
           <button
             type="button"
-            className={`px-3 py-1.5 text-xs font-extrabold ${market === "spread" ? "bg-[#d4af37] text-black" : "text-white"} `}
+            className={`px-3 py-1.5 text-xs font-extrabold ${market === "spread" ? "bg-[#d4af37] text-black" : "text-white"}`}
             onClick={() => setMarket("spread")}
           >
             Spread
@@ -1102,7 +1165,7 @@ function LineMovementModal({
           <div className="w-px bg-[#2a2a2a]" />
           <button
             type="button"
-            className={`px-3 py-1.5 text-xs font-extrabold ${market === "total" ? "bg-[#d4af37] text-black" : "text-white"} `}
+            className={`px-3 py-1.5 text-xs font-extrabold ${market === "total" ? "bg-[#d4af37] text-black" : "text-white"}`}
             onClick={() => setMarket("total")}
           >
             Total
@@ -1154,24 +1217,9 @@ function LineMovementModal({
                   interval="preserveStartEnd"
                   minTickGap={18}
                 />
-                <YAxis
-                  tick={{ fill: "#9a9a9a", fontSize: 10 }}
-                  width={40}
-                  domain={["auto", "auto"]}
-                />
+                <YAxis tick={{ fill: "#9a9a9a", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
                 <Tooltip content={<HistoryTooltip market={market} />} />
                 <Legend wrapperStyle={{ color: "#d0d0d0", fontSize: 11 }} />
-
-                {/* If line exists, show it as a faint reference (only meaningful for spread/total) */}
-                {refLine != null && market !== "ml" ? (
-                  <ReferenceLine
-                    y={refLine}
-                    stroke="#d4af37"
-                    strokeOpacity={0.25}
-                    strokeDasharray="4 4"
-                    ifOverflow="extendDomain"
-                  />
-                ) : null}
 
                 {BOOKS.map((bk) => (
                   <Line
@@ -1255,8 +1303,6 @@ function PlayerPropsModal({
     setError("");
 
     const fetchProps = async () => {
-      // 1) Pull props snapshot for this event
-      // We don’t assume exact column names; we filter in JS too.
       const snap = await supabase
         .from("player_props_snapshot")
         .select("*")
@@ -1272,7 +1318,6 @@ function PlayerPropsModal({
 
       const raw = snap.data ?? [];
 
-      // 2) Extract player names to enrich with pos/pic
       const names = Array.from(
         new Set(
           raw
@@ -1282,7 +1327,6 @@ function PlayerPropsModal({
         )
       );
 
-      // 3) Pull meta from player_prop_ev_latest
       let metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
       if (names.length) {
         const meta = await supabase
@@ -1303,10 +1347,9 @@ function PlayerPropsModal({
         }
       }
 
-      // 4) Build normalized rows
       const wanted = canonPropMarket(market);
-
       const out: PropRow[] = [];
+
       for (const r of raw as any[]) {
         const player_name = String(r.player_name ?? r.player ?? r.name ?? "").trim();
         if (!player_name) continue;
@@ -1339,8 +1382,7 @@ function PlayerPropsModal({
           team: meta.team ?? (r.team ?? null),
           position: meta.position,
           picture_url: meta.picture_url,
-
-          market: market,
+          market,
           side,
           line,
           odds,
@@ -1349,7 +1391,6 @@ function PlayerPropsModal({
         });
       }
 
-      // Sort: player, then over/under, then best ts
       out.sort((a, b) => {
         const p = a.player_name.localeCompare(b.player_name);
         if (p !== 0) return p;
@@ -1376,7 +1417,7 @@ function PlayerPropsModal({
             <button
               key={m}
               type="button"
-              className={`px-3 py-1.5 text-xs font-extrabold ${market === m ? "bg-[#d4af37] text-black" : "text-white"} `}
+              className={`px-3 py-1.5 text-xs font-extrabold ${market === m ? "bg-[#d4af37] text-black" : "text-white"}`}
               onClick={() => setMarket(m)}
             >
               {m}
@@ -1454,13 +1495,9 @@ function PlayerPropsModal({
                       {r.odds == null ? "—" : r.odds}
                     </td>
 
-                    <td className="px-3 py-3 text-[#d0d0d0] font-extrabold text-[12px]">
-                      {r.bookmaker ?? "—"}
-                    </td>
+                    <td className="px-3 py-3 text-[#d0d0d0] font-extrabold text-[12px]">{r.bookmaker ?? "—"}</td>
 
-                    <td className="px-3 py-3 text-[#d0d0d0] font-semibold text-[12px]">
-                      {fmtCTDateTime(r.ts)}
-                    </td>
+                    <td className="px-3 py-3 text-[#d0d0d0] font-semibold text-[12px]">{fmtCTDateTime(r.ts)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1548,21 +1585,20 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       return ta - tb;
     });
 
-    // optional: include latest props snapshot time if available (non-blocking)
+    // optional: include latest props snapshot time if available (schema-safe)
     let propsLatest: string | null = null;
     try {
       const propsRes = await supabase
         .from("player_props_snapshot")
         .select("ts,snapshot_ts,inserted_at")
         .eq("sport_key", sportKey)
-        .order("ts", { ascending: false })
-        .order("snapshot_ts", { ascending: false })
-        .order("inserted_at", { ascending: false })
-        .limit(1);
+        .limit(250);
 
-      if (!propsRes.error) {
-        const r = (propsRes.data?.[0] ?? null) as { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null } | null;
-        propsLatest = normalizeIso(r?.ts ?? r?.snapshot_ts ?? r?.inserted_at ?? null);
+      if (!propsRes.error && propsRes.data) {
+        for (const r of propsRes.data as any[]) {
+          const t = normalizeIso(r.ts ?? r.snapshot_ts ?? r.inserted_at ?? null);
+          propsLatest = maxIso(propsLatest, t);
+        }
       }
     } catch {
       // ignore
@@ -1726,7 +1762,8 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                 <div className="md:hidden w-full" />
                 <div className="md:hidden text-[11px] text-[#6a6a6a] font-semibold">
-                  Last Updated (CT): <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
+                  Last Updated (CT):{" "}
+                  <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
                 </div>
               </div>
 
@@ -1743,7 +1780,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                       {fmtDateBtn(d)}
                     </button>
                   ))}
-                  {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
+                  {!availableDates.length && (
+                    <div className="text-xs text-[#808080]">No games available.</div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
@@ -1773,7 +1812,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         ev={ev}
                         market={market}
                         booksOpen={!!mobileOpenMap[ev.eventId]}
-                        onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
+                        onToggleBooks={() =>
+                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                        }
                         onOpenHistory={openHistory}
                         onOpenProps={openProps}
                       />
@@ -1807,13 +1848,24 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         <thead className="sticky top-0 z-20">
                           <tr className={`border-b ${HDR_BORDER}`}>
                             <th
-                              className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}
+                              className={[
+                                "text-left px-4 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "sticky left-0 z-30 text-[13px] font-extrabold",
+                              ].join(" ")}
                             >
                               Matchup
                             </th>
 
                             <th
-                              className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}
+                              className={[
+                                "text-center px-3 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "z-20 text-[13px] font-extrabold border-l",
+                                HDR_BORDER,
+                              ].join(" ")}
                             >
                               Consensus
                             </th>
@@ -1828,7 +1880,13 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <tbody>
                           {events.map((ev) => (
-                            <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} onOpenProps={openProps} />
+                            <EventTwoRows
+                              key={ev.eventId}
+                              ev={ev}
+                              market={market}
+                              onOpenHistory={openHistory}
+                              onOpenProps={openProps}
+                            />
                           ))}
                         </tbody>
                       </table>
@@ -1853,5 +1911,4 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
-
 
