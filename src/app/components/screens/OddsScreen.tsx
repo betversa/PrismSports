@@ -1,4 +1,4 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Odds + History + Player Props modal w/ headshots + positions)
+// screens/OddsScreen.tsx — FULL REWRITE (Continuity Pass: matches Overview/Model visual system)
 // -------------------------------------------------------------------------------------------------
 // ✅ Filters by sport_key
 // ✅ Desktop: centered max-width “web” layout (less app-like)
@@ -16,7 +16,7 @@
 // ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across odds rows + props snapshot ts (without opening modal)
 // ✅ FIX: props book logos appear in white pill (readable even if logo is black)
 // ✅ FIX: player_props_snapshot.player_id removed (column does not exist)
-// ✅ UPDATE: History hover now shows DATE + TIME (Axis stays time-only for readability)
+// ✅ NEW (this rewrite): Visual continuity with other screens (same shell, buttons, section cards, typography cadence)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -101,6 +101,29 @@ const COL_BOOK = 122;
 
 const BOOK_LOGO_W = 92;
 const BOOK_LOGO_H = 24;
+
+/* =========================================================
+   CONTINUITY THEME (matches Overview/Model)
+========================================================= */
+
+const PAGE_MAX_W = "max-w-[1320px]";
+const PAGE_X = "px-4 md:px-8";
+
+const PANEL = "rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]";
+const PANEL_INNER = "border border-[#2a2a2a] bg-black/20 rounded-xl overflow-hidden";
+
+const MUTED = "text-[#8a8a8a]";
+const MUTED2 = "text-[#6a6a6a]";
+const EDGE = "border-[#2a2a2a]";
+const EDGE2 = "border-[#232323]";
+
+const BTN_BASE =
+  "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors whitespace-nowrap";
+const BTN_ON = "bg-[#d4af37] text-black border-[#d4af37]";
+const BTN_OFF = "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]";
+const BTN_GHOST =
+  "text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]";
+const LINK_GOLD = "text-[11px] font-extrabold text-[#d4af37] hover:underline";
 
 /** Header colors */
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
@@ -399,7 +422,7 @@ function BookLogoPill({
 }
 
 /* =========================================================
-   SMALL UI HELPERS
+   SMALL UI HELPERS (consistent buttons)
 ========================================================= */
 
 function SegButton({
@@ -418,9 +441,7 @@ function SegButton({
       className={[
         "px-3 py-1.5 text-xs font-extrabold transition-colors",
         "border border-[#2a2a2a]",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
+        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -506,12 +527,7 @@ function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boole
 
 function ConsensusValue({ parts }: { parts: CellParts }) {
   return (
-    <td
-      className={[
-        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
-        `border-r ${HDR_BORDER}`,
-      ].join(" ")}
-    >
+    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", `border-r ${HDR_BORDER}`].join(" ")}>
       {renderCellParts(parts)}
     </td>
   );
@@ -608,18 +624,7 @@ function seriesColor(bookmaker: string) {
   return BOOK_SERIES_COLOR[k] ?? "#9ca3af";
 }
 
-function fmtCTAxisTimeLabel(iso: string) {
-  const n = normalizeIso(iso) ?? iso;
-  const d = new Date(n);
-  if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(d);
-}
-
-function fmtCTTooltipDateTimeLabel(iso: string) {
+function fmtCTShortLabel(iso: string) {
   const n = normalizeIso(iso) ?? iso;
   const d = new Date(n);
   if (Number.isNaN(d.getTime())) return iso;
@@ -660,10 +665,7 @@ function medianProbOfKeys(point: any, keys: string[]) {
 
 type ChartPoint = {
   ts: string;
-  /** x-axis (time-only) */
   t: string;
-  /** tooltip label (date + time) */
-  dt: string;
   mw: number | null;
   sharp: boolean;
   pinProb?: number | null;
@@ -692,13 +694,7 @@ function buildChartSeriesOddsOnly(rows: HistoryRow[], uiMarket: Market, books: s
 
   const points: ChartPoint[] = bins.map((bin) => {
     const byBook = binMap.get(bin)!;
-    const p: ChartPoint = {
-      ts: bin,
-      t: fmtCTAxisTimeLabel(bin),
-      dt: fmtCTTooltipDateTimeLabel(bin),
-      mw: null,
-      sharp: false,
-    };
+    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
 
     for (const b of books) {
       const row = byBook.get(b);
@@ -762,13 +758,13 @@ function useIsMobile(bp = 640) {
     const on = () => setIsMobile(mq.matches);
     on();
     mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener("change", on);
+    return () => mq.removeEventListener?.("change", on);
   }, [bp]);
   return isMobile;
 }
 
 /* =========================================================
-   MODAL SHELL
+   MODAL SHELL (same shape/typography as other screens)
 ========================================================= */
 
 function ModalShell({
@@ -797,7 +793,7 @@ function ModalShell({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-7xl rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col">
+      <div className="w-full max-w-7xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
         <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
@@ -1240,7 +1236,7 @@ function PlayerPropsModal({
         <>
           {/* Desktop/tablet */}
           <div className="hidden sm:block">
-            <div className="overflow-x-auto rounded-xl border border-[#2a2a2a] bg-black/20">
+            <div className={PANEL_INNER}>
               <table className="min-w-[1040px] w-full">
                 <thead className="sticky top-0 z-10">
                   <tr className={`border-b ${HDR_BORDER}`}>
@@ -1311,7 +1307,7 @@ function PlayerPropsModal({
           {/* Mobile */}
           <div className="sm:hidden space-y-3">
             {rows.map((r) => (
-              <div key={r.player} className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+              <div key={r.player} className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
                 <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
                   <div className="min-w-0 flex items-center gap-3">
                     <PlayerAvatar url={r.pictureUrl} name={r.player} size={34} />
@@ -1399,7 +1395,7 @@ function HistoryChartPairOddsOnly({
   const empty = !seriesA.length && !seriesB.length;
 
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+    <div className={PANEL_INNER}>
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-white font-extrabold text-sm">{title}</div>
       </div>
@@ -1412,7 +1408,7 @@ function HistoryChartPairOddsOnly({
             { title: panelTitleA, data: seriesA } as const,
             { title: panelTitleB, data: seriesB } as const,
           ].map((panel) => (
-            <div key={panel.title} className="rounded-lg border border-[#2a2a2a] bg-black/20 p-3">
+            <div key={panel.title} className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
               <div className="flex items-center justify-between gap-3 mb-2">
                 <div className="text-white font-bold text-xs">{panel.title}</div>
                 <div className="flex items-center gap-3">
@@ -1431,7 +1427,7 @@ function HistoryChartPairOddsOnly({
                     <YAxis yAxisId="mw" orientation="right" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 42 : 46} />
 
                     <Tooltip
-                      content={({ active, payload }) => {
+                      content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
 
                         const row: any = payload[0]?.payload;
@@ -1448,9 +1444,7 @@ function HistoryChartPairOddsOnly({
 
                         return (
                           <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[340px]">
-                            <div className="font-extrabold text-white mb-1">
-                              {row?.dt ?? row?.t ?? "—"}
-                            </div>
+                            <div className="font-extrabold text-white mb-1">{label}</div>
 
                             {row?.mw != null && (
                               <div className="mb-1">
@@ -1633,33 +1627,21 @@ function LineMovementModal({
     <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
-            activeMarket === "ml"
-              ? "bg-[#d4af37] text-black border-[#d4af37]"
-              : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
-          }`}
+          className={[BTN_BASE, activeMarket === "ml" ? BTN_ON : BTN_OFF].join(" ")}
           onClick={() => setActiveMarket("ml")}
           type="button"
         >
           Moneyline
         </button>
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
-            activeMarket === "spread"
-              ? "bg-[#d4af37] text-black border-[#d4af37]"
-              : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
-          }`}
+          className={[BTN_BASE, activeMarket === "spread" ? BTN_ON : BTN_OFF].join(" ")}
           onClick={() => setActiveMarket("spread")}
           type="button"
         >
           Spread
         </button>
         <button
-          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold border ${
-            activeMarket === "total"
-              ? "bg-[#d4af37] text-black border-[#d4af37]"
-              : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a]"
-          }`}
+          className={[BTN_BASE, activeMarket === "total" ? BTN_ON : BTN_OFF].join(" ")}
           onClick={() => setActiveMarket("total")}
           type="button"
         >
@@ -1737,16 +1719,12 @@ function MobileMoreMenu({ onHistory, onProps }: { onHistory: () => void; onProps
 
   return (
     <div className="relative" ref={ref as any}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
-      >
+      <button type="button" onClick={() => setOpen((v) => !v)} className={BTN_GHOST}>
         More ▾
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-40 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] shadow-[0_16px_60px_rgba(0,0,0,0.45)] overflow-hidden z-20">
+        <div className="absolute right-0 mt-2 w-40 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] shadow-[0_16px_60px_rgba(0,0,0,0.45)] overflow-hidden z-20">
           <button
             type="button"
             onClick={() => {
@@ -1813,16 +1791,12 @@ function EventCardMobile({
       : { alt: "BetOnline", fb: "BOL" };
 
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
         <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onToggleBooks}
-            className="text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
-          >
+          <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
             {booksOpen ? "Hide Books" : "Show Books"}
           </button>
 
@@ -1836,7 +1810,7 @@ function EventCardMobile({
       </div>
 
       <div className="px-4 pb-4">
-        <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3">
+        <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-3">
           <div className="flex items-center justify-between mb-2">
             <div className="text-[12px] text-white font-extrabold">Consensus</div>
             <div className="text-[11px] text-[#808080] font-semibold">
@@ -1861,7 +1835,7 @@ function EventCardMobile({
         </div>
 
         {booksOpen && (
-          <div className="mt-3 rounded-lg border border-[#2a2a2a] bg-black/10 overflow-hidden">
+          <div className="mt-3 rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
             <div className="px-4 py-2 border-b border-[#141414]">
               <div className="text-[12px] text-white font-extrabold">Books</div>
               <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
@@ -1920,10 +1894,7 @@ function EventTwoRows({
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
-        <td
-          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
-          rowSpan={2}
-        >
+        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
@@ -1931,7 +1902,7 @@ function EventTwoRows({
               <button
                 type="button"
                 onClick={() => onOpenHistory(ev)}
-                className="text-[11px] font-extrabold text-[#d4af37] hover:underline"
+                className={LINK_GOLD}
                 title="View line movement history"
               >
                 History
@@ -1940,7 +1911,7 @@ function EventTwoRows({
               <button
                 type="button"
                 onClick={() => onOpenProps(ev)}
-                className="text-[11px] font-extrabold text-white/90 hover:text-white px-2 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]"
+                className={BTN_GHOST}
                 title="View player props"
               >
                 Props
@@ -2191,20 +2162,25 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
   return (
     <div className="w-full">
-      <div className="max-w-[1320px] mx-auto px-4 md:px-8">
+      <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X}`}>
+        {/* Page header (matches other screens: title + sub + last updated chip) */}
         <div className="pt-4 md:pt-6">
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-            <div>
+            <div className="min-w-0">
               <h2 className="text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
-              <div className="text-xs text-[#8a8a8a] mt-1">{headerLabel} · 5 books · refresh 60s</div>
+              <div className={`text-xs ${MUTED} mt-1`}>
+                {headerLabel} · 5 books · refresh 60s
+              </div>
 
+              {/* Mobile last updated */}
               <div className="md:hidden mt-2 text-[11px] text-[#6a6a6a] font-semibold">
                 Last Updated (CT): <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
               </div>
             </div>
 
+            {/* Desktop last updated */}
             <div className="hidden md:block text-right">
-              <div className="text-[10px] text-[#6a6a6a] font-semibold">Last Updated (CT)</div>
+              <div className={`text-[10px] ${MUTED2} font-semibold`}>Last Updated (CT)</div>
               <div className="text-xs text-white flex items-center justify-end gap-2">
                 <span className="font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
@@ -2212,18 +2188,14 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
             </div>
           </div>
 
+          {/* Controls section (same spacing cadence as other screens) */}
           <div className="mt-4 flex flex-col gap-3">
             <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
               {availableDates.map((d) => (
                 <button
                   key={d}
                   onClick={() => setSelectedDate(d)}
-                  className={[
-                    "px-3 py-1.5 rounded-lg text-xs border transition-colors whitespace-nowrap font-extrabold",
-                    selectedDate === d
-                      ? "bg-[#d4af37] text-black border-[#d4af37]"
-                      : "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]",
-                  ].join(" ")}
+                  className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")}
                   title={d}
                   type="button"
                 >
@@ -2240,7 +2212,8 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           </div>
         </div>
 
-        <div className="mt-5 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]">
+        {/* Main panel */}
+        <div className={`mt-5 ${PANEL}`}>
           {/* MOBILE */}
           <div className="md:hidden">
             {loading ? (
@@ -2338,9 +2311,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         </div>
 
         {/* History modal */}
-        {historyOpen && historyEvent?.eventId && (
-          <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />
-        )}
+        {historyOpen && historyEvent?.eventId && <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />}
 
         {/* Player Props modal */}
         {propsOpen && propsEvent?.eventId && (
@@ -2357,4 +2328,5 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
+
 
