@@ -1,11 +1,13 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Predictions tab redesigned: 100% split circle + richer header + background)
+// screens/OddsScreen.tsx — FULL REWRITE (Predictions spacing fixed + Last 5 Games added)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ Fix: Predictions circle is now a 100% donut split into TWO arcs (Away/Home win%)
-// ✅ Fix: Projected score is INSIDE the donut (not outside), with win% labels around it
-// ✅ Adds “dead space” content at top of Predictions tab (Key Lines + Model Snapshot chips)
-// ✅ Adds subtle modal background (gradient + soft pattern/noise) so it’s not flat black
+// ✅ FIX: Predictions tab spacing + layout tightened (less dead space / better grid)
+// ✅ NEW: Last 5 Games panel in Predictions (NBA: basketballref_games_nba, NCAAB: kenpom_games)
 // ✅ Keeps: single Game Details button, single Market buttons ONLY in Line Movement tab
 // ✅ Keeps: Player Props tab = one row per player, books in same row
+// ✅ Keeps: line movement tooltip shows DATE + TIME (CT) + line+odds for spread/total
+//
+// NOTE: kenpom_games column names may be either literal (e.g. "Team1 (Away)") or snake_case.
+//       This script attempts literal first; if you use snake_case, adjust in fetchLast5Games().
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -239,14 +241,29 @@ function pickTs(row: any): string | null {
 }
 
 function pickOdds(row: any): number | null {
-  const raw = pickAny(row, ["odds", "price", "american_odds", "odds_american", "book_odds"]);
+  const raw = pickAny(row, [
+    "odds",
+    "price",
+    "american_odds",
+    "odds_american",
+    "book_odds",
+  ]);
   if (raw == null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
 function pickLine(row: any): number | null {
-  const raw = pickAny(row, ["line", "points", "point", "total", "spread_line", "total_line", "prop_line", "value"]);
+  const raw = pickAny(row, [
+    "line",
+    "points",
+    "point",
+    "total",
+    "spread_line",
+    "total_line",
+    "prop_line",
+    "value",
+  ]);
   if (raw == null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
@@ -325,11 +342,31 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
-      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
-      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
-      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
-      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
+      dk: {
+        line: row.dk_total_line ?? null,
+        over: row.dk_total_over_odds ?? null,
+        under: row.dk_total_under_odds ?? null,
+      },
+      fd: {
+        line: row.fd_total_line ?? null,
+        over: row.fd_total_over_odds ?? null,
+        under: row.fd_total_under_odds ?? null,
+      },
+      mgm: {
+        line: row.mgm_total_line ?? null,
+        over: row.mgm_total_over_odds ?? null,
+        under: row.mgm_total_under_odds ?? null,
+      },
+      pin: {
+        line: row.pin_total_line ?? null,
+        over: row.pin_total_over_odds ?? null,
+        under: row.pin_total_under_odds ?? null,
+      },
+      bol: {
+        line: row.bol_total_line ?? null,
+        over: row.bol_total_over_odds ?? null,
+        under: row.bol_total_under_odds ?? null,
+      },
     },
   };
 }
@@ -473,7 +510,10 @@ function BookLogoPill({
   const pillW = size === "sm" ? "w-[90px]" : "w-[92px]";
 
   return (
-    <div className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`} title={alt}>
+    <div
+      className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`}
+      title={alt}
+    >
       <img
         src={src}
         alt={alt}
@@ -489,7 +529,15 @@ function BookLogoPill({
 
 function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: boolean }) {
   const fb =
-    bookKey === "dk" ? "DK" : bookKey === "fd" ? "FD" : bookKey === "mgm" ? "MGM" : bookKey === "pin" ? "PIN" : "BOL";
+    bookKey === "dk"
+      ? "DK"
+      : bookKey === "fd"
+      ? "FD"
+      : bookKey === "mgm"
+      ? "MGM"
+      : bookKey === "pin"
+      ? "PIN"
+      : "BOL";
   return (
     <th
       className={[
@@ -502,7 +550,12 @@ function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: bo
       style={{ width: COL_BOOK }}
     >
       <div className="flex items-center justify-center">
-        <BookLogoPill src={BOOK_LOGOS[bookKey]} alt={BOOK_LABEL[bookKey]} fallbackLabel={fb} size="md" />
+        <BookLogoPill
+          src={BOOK_LOGOS[bookKey]}
+          alt={BOOK_LABEL[bookKey]}
+          fallbackLabel={fb}
+          size="md"
+        />
       </div>
     </th>
   );
@@ -510,7 +563,12 @@ function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: bo
 
 function ConsensusValue({ parts }: { parts: CellParts }) {
   return (
-    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", `border-r ${HDR_BORDER}`].join(" ")}>
+    <td
+      className={[
+        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
+        `border-r ${HDR_BORDER}`,
+      ].join(" ")}
+    >
       {renderCellParts(parts)}
     </td>
   );
@@ -518,13 +576,26 @@ function ConsensusValue({ parts }: { parts: CellParts }) {
 
 function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
   return (
-    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", borderLeft ? `border-l ${HDR_BORDER}` : ""].join(" ")}>
+    <td
+      className={[
+        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
+        borderLeft ? `border-l ${HDR_BORDER}` : "",
+      ].join(" ")}
+    >
       {renderCellParts(parts)}
     </td>
   );
 }
 
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+function MiniTeamRow({
+  team,
+  logoUrl,
+  side,
+}: {
+  team: string;
+  logoUrl: string | null;
+  side: "AWAY" | "HOME";
+}) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -551,7 +622,15 @@ function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | 
    SEGMENTED MARKET CONTROL (board)
 ========================================================= */
 
-function SegButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function SegButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
@@ -559,7 +638,9 @@ function SegButton({ active, onClick, children }: { active: boolean; onClick: ()
       className={[
         "px-3 py-1.5 text-xs font-extrabold transition-colors",
         "border border-[#2a2a2a]",
-        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -570,11 +651,17 @@ function SegButton({ active, onClick, children }: { active: boolean; onClick: ()
 function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) => void }) {
   return (
     <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>Moneyline</SegButton>
+      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>
+        Moneyline
+      </SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>Spread</SegButton>
+      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>
+        Spread
+      </SegButton>
       <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "total"} onClick={() => onChange("total")}>Total</SegButton>
+      <SegButton active={value === "total"} onClick={() => onChange("total")}>
+        Total
+      </SegButton>
     </div>
   );
 }
@@ -612,22 +699,32 @@ function EventCardMobile({
   const homeCons = consensusPartsForRow(ev, market, "HOME");
 
   const metaFor = (book: BookKey) =>
-    book === "dk" ? { alt: "DraftKings", fb: "DK" } :
-    book === "fd" ? { alt: "FanDuel", fb: "FD" } :
-    book === "mgm" ? { alt: "BetMGM", fb: "MGM" } :
-    book === "pin" ? { alt: "Pinnacle", fb: "PIN" } :
-    { alt: "BetOnline", fb: "BOL" };
+    book === "dk"
+      ? { alt: "DraftKings", fb: "DK" }
+      : book === "fd"
+      ? { alt: "FanDuel", fb: "FD" }
+      : book === "mgm"
+      ? { alt: "BetMGM", fb: "MGM" }
+      : book === "pin"
+      ? { alt: "Pinnacle", fb: "PIN" }
+      : { alt: "BetOnline", fb: "BOL" };
 
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
       <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
-        <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+        <div className="text-[12px] text-[#cfcfcf] font-semibold">
+          {fmtCTTimeOnly(ev.commenceTime)} CT
+        </div>
 
         <div className="flex items-center gap-2">
           <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
             {booksOpen ? "Hide Books" : "Show Books"}
           </button>
-          <button type="button" onClick={() => onOpenDetails(ev)} className={[BTN_BASE, BTN_ON].join(" ")}>
+          <button
+            type="button"
+            onClick={() => onOpenDetails(ev)}
+            className={[BTN_BASE, BTN_ON].join(" ")}
+          >
             Game Details
           </button>
         </div>
@@ -649,12 +746,20 @@ function EventCardMobile({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(awayCons)}</div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
+                {leftLabel}
+              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(awayCons)}
+              </div>
             </div>
             <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">{renderCellParts(homeCons)}</div>
+              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
+                {rightLabel}
+              </div>
+              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+                {renderCellParts(homeCons)}
+              </div>
             </div>
           </div>
         </div>
@@ -665,8 +770,12 @@ function EventCardMobile({
               <div className="text-[12px] text-white font-extrabold">Books</div>
               <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
                 <div />
-                <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
-                <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
+                <div className="text-[10px] text-[#808080] font-semibold text-center">
+                  {leftLabel}
+                </div>
+                <div className="text-[10px] text-[#808080] font-semibold text-center">
+                  {rightLabel}
+                </div>
               </div>
             </div>
 
@@ -698,14 +807,28 @@ function EventCardMobile({
   );
 }
 
-function EventTwoRows({ ev, market, onOpenDetails }: { ev: EventOdds; market: Market; onOpenDetails: (ev: EventOdds) => void }) {
+function EventTwoRows({
+  ev,
+  market,
+  onOpenDetails,
+}: {
+  ev: EventOdds;
+  market: Market;
+  onOpenDetails: (ev: EventOdds) => void;
+}) {
   const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
   const homeConsensus = consensusPartsForRow(ev, market, "HOME");
 
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
-        <td className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")} rowSpan={2}>
+        <td
+          className={[
+            "p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle",
+            `border-r ${HDR_BORDER}`,
+          ].join(" ")}
+          rowSpan={2}
+        >
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
@@ -737,13 +860,15 @@ function EventTwoRows({ ev, market, onOpenDetails }: { ev: EventOdds; market: Ma
         <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
       </tr>
 
-      <tr><td colSpan={7} className="h-2 bg-transparent" /></tr>
+      <tr>
+        <td colSpan={7} className="h-2 bg-transparent" />
+      </tr>
     </>
   );
 }
 
 /* =========================================================
-   MODAL SHELL (now with subtle background)
+   MODAL SHELL (with subtle background)
 ========================================================= */
 
 function ModalShell({
@@ -785,7 +910,7 @@ function ModalShell({
       }}
     >
       <div
-        className="w-full max-w-7xl rounded-2xl border border-[#2a2a2a] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+        className="relative w-full max-w-7xl rounded-2xl border border-[#2a2a2a] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
         style={{
           background:
             "radial-gradient(1200px 700px at 15% 10%, rgba(212,175,55,0.10), transparent 55%)," +
@@ -828,14 +953,24 @@ function ModalShell({
 
 type DetailsTab = "line" | "pred" | "props";
 
-function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function TabBtn({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={[
         "px-3 py-1.5 text-xs font-extrabold rounded-lg border transition-colors",
-        active ? "bg-[#d4af37] text-black border-[#d4af37]" : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
+        active
+          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
       ].join(" ")}
     >
       {children}
@@ -886,11 +1021,17 @@ function HistoryTooltip({ active, payload, label, market }: any) {
 
             return (
               <div key={bk} className="flex items-center justify-between gap-3 text-[11px]">
-                <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>{BOOK_LABEL[bk]}</div>
+                <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
+                  {BOOK_LABEL[bk]}
+                </div>
                 <div className="text-white font-extrabold tabular-nums">
                   {market === "ml"
-                    ? odds == null ? "—" : String(odds)
-                    : line == null && odds == null ? "—" : `${line == null ? "—" : String(line)}  (${odds == null ? "—" : String(odds)})`}
+                    ? odds == null
+                      ? "—"
+                      : String(odds)
+                    : line == null && odds == null
+                    ? "—"
+                    : `${line == null ? "—" : String(line)}  (${odds == null ? "—" : String(odds)})`}
                 </div>
               </div>
             );
@@ -898,7 +1039,11 @@ function HistoryTooltip({ active, payload, label, market }: any) {
       </div>
 
       <div className="mt-2 text-[10px] text-[#808080] font-semibold">
-        {market === "ml" ? "Moneyline Odds History" : market === "spread" ? "Spread (line + odds) History" : "Total (line + odds) History"}
+        {market === "ml"
+          ? "Moneyline Odds History"
+          : market === "spread"
+          ? "Spread (line + odds) History"
+          : "Total (line + odds) History"}
       </div>
     </div>
   );
@@ -1003,7 +1148,12 @@ function SideBySideLineCharts({
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={pts} margin={{ top: 10, right: 18, left: 0, bottom: 10 }}>
               <CartesianGrid stroke="#222222" strokeDasharray="3 3" />
-              <XAxis dataKey="label" tick={{ fill: "#b0b0b0", fontSize: 10 }} interval="preserveStartEnd" minTickGap={18} />
+              <XAxis
+                dataKey="label"
+                tick={{ fill: "#b0b0b0", fontSize: 10 }}
+                interval="preserveStartEnd"
+                minTickGap={18}
+              />
               <YAxis tick={{ fill: "#b0b0b0", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
               <Tooltip content={<HistoryTooltip market={market} />} />
               <Legend wrapperStyle={{ color: "#d0d0d0", fontSize: 11 }} />
@@ -1103,9 +1253,17 @@ function probToAmerican(p: number | null): string {
 }
 
 function winColors(awayP: number | null, homeP: number | null) {
-  if (awayP == null || homeP == null) return { away: "text-white", home: "text-white", awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
-  if (awayP > homeP) return { away: "text-emerald-400", home: "text-red-400", awayHex: "#34d399", homeHex: "#f87171" };
-  if (homeP > awayP) return { away: "text-red-400", home: "text-emerald-400", awayHex: "#f87171", homeHex: "#34d399" };
+  if (awayP == null || homeP == null)
+    return {
+      away: "text-white",
+      home: "text-white",
+      awayHex: "#d0d0d0",
+      homeHex: "#d0d0d0",
+    };
+  if (awayP > homeP)
+    return { away: "text-emerald-400", home: "text-red-400", awayHex: "#34d399", homeHex: "#f87171" };
+  if (homeP > awayP)
+    return { away: "text-red-400", home: "text-emerald-400", awayHex: "#f87171", homeHex: "#34d399" };
   return { away: "text-white", home: "text-white", awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
 }
 
@@ -1137,10 +1295,10 @@ function SplitDonut({
   const hN = h / total;
 
   // SVG ring
-  const size = 176;
+  const size = 168; // slightly smaller to reduce "float"
   const cx = size / 2;
   const cy = size / 2;
-  const r = 70;
+  const r = 66;
   const c = 2 * Math.PI * r;
   const stroke = 14;
 
@@ -1151,12 +1309,10 @@ function SplitDonut({
   const rotate = -90;
 
   return (
-    <div className="relative w-[176px] h-[176px]">
+    <div className="relative w-[168px] h-[168px]">
       <svg width={size} height={size} className="block">
-        {/* track */}
         <g transform={`rotate(${rotate} ${cx} ${cy})`}>
           <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={stroke} />
-          {/* Away arc */}
           <circle
             cx={cx}
             cy={cy}
@@ -1168,7 +1324,6 @@ function SplitDonut({
             strokeDasharray={`${aLen} ${c - aLen}`}
             strokeDashoffset={0}
           />
-          {/* Home arc continues after away */}
           <circle
             cx={cx}
             cy={cy}
@@ -1182,14 +1337,13 @@ function SplitDonut({
           />
         </g>
 
-        {/* inner glow */}
         <circle cx={cx} cy={cy} r={r - stroke / 2} fill="rgba(0,0,0,0.28)" />
       </svg>
 
-      {/* Center content */}
       <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-2">
         <div className="text-[10px] text-[#b0b0b0] font-semibold">Projected Score</div>
-        <div className="mt-1 text-white font-extrabold tabular-nums text-[22px] leading-tight">{scoreText}</div>
+        <div className="mt-1 text-white font-extrabold tabular-nums text-[20px] leading-tight">{scoreText}</div>
+
         <div className="mt-2 grid grid-cols-2 gap-2 w-full px-3">
           <div className="rounded-lg border border-[#2a2a2a] bg-black/25 py-1">
             <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayLabel}</div>
@@ -1204,6 +1358,173 @@ function SplitDonut({
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   NEW: LAST 5 GAMES (NBA / NCAAB)
+========================================================= */
+
+type RecentGame = {
+  date: string | null;
+  opp: string;
+  isHome: boolean;
+  teamPts: number | null;
+  oppPts: number | null;
+  result: "W" | "L" | "—";
+  scoreText: string;
+};
+
+function safeNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function safeStr(v: any): string {
+  return v == null ? "" : String(v).trim();
+}
+function fmtYmdShort(d: string | null) {
+  if (!d) return "—";
+  const dt = new Date(d.includes("T") ? d : `${d}T12:00:00`);
+  if (Number.isNaN(dt.getTime())) return d;
+  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+async function fetchLast5Games({
+  sportKey,
+  teamName,
+}: {
+  sportKey: string;
+  teamName: string;
+}): Promise<RecentGame[]> {
+  if (!teamName) return [];
+
+  if (sportKey === "basketball_nba") {
+    const { data, error } = await supabase
+      .from("basketballref_games_nba")
+      .select("date, away_team, home_team, away_pts, home_pts, overtime, notes")
+      .or(`away_team.ilike.%${teamName}%,home_team.ilike.%${teamName}%`)
+      .order("date", { ascending: false })
+      .limit(5);
+
+    if (error || !data) return [];
+
+    return (data as any[]).map((r) => {
+      const away = safeStr(r.away_team);
+      const home = safeStr(r.home_team);
+      const isHome = home.toLowerCase() === teamName.toLowerCase();
+      const opp = isHome ? away : home;
+
+      const awayPts = safeNum(r.away_pts);
+      const homePts = safeNum(r.home_pts);
+
+      const teamPts = isHome ? homePts : awayPts;
+      const oppPts = isHome ? awayPts : homePts;
+
+      let result: RecentGame["result"] = "—";
+      if (teamPts != null && oppPts != null) result = teamPts > oppPts ? "W" : "L";
+
+      const scoreText = teamPts == null || oppPts == null ? "—" : `${teamPts}-${oppPts}`;
+
+      return {
+        date: r.date ?? null,
+        opp,
+        isHome,
+        teamPts,
+        oppPts,
+        result,
+        scoreText,
+      };
+    });
+  }
+
+  if (sportKey === "basketball_ncaab") {
+    // Attempt literal-column table (as in your CSV):
+    // Date, Team1 (Away), Score1, Team2 (Home), Score2, Neutral, Location, Season
+    const { data, error } = await supabase
+      .from("kenpom_games")
+      .select("*")
+      .or(`"Team1 (Away)".ilike.%${teamName}%,"Team2 (Home)".ilike.%${teamName}%`)
+      .order("Date", { ascending: false })
+      .limit(5);
+
+    // If your DB uses snake_case, replace the query above with:
+    // .or(`team1_away.ilike.%${teamName}%,team2_home.ilike.%${teamName}%`)
+    // .order("date", { ascending: false })
+
+    if (error || !data) return [];
+
+    return (data as any[]).map((r) => {
+      const away = safeStr(r["Team1 (Away)"] ?? r.team1_away ?? r.away_team);
+      const home = safeStr(r["Team2 (Home)"] ?? r.team2_home ?? r.home_team);
+      const isHome = home.toLowerCase() === teamName.toLowerCase();
+      const opp = isHome ? away : home;
+
+      const awayPts = safeNum(r.Score1 ?? r.score1 ?? r.away_pts);
+      const homePts = safeNum(r.Score2 ?? r.score2 ?? r.home_pts);
+
+      const teamPts = isHome ? homePts : awayPts;
+      const oppPts = isHome ? awayPts : homePts;
+
+      let result: RecentGame["result"] = "—";
+      if (teamPts != null && oppPts != null) result = teamPts > oppPts ? "W" : "L";
+
+      const scoreText = teamPts == null || oppPts == null ? "—" : `${teamPts}-${oppPts}`;
+
+      return {
+        date: r.Date ?? r.date ?? null,
+        opp,
+        isHome,
+        teamPts,
+        oppPts,
+        result,
+        scoreText,
+      };
+    });
+  }
+
+  return [];
+}
+
+function Last5Panel({ title, team, games }: { title: string; team: string; games: RecentGame[] }) {
+  return (
+    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-white font-extrabold text-[12px]">{title}</div>
+        <div className="text-[11px] text-[#b0b0b0] font-semibold truncate max-w-[70%] text-right">
+          {team}
+        </div>
+      </div>
+
+      <div className="mt-2 space-y-2">
+        {games.map((g, i) => (
+          <div
+            key={`${title}-${i}`}
+            className="flex items-center justify-between gap-2 rounded-xl border border-[#1f1f1f] bg-black/20 px-3 py-2"
+          >
+            <div className="min-w-0">
+              <div className="text-[11px] text-[#b0b0b0] font-semibold truncate">
+                {fmtYmdShort(g.date)} • {g.isHome ? "vs" : "@"}{" "}
+                <span className="text-white font-extrabold">{g.opp}</span>
+              </div>
+              <div className="text-[12px] text-white font-extrabold tabular-nums">{g.scoreText}</div>
+            </div>
+
+            <div
+              className={[
+                "shrink-0 rounded-full px-2 py-1 text-[10px] font-extrabold border",
+                g.result === "W"
+                  ? "text-emerald-300 border-emerald-500/40 bg-emerald-500/10"
+                  : g.result === "L"
+                  ? "text-red-300 border-red-500/40 bg-red-500/10"
+                  : "text-[#d0d0d0] border-[#2a2a2a] bg-black/20",
+              ].join(" ")}
+            >
+              {g.result}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1286,6 +1607,11 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const [predError, setPredError] = useState("");
   const [predRow, setPredRow] = useState<MonteCarloRow | null>(null);
 
+  // last 5 state
+  const [last5Away, setLast5Away] = useState<RecentGame[]>([]);
+  const [last5Home, setLast5Home] = useState<RecentGame[]>([]);
+  const [last5Loading, setLast5Loading] = useState(false);
+
   // props state
   const [propMarket, setPropMarket] = useState<PropMarket>("Points");
   const [propsLoading, setPropsLoading] = useState(true);
@@ -1322,7 +1648,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       setLmLoading(false);
     })();
 
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [tab, sportKey, ev.eventId, lmMarket]);
 
   // Predictions fetch
@@ -1335,7 +1663,12 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     setPredRow(null);
 
     (async () => {
-      const { data, error } = await supabase.from("monte_carlo_results").select("*").eq("event_id", ev.eventId).limit(1);
+      const { data, error } = await supabase
+        .from("monte_carlo_results")
+        .select("*")
+        .eq("event_id", ev.eventId)
+        .limit(1);
+
       if (!alive) return;
 
       if (error) {
@@ -1385,8 +1718,37 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       setPredLoading(false);
     })();
 
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [tab, ev.eventId]);
+
+  // Last 5 fetch (only when Predictions tab is open)
+  useEffect(() => {
+    if (tab !== "pred") return;
+
+    const awayTeamName = ev.away?.team ?? predRow?.away_team ?? "";
+    const homeTeamName = ev.home?.team ?? predRow?.home_team ?? "";
+    if (!awayTeamName && !homeTeamName) return;
+
+    let alive = true;
+    setLast5Loading(true);
+
+    (async () => {
+      const [a, h] = await Promise.all([
+        fetchLast5Games({ sportKey, teamName: awayTeamName }),
+        fetchLast5Games({ sportKey, teamName: homeTeamName }),
+      ]);
+      if (!alive) return;
+      setLast5Away(a);
+      setLast5Home(h);
+      setLast5Loading(false);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [tab, sportKey, ev.away?.team, ev.home?.team, predRow?.away_team, predRow?.home_team]);
 
   // Props fetch
   useEffect(() => {
@@ -1398,7 +1760,12 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
     setPropsAgg([]);
 
     (async () => {
-      const snap = await supabase.from("player_props_snapshot").select("*").eq("sport_key", sportKey).eq("event_id", ev.eventId);
+      const snap = await supabase
+        .from("player_props_snapshot")
+        .select("*")
+        .eq("sport_key", sportKey)
+        .eq("event_id", ev.eventId);
+
       if (!alive) return;
 
       if (snap.error) {
@@ -1447,7 +1814,11 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       const metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
 
       if (names.length) {
-        const meta = await supabase.from("player_prop_ev_latest").select("player_name,team,position,picture_url").in("player_name", names);
+        const meta = await supabase
+          .from("player_prop_ev_latest")
+          .select("player_name,team,position,picture_url")
+          .in("player_name", names);
+
         if (!meta.error && meta.data) {
           for (const m of meta.data as any[]) {
             const key = String(m.player_name ?? "").trim();
@@ -1506,7 +1877,9 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
       setPropsLoading(false);
     })();
 
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [tab, sportKey, ev.eventId, propMarket]);
 
   const awayTeam = ev.away?.team ?? predRow?.away_team ?? "Away";
@@ -1536,28 +1909,60 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      {/* Tabs */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <TabBtn active={tab === "line"} onClick={() => setTab("line")}>Line Movement</TabBtn>
-        <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>Predictions</TabBtn>
-        <TabBtn active={tab === "props"} onClick={() => setTab("props")}>Player Props</TabBtn>
+        <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
+          Line Movement
+        </TabBtn>
+        <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
+          Predictions
+        </TabBtn>
+        <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
+          Player Props
+        </TabBtn>
       </div>
 
       {/* LINE MOVEMENT TAB */}
       {tab === "line" && (
         <div>
-          {/* single market selector ONLY here */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-              <button type="button" className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"}`} onClick={() => setLmMarket("ml")}>Moneyline</button>
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                onClick={() => setLmMarket("ml")}
+              >
+                Moneyline
+              </button>
               <div className="w-px bg-[#2a2a2a]" />
-              <button type="button" className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"}`} onClick={() => setLmMarket("spread")}>Spread</button>
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                onClick={() => setLmMarket("spread")}
+              >
+                Spread
+              </button>
               <div className="w-px bg-[#2a2a2a]" />
-              <button type="button" className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"}`} onClick={() => setLmMarket("total")}>Total</button>
+              <button
+                type="button"
+                className={`px-3 py-1.5 text-xs font-extrabold ${lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"}`}
+                onClick={() => setLmMarket("total")}
+              >
+                Total
+              </button>
             </div>
 
             <div className="text-[11px] text-[#b0b0b0] font-semibold">
-              {lmMarket === "total" ? <>Left = <span className="text-white font-extrabold">Over</span>, Right = <span className="text-white font-extrabold">Under</span></> : <>Left = <span className="text-white font-extrabold">Away</span>, Right = <span className="text-white font-extrabold">Home</span></>}
+              {lmMarket === "total" ? (
+                <>
+                  Left = <span className="text-white font-extrabold">Over</span>, Right ={" "}
+                  <span className="text-white font-extrabold">Under</span>
+                </>
+              ) : (
+                <>
+                  Left = <span className="text-white font-extrabold">Away</span>, Right ={" "}
+                  <span className="text-white font-extrabold">Home</span>
+                </>
+              )}
             </div>
           </div>
 
@@ -1577,7 +1982,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
         </div>
       )}
 
-      {/* PREDICTIONS TAB (REDESIGNED) */}
+      {/* PREDICTIONS TAB */}
       {tab === "pred" && (
         <div>
           {predLoading ? (
@@ -1588,21 +1993,22 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
             <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
           ) : (
             <div className="space-y-3">
-              {/* "Dead space" fill: Key Lines + Model Snapshot chips */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
+              {/* Top: key lines + model snapshot (tightened) */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
                     <div className="text-white font-extrabold text-[13px]">Key Lines</div>
                     <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
                       Consensus + Quantum fair odds (from win probabilities)
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <div className="rounded-xl border border-[#2a2a2a] bg-black/25 px-3 py-2">
                       <div className="text-[10px] text-[#b0b0b0] font-semibold">Quantum ML</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {awayTeam}: <span style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span> • {homeTeam}: <span style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
+                        {awayTeam}: <span style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span> •{" "}
+                        {homeTeam}: <span style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
                       </div>
                     </div>
 
@@ -1615,66 +2021,77 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums">
-                      {awayTeam}: {consSprAway.top} <span className="text-[#b0b0b0]">{consSprAway.bottom ? consSprAway.bottom : ""}</span>
+                      {awayTeam}: {consSprAway.top} <span className="text-[#b0b0b0]">{consSprAway.bottom ?? ""}</span>
                       <span className="text-[#808080] mx-2">|</span>
-                      {homeTeam}: {consSprHome.top} <span className="text-[#b0b0b0]">{consSprHome.bottom ? consSprHome.bottom : ""}</span>
+                      {homeTeam}: {consSprHome.top} <span className="text-[#b0b0b0]">{consSprHome.bottom ?? ""}</span>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Total</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums">
-                      Over: {consTotOver.top} <span className="text-[#b0b0b0]">{consTotOver.bottom ? consTotOver.bottom : ""}</span>
+                      Over: {consTotOver.top} <span className="text-[#b0b0b0]">{consTotOver.bottom ?? ""}</span>
                       <span className="text-[#808080] mx-2">|</span>
-                      Under: {consTotUnder.top} <span className="text-[#b0b0b0]">{consTotUnder.bottom ? consTotUnder.bottom : ""}</span>
+                      Under: {consTotUnder.top} <span className="text-[#b0b0b0]">{consTotUnder.bottom ?? ""}</span>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
+                  <div className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Model Snapshot</div>
-                    <div className="mt-1 grid grid-cols-3 gap-2">
+                    <div className="mt-2 grid grid-cols-3 gap-2">
                       <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
                         <div className="text-[10px] text-[#b0b0b0] font-semibold">Proj Total</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}</div>
+                        <div className="text-white font-extrabold tabular-nums text-[12px]">
+                          {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                        </div>
                       </div>
                       <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
                         <div className="text-[10px] text-[#b0b0b0] font-semibold">Margin (H)</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}</div>
+                        <div className="text-white font-extrabold tabular-nums text-[12px]">
+                          {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                        </div>
                       </div>
                       <div className="rounded-lg border border-[#2a2a2a] bg-black/25 p-2 text-center">
                         <div className="text-[10px] text-[#b0b0b0] font-semibold">Run</div>
-                        <div className="text-white font-extrabold tabular-nums text-[12px]">{fmtCTDateTime(predRow.commence_time ?? ev.commenceTime)}</div>
+                        <div className="text-white font-extrabold tabular-nums text-[12px]">
+                          {fmtCTDateTime(predRow.commence_time ?? ev.commenceTime)}
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Main hero row: teams + split donut in the middle */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
-                <div className="grid grid-cols-1 md:grid-cols-[1fr_220px_1fr] gap-4 items-center">
-                  {/* Away */}
+              {/* Middle: donut + teams (tight grid) */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 p-4">
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr_200px_1fr] gap-4 items-center">
                   <div className="flex items-center gap-3">
                     {awayLogo ? (
-                      <img src={awayLogo} alt={`${awayTeam} logo`} className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1" loading="lazy"
+                      <img
+                        src={awayLogo}
+                        alt={`${awayTeam} logo`}
+                        className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        loading="lazy"
                         onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
-                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                      <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
                     )}
                     <div className="min-w-0">
                       <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
                       <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                        Quantum ML: <span className="text-white font-extrabold tabular-nums" style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span>
+                        Quantum ML:{" "}
+                        <span className="text-white font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
+                          {probToAmerican(awayP)}
+                        </span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Center split donut */}
                   <div className="flex items-center justify-center">
                     <SplitDonut
                       awayP={awayP}
@@ -1687,32 +2104,57 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     />
                   </div>
 
-                  {/* Home */}
-                  <div className="flex items-center gap-3 justify-start md:justify-end">
+                  <div className="flex items-center gap-3 justify-start lg:justify-end">
                     <div className="min-w-0 text-right">
                       <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
                       <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                        Quantum ML: <span className="text-white font-extrabold tabular-nums" style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
+                        Quantum ML:{" "}
+                        <span className="text-white font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
+                          {probToAmerican(homeP)}
+                        </span>
                       </div>
                     </div>
                     {homeLogo ? (
-                      <img src={homeLogo} alt={`${homeTeam} logo`} className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1" loading="lazy"
+                      <img
+                        src={homeLogo}
+                        alt={`${homeTeam} logo`}
+                        className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                        loading="lazy"
                         onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
-                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                      <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Spread / Total probability cards (same as before but tightened + better background) */}
+              {/* NEW: Last 5 Games */}
+              <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-white font-extrabold text-[13px]">Last 5 Games</div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
+                      Recent results for each team (from your games tables)
+                    </div>
+                  </div>
+                  {last5Loading && <div className="text-[11px] text-[#b0b0b0] font-semibold">Loading…</div>}
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <Last5Panel title="Away" team={awayTeam} games={last5Away} />
+                  <Last5Panel title="Home" team={homeTeam} games={last5Home} />
+                </div>
+              </div>
+
+              {/* Spread / Total probability cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-4">
                   <div className="flex items-center justify-between">
                     <div className="text-white font-extrabold text-[13px]">Spread</div>
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                      Line (Home): <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                      Line (Home):{" "}
+                      <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
                     </div>
                   </div>
 
@@ -1732,7 +2174,8 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </div>
 
                   <div className="mt-3 text-[11px] text-[#b0b0b0]">
-                    σ Margin: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_margin_game ?? "—"}</span>
+                    σ Margin:{" "}
+                    <span className="text-white font-extrabold tabular-nums">{predRow.sigma_margin_game ?? "—"}</span>
                   </div>
                 </div>
 
@@ -1740,7 +2183,8 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   <div className="flex items-center justify-between">
                     <div className="text-white font-extrabold text-[13px]">Total</div>
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                      Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
+                      Line:{" "}
+                      <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
                     </div>
                   </div>
 
@@ -1760,7 +2204,8 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   </div>
 
                   <div className="mt-3 text-[11px] text-[#b0b0b0]">
-                    σ Total: <span className="text-white font-extrabold tabular-nums">{predRow.sigma_total_game ?? "—"}</span>
+                    σ Total:{" "}
+                    <span className="text-white font-extrabold tabular-nums">{predRow.sigma_total_game ?? "—"}</span>
                   </div>
                 </div>
               </div>
@@ -1992,7 +2437,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         .limit(1);
 
       if (!propsRes.error) {
-        const r = (propsRes.data?.[0] ?? null) as { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null } | null;
+        const r = (propsRes.data?.[0] ?? null) as
+          | { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null }
+          | null;
         propsLatest = normalizeIso(r?.ts ?? r?.snapshot_ts ?? r?.inserted_at ?? null);
       }
     } catch {
@@ -2080,13 +2527,19 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   }, [events]);
 
   const sportLabel =
-    sportKey === "basketball_nba" ? "NBA Odds" :
-    sportKey === "basketball_ncaab" ? "NCAAB Odds" :
-    sportKey === "football_nfl" ? "NFL Odds" :
-    sportKey === "football_ncaaf" ? "NCAAF Odds" :
-    sportKey === "icehockey_nhl" ? "NHL Odds" :
-    sportKey === "baseball_mlb" ? "MLB Odds" :
-    "Odds";
+    sportKey === "basketball_nba"
+      ? "NBA Odds"
+      : sportKey === "basketball_ncaab"
+      ? "NCAAB Odds"
+      : sportKey === "football_nfl"
+      ? "NFL Odds"
+      : sportKey === "football_ncaaf"
+      ? "NCAAF Odds"
+      : sportKey === "icehockey_nhl"
+      ? "NHL Odds"
+      : sportKey === "baseball_mlb"
+      ? "MLB Odds"
+      : "Odds";
 
   const sportChip = sportKey.toUpperCase();
   const marketLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
@@ -2105,15 +2558,23 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
             <div className={HERO_INNER}>
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <div className={PILL}><span className={PILL_DOT} /><span className={PILL_TX}>Prism Odds Board</span></div>
-                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
+                  <div className={PILL}>
+                    <span className={PILL_DOT} />
+                    <span className={PILL_TX}>Prism Odds Board</span>
+                  </div>
+                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
+                    {sportLabel}
+                  </h2>
                   <div className={HERO_SUB}>
                     One board per slate. Books shown side-by-side with consensus. Open Game Details for movement, predictions, and props.
                   </div>
                 </div>
 
                 <div className="hidden md:flex flex-col items-end gap-2">
-                  <div className={LIVE_BADGE}><span className={LIVE_TX}>Live</span><span className={LIVE_DOT} /></div>
+                  <div className={LIVE_BADGE}>
+                    <span className={LIVE_TX}>Live</span>
+                    <span className={LIVE_DOT} />
+                  </div>
                   <div className="text-right">
                     <div className="text-[10px] text-[#6a6a6a] font-semibold">Last Updated (CT)</div>
                     <div className="text-xs text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
@@ -2136,7 +2597,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               <div className="mt-4 flex flex-col gap-3">
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                   {availableDates.map((d) => (
-                    <button key={d} onClick={() => setSelectedDate(d)} className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")} type="button">
+                    <button
+                      key={d}
+                      onClick={() => setSelectedDate(d)}
+                      className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")}
+                      type="button"
+                    >
                       {fmtDateBtn(d)}
                     </button>
                   ))}
@@ -2168,7 +2634,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         ev={ev}
                         market={market}
                         booksOpen={!!mobileOpenMap[ev.eventId]}
-                        onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
+                        onToggleBooks={() =>
+                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                        }
                         onOpenDetails={openDetails}
                       />
                     ))}
@@ -2200,11 +2668,26 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <thead className="sticky top-0 z-20">
                           <tr className={`border-b ${HDR_BORDER}`}>
-                            <th className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}>
+                            <th
+                              className={[
+                                "text-left px-4 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "sticky left-0 z-30 text-[13px] font-extrabold",
+                              ].join(" ")}
+                            >
                               Matchup
                             </th>
 
-                            <th className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}>
+                            <th
+                              className={[
+                                "text-center px-3 py-3",
+                                HDR_LEFT_BG,
+                                HDR_TEXT,
+                                "z-20 text-[13px] font-extrabold border-l",
+                                HDR_BORDER,
+                              ].join(" ")}
+                            >
                               Consensus
                             </th>
 
