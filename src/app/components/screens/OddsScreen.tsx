@@ -1620,13 +1620,17 @@ function GameDetailsModal({
 
       setTabsBarH(Math.ceil(tabsH));
       // +8px safety buffer prevents “peek through” during momentum scroll
-      setPropsHeaderTop(Math.ceil(tabsH + propH));
+      setPropsHeaderTop(Math.ceil(tabsH + propH + 1));
     };
 
     measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [tab, propMarket, propsAgg.length]);
+    // ResizeObserver is more reliable than window resize for dynamic content heights
+    const ro = new ResizeObserver(measure);
+    if (tabsBarRef.current) ro.observe(tabsBarRef.current);
+    if (propBarRef.current) ro.observe(propBarRef.current);
+
+    return () => ro.disconnect();
+  }, [tab]);
 
   /* -------------------------
      Line movement fetch
@@ -1952,7 +1956,7 @@ function GameDetailsModal({
       {/* ✅ Sticky tabs bar (opaque + shadow to prevent seeing content between bars) */}
       <div
         ref={tabsBarRef}
-        className="sticky top-0 z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-3 sm:pt-4 pb-3 border-b border-[#232323] bg-[#0b0b0b] shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
+        className="sticky top-0 z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 sm:pt-3 pb-2 border-b border-[#232323] bg-[#0b0b0b] shadow-[0_10px_26px_rgba(0,0,0,0.45)]"
       >
         <div className="flex flex-wrap items-center gap-2">
           <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
@@ -1969,7 +1973,7 @@ function GameDetailsModal({
 
       {/* LINE MOVEMENT TAB */}
       {tab === "line" && (
-        <div className="pt-3">
+        <div className="pt-0">
           {/* single market selector ONLY here */}
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
