@@ -1,6 +1,7 @@
 // screens/OddsScreen.tsx — FULL REWRITE (ONLY requested updates applied)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Player Props modal: headers (Points / “14 players” / Player Team Line Over Under) are STICKY while scrolling
+//    - FIX: no “blank gap” / jump by keeping sticky header OUTSIDE overflow-x container + syncing horizontal scroll
 // ✅ Predictions “Key Lines”: remove Quantum ML block (consensus only; quantum ML already shown by team logos)
 // ✅ Mobile Predictions: smaller logos + team names in a compact row ABOVE the win% bar (both teams above the bar)
 // ✅ Everything else unchanged from your provided script
@@ -1610,7 +1611,7 @@ function GameDetailsModal({
   )} CT`;
 
   /* =========================================================
-     ✅ FIX: sticky stacking (no “gap” where body shows between headers)
+     ✅ Sticky stacking (no “gap” where body shows between headers)
   ========================================================= */
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const propBarRef = useRef<HTMLDivElement | null>(null);
@@ -1635,6 +1636,32 @@ function GameDetailsModal({
     if (propBarRef.current) ro.observe(propBarRef.current);
 
     return () => ro.disconnect();
+  }, [tab]);
+
+  /* =========================================================
+     ✅ Props sticky header FIX:
+     - sticky header must NOT be inside overflow-x container
+     - sync horizontal scroll (scrollLeft) from body -> header inner wrapper
+  ========================================================= */
+  const propsScrollRef = useRef<HTMLDivElement | null>(null);
+  const propsHeaderInnerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (tab !== "props") return;
+
+    const el = propsScrollRef.current;
+    if (!el) return;
+
+    const sync = () => {
+      const x = el.scrollLeft || 0;
+      if (propsHeaderInnerRef.current) {
+        propsHeaderInnerRef.current.style.transform = `translateX(${-x}px)`;
+      }
+    };
+
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    return () => el.removeEventListener("scroll", sync);
   }, [tab]);
 
   /* -------------------------
@@ -2388,25 +2415,24 @@ function GameDetailsModal({
             <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
           ) : (
             <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
-              {/* ✅ ONE unified horizontal scroll container for BOTH header+body */}
-              <div className="overflow-x-auto">
-                {/* ✅ Sticky header slab */}
-                <div
-                  className="sticky z-40 bg-[#0b0b0b] border-b border-[#2a2a2a] shadow-[0_14px_34px_rgba(0,0,0,0.62)]"
-                  style={{ top: Math.max(0, propsHeaderTop) }}
-                >
-                  <div className="px-4 py-2 flex items-center justify-between">
+              {/* ✅ Sticky header (NOT inside overflow-x) */}
+              <div
+                className="sticky z-40 bg-[#0b0b0b] border-b border-[#2a2a2a] shadow-[0_14px_34px_rgba(0,0,0,0.62)]"
+                style={{ top: Math.max(0, propsHeaderTop) }}
+              >
+                <div ref={propsHeaderInnerRef} className="will-change-transform">
+                  <div className="px-4 py-2 flex items-center justify-between min-w-[1100px]">
                     <div className="text-white font-extrabold text-sm">{propMarket}</div>
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
                   </div>
 
-                  <table className="w-full table-fixed">
+                  <table className="table-fixed min-w-[1100px] w-[1100px]">
                     <colgroup>
                       <col style={{ width: 260 }} />
                       <col style={{ width: 110 }} />
                       <col style={{ width: 90 }} />
-                      <col />
-                      <col />
+                      <col style={{ width: 320 }} />
+                      <col style={{ width: 320 }} />
                     </colgroup>
 
                     <thead>
@@ -2452,15 +2478,17 @@ function GameDetailsModal({
                     </thead>
                   </table>
                 </div>
+              </div>
 
-                {/* Body table */}
-                <table className="w-full table-fixed">
+              {/* ✅ Body scroll container */}
+              <div ref={propsScrollRef} className="overflow-x-auto">
+                <table className="table-fixed min-w-[1100px] w-[1100px]">
                   <colgroup>
                     <col style={{ width: 260 }} />
                     <col style={{ width: 110 }} />
                     <col style={{ width: 90 }} />
-                    <col />
-                    <col />
+                    <col style={{ width: 320 }} />
+                    <col style={{ width: 320 }} />
                   </colgroup>
 
                   <tbody>
@@ -2918,5 +2946,4 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
-
 
