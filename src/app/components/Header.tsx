@@ -1,4 +1,10 @@
-// components/Header.tsx
+// components/Header.tsx — FULL REWRITE (Subtle Prism spectrum + black-forward, logo click -> Overview)
+// ---------------------------------------------------------------------------------------------------
+// ✅ Color update: spectrum is MUCH more subtle + black remains dominant (no loud rainbow wash)
+// ✅ Keeps GOLD as the underline/accent
+// ✅ Clicking the logo returns to Overview (onNavigate?.("overview"))
+// ✅ Everything else kept the same behavior
+
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
 import type { SportKey } from "../App"; // <-- adjust if your path differs (e.g. "../../App")
@@ -29,26 +35,31 @@ type HeaderProps = {
 type UiSport = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
 const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
-/**
- * Prism palette tuned to the logo spectrum.
- * (Keep GOLD for underline + selected accents, but add the full rainbow glow for backgrounds.)
- */
 const GOLD = "#d4af37";
-
-// Spectrum accents (approx logo hues)
-const PRISM_BLUE = "rgba(  0, 146, 255, 0.18)";
-const PRISM_TEAL = "rgba(  0, 201, 255, 0.14)";
-const PRISM_GREEN = "rgba(  0, 200, 120, 0.16)";
-const PRISM_GOLD = "rgba(212, 175,  55, 0.18)";
-const PRISM_ORANGE = "rgba(255, 140,   0, 0.16)";
-const PRISM_RED = "rgba(255,  60,  60, 0.14)";
-const PRISM_VIOLET = "rgba(170,  70, 255, 0.14)";
-
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
 const DROPDOWN_CLOSE_DELAY_MS = 240;
 
 // ✅ simple, distinct from dratings
 const TAGLINE = "Sports Models · Projections · Analysis";
+
+/**
+ * Subtle prism palette — black-forward.
+ * (Lower alpha values so the header stays “mostly black” with faint spectrum hints.)
+ */
+const PRISM = {
+  blue: "rgba(0, 146, 255, 0.08)",
+  teal: "rgba(0, 201, 255, 0.06)",
+  green: "rgba(0, 200, 120, 0.07)",
+  gold: "rgba(212, 175, 55, 0.09)",
+  orange: "rgba(255, 140, 0, 0.07)",
+  red: "rgba(255, 60, 60, 0.06)",
+  violet: "rgba(170, 70, 255, 0.06)",
+};
+
+// Black glass layers used to “sink” the spectrum into the background
+const BLACK_GLASS_TOP = "rgba(0,0,0,0.35)";
+const BLACK_GLASS_MID = "rgba(0,0,0,0.55)";
+const BLACK_GLASS_BOTTOM = "rgba(0,0,0,0.78)";
 
 /** =========================
  * SPORT MAPPING
@@ -198,32 +209,24 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          {/* Prism-spectrum background wash */}
+          {/* Subtle prism + black glass */}
           <div
-            className="pointer-events-none absolute inset-0 opacity-90"
+            className="pointer-events-none absolute inset-0"
             style={{
               background: [
-                `radial-gradient(620px 170px at 12% 0%, ${PRISM_BLUE}, transparent 58%)`,
-                `radial-gradient(520px 160px at 32% 0%, ${PRISM_TEAL}, transparent 62%)`,
-                `radial-gradient(560px 180px at 50% 0%, ${PRISM_GREEN}, transparent 60%)`,
-                `radial-gradient(560px 180px at 66% 0%, ${PRISM_GOLD}, transparent 62%)`,
-                `radial-gradient(620px 190px at 82% 0%, ${PRISM_ORANGE}, transparent 62%)`,
-                `radial-gradient(520px 220px at 98% 35%, ${PRISM_RED}, transparent 60%)`,
-                `radial-gradient(680px 260px at 70% 110%, ${PRISM_VIOLET}, transparent 58%)`,
-                `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.00) 55%)`,
+                // faint spectrum hints
+                `radial-gradient(520px 160px at 18% 0%, ${PRISM.blue}, transparent 62%)`,
+                `radial-gradient(520px 160px at 34% 0%, ${PRISM.teal}, transparent 64%)`,
+                `radial-gradient(560px 180px at 50% 0%, ${PRISM.green}, transparent 64%)`,
+                `radial-gradient(560px 180px at 66% 0%, ${PRISM.gold}, transparent 66%)`,
+                `radial-gradient(560px 180px at 80% 0%, ${PRISM.orange}, transparent 66%)`,
+                `radial-gradient(560px 220px at 98% 30%, ${PRISM.red}, transparent 68%)`,
+                `radial-gradient(720px 300px at 70% 120%, ${PRISM.violet}, transparent 62%)`,
+                // black glass layers to keep it dark
+                `linear-gradient(180deg, ${BLACK_GLASS_TOP}, ${BLACK_GLASS_MID} 55%, ${BLACK_GLASS_BOTTOM} 100%)`,
+                // tiny sheen so it still feels “premium”
+                `linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.00) 60%)`,
               ].join(", "),
-            }}
-          />
-
-          {/* Subtle shimmer for dropdown */}
-          <div
-            className="pointer-events-none absolute inset-[-40%] opacity-[0.10]"
-            style={{
-              background:
-                "linear-gradient(120deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 50%, rgba(255,255,255,0) 100%)",
-              transform: "translateX(-35%) rotate(6deg)",
-              animation: "prismShimmer 10s ease-in-out infinite",
-              mixBlendMode: "screen",
             }}
           />
 
@@ -305,63 +308,43 @@ export function Header({
       ref={headerRef}
       className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]"
     >
-      {/* keyframes (scoped to header) */}
-      <style>{`
-        @keyframes prismShimmer {
-          0%   { transform: translateX(-42%) rotate(6deg); }
-          50%  { transform: translateX(42%) rotate(6deg); }
-          100% { transform: translateX(-42%) rotate(6deg); }
-        }
-        @media (prefers-reduced-motion: reduce) {
-          .prism-shimmer-disable { animation: none !important; }
-        }
-      `}</style>
-
-      {/* Prism-spectrum header background */}
+      {/* Subtle prism spectrum + black glass (header stays dark) */}
       <div className="pointer-events-none absolute inset-0">
         <div
-          className="absolute inset-0 opacity-90"
+          className="absolute inset-0"
           style={{
             background: [
-              `radial-gradient(900px 240px at 12% 0%, ${PRISM_BLUE}, transparent 62%)`,
-              `radial-gradient(820px 240px at 30% 0%, ${PRISM_TEAL}, transparent 64%)`,
-              `radial-gradient(880px 260px at 48% 0%, ${PRISM_GREEN}, transparent 62%)`,
-              `radial-gradient(900px 260px at 62% 0%, ${PRISM_GOLD}, transparent 64%)`,
-              `radial-gradient(920px 280px at 78% 0%, ${PRISM_ORANGE}, transparent 64%)`,
-              `radial-gradient(860px 260px at 92% 10%, ${PRISM_RED}, transparent 66%)`,
-              `radial-gradient(900px 340px at 60% 120%, ${PRISM_VIOLET}, transparent 58%)`,
-              `linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0) 100%)`,
+              // very faint spectrum near the top edge (kept subtle)
+              `radial-gradient(900px 240px at 14% 0%, ${PRISM.blue}, transparent 66%)`,
+              `radial-gradient(820px 240px at 30% 0%, ${PRISM.teal}, transparent 68%)`,
+              `radial-gradient(880px 260px at 48% 0%, ${PRISM.green}, transparent 68%)`,
+              `radial-gradient(900px 260px at 62% 0%, ${PRISM.gold}, transparent 70%)`,
+              `radial-gradient(920px 280px at 78% 0%, ${PRISM.orange}, transparent 70%)`,
+              `radial-gradient(860px 260px at 92% 10%, ${PRISM.red}, transparent 72%)`,
+              `radial-gradient(900px 340px at 60% 120%, ${PRISM.violet}, transparent 66%)`,
+              // black glass to make sure it never turns “colorful”
+              `linear-gradient(180deg, ${BLACK_GLASS_TOP}, ${BLACK_GLASS_MID} 52%, ${BLACK_GLASS_BOTTOM} 100%)`,
+              // light sheen
+              `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0) 100%)`,
             ].join(", "),
           }}
         />
 
-        {/* Subtle shimmer sweep across the header */}
+        {/* Super subtle spectrum hairline (not loud) */}
         <div
-          className="prism-shimmer-disable absolute inset-[-60%] opacity-[0.08]"
+          className="absolute left-0 right-0 top-0 h-[1px] opacity-55"
           style={{
             background:
-              "linear-gradient(115deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.55) 48%, rgba(255,255,255,0) 100%)",
-            transform: "translateX(-40%) rotate(6deg)",
-            animation: "prismShimmer 12s ease-in-out infinite",
-            mixBlendMode: "screen",
+              "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.35), rgba(0,200,120,0.35), rgba(212,175,55,0.40), rgba(255,140,0,0.35), rgba(255,60,60,0.30), rgba(170,70,255,0.30), rgba(0,0,0,0))",
           }}
         />
 
-        {/* Thin top highlight line (spectrum instead of only gold) */}
+        {/* Gold anchor line stays (brand) */}
         <div
-          className="absolute left-0 right-0 top-0 h-[1px]"
+          className="absolute left-0 right-0 bottom-0 h-[1px] opacity-65"
           style={{
             background:
-              "linear-gradient(90deg, rgba(0,146,255,0.0), rgba(0,146,255,0.55), rgba(0,200,120,0.55), rgba(212,175,55,0.55), rgba(255,140,0,0.55), rgba(255,60,60,0.55), rgba(170,70,255,0.55), rgba(170,70,255,0.0))",
-          }}
-        />
-
-        {/* Bottom “gold spine” kept (brand anchor) */}
-        <div
-          className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
-          style={{
-            background:
-              "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.45), rgba(212,175,55,0.0))",
+              "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.42), rgba(212,175,55,0.0))",
           }}
         />
       </div>
@@ -410,12 +393,12 @@ export function Header({
                   {TAGLINE}
                 </div>
 
-                {/* subtle spectrum micro-accent under tagline */}
+                {/* ultra-subtle spectrum micro-accent (kept dark) */}
                 <div
-                  className="mt-1 h-[2px] w-[160px] max-w-full rounded-full opacity-70"
+                  className="mt-1 h-[2px] w-[150px] max-w-full rounded-full opacity-45"
                   style={{
                     background:
-                      "linear-gradient(90deg, rgba(0,146,255,0.8), rgba(0,200,120,0.8), rgba(212,175,55,0.85), rgba(255,140,0,0.8), rgba(255,60,60,0.75), rgba(170,70,255,0.75))",
+                      "linear-gradient(90deg, rgba(0,146,255,0.55), rgba(0,200,120,0.55), rgba(212,175,55,0.65), rgba(255,140,0,0.55), rgba(255,60,60,0.45), rgba(170,70,255,0.45))",
                   }}
                 />
               </div>
@@ -426,7 +409,7 @@ export function Header({
               <HoverDropdown
                 label="Odds"
                 suffix="Odds"
-                active={oddsActive}
+                active={activeScreen === "odds"}
                 selectedDbSport={oddsSportKey}
                 onPickDbSport={(k) => {
                   onPickOddsSport(k);
@@ -437,7 +420,7 @@ export function Header({
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
-                active={predsActive}
+                active={activeScreen === "monte-carlo"}
                 selectedDbSport={predSportKey}
                 onPickDbSport={(k) => {
                   onPickPredSport(k);
@@ -458,7 +441,7 @@ export function Header({
           <div
             className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
             style={{
-              background: "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))",
+              background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
             }}
           >
             <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
@@ -469,3 +452,4 @@ export function Header({
     </header>
   );
 }
+
