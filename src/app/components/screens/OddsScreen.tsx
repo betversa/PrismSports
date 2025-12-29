@@ -1,22 +1,12 @@
-// screens/OddsScreen.tsx — FULL REWRITE (Model-style header card + tighter layout + table continuity)
+// screens/OddsScreen.tsx — FULL REWRITE (Hero matches Model + Monte Carlo exactly)
 // -------------------------------------------------------------------------------------------------
-// ✅ Filters by sport_key
-// ✅ Desktop: centered max-width “web” layout (less app-like)
+// ✅ Hero section uses SAME structure/spacing as Model + MonteCarlo screens
+// ✅ Desktop: centered max-width “web” layout
 // ✅ Desktop: books ALWAYS shown (no toggle)
-// ✅ Date pills ONLY show dates that actually have displayable games (same filtering as list)
-// ✅ Mobile cards keep “Show/Hide Books” toggle
-// ✅ History modal behavior unchanged (odds-only, line shown in hover tooltip)
-// ✅ Player Props modal pulls ODDS from player_props_snapshot
-// ✅ Player Props modal pulls POSITION + PICTURE from player_prop_ev_latest
-// ✅ Fix: player_props_snapshot has NO created_at — uses ts (+ inserted_at fallback)
-// ✅ Fix: headshots render reliably (img tag + fallback + no Next/Image restrictions)
-// ✅ Mobile button clutter fixed: Show/Hide Books + single “More” menu (History / Props)
-// ✅ Odds screen defaults to Moneyline (and resets to Moneyline on sport change)
-// ✅ “Last Updated” improved: uses max(updated_at/ts/inserted_at/etc) across odds rows + props snapshot ts (without opening modal)
-// ✅ FIX: props book logos appear in white pill (readable even if logo is black)
-// ✅ FIX: player_props_snapshot.player_id removed (column does not exist)
-// ✅ NEW (this rewrite): Matches Model header-card system (pill + title + desc + chips), removes excess top whitespace,
-//    and uses the same table density / cadence as Model screen.
+// ✅ Mobile: Show/Hide Books toggle + More menu (History / Props)
+// ✅ History modal: ML / Spread / Total ODDS movement charts (date+time CT in tooltip)
+// ✅ Props modal: odds from player_props_snapshot + meta (pos/pic) from player_prop_ev_latest
+// ✅ player_props_snapshot has NO created_at (uses ts / snapshot_ts / inserted_at)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -65,7 +55,25 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-/** Public folder book logos */
+const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
+const BOOK_LABEL: Record<BookKey, string> = {
+  dk: "DraftKings",
+  fd: "FanDuel",
+  mgm: "BetMGM",
+  pin: "Pinnacle",
+  bol: "BetOnline",
+};
+
+// Keep these aligned with your UI theme goals.
+// DK green, FD blue, MGM gold, PIN orange, BOL red.
+const BOOK_STROKES: Record<BookKey, string> = {
+  dk: "#16a34a",
+  fd: "#2563eb",
+  mgm: "#d4af37",
+  pin: "#f97316",
+  bol: "#ef4444",
+};
+
 const BOOK_LOGOS: Record<BookKey, string> = {
   dk: "/books/dk.png",
   fd: "/books/fd.png",
@@ -73,59 +81,46 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   pin: "/books/pin.png",
   bol: "/books/bol.png",
 };
-const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 
-/** snapshot bookmaker strings (from player_props_snapshot.bookmaker) */
-const BOOKMAKER_STR_BY_KEY: Record<BookKey, string> = {
-  dk: "draftkings",
-  fd: "fanduel",
-  mgm: "betmgm",
-  pin: "pinnacle",
-  bol: "betonlineag",
-};
-
-function bookKeyFromBookmaker(raw: string): BookKey | null {
-  const k = String(raw || "").toLowerCase();
-  if (k === "draftkings") return "dk";
-  if (k === "fanduel") return "fd";
-  if (k === "betmgm") return "mgm";
-  if (k === "pinnacle") return "pin";
-  if (k === "betonlineag") return "bol";
-  return null;
-}
-
-/** Desktop layout widths (web-friendly) — tuned to match Model table density */
 const COL_MATCHUP = 420;
 const COL_CONSENSUS = 180;
 const COL_BOOK = 120;
 
-const BOOK_LOGO_W = 86;
-const BOOK_LOGO_H = 22;
-
-/* =========================================================
-   CONTINUITY THEME (matches Overview/Model)
-========================================================= */
-
 const PAGE_MAX_W = "max-w-[1320px]";
 const PAGE_X = "px-4 md:px-8";
 
-const PANEL =
+/** HERO + PANEL styles — intended to match Model/MonteCarlo hero exactly */
+const HERO_WRAP =
   "rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.38)]";
+const HERO_INNER = "p-5 md:p-6";
+const HERO_SUB = "text-sm text-[#8a8a8a] mt-2";
+
+const CHIP =
+  "inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/25 px-3 py-1.5";
+const CHIP_L = "text-[10px] font-bold text-[#808080]";
+const CHIP_V = "text-[11px] font-extrabold text-white tabular-nums";
+
+const PILL =
+  "inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/35 px-3 py-1";
+const PILL_DOT = "inline-block w-2 h-2 rounded-full bg-[#d4af37]";
+const PILL_TX = "text-[11px] font-extrabold text-[#d0d0d0]";
+
+const LIVE_BADGE =
+  "inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/35 px-3 py-1";
+const LIVE_TX = "text-[11px] font-extrabold text-[#d0d0d0]";
+const LIVE_DOT = "inline-block w-2 h-2 rounded-full bg-emerald-500";
+
 const PANEL_INNER = "border border-[#2a2a2a] bg-black/20 rounded-xl overflow-hidden";
 
-const MUTED = "text-[#8a8a8a]";
-const MUTED2 = "text-[#6a6a6a]";
-const EDGE = "border-[#2a2a2a]";
-const EDGE2 = "border-[#232323]";
-
-const BTN_BASE = "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors whitespace-nowrap";
+const BTN_BASE =
+  "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors whitespace-nowrap";
 const BTN_ON = "bg-[#d4af37] text-black border-[#d4af37]";
-const BTN_OFF = "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]";
+const BTN_OFF =
+  "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]";
 const BTN_GHOST =
   "text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a]";
 const LINK_GOLD = "text-[11px] font-extrabold text-[#d4af37] hover:underline";
 
-/** Header colors */
 const HDR_LEFT_BG = "bg-[#0b0b0b]";
 const HDR_BOOK_BG = "bg-[#1c1c1c]";
 const HDR_TEXT = "text-[#d0d0d0]";
@@ -144,19 +139,6 @@ function normalizeIso(raw: string | null | undefined): string | null {
   return s;
 }
 
-function fmtCTTimeOnly(iso: string | null | undefined) {
-  if (!iso) return "—";
-  const n = normalizeIso(iso);
-  if (!n) return "—";
-  const d = new Date(n);
-  if (Number.isNaN(d.getTime())) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(d);
-}
-
 function fmtCTDateTime(iso: string | null | undefined) {
   if (!iso) return "—";
   const n = normalizeIso(iso);
@@ -167,6 +149,35 @@ function fmtCTDateTime(iso: string | null | undefined) {
     timeZone: CT_TZ,
     month: "short",
     day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function fmtCTDateTimeLong(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const n = normalizeIso(iso);
+  if (!n) return "—";
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
+    weekday: "short",
+    month: "short",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
+function fmtCTTimeOnly(iso: string | null | undefined) {
+  if (!iso) return "—";
+  const n = normalizeIso(iso);
+  if (!n) return "—";
+  const d = new Date(n);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ,
     hour: "numeric",
     minute: "2-digit",
   }).format(d);
@@ -207,6 +218,61 @@ function maxIso(a: string | null, b: string | null) {
   if (!an) return b;
   if (!bn) return a;
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
+}
+
+/* =========================================================
+   FLEX COLUMN PICKERS (history tables vary)
+========================================================= */
+
+function pickAny(row: any, keys: string[]) {
+  for (const k of keys) if (row?.[k] != null) return row[k];
+  return null;
+}
+
+function pickTs(row: any): string | null {
+  return normalizeIso(
+    pickAny(row, ["ts", "timestamp", "snapshot_ts", "inserted_at", "created_at", "time", "date"])
+  );
+}
+
+function pickOdds(row: any): number | null {
+  const raw = pickAny(row, ["odds", "price", "american_odds", "odds_american", "book_odds"]);
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pickLine(row: any): number | null {
+  const raw = pickAny(row, ["line", "points", "point", "total", "spread_line", "total_line"]);
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pickBook(row: any): string | null {
+  const raw = pickAny(row, ["bookmaker", "book", "sportsbook", "provider", "site"]);
+  return raw ? String(raw).toLowerCase() : null;
+}
+
+function bookKeyFromRaw(s: string | null): BookKey | null {
+  if (!s) return null;
+  const v = s.toLowerCase();
+  if (v.includes("draftkings") || v === "dk") return "dk";
+  if (v.includes("fanduel") || v === "fd") return "fd";
+  if (v.includes("betmgm") || v === "mgm") return "mgm";
+  if (v.includes("pinnacle") || v === "pin") return "pin";
+  if (v.includes("betonline") || v === "bol") return "bol";
+  return null;
+}
+
+function pickSide(row: any): string | null {
+  const raw = pickAny(row, ["side", "team_side", "home_away", "bet_side"]);
+  return raw ? String(raw).toLowerCase() : null;
+}
+
+function pickOU(row: any): string | null {
+  const raw = pickAny(row, ["over_under", "ou", "side_ou", "total_side"]);
+  return raw ? String(raw).toLowerCase() : null;
 }
 
 /* =========================================================
@@ -256,31 +322,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: {
-        line: row.dk_total_line ?? null,
-        over: row.dk_total_over_odds ?? null,
-        under: row.dk_total_under_odds ?? null,
-      },
-      fd: {
-        line: row.fd_total_line ?? null,
-        over: row.fd_total_over_odds ?? null,
-        under: row.fd_total_under_odds ?? null,
-      },
-      mgm: {
-        line: row.mgm_total_line ?? null,
-        over: row.mgm_total_over_odds ?? null,
-        under: row.mgm_total_under_odds ?? null,
-      },
-      pin: {
-        line: row.pin_total_line ?? null,
-        over: row.pin_total_over_odds ?? null,
-        under: row.pin_total_under_odds ?? null,
-      },
-      bol: {
-        line: row.bol_total_line ?? null,
-        over: row.bol_total_over_odds ?? null,
-        under: row.bol_total_under_odds ?? null,
-      },
+      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
+      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
+      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
+      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
+      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
     },
   };
 }
@@ -368,9 +414,31 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
 }
 
+function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
+  const src = side === "AWAY" ? ev.away : ev.home;
+  if (!src) return { top: "—" };
+
+  if (market === "ml") return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
+
+  if (market === "spread") {
+    const c = src.spread[book];
+    if (c?.line == null) return { top: "—" };
+    return { top: String(c.line), bottom: c?.odds == null ? "—" : `(${c.odds})` };
+  }
+
+  // total: AWAY is Over, HOME is Under
+  const t = src.total[book];
+  const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
+  if (t?.line == null) return { top: "—" };
+  return { top: String(t.line), bottom: odds == null ? "—" : `(${odds})` };
+}
+
 /* =========================================================
-   HEADER FALLBACK + BOOK “PILL”
+   BOOK HEADER PILL (white pill like your screenshots)
 ========================================================= */
+
+const BOOK_LOGO_W = 86;
+const BOOK_LOGO_H = 22;
 
 function headerFallbackPillDataUri(label: string) {
   const svg = `
@@ -400,10 +468,7 @@ function BookLogoPill({
   const pillW = size === "sm" ? "w-[90px]" : "w-[92px]";
 
   return (
-    <div
-      className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`}
-      title={alt}
-    >
+    <div className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center`} title={alt}>
       <img
         src={src}
         alt={alt}
@@ -417,8 +482,74 @@ function BookLogoPill({
   );
 }
 
+function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: boolean }) {
+  const fb = bookKey === "dk" ? "DK" : bookKey === "fd" ? "FD" : bookKey === "mgm" ? "MGM" : bookKey === "pin" ? "PIN" : "BOL";
+  return (
+    <th
+      className={[
+        "text-center px-2 py-3",
+        HDR_BOOK_BG,
+        "border-b",
+        HDR_BORDER,
+        borderLeft ? `border-l ${HDR_BORDER}` : "",
+      ].join(" ")}
+      style={{ width: COL_BOOK }}
+    >
+      <div className="flex items-center justify-center">
+        <BookLogoPill src={BOOK_LOGOS[bookKey]} alt={BOOK_LABEL[bookKey]} fallbackLabel={fb} size="md" />
+      </div>
+    </th>
+  );
+}
+
+function ConsensusValue({ parts }: { parts: CellParts }) {
+  return (
+    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", `border-r ${HDR_BORDER}`].join(" ")}>
+      {renderCellParts(parts)}
+    </td>
+  );
+}
+
+function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
+  return (
+    <td
+      className={[
+        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
+        borderLeft ? `border-l ${HDR_BORDER}` : "",
+      ].join(" ")}
+    >
+      {renderCellParts(parts)}
+    </td>
+  );
+}
+
+function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+  return (
+    <div className="flex items-center gap-3">
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt={`${team} logo`}
+          className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : (
+        <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
+      )}
+
+      <div className="leading-tight min-w-0">
+        <div className="text-white font-extrabold text-[15px] truncate">{team}</div>
+        <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
+      </div>
+    </div>
+  );
+}
+
 /* =========================================================
-   SMALL UI HELPERS (segmented — same as Model cadence)
+   SEGMENTED MARKET CONTROL
 ========================================================= */
 
 function SegButton({
@@ -464,1188 +595,24 @@ function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) =
 }
 
 /* =========================================================
-   TABLE CELLS / HEADERS
+   HERO CHIPS (exact vibe as model screens)
 ========================================================= */
 
-function BookHeader({
-  bookKey,
-  borderLeft,
-}: {
-  bookKey: BookKey;
-  borderLeft?: boolean;
-}) {
-  const meta =
-    bookKey === "dk"
-      ? { alt: "DraftKings", fb: "DK" }
-      : bookKey === "fd"
-      ? { alt: "FanDuel", fb: "FD" }
-      : bookKey === "mgm"
-      ? { alt: "BetMGM", fb: "MGM" }
-      : bookKey === "pin"
-      ? { alt: "Pinnacle", fb: "PIN" }
-      : { alt: "BetOnline", fb: "BOL" };
-
+function Chip({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <th
-      className={[
-        "text-center px-2 py-3",
-        HDR_BOOK_BG,
-        "border-b",
-        HDR_BORDER,
-        borderLeft ? `border-l ${HDR_BORDER}` : "",
-      ].join(" ")}
-      style={{ width: COL_BOOK }}
-    >
-      <div className="flex items-center justify-center">
-        <BookLogoPill src={BOOK_LOGOS[bookKey]} alt={meta.alt} fallbackLabel={meta.fb} size="md" />
-      </div>
-    </th>
-  );
-}
-
-function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
-  return (
-    <td
-      className={[
-        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
-        borderLeft ? `border-l ${HDR_BORDER}` : "",
-      ].join(" ")}
-    >
-      {renderCellParts(parts)}
-    </td>
-  );
-}
-
-function ConsensusValue({ parts }: { parts: CellParts }) {
-  return (
-    <td className={["px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]", `border-r ${HDR_BORDER}`].join(" ")}>
-      {renderCellParts(parts)}
-    </td>
-  );
-}
-
-function MiniTeamRow({
-  team,
-  logoUrl,
-  side,
-}: {
-  team: string;
-  logoUrl: string | null;
-  side: "AWAY" | "HOME";
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      {logoUrl ? (
-        <img
-          src={logoUrl}
-          alt={`${team} logo`}
-          className="w-11 h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
-      ) : (
-        <div className="w-11 h-11 rounded-md bg-white border border-[#e5e5e5]" />
-      )}
-
-      <div className="leading-tight min-w-0">
-        <div className="text-white font-extrabold text-[15px] truncate">{team}</div>
-        <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
-      </div>
+    <div className={CHIP}>
+      <div className={CHIP_L}>{label}</div>
+      <div className={CHIP_V}>{value}</div>
     </div>
   );
 }
 
 /* =========================================================
-   CELL GETTERS
-========================================================= */
-
-function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
-  const src = side === "AWAY" ? ev.away : ev.home;
-  if (!src) return { top: "—" };
-
-  if (market === "ml") return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
-
-  if (market === "spread") {
-    const c = src.spread[book];
-    if (c?.line == null) return { top: "—" };
-    return { top: String(c.line), bottom: c?.odds == null ? "—" : `(${c.odds})` };
-  }
-
-  // total: AWAY is Over, HOME is Under
-  const t = src.total[book];
-  const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
-  if (t?.line == null) return { top: "—" };
-  return { top: String(t.line), bottom: odds == null ? "—" : `(${odds})` };
-}
-
-/* =========================================================
-   HISTORY / CHARTS (ODDS ONLY)
-========================================================= */
-
-type HistMarket = "h2h" | "spreads" | "totals";
-type HistSide = "home" | "away" | "over" | "under";
-
-type HistoryRow = {
-  id: number;
-  ts: string;
-  event_id: string;
-  bookmaker: string;
-  market: HistMarket;
-  side: HistSide;
-  line: number | null;
-  odds: number | null;
-  last_update?: string | null;
-  inserted_at?: string | null;
-};
-
-const HISTORY_TABLE = "odds_snapshot_history";
-
-const BOOK_SERIES_COLOR: Record<string, string> = {
-  draftkings: "#34d399",
-  fanduel: "#60a5fa",
-  betmgm: "#d4af37",
-  pinnacle: "#f97316",
-  betonlineag: "#a78bfa",
-};
-
-function seriesColor(bookmaker: string) {
-  const k = String(bookmaker || "").toLowerCase();
-  return BOOK_SERIES_COLOR[k] ?? "#9ca3af";
-}
-
-function fmtCTShortLabel(iso: string) {
-  const n = normalizeIso(iso) ?? iso;
-  const d = new Date(n);
-  if (Number.isNaN(d.getTime())) return iso;
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    month: "short",
-    day: "2-digit",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(d);
-}
-
-function impliedProbFromAmerican(odds: number) {
-  if (!Number.isFinite(odds) || odds === 0) return NaN;
-  if (odds > 0) return 100 / (odds + 100);
-  return Math.abs(odds) / (Math.abs(odds) + 100);
-}
-
-function floorToMinuteIso(iso: string) {
-  const n = normalizeIso(iso) ?? iso;
-  const d = new Date(n);
-  if (Number.isNaN(d.getTime())) return iso;
-  d.setSeconds(0, 0);
-  return d.toISOString();
-}
-
-function medianProbOfKeys(point: any, keys: string[]) {
-  const probs: number[] = [];
-  for (const k of keys) {
-    const odds = point?.[k];
-    if (typeof odds === "number" && Number.isFinite(odds)) {
-      const p = impliedProbFromAmerican(odds);
-      if (Number.isFinite(p)) probs.push(p);
-    }
-  }
-  return median(probs);
-}
-
-type ChartPoint = {
-  ts: string;
-  t: string;
-  mw: number | null;
-  sharp: boolean;
-  pinProb?: number | null;
-  [k: string]: any;
-};
-
-function buildChartSeriesOddsOnly(rows: HistoryRow[], uiMarket: Market, books: string[]) {
-  const binMap = new Map<string, Map<string, HistoryRow>>();
-
-  for (const r of rows) {
-    const bin = floorToMinuteIso(r.ts);
-    const byBook = binMap.get(bin) ?? new Map<string, HistoryRow>();
-    const prev = byBook.get(r.bookmaker);
-
-    if (!prev) byBook.set(r.bookmaker, r);
-    else {
-      const pt = new Date(normalizeIso(prev.ts) ?? prev.ts).getTime();
-      const rt = new Date(normalizeIso(r.ts) ?? r.ts).getTime();
-      if (rt >= pt) byBook.set(r.bookmaker, r);
-    }
-
-    binMap.set(bin, byBook);
-  }
-
-  const bins = Array.from(binMap.keys()).sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-
-  const points: ChartPoint[] = bins.map((bin) => {
-    const byBook = binMap.get(bin)!;
-    const p: ChartPoint = { ts: bin, t: fmtCTShortLabel(bin), mw: null, sharp: false };
-
-    for (const b of books) {
-      const row = byBook.get(b);
-      if (!row) continue;
-
-      if (typeof row.odds === "number" && Number.isFinite(row.odds)) p[b] = row.odds;
-      if (typeof row.line === "number" && Number.isFinite(row.line)) p[`${b}__line`] = row.line;
-    }
-
-    const probs = books
-      .map((b) => p[b])
-      .filter((v) => typeof v === "number" && Number.isFinite(v))
-      .map((odds: number) => impliedProbFromAmerican(odds))
-      .filter((q) => Number.isFinite(q));
-
-    if (probs.length >= 2) p.mw = +(Math.max(...probs) - Math.min(...probs)).toFixed(4);
-
-    const pinOdds = p["pinnacle"];
-    if (typeof pinOdds === "number" && Number.isFinite(pinOdds)) {
-      const pp = impliedProbFromAmerican(pinOdds);
-      p.pinProb = Number.isFinite(pp) ? pp : null;
-    } else {
-      p.pinProb = null;
-    }
-
-    return p;
-  });
-
-  const PROB_MOVE = 0.02;
-  const widthTight = uiMarket === "ml" ? 0.03 : uiMarket === "spread" ? 0.02 : 0.02;
-
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const cur = points[i];
-
-    const widthOk = cur.mw != null ? cur.mw <= widthTight : false;
-    let sharp = false;
-
-    if (prev.pinProb != null && cur.pinProb != null) {
-      if (Math.abs(cur.pinProb - prev.pinProb) >= PROB_MOVE) sharp = true;
-    }
-
-    if (!sharp && widthOk) {
-      const consPrev = medianProbOfKeys(prev, books);
-      const consCur = medianProbOfKeys(cur, books);
-      if (consPrev != null && consCur != null) {
-        if (Math.abs(consCur - consPrev) >= PROB_MOVE) sharp = true;
-      }
-    }
-
-    cur.sharp = sharp;
-  }
-
-  return points;
-}
-
-function useIsMobile(bp = 640) {
-  const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${bp}px)`);
-    const on = () => setIsMobile(mq.matches);
-    on();
-    mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener?.("change", on);
-  }, [bp]);
-  return isMobile;
-}
-
-/* =========================================================
-   MODAL SHELL (same shape/typography as other screens)
-========================================================= */
-
-function ModalShell({
-  title,
-  subtitle,
-  onClose,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 p-2 sm:p-4"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="w-full max-w-7xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-        <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
-          <div className="min-w-0">
-            <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
-          </div>
-          <button
-            className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
-            onClick={onClose}
-            type="button"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div className="p-3 sm:p-4 overflow-y-auto">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/* =========================================================
-   PLAYER PROPS MODAL
-========================================================= */
-
-type PropType = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
-
-const PROP_LABEL: Record<PropType, string> = {
-  player_points: "Points",
-  player_rebounds: "Rebounds",
-  player_assists: "Assists",
-  player_threes: "3 Pointers",
-};
-
-type PlayerPropsSnapshotRow = {
-  id: number;
-  ts: string | null;
-  inserted_at: string | null;
-
-  run_id: string | null;
-  sport_key: string;
-
-  event_id: string | null;
-  commence_time: string | null;
-
-  home_team: string | null;
-  away_team: string | null;
-
-  player_name: string | null;
-
-  team: string | null;
-  opponent: string | null;
-
-  market: string;
-  side: "over" | "under" | string;
-  line: number | null;
-  odds: number | null;
-  bookmaker: string;
-
-  source?: string | null;
-};
-
-type PlayerPropEvLatestRow = {
-  sport_key?: string | null;
-  event_id?: string | null;
-
-  player_name: string | null;
-  team: string | null;
-
-  position: string | null;
-  picture_url: string | null;
-};
-
-type PropCell = {
-  line: number | null;
-  over: number | null;
-  under: number | null;
-};
-
-type PlayerPropWide = {
-  player: string;
-
-  team?: string | null;
-  opponent?: string | null;
-
-  position?: string | null;
-  pictureUrl?: string | null;
-
-  lineConsensus: number | null;
-  byBook: Record<BookKey, PropCell>;
-};
-
-function initPropCell(): PropCell {
-  return { line: null, over: null, under: null };
-}
-
-function propsMedianLine(rows: PlayerPropsSnapshotRow[]) {
-  const nums: number[] = [];
-  for (const r of rows) if (typeof r.line === "number" && Number.isFinite(r.line)) nums.push(r.line);
-  return median(nums);
-}
-
-/** player_props_snapshot DOES NOT have created_at. Use ts, fallback inserted_at. */
-function pickSnapTs(r: PlayerPropsSnapshotRow): string | null {
-  const raw = r.ts ?? r.inserted_at ?? null;
-  return normalizeIso(raw);
-}
-
-function safeNameKey(x: string | null | undefined) {
-  return (x ?? "").trim().toLowerCase();
-}
-
-function PlayerAvatar({
-  url,
-  name,
-  size = 34,
-}: {
-  url: string | null | undefined;
-  name: string;
-  size?: number;
-}) {
-  const [broken, setBroken] = useState(false);
-
-  const initials = useMemo(() => {
-    const parts = (name || "").trim().split(/\s+/).filter(Boolean);
-    if (!parts.length) return "—";
-    const a = parts[0]?.[0] ?? "";
-    const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
-    return (a + b).toUpperCase();
-  }, [name]);
-
-  if (!url || broken) {
-    return (
-      <div
-        className="rounded-full bg-white/10 border border-[#2a2a2a] flex items-center justify-center text-[11px] font-extrabold text-[#cfcfcf]"
-        style={{ width: size, height: size }}
-        title={name}
-      >
-        {initials}
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={url}
-      alt={name}
-      width={size}
-      height={size}
-      className="rounded-full object-cover border border-[#2a2a2a] bg-black/40"
-      loading="lazy"
-      referrerPolicy="no-referrer"
-      onError={() => setBroken(true)}
-      title={name}
-      style={{ width: size, height: size }}
-    />
-  );
-}
-
-function PlayerPropsModal({
-  ev,
-  sportKey,
-  onClose,
-  onLastUpdated,
-}: {
-  ev: EventOdds;
-  sportKey: string;
-  onClose: () => void;
-  onLastUpdated?: (iso: string) => void;
-}) {
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [propType, setPropType] = useState<PropType>("player_points");
-
-  const [latestTs, setLatestTs] = useState<string | null>(null);
-  const [rows, setRows] = useState<PlayerPropWide[]>([]);
-
-  useEffect(() => {
-    let alive = true;
-
-    async function fetchRows() {
-      setLoading(true);
-      setErr("");
-      setLatestTs(null);
-      setRows([]);
-
-      const selectCols =
-        "id,ts,inserted_at,run_id,sport_key,event_id,commence_time,home_team,away_team,player_name,team,opponent,market,side,line,odds,bookmaker,source";
-
-      // 1) Try event_id
-      const r1 = await supabase
-        .from("player_props_snapshot")
-        .select(selectCols)
-        .eq("sport_key", sportKey)
-        .eq("market", propType)
-        .eq("event_id", ev.eventId)
-        .order("ts", { ascending: false })
-        .order("inserted_at", { ascending: false })
-        .limit(5000);
-
-      if (!alive) return;
-
-      let raw = (r1.data ?? []) as PlayerPropsSnapshotRow[];
-      let error = r1.error;
-
-      // 2) Fallback: match teams if no event rows
-      if (!error && (!raw || raw.length === 0)) {
-        const home = ev.home?.team ?? "";
-        const away = ev.away?.team ?? "";
-
-        const orFilter = [
-          `and(home_team.eq.${home},away_team.eq.${away})`,
-          `and(home_team.eq.${away},away_team.eq.${home})`,
-        ].join(",");
-
-        const r2 = await supabase
-          .from("player_props_snapshot")
-          .select(selectCols)
-          .eq("sport_key", sportKey)
-          .eq("market", propType)
-          .or(orFilter)
-          .order("ts", { ascending: false })
-          .order("inserted_at", { ascending: false })
-          .limit(5000);
-
-        if (!alive) return;
-        raw = (r2.data ?? []) as PlayerPropsSnapshotRow[];
-        error = r2.error;
-      }
-
-      if (error) {
-        setErr(error.message);
-        setLoading(false);
-        return;
-      }
-
-      if (!raw.length) {
-        setLatestTs(null);
-        setRows([]);
-        setLoading(false);
-        return;
-      }
-
-      // 3) Determine newest snapshot batch timestamp (ts, fallback inserted_at)
-      const newest = pickSnapTs(raw[0]) ?? null;
-      setLatestTs(newest);
-      if (newest && onLastUpdated) onLastUpdated(newest);
-
-      const latestOnly = newest ? raw.filter((x) => pickSnapTs(x) === newest) : raw;
-
-      // 4) Build player set for meta lookup
-      const playersInThisSnap = Array.from(
-        new Set(
-          latestOnly
-            .map((r) => (r.player_name ?? "").trim())
-            .filter((x) => x.length > 0)
-        )
-      );
-
-      // 5) Pull POSITION + PICTURE from player_prop_ev_latest (meta only)
-      const metaMap = new Map<string, { position: string | null; pictureUrl: string | null }>();
-
-      if (playersInThisSnap.length) {
-        const metaRes = await supabase
-          .from("player_prop_ev_latest")
-          .select("player_name,position,picture_url,event_id,sport_key")
-          .eq("sport_key", sportKey)
-          .eq("event_id", ev.eventId)
-          .in("player_name", playersInThisSnap);
-
-        if (!alive) return;
-
-        if (metaRes.error) {
-          console.warn("player_prop_ev_latest meta lookup error:", metaRes.error.message);
-        } else {
-          const metaRows = (metaRes.data ?? []) as PlayerPropEvLatestRow[];
-          for (const m of metaRows) {
-            const k = safeNameKey(m.player_name);
-            if (!k) continue;
-            metaMap.set(k, {
-              position: m.position ?? null,
-              pictureUrl: m.picture_url ?? null,
-            });
-          }
-        }
-      }
-
-      // 6) Wide transform by player
-      const byPlayer = new Map<string, PlayerPropsSnapshotRow[]>();
-      for (const r of latestOnly) {
-        const name = (r.player_name ?? "").trim();
-        if (!name) continue;
-        const arr = byPlayer.get(name) ?? [];
-        arr.push(r);
-        byPlayer.set(name, arr);
-      }
-
-      const wide: PlayerPropWide[] = Array.from(byPlayer.entries()).map(([player, prs]) => {
-        const byBook: Record<BookKey, PropCell> = {
-          dk: initPropCell(),
-          fd: initPropCell(),
-          mgm: initPropCell(),
-          pin: initPropCell(),
-          bol: initPropCell(),
-        };
-
-        for (const r of prs) {
-          const bk = bookKeyFromBookmaker(r.bookmaker);
-          if (!bk) continue;
-
-          if (typeof r.line === "number" && Number.isFinite(r.line)) {
-            byBook[bk].line = r.line;
-          }
-
-          const side = String(r.side || "").toLowerCase();
-          if (side === "over") byBook[bk].over = typeof r.odds === "number" ? r.odds : null;
-          if (side === "under") byBook[bk].under = typeof r.odds === "number" ? r.odds : null;
-        }
-
-        const lineConsensus = propsMedianLine(prs);
-        const meta = metaMap.get(safeNameKey(player));
-
-        return {
-          player,
-          team: prs[0]?.team ?? null,
-          opponent: prs[0]?.opponent ?? null,
-          lineConsensus,
-          byBook,
-          position: meta?.position ?? null,
-          pictureUrl: meta?.pictureUrl ?? null,
-        };
-      });
-
-      wide.sort((a, b) => a.player.localeCompare(b.player));
-      setRows(wide);
-      setLoading(false);
-    }
-
-    fetchRows();
-    return () => {
-      alive = false;
-    };
-  }, [ev.eventId, ev.home?.team, ev.away?.team, propType, sportKey, onLastUpdated]);
-
-  const subtitle = [
-    ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
-    latestTs ? `Snapshot: ${fmtCTDateTime(latestTs)}` : "Snapshot: —",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  function PropBookCell({ cell }: { cell: PropCell }) {
-    return (
-      <div className="flex flex-col items-center justify-center leading-tight">
-        <div className="text-[12px] text-white font-extrabold tabular-nums">
-          {cell.line == null ? "—" : cell.line}
-        </div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums mt-0.5">O: {cell.over == null ? "—" : cell.over}</div>
-        <div className="text-[11px] text-[#cfcfcf] font-bold tabular-nums">U: {cell.under == null ? "—" : cell.under}</div>
-      </div>
-    );
-  }
-
-  function bookMeta(bk: BookKey) {
-    return bk === "dk"
-      ? { alt: "DraftKings", fb: "DK" }
-      : bk === "fd"
-      ? { alt: "FanDuel", fb: "FD" }
-      : bk === "mgm"
-      ? { alt: "BetMGM", fb: "MGM" }
-      : bk === "pin"
-      ? { alt: "Pinnacle", fb: "PIN" }
-      : { alt: "BetOnline", fb: "BOL" };
-  }
-
-  function PlayerCell({ r }: { r: PlayerPropWide }) {
-    return (
-      <div className="flex items-center gap-3 min-w-0">
-        <PlayerAvatar url={r.pictureUrl} name={r.player} size={34} />
-        <div className="min-w-0">
-          <div className="text-white font-extrabold text-[13px] truncate flex items-center gap-2">
-            <span className="truncate">{r.player}</span>
-            {r.position ? (
-              <span className="shrink-0 text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-white/10 border border-[#2a2a2a] text-[#d0d0d0]">
-                {r.position}
-              </span>
-            ) : null}
-          </div>
-
-          {(r.team || r.opponent) && (
-            <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-              {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <ModalShell title="Player Props" subtitle={subtitle} onClose={onClose}>
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-[11px] text-[#9a9a9a] font-extrabold">Prop:</div>
-          <select
-            value={propType}
-            onChange={(e) => setPropType(e.target.value as PropType)}
-            className="bg-black/30 border border-[#2a2a2a] text-white text-xs font-extrabold rounded-lg px-3 py-2"
-          >
-            <option value="player_points">Points</option>
-            <option value="player_rebounds">Rebounds</option>
-            <option value="player_assists">Assists</option>
-            <option value="player_threes">3 Pointers</option>
-          </select>
-        </div>
-
-        <div className="text-[11px] text-[#808080] font-semibold">
-          {rows.length ? `${rows.length} players · books: DK/FD/MGM/PIN/BOL` : "—"}
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="text-xs text-[#808080]">Loading player props…</div>
-      ) : err ? (
-        <div className="text-xs text-red-400">Supabase error: {err}</div>
-      ) : !rows.length ? (
-        <div className="text-xs text-[#808080]">
-          No rows found for <span className="text-white font-extrabold">{PROP_LABEL[propType]}</span> for this event.
-        </div>
-      ) : (
-        <>
-          {/* Desktop/tablet */}
-          <div className="hidden sm:block">
-            <div className={PANEL_INNER}>
-              <table className="min-w-[1040px] w-full">
-                <thead className="sticky top-0 z-10">
-                  <tr className={`border-b ${HDR_BORDER}`}>
-                    <th className={`text-left px-4 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold`}>
-                      Player
-                    </th>
-
-                    <th className={`text-center px-3 py-3 ${HDR_LEFT_BG} ${HDR_TEXT} text-[12px] font-extrabold border-l ${HDR_BORDER}`}>
-                      Cons Line
-                    </th>
-
-                    {BOOKS.map((bk, i) => {
-                      const meta = bookMeta(bk);
-                      return (
-                        <th
-                          key={bk}
-                          className={[
-                            "text-center px-2 py-3",
-                            HDR_BOOK_BG,
-                            "border-b",
-                            HDR_BORDER,
-                            i === 0 ? `border-l ${HDR_BORDER}` : "",
-                          ].join(" ")}
-                        >
-                          <div className="flex items-center justify-center">
-                            <BookLogoPill src={BOOK_LOGOS[bk]} alt={meta.alt} fallbackLabel={meta.fb} size="md" />
-                          </div>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.player} className={`border-b ${HDR_BORDER} last:border-b-0 hover:bg-white/5`}>
-                      <td className="px-4 py-3">
-                        <PlayerCell r={r} />
-                      </td>
-
-                      <td className={`px-3 py-3 text-center font-extrabold text-white tabular-nums border-l ${HDR_BORDER}`}>
-                        {r.lineConsensus == null ? "—" : r.lineConsensus}
-                      </td>
-
-                      {BOOKS.map((bk, i) => (
-                        <td key={bk} className={["px-2 py-3 text-center", i === 0 ? `border-l ${HDR_BORDER}` : ""].join(" ")}>
-                          <PropBookCell cell={r.byBook[bk]} />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-3 text-[11px] text-[#808080]">
-              Each book cell shows: <span className="text-white font-bold">Line</span> +{" "}
-              <span className="text-white font-bold">O/U odds</span> (latest snapshot only). Player headshots + position come from{" "}
-              <span className="text-white font-bold">player_prop_ev_latest</span>.
-            </div>
-          </div>
-
-          {/* Mobile */}
-          <div className="sm:hidden space-y-3">
-            {rows.map((r) => (
-              <div key={r.player} className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
-                <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex items-center gap-3">
-                    <PlayerAvatar url={r.pictureUrl} name={r.player} size={34} />
-                    <div className="min-w-0">
-                      <div className="text-white font-extrabold text-[13px] truncate flex items-center gap-2">
-                        <span className="truncate">{r.player}</span>
-                        {r.position ? (
-                          <span className="shrink-0 text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-white/10 border border-[#2a2a2a] text-[#d0d0d0]">
-                            {r.position}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {(r.team || r.opponent) && (
-                        <div className="text-[11px] text-[#8a8a8a] font-semibold mt-0.5 truncate">
-                          {r.team ?? "—"} {r.opponent ? <span className="text-[#6f6f6f]">vs {r.opponent}</span> : null}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="text-right">
-                    <div className="text-[10px] text-[#808080] font-semibold">Cons</div>
-                    <div className="text-white font-extrabold tabular-nums">{r.lineConsensus == null ? "—" : r.lineConsensus}</div>
-                  </div>
-                </div>
-
-                <div className="p-3 grid grid-cols-2 gap-3">
-                  {BOOKS.map((bk) => {
-                    const meta = bookMeta(bk);
-                    return (
-                      <div key={bk} className="rounded-lg border border-[#2a2a2a] bg-black/10 p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <BookLogoPill src={BOOK_LOGOS[bk]} alt={meta.alt} fallbackLabel={meta.fb} size="sm" />
-                          <div className="text-[10px] text-[#808080] font-bold">{bk.toUpperCase()}</div>
-                        </div>
-                        <PropBookCell cell={r.byBook[bk]} />
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </ModalShell>
-  );
-}
-
-/* =========================================================
-   HISTORY CHART PAIR (ODDS ONLY)
-========================================================= */
-
-function HistoryChartPairOddsOnly({
-  title,
-  uiMarket,
-  books,
-  seriesA,
-  seriesB,
-  panelTitleA,
-  panelTitleB,
-}: {
-  title: string;
-  uiMarket: Market;
-  books: string[];
-  seriesA: ChartPoint[];
-  seriesB: ChartPoint[];
-  panelTitleA: string;
-  panelTitleB: string;
-}) {
-  const isMobile = useIsMobile();
-  const chartHeight = isMobile ? 420 : 520;
-
-  const leftTopLabel = uiMarket === "ml" ? "Moneyline Odds" : uiMarket === "spread" ? "Spread Odds" : "Total Odds";
-  const rightTopLabel = "Market Width (Prob)";
-
-  const margin = isMobile ? { top: 8, right: 14, left: 36, bottom: 14 } : { top: 8, right: 16, left: 38, bottom: 16 };
-  const xTickSize = isMobile ? 10 : 11;
-  const yTickSize = isMobile ? 10 : 11;
-
-  const empty = !seriesA.length && !seriesB.length;
-
-  return (
-    <div className={PANEL_INNER}>
-      <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
-        <div className="text-white font-extrabold text-sm">{title}</div>
-      </div>
-
-      {empty ? (
-        <div className="p-4 text-xs text-[#808080]">No history rows found in this window for this market.</div>
-      ) : (
-        <div className="p-3 sm:p-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {[
-            { title: panelTitleA, data: seriesA } as const,
-            { title: panelTitleB, data: seriesB } as const,
-          ].map((panel) => (
-            <div key={panel.title} className="rounded-xl border border-[#2a2a2a] bg-black/20 p-3">
-              <div className="flex items-center justify-between gap-3 mb-2">
-                <div className="text-white font-bold text-xs">{panel.title}</div>
-                <div className="flex items-center gap-3">
-                  <div className="text-[10px] text-[#cfcfcf] font-extrabold">{leftTopLabel}</div>
-                  <div className="text-[10px] text-[#cfcfcf] font-extrabold">{rightTopLabel}</div>
-                </div>
-              </div>
-
-              <div style={{ height: chartHeight }} className="w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={panel.data} margin={margin}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="t" tick={{ fontSize: xTickSize }} interval="preserveStartEnd" />
-
-                    <YAxis yAxisId="main" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 36 : 40} />
-                    <YAxis yAxisId="mw" orientation="right" tick={{ fontSize: yTickSize }} tickMargin={8} width={isMobile ? 42 : 46} />
-
-                    <Tooltip
-                      content={({ active, payload, label }) => {
-                        if (!active || !payload?.length) return null;
-
-                        const row: any = payload[0]?.payload;
-
-                        const series = (payload ?? [])
-                          .filter((p) => p?.dataKey && typeof p.value === "number")
-                          .map((p) => ({ key: String(p.dataKey), val: p.value as number }))
-                          .filter((x) => x.key !== "mw");
-
-                        const pretty = series.map((s) => {
-                          const ln = row?.[`${s.key}__line`];
-                          return { book: s.key, odds: s.val, line: typeof ln === "number" ? ln : null };
-                        });
-
-                        return (
-                          <div className="bg-[#0a0a0a] border border-[#2a2a2a] rounded-md p-2 text-[11px] text-[#cfcfcf] max-w-[340px]">
-                            <div className="font-extrabold text-white mb-1">{label}</div>
-
-                            {row?.mw != null && (
-                              <div className="mb-1">
-                                <span className="font-bold">Width:</span> {row.mw}
-                              </div>
-                            )}
-
-                            <div className="space-y-0.5">
-                              {pretty.slice(0, 12).map((x) => (
-                                <div key={x.book} className="flex items-center justify-between gap-2">
-                                  <span className="text-[#9a9a9a] font-semibold">{x.book}</span>
-                                  <span className="text-white font-extrabold tabular-nums">
-                                    {x.odds}
-                                    {x.line != null ? <span className="text-white/80"> · {x.line}</span> : null}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-
-                            <div className="mt-2">
-                              {row?.sharp ? (
-                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-red-500 text-white">
-                                  Sharp Move
-                                </span>
-                              ) : (
-                                <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#2a2a2a] text-[#cfcfcf]">
-                                  —
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      }}
-                    />
-
-                    <Legend />
-
-                    {books.map((b) => (
-                      <Line
-                        key={b}
-                        yAxisId="main"
-                        type="monotone"
-                        dataKey={b}
-                        name={b}
-                        dot={false}
-                        strokeWidth={2}
-                        connectNulls
-                        stroke={seriesColor(b)}
-                      />
-                    ))}
-
-                    <Line
-                      yAxisId="mw"
-                      type="monotone"
-                      dataKey="mw"
-                      name="Market Width"
-                      dot={false}
-                      strokeWidth={2}
-                      connectNulls
-                      stroke="#e5e7eb"
-                      strokeDasharray="6 6"
-                    />
-
-                    {panel.data
-                      .filter((p) => p.sharp)
-                      .map((p) => (
-                        <ReferenceLine
-                          key={`sharp-${panel.title}-${p.ts}`}
-                          x={p.t}
-                          stroke="rgba(239,68,68,0.55)"
-                          strokeDasharray="3 3"
-                          yAxisId="main"
-                        />
-                      ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LineMovementModal({
-  ev,
-  uiMarket,
-  onClose,
-}: {
-  ev: EventOdds;
-  uiMarket: Market;
-  onClose: () => void;
-}) {
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-
-  const [activeMarket, setActiveMarket] = useState<Market>(uiMarket);
-  useEffect(() => setActiveMarket(uiMarket), [uiMarket]);
-
-  const hoursBack = 24;
-  const [books, setBooks] = useState<string[]>([]);
-
-  const [mlAway, setMlAway] = useState<ChartPoint[]>([]);
-  const [mlHome, setMlHome] = useState<ChartPoint[]>([]);
-  const [spAway, setSpAway] = useState<ChartPoint[]>([]);
-  const [spHome, setSpHome] = useState<ChartPoint[]>([]);
-  const [toOver, setToOver] = useState<ChartPoint[]>([]);
-  const [toUnder, setToUnder] = useState<ChartPoint[]>([]);
-
-  useEffect(() => {
-    let alive = true;
-
-    async function run() {
-      setLoading(true);
-      setErr("");
-
-      const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
-
-      const { data, error } = await supabase
-        .from(HISTORY_TABLE)
-        .select("id,ts,event_id,bookmaker,market,side,line,odds,last_update,inserted_at")
-        .eq("event_id", ev.eventId)
-        .gte("ts", since)
-        .order("ts", { ascending: true });
-
-      if (!alive) return;
-
-      if (error) {
-        setErr(error.message);
-        setBooks([]);
-        setMlAway([]);
-        setMlHome([]);
-        setSpAway([]);
-        setSpHome([]);
-        setToOver([]);
-        setToUnder([]);
-        setLoading(false);
-        return;
-      }
-
-      const rows = (data ?? []) as HistoryRow[];
-
-      const set = new Set<string>();
-      for (const r of rows) set.add(String(r.bookmaker || "").toLowerCase());
-      const bookList = Array.from(set).sort((a, b) => a.localeCompare(b));
-      setBooks(bookList);
-
-      const pick = (m: HistMarket, s: HistSide) =>
-        rows.filter((r) => String(r.market).toLowerCase() === m && String(r.side).toLowerCase() === s);
-
-      setMlAway(buildChartSeriesOddsOnly(pick("h2h", "away"), "ml", bookList));
-      setMlHome(buildChartSeriesOddsOnly(pick("h2h", "home"), "ml", bookList));
-
-      setSpAway(buildChartSeriesOddsOnly(pick("spreads", "away"), "spread", bookList));
-      setSpHome(buildChartSeriesOddsOnly(pick("spreads", "home"), "spread", bookList));
-
-      setToOver(buildChartSeriesOddsOnly(pick("totals", "over"), "total", bookList));
-      setToUnder(buildChartSeriesOddsOnly(pick("totals", "under"), "total", bookList));
-
-      setLoading(false);
-    }
-
-    run();
-    return () => {
-      alive = false;
-    };
-  }, [ev.eventId]);
-
-  const subtitle = [
-    ev.commenceTime ? `Commence: ${fmtCTDateTime(ev.commenceTime)}` : null,
-    `Window: last ${hoursBack}h`,
-    "Bucket: 1-min",
-    "Chart: odds (line in hover)",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <ModalShell title="Line Movement" subtitle={subtitle} onClose={onClose}>
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <button className={[BTN_BASE, activeMarket === "ml" ? BTN_ON : BTN_OFF].join(" ")} onClick={() => setActiveMarket("ml")} type="button">
-          Moneyline
-        </button>
-        <button
-          className={[BTN_BASE, activeMarket === "spread" ? BTN_ON : BTN_OFF].join(" ")}
-          onClick={() => setActiveMarket("spread")}
-          type="button"
-        >
-          Spread
-        </button>
-        <button
-          className={[BTN_BASE, activeMarket === "total" ? BTN_ON : BTN_OFF].join(" ")}
-          onClick={() => setActiveMarket("total")}
-          type="button"
-        >
-          Total
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="text-xs text-[#808080]">Loading snapshots…</div>
-      ) : err ? (
-        <div className="text-xs text-red-400">Supabase error: {err}</div>
-      ) : (
-        <div className="space-y-4">
-          {activeMarket === "ml" && (
-            <HistoryChartPairOddsOnly title="Moneyline (Odds)" uiMarket="ml" books={books} seriesA={mlAway} seriesB={mlHome} panelTitleA="AWAY" panelTitleB="HOME" />
-          )}
-          {activeMarket === "spread" && (
-            <HistoryChartPairOddsOnly title="Spread (Odds)" uiMarket="spread" books={books} seriesA={spAway} seriesB={spHome} panelTitleA="AWAY" panelTitleB="HOME" />
-          )}
-          {activeMarket === "total" && (
-            <HistoryChartPairOddsOnly title="Total (Odds)" uiMarket="total" books={books} seriesA={toOver} seriesB={toUnder} panelTitleA="OVER" panelTitleB="UNDER" />
-          )}
-        </div>
-      )}
-    </ModalShell>
-  );
-}
-
-/* =========================================================
-   MOBILE “MORE” MENU (fix clutter)
+   MOBILE “MORE” MENU
 ========================================================= */
 
 function useOutsideClose<T extends HTMLElement>(onClose: () => void) {
   const ref = useRef<T | null>(null);
-
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       if (!ref.current) return;
@@ -1654,20 +621,17 @@ function useOutsideClose<T extends HTMLElement>(onClose: () => void) {
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [onClose]);
-
   return ref;
 }
 
 function MobileMoreMenu({ onHistory, onProps }: { onHistory: () => void; onProps: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useOutsideClose<HTMLDivElement>(() => setOpen(false));
-
   return (
     <div className="relative" ref={ref as any}>
       <button type="button" onClick={() => setOpen((v) => !v)} className={BTN_GHOST}>
         More ▾
       </button>
-
       {open && (
         <div className="absolute right-0 mt-2 w-40 rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] shadow-[0_16px_60px_rgba(0,0,0,0.45)] overflow-hidden z-20">
           <button
@@ -1697,7 +661,7 @@ function MobileMoreMenu({ onHistory, onProps }: { onHistory: () => void; onProps
 }
 
 /* =========================================================
-   MOBILE CARD
+   DESKTOP TABLE ROWS + MOBILE CARD
 ========================================================= */
 
 function EventCardMobile({
@@ -1721,9 +685,6 @@ function EventCardMobile({
   const awayCons = consensusPartsForRow(ev, market, "AWAY");
   const homeCons = consensusPartsForRow(ev, market, "HOME");
 
-  const leftPartsByBook = (b: BookKey) => partsForBookSide(ev, market, "AWAY", b);
-  const rightPartsByBook = (b: BookKey) => partsForBookSide(ev, market, "HOME", b);
-
   const metaFor = (book: BookKey) =>
     book === "dk"
       ? { alt: "DraftKings", fb: "DK" }
@@ -1744,7 +705,6 @@ function EventCardMobile({
           <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
             {booksOpen ? "Hide Books" : "Show Books"}
           </button>
-
           <MobileMoreMenu onHistory={() => onOpenHistory(ev)} onProps={() => onOpenProps(ev)} />
         </div>
       </div>
@@ -1797,10 +757,10 @@ function EventCardMobile({
                       </div>
 
                       <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(leftPartsByBook(bk))}
+                        {renderCellParts(partsForBookSide(ev, market, "AWAY", bk))}
                       </div>
                       <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(rightPartsByBook(bk))}
+                        {renderCellParts(partsForBookSide(ev, market, "HOME", bk))}
                       </div>
                     </div>
                   </div>
@@ -1813,10 +773,6 @@ function EventCardMobile({
     </div>
   );
 }
-
-/* =========================================================
-   DESKTOP ROWS (always books)
-========================================================= */
 
 function EventTwoRows({
   ev,
@@ -1840,11 +796,10 @@ function EventTwoRows({
             <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
 
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => onOpenHistory(ev)} className={LINK_GOLD} title="View line movement history">
+              <button type="button" onClick={() => onOpenHistory(ev)} className={LINK_GOLD}>
                 History
               </button>
-
-              <button type="button" onClick={() => onOpenProps(ev)} className={BTN_GHOST} title="View player props">
+              <button type="button" onClick={() => onOpenProps(ev)} className={BTN_GHOST}>
                 Props
               </button>
             </div>
@@ -1857,7 +812,6 @@ function EventTwoRows({
         </td>
 
         <ConsensusValue parts={awayConsensus} />
-
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "dk")} borderLeft />
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "fd")} />
         <BookValue parts={partsForBookSide(ev, market, "AWAY", "mgm")} />
@@ -1867,7 +821,6 @@ function EventTwoRows({
 
       <tr className={["hover:bg-white/5 transition-colors", `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`].join(" ")}>
         <ConsensusValue parts={homeConsensus} />
-
         <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
         <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
         <BookValue parts={partsForBookSide(ev, market, "HOME", "mgm")} />
@@ -1883,34 +836,644 @@ function EventTwoRows({
 }
 
 /* =========================================================
-   MODEL-STYLE HEADER CARD (key change vs previous Odds page)
+   MODAL SHELL
 ========================================================= */
 
-function Chip({
-  label,
-  value,
+function ModalShell({
+  title,
+  subtitle,
+  onClose,
+  children,
 }: {
-  label: string;
-  value: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: React.ReactNode;
 }) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/25 px-3 py-1.5">
-      <div className="text-[10px] font-bold text-[#808080]">{label}</div>
-      <div className="text-[11px] font-extrabold text-white tabular-nums">{value}</div>
+    <div
+      className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 p-2 sm:p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="w-full max-w-7xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
+        <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
+          <div className="min-w-0">
+            <div className="text-white font-extrabold text-sm">{title}</div>
+            {subtitle && <div className="text-[11px] text-[#808080] mt-0.5 break-words">{subtitle}</div>}
+          </div>
+          <button
+            className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
+            onClick={onClose}
+            type="button"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="p-3 sm:p-4 overflow-y-auto">{children}</div>
+      </div>
     </div>
   );
 }
 
-function Pill({
-  text,
-}: {
-  text: string;
-}) {
+/* =========================================================
+   HISTORY MODAL (ML / Spread / Total)
+========================================================= */
+
+type HistoryRow = {
+  ts: string;
+  book: BookKey;
+  odds: number | null;
+  line: number | null;
+};
+
+type HistoryPoint = {
+  ts: string; // iso
+  label: string; // CT formatted
+  [key: string]: any; // book series values: "dk", "fd", ...
+};
+
+function buildSeries(points: HistoryRow[]): HistoryPoint[] {
+  const byTs = new Map<string, HistoryPoint>();
+  for (const r of points) {
+    const key = r.ts;
+    if (!byTs.has(key)) {
+      byTs.set(key, { ts: key, label: fmtCTDateTimeLong(key) });
+    }
+    const p = byTs.get(key)!;
+    p[r.book] = r.odds;
+    // store line per-book too (optional)
+    p[`${r.book}__line`] = r.line;
+  }
+  return Array.from(byTs.values()).sort((a, b) => {
+    const ta = new Date(normalizeIso(a.ts) ?? a.ts).getTime();
+    const tb = new Date(normalizeIso(b.ts) ?? b.ts).getTime();
+    return ta - tb;
+  });
+}
+
+function HistoryTooltip({
+  active,
+  payload,
+  label,
+  market,
+}: any) {
+  if (!active || !payload?.length) return null;
+
+  const tsLabel = label || payload?.[0]?.payload?.label || "—";
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/35 px-3 py-1">
-      <span className="inline-block w-2 h-2 rounded-full bg-[#d4af37]" />
-      <span className="text-[11px] font-extrabold text-[#d0d0d0]">{text}</span>
+    <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 shadow-[0_16px_60px_rgba(0,0,0,0.45)]">
+      <div className="text-[11px] text-[#d0d0d0] font-extrabold">{tsLabel} CT</div>
+      <div className="mt-1 space-y-1">
+        {payload
+          .filter((p: any) => BOOKS.includes(p.dataKey))
+          .map((p: any) => {
+            const bk = p.dataKey as BookKey;
+            const v = p.value;
+            return (
+              <div key={bk} className="flex items-center justify-between gap-3 text-[11px]">
+                <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
+                  {BOOK_LABEL[bk]}
+                </div>
+                <div className="text-white font-extrabold tabular-nums">
+                  {v == null ? "—" : String(v)}
+                </div>
+              </div>
+            );
+          })}
+      </div>
+      <div className="mt-2 text-[10px] text-[#808080] font-semibold">
+        {market === "ml" ? "Moneyline Odds History" : market === "spread" ? "Spread Odds History" : "Total Odds History"}
+      </div>
     </div>
+  );
+}
+
+function LineMovementModal({
+  sportKey,
+  ev,
+  onClose,
+}: {
+  sportKey: string;
+  ev: EventOdds;
+  onClose: () => void;
+}) {
+  const [market, setMarket] = useState<Market>("ml");
+  const [side, setSide] = useState<"AWAY" | "HOME">("AWAY"); // total uses AWAY=Over HOME=Under
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState<HistoryRow[]>([]);
+  const [refLine, setRefLine] = useState<number | null>(null);
+
+  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
+
+  useEffect(() => {
+    setError("");
+    setLoading(true);
+
+    const fetchHistory = async () => {
+      // We’ll try a few likely tables in order.
+      // This keeps it resilient across schema changes without breaking builds.
+      const candidates = ["odds_history", "odds_log", "odds_snapshots", "odds_movement"];
+
+      let lastErr: string | null = null;
+      let found: any[] | null = null;
+
+      for (const t of candidates) {
+        const { data, error } = await supabase
+          .from(t)
+          .select("*")
+          .eq("sport_key", sportKey)
+          .eq("event_id", ev.eventId)
+          .order("ts", { ascending: true });
+
+        if (!error && data) {
+          found = data;
+          lastErr = null;
+          break;
+        }
+        lastErr = error?.message ?? lastErr;
+      }
+
+      if (!found) {
+        setRows([]);
+        setRefLine(null);
+        setError(lastErr ?? "No history available (no matching table).");
+        setLoading(false);
+        return;
+      }
+
+      // Filter rows to the requested market+side
+      const sideKey = side.toLowerCase(); // "away"/"home"
+      const wantOverUnder = market === "total";
+
+      const parsed: HistoryRow[] = [];
+      for (const r of found) {
+        const ts = pickTs(r);
+        const bk = bookKeyFromRaw(pickBook(r));
+        if (!ts || !bk) continue;
+
+        // market matching: try common keys
+        const marketRaw = String(pickAny(r, ["market", "market_key", "bet_type", "type"]) ?? "").toLowerCase();
+        const isMl = marketRaw.includes("h2h") || marketRaw.includes("moneyline") || marketRaw === "ml";
+        const isSpread = marketRaw.includes("spread");
+        const isTotal = marketRaw.includes("total") || marketRaw.includes("ou") || marketRaw.includes("over_under");
+
+        if (market === "ml" && !isMl && marketRaw) continue;
+        if (market === "spread" && !isSpread && marketRaw) continue;
+        if (market === "total" && !isTotal && marketRaw) continue;
+
+        // side matching
+        const sideRaw = pickSide(r); // away/home OR team name
+        const ouRaw = pickOU(r); // over/under possibly
+
+        let sideOk = true;
+
+        if (wantOverUnder) {
+          const need = side === "AWAY" ? "over" : "under";
+          if (ouRaw) sideOk = ouRaw.includes(need);
+        } else {
+          if (sideRaw) sideOk = sideRaw.includes(sideKey);
+        }
+
+        if (!sideOk) continue;
+
+        const odds = pickOdds(r);
+        const line = pickLine(r);
+
+        parsed.push({ ts, book: bk, odds, line });
+      }
+
+      // Ref line for chart: median of latest lines from rows (if any)
+      let ref: number | null = null;
+      try {
+        const latestByBook = new Map<BookKey, HistoryRow>();
+        for (const rr of parsed) latestByBook.set(rr.book, rr);
+        const lines = Array.from(latestByBook.values())
+          .map((x) => x.line)
+          .filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+        const m = median(lines);
+        ref = m == null ? null : m;
+      } catch {
+        ref = null;
+      }
+
+      setRows(parsed);
+      setRefLine(ref);
+      setLoading(false);
+    };
+
+    fetchHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sportKey, ev.eventId, market, side]);
+
+  const points = useMemo(() => buildSeries(rows), [rows]);
+
+  const sideLabel = market === "total" ? (side === "AWAY" ? "Over" : "Under") : side === "AWAY" ? "Away" : "Home";
+
+  return (
+    <ModalShell title="Odds History" subtitle={subtitle} onClose={onClose}>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+          <button
+            type="button"
+            className={`px-3 py-1.5 text-xs font-extrabold ${market === "ml" ? "bg-[#d4af37] text-black" : "text-white"} `}
+            onClick={() => setMarket("ml")}
+          >
+            Moneyline
+          </button>
+          <div className="w-px bg-[#2a2a2a]" />
+          <button
+            type="button"
+            className={`px-3 py-1.5 text-xs font-extrabold ${market === "spread" ? "bg-[#d4af37] text-black" : "text-white"} `}
+            onClick={() => setMarket("spread")}
+          >
+            Spread
+          </button>
+          <div className="w-px bg-[#2a2a2a]" />
+          <button
+            type="button"
+            className={`px-3 py-1.5 text-xs font-extrabold ${market === "total" ? "bg-[#d4af37] text-black" : "text-white"} `}
+            onClick={() => setMarket("total")}
+          >
+            Total
+          </button>
+        </div>
+
+        <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+          <button
+            type="button"
+            className={`px-3 py-1.5 text-xs font-extrabold ${side === "AWAY" ? "bg-white/10 text-white" : "text-white/80"}`}
+            onClick={() => setSide("AWAY")}
+          >
+            {market === "total" ? "Over" : "Away"}
+          </button>
+          <div className="w-px bg-[#2a2a2a]" />
+          <button
+            type="button"
+            className={`px-3 py-1.5 text-xs font-extrabold ${side === "HOME" ? "bg-white/10 text-white" : "text-white/80"}`}
+            onClick={() => setSide("HOME")}
+          >
+            {market === "total" ? "Under" : "Home"}
+          </button>
+        </div>
+
+        <div className="text-[11px] text-[#808080] font-semibold">
+          Side: <span className="text-white font-extrabold">{sideLabel}</span>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-[#808080] p-4">Loading history…</div>
+      ) : error ? (
+        <div className="text-sm text-red-400 p-4">No odds history available: {error}</div>
+      ) : !points.length ? (
+        <div className="text-sm text-[#808080] p-4">No odds history available for this selection.</div>
+      ) : (
+        <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 p-3">
+          <div className="text-[12px] text-white font-extrabold mb-2">
+            Odds History ({market.toUpperCase()} • {sideLabel})
+          </div>
+
+          <div className="h-[320px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={points} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+                <CartesianGrid stroke="#222222" strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: "#9a9a9a", fontSize: 10 }}
+                  interval="preserveStartEnd"
+                  minTickGap={18}
+                />
+                <YAxis
+                  tick={{ fill: "#9a9a9a", fontSize: 10 }}
+                  width={40}
+                  domain={["auto", "auto"]}
+                />
+                <Tooltip content={<HistoryTooltip market={market} />} />
+                <Legend wrapperStyle={{ color: "#d0d0d0", fontSize: 11 }} />
+
+                {/* If line exists, show it as a faint reference (only meaningful for spread/total) */}
+                {refLine != null && market !== "ml" ? (
+                  <ReferenceLine
+                    y={refLine}
+                    stroke="#d4af37"
+                    strokeOpacity={0.25}
+                    strokeDasharray="4 4"
+                    ifOverflow="extendDomain"
+                  />
+                ) : null}
+
+                {BOOKS.map((bk) => (
+                  <Line
+                    key={bk}
+                    type="monotone"
+                    dataKey={bk}
+                    name={BOOK_LABEL[bk]}
+                    stroke={BOOK_STROKES[bk]}
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="mt-2 text-[11px] text-[#808080]">
+            Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>. Lines are book-colored.
+          </div>
+        </div>
+      )}
+    </ModalShell>
+  );
+}
+
+/* =========================================================
+   PLAYER PROPS MODAL
+========================================================= */
+
+type PropMarket = "Points" | "Rebounds" | "Assists" | "3 Pointers";
+const PROP_MARKETS: PropMarket[] = ["Points", "Rebounds", "Assists", "3 Pointers"];
+
+function canonPropMarket(m: PropMarket) {
+  if (m === "Points") return ["points", "player_points", "pts"];
+  if (m === "Rebounds") return ["rebounds", "player_rebounds", "reb"];
+  if (m === "Assists") return ["assists", "player_assists", "ast"];
+  return ["threes", "3pm", "player_threes", "3_pointers", "3-pointers"];
+}
+
+type PropRow = {
+  player_name: string;
+  team: string | null;
+  position: string | null;
+  picture_url: string | null;
+
+  market: string;
+  side: string; // over/under
+  line: number | null;
+  odds: number | null;
+  bookmaker: string | null;
+  ts: string | null;
+};
+
+function normalizeSideOU(s: string | null): "over" | "under" | null {
+  if (!s) return null;
+  const v = s.toLowerCase();
+  if (v.includes("over")) return "over";
+  if (v.includes("under")) return "under";
+  return null;
+}
+
+function PlayerPropsModal({
+  sportKey,
+  ev,
+  onClose,
+}: {
+  sportKey: string;
+  ev: EventOdds;
+  onClose: () => void;
+}) {
+  const [market, setMarket] = useState<PropMarket>("Points");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [rows, setRows] = useState<PropRow[]>([]);
+
+  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
+
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+
+    const fetchProps = async () => {
+      // 1) Pull props snapshot for this event
+      // We don’t assume exact column names; we filter in JS too.
+      const snap = await supabase
+        .from("player_props_snapshot")
+        .select("*")
+        .eq("sport_key", sportKey)
+        .eq("event_id", ev.eventId);
+
+      if (snap.error) {
+        setError(snap.error.message);
+        setRows([]);
+        setLoading(false);
+        return;
+      }
+
+      const raw = snap.data ?? [];
+
+      // 2) Extract player names to enrich with pos/pic
+      const names = Array.from(
+        new Set(
+          raw
+            .map((r: any) => (r.player_name ?? r.player ?? r.name ?? null))
+            .filter((x: any) => typeof x === "string" && x.trim().length > 0)
+            .map((x: string) => x.trim())
+        )
+      );
+
+      // 3) Pull meta from player_prop_ev_latest
+      let metaMap = new Map<string, { position: string | null; picture_url: string | null; team: string | null }>();
+      if (names.length) {
+        const meta = await supabase
+          .from("player_prop_ev_latest")
+          .select("player_name,team,position,picture_url")
+          .in("player_name", names);
+
+        if (!meta.error && meta.data) {
+          for (const m of meta.data as any[]) {
+            const key = String(m.player_name ?? "").trim();
+            if (!key) continue;
+            metaMap.set(key, {
+              position: m.position ?? null,
+              picture_url: m.picture_url ?? null,
+              team: m.team ?? null,
+            });
+          }
+        }
+      }
+
+      // 4) Build normalized rows
+      const wanted = canonPropMarket(market);
+
+      const out: PropRow[] = [];
+      for (const r of raw as any[]) {
+        const player_name = String(r.player_name ?? r.player ?? r.name ?? "").trim();
+        if (!player_name) continue;
+
+        const mRaw = String(r.market ?? r.market_key ?? r.marketRaw ?? r.prop_type ?? "").toLowerCase();
+        if (mRaw) {
+          const ok = wanted.some((k) => mRaw.includes(k));
+          if (!ok) continue;
+        }
+
+        const side = normalizeSideOU(String(r.side ?? r.bet_side ?? r.over_under ?? r.ou ?? "")) ?? "over";
+        const line = (() => {
+          const v = r.line ?? r.points ?? r.point ?? r.total ?? r.value ?? null;
+          const n = Number(v);
+          return Number.isFinite(n) ? n : null;
+        })();
+        const odds = (() => {
+          const v = r.odds ?? r.price ?? r.american_odds ?? r.book_odds ?? null;
+          const n = Number(v);
+          return Number.isFinite(n) ? n : null;
+        })();
+
+        const bookmaker = String(r.bookmaker ?? r.book ?? r.sportsbook ?? "").trim() || null;
+        const ts = normalizeIso(r.ts ?? r.snapshot_ts ?? r.inserted_at ?? r.created_at ?? null);
+
+        const meta = metaMap.get(player_name) ?? { position: null, picture_url: null, team: null };
+
+        out.push({
+          player_name,
+          team: meta.team ?? (r.team ?? null),
+          position: meta.position,
+          picture_url: meta.picture_url,
+
+          market: market,
+          side,
+          line,
+          odds,
+          bookmaker,
+          ts,
+        });
+      }
+
+      // Sort: player, then over/under, then best ts
+      out.sort((a, b) => {
+        const p = a.player_name.localeCompare(b.player_name);
+        if (p !== 0) return p;
+        const s = (a.side ?? "").localeCompare(b.side ?? "");
+        if (s !== 0) return s;
+        const ta = a.ts ? new Date(a.ts).getTime() : 0;
+        const tb = b.ts ? new Date(b.ts).getTime() : 0;
+        return tb - ta;
+      });
+
+      setRows(out);
+      setLoading(false);
+    };
+
+    fetchProps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sportKey, ev.eventId, market]);
+
+  return (
+    <ModalShell title="Player Props" subtitle={subtitle} onClose={onClose}>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
+          {PROP_MARKETS.map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`px-3 py-1.5 text-xs font-extrabold ${market === m ? "bg-[#d4af37] text-black" : "text-white"} `}
+              onClick={() => setMarket(m)}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-[#808080] p-4">Loading props…</div>
+      ) : error ? (
+        <div className="text-sm text-red-400 p-4">Supabase error: {error}</div>
+      ) : !rows.length ? (
+        <div className="text-sm text-[#808080] p-4">No props found for this game/market.</div>
+      ) : (
+        <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between">
+            <div className="text-white font-extrabold text-sm">{market}</div>
+            <div className="text-[11px] text-[#808080] font-semibold">
+              {rows.length} rows • Snapshot time:{" "}
+              <span className="text-white font-extrabold">{fmtCTDateTime(rows[0]?.ts)}</span>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-[#232323] bg-[#0b0b0b]">
+                  <th className="text-left px-4 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
+                  <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
+                  <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Side</th>
+                  <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
+                  <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Odds</th>
+                  <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Book</th>
+                  <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Time (CT)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, idx) => (
+                  <tr key={`${r.player_name}-${idx}`} className="border-b border-[#141414] hover:bg-white/5">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {r.picture_url ? (
+                          <img
+                            src={r.picture_url}
+                            alt={r.player_name}
+                            className="w-9 h-9 rounded-full object-cover border border-[#2a2a2a]"
+                            loading="lazy"
+                            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-full bg-white/5 border border-[#2a2a2a]" />
+                        )}
+
+                        <div className="min-w-0">
+                          <div className="text-white font-extrabold text-[13px] truncate">{r.player_name}</div>
+                          <div className="text-[11px] text-[#808080] font-semibold">{r.position ?? "—"}</div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="px-3 py-3 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
+
+                    <td className="px-3 py-3 text-center">
+                      <span className={`text-[12px] font-extrabold ${r.side === "over" ? "text-emerald-400" : "text-red-400"}`}>
+                        {r.side.toUpperCase()}
+                      </span>
+                    </td>
+
+                    <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
+                      {r.line == null ? "—" : r.line}
+                    </td>
+
+                    <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
+                      {r.odds == null ? "—" : r.odds}
+                    </td>
+
+                    <td className="px-3 py-3 text-[#d0d0d0] font-extrabold text-[12px]">
+                      {r.bookmaker ?? "—"}
+                    </td>
+
+                    <td className="px-3 py-3 text-[#d0d0d0] font-semibold text-[12px]">
+                      {fmtCTDateTime(r.ts)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="px-4 py-3 text-[11px] text-[#808080]">
+            Odds are read from <span className="text-white font-extrabold">player_props_snapshot</span>. Player photo/position from{" "}
+            <span className="text-white font-extrabold">player_prop_ev_latest</span>.
+          </div>
+        </div>
+      )}
+    </ModalShell>
   );
 }
 
@@ -1927,35 +1490,14 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [lastUpdatedIso, setLastUpdatedIso] = useState<string | null>(null);
 
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyEvent, setHistoryEvent] = useState<EventOdds | null>(null);
-
   const [propsOpen, setPropsOpen] = useState(false);
-  const [propsEvent, setPropsEvent] = useState<EventOdds | null>(null);
+  const [activeEvent, setActiveEvent] = useState<EventOdds | null>(null);
 
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
-
-  function openHistory(ev: EventOdds) {
-    setHistoryEvent(ev);
-    setHistoryOpen(true);
-  }
-  function closeHistory() {
-    setHistoryOpen(false);
-    setHistoryEvent(null);
-  }
-
-  function openProps(ev: EventOdds) {
-    setPropsEvent(ev);
-    setPropsOpen(true);
-  }
-  function closeProps() {
-    setPropsOpen(false);
-    setPropsEvent(null);
-  }
 
   async function load() {
     setError("");
 
-    // ---- 1) Main odds load
     const { data, error } = await supabase
       .from("odds_wide_latest")
       .select("*")
@@ -1994,7 +1536,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
       cur.latestUpdatedAt = maxIso(cur.latestUpdatedAt, sideOdds.updatedAt);
 
-      // last updated across any “updated-ish” columns in wide table
       globalLatest = maxIso(globalLatest, sideOdds.updatedAt);
       globalLatest = maxIso(globalLatest, pickUpdatedAt(row));
 
@@ -2007,23 +1548,24 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       return ta - tb;
     });
 
-    // ---- 2) Also include latest props snapshot timestamp (without opening modal)
+    // optional: include latest props snapshot time if available (non-blocking)
     let propsLatest: string | null = null;
     try {
       const propsRes = await supabase
         .from("player_props_snapshot")
-        .select("ts,inserted_at")
+        .select("ts,snapshot_ts,inserted_at")
         .eq("sport_key", sportKey)
         .order("ts", { ascending: false })
+        .order("snapshot_ts", { ascending: false })
         .order("inserted_at", { ascending: false })
         .limit(1);
 
       if (!propsRes.error) {
-        const r = (propsRes.data?.[0] ?? null) as { ts?: string | null; inserted_at?: string | null } | null;
-        propsLatest = normalizeIso(r?.ts ?? r?.inserted_at ?? null);
+        const r = (propsRes.data?.[0] ?? null) as { ts?: string | null; snapshot_ts?: string | null; inserted_at?: string | null } | null;
+        propsLatest = normalizeIso(r?.ts ?? r?.snapshot_ts ?? r?.inserted_at ?? null);
       }
     } catch {
-      // ignore — keep odds-based lastUpdated
+      // ignore
     }
 
     setAllEvents(list);
@@ -2042,7 +1584,10 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   useEffect(() => {
     setSelectedDate("");
     setMobileOpenMap({});
-    setMarket("ml"); // reset to moneyline on sport change
+    setMarket("ml");
+    setHistoryOpen(false);
+    setPropsOpen(false);
+    setActiveEvent(null);
   }, [sportKey]);
 
   const availableDates = useMemo(() => {
@@ -2054,7 +1599,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (!evDate) continue;
 
-      // only show today if the game hasn't started yet
       if (evDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (Number.isFinite(startMs) && startMs > nowMs) set.add(evDate);
@@ -2071,7 +1615,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       setSelectedDate("");
       return;
     }
-
     const today = ctTodayYmd();
     setSelectedDate((prev) => {
       if (prev && availableDates.includes(prev)) return prev;
@@ -2089,7 +1632,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
-      // only show future games for today
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -2107,8 +1649,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
   }, [events]);
 
-  const headerLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
-
   const sportLabel =
     sportKey === "basketball_nba"
       ? "NBA Odds"
@@ -2124,91 +1664,98 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       ? "MLB Odds"
       : "Odds";
 
-  const sportChip =
-    sportKey === "basketball_nba"
-      ? "BASKETBALL_NBA"
-      : sportKey === "basketball_ncaab"
-      ? "BASKETBALL_NCAAB"
-      : sportKey === "football_nfl"
-      ? "FOOTBALL_NFL"
-      : sportKey === "football_ncaaf"
-      ? "FOOTBALL_NCAAF"
-      : sportKey === "icehockey_nhl"
-      ? "ICEHOCKEY_NHL"
-      : sportKey === "baseball_mlb"
-      ? "BASEBALL_MLB"
-      : sportKey.toUpperCase();
+  const sportChip = sportKey.toUpperCase();
+  const marketLabel = market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total";
 
-  const gamesCount = events.length;
+  const openHistory = (ev: EventOdds) => {
+    setActiveEvent(ev);
+    setHistoryOpen(true);
+    setPropsOpen(false);
+  };
+
+  const openProps = (ev: EventOdds) => {
+    setActiveEvent(ev);
+    setPropsOpen(true);
+    setHistoryOpen(false);
+  };
 
   return (
     <div className="w-full">
       <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X}`}>
-        {/* MODEL-STYLE HEADER CARD (fixes the “big empty top” + matches Monte Carlo screen cadence) */}
+        {/* ✅ HERO — matches Model/MonteCarlo structure */}
         <div className="pt-4 md:pt-6">
-          <div className={PANEL}>
-            <div className="p-5 md:p-6">
-              <div className="flex flex-col gap-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <Pill text="Odds Feed" />
-                    <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
-                    <div className={`mt-2 text-sm ${MUTED}`}>
-                      Live odds board. Choose a date + market, then open History (odds movement) or Player Props (latest snapshot).
-                    </div>
+          <div className={HERO_WRAP}>
+            <div className={HERO_INNER}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className={PILL}>
+                    <span className={PILL_DOT} />
+                    <span className={PILL_TX}>Prism Odds Board</span>
                   </div>
 
-                  <div className="hidden md:flex flex-col items-end gap-2">
-                    <div className={`text-[10px] ${MUTED2} font-semibold`}>Last Updated (CT)</div>
-                    <div className="text-xs text-white flex items-center gap-2">
-                      <span className="font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
-                      <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
-                    </div>
+                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
+                    {sportLabel}
+                  </h2>
+
+                  <div className={HERO_SUB}>
+                    One board per slate. Books shown side-by-side with consensus, plus History and Player Props.
                   </div>
                 </div>
 
-                {/* Chips row (like Model screen) */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <Chip label="Sport" value={sportChip} />
-                  <Chip label="Games" value={gamesCount} />
-                  <Chip label="Market" value={headerLabel.toUpperCase()} />
-                  <Chip label="Books" value="5" />
-                  <Chip label="Refresh" value="60s" />
-                  <div className="md:hidden w-full" />
-                  <div className="md:hidden text-[11px] text-[#6a6a6a] font-semibold">
-                    Last Updated (CT): <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
+                {/* ✅ RIGHT SIDE — Live badge like MonteCarlo */}
+                <div className="hidden md:flex flex-col items-end gap-2">
+                  <div className={LIVE_BADGE}>
+                    <span className={LIVE_TX}>Live</span>
+                    <span className={LIVE_DOT} />
+                  </div>
+
+                  <div className="text-right">
+                    <div className="text-[10px] text-[#6a6a6a] font-semibold">Last Updated (CT)</div>
+                    <div className="text-xs text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
                   </div>
                 </div>
+              </div>
 
-                {/* Controls (kept tight, inside header card) */}
-                <div className="flex flex-col gap-3 pt-1">
-                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                    {availableDates.map((d) => (
-                      <button
-                        key={d}
-                        onClick={() => setSelectedDate(d)}
-                        className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")}
-                        title={d}
-                        type="button"
-                      >
-                        {fmtDateBtn(d)}
-                      </button>
-                    ))}
+              {/* ✅ CHIPS ROW */}
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Chip label="Sport" value={sportChip} />
+                <Chip label="Games" value={events.length} />
+                <Chip label="Market" value={marketLabel.toUpperCase()} />
+                <Chip label="Books" value="5" />
+                <Chip label="Refresh" value="60s" />
 
-                    {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
-                  </div>
+                <div className="md:hidden w-full" />
+                <div className="md:hidden text-[11px] text-[#6a6a6a] font-semibold">
+                  Last Updated (CT): <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
+                </div>
+              </div>
 
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Segmented value={market} onChange={setMarket} />
-                  </div>
+              {/* ✅ CONTROLS */}
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                  {availableDates.map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setSelectedDate(d)}
+                      className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")}
+                      type="button"
+                    >
+                      {fmtDateBtn(d)}
+                    </button>
+                  ))}
+                  {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Segmented value={market} onChange={setMarket} />
                 </div>
               </div>
             </div>
 
-            {/* Divider line like Model card (subtle) */}
+            {/* Divider */}
             <div className="h-px bg-[#232323]" />
 
-            {/* TABLE PANEL (starts immediately—no extra whitespace) */}
+            {/* CONTENT */}
             <div className="p-3 md:p-4">
               {/* MOBILE */}
               <div className="md:hidden">
@@ -2260,24 +1807,13 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                         <thead className="sticky top-0 z-20">
                           <tr className={`border-b ${HDR_BORDER}`}>
                             <th
-                              className={[
-                                "text-left px-4 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "sticky left-0 z-30 text-[13px] font-extrabold",
-                              ].join(" ")}
+                              className={["text-left px-4 py-3", HDR_LEFT_BG, HDR_TEXT, "sticky left-0 z-30 text-[13px] font-extrabold"].join(" ")}
                             >
                               Matchup
                             </th>
 
                             <th
-                              className={[
-                                "text-center px-3 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "z-20 text-[13px] font-extrabold border-l",
-                                HDR_BORDER,
-                              ].join(" ")}
+                              className={["text-center px-3 py-3", HDR_LEFT_BG, HDR_TEXT, "z-20 text-[13px] font-extrabold border-l", HDR_BORDER].join(" ")}
                             >
                               Consensus
                             </th>
@@ -2292,13 +1828,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <tbody>
                           {events.map((ev) => (
-                            <EventTwoRows
-                              key={ev.eventId}
-                              ev={ev}
-                              market={market}
-                              onOpenHistory={openHistory}
-                              onOpenProps={openProps}
-                            />
+                            <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenHistory={openHistory} onOpenProps={openProps} />
                           ))}
                         </tbody>
                       </table>
@@ -2310,17 +1840,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           </div>
         </div>
 
-        {/* History modal */}
-        {historyOpen && historyEvent?.eventId && <LineMovementModal ev={historyEvent} uiMarket={market} onClose={closeHistory} />}
-
-        {/* Player Props modal */}
-        {propsOpen && propsEvent?.eventId && (
-          <PlayerPropsModal
-            ev={propsEvent}
-            sportKey={sportKey}
-            onClose={closeProps}
-            onLastUpdated={(iso) => setLastUpdatedIso((prev) => maxIso(prev, iso))}
-          />
+        {/* Modals */}
+        {historyOpen && activeEvent && (
+          <LineMovementModal sportKey={sportKey} ev={activeEvent} onClose={() => setHistoryOpen(false)} />
+        )}
+        {propsOpen && activeEvent && (
+          <PlayerPropsModal sportKey={sportKey} ev={activeEvent} onClose={() => setPropsOpen(false)} />
         )}
 
         <div className="h-12" />
@@ -2328,3 +1853,5 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     </div>
   );
 }
+
+
