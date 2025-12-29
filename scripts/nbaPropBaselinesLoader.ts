@@ -1,15 +1,18 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.6: SNAPSHOT ENRICH + SHARP FALLBACKS + MODEL-ONLY)
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.7: MARKET-AVG FALLBACK WHEN NO SHARP)
 // ------------------------------------------------------------------------------------------------------
-// ✅ FIX: pin_spread_line / pin_total_line pulled by (event_id + team) not team-only
-// ✅ SHARP LOGIC:
+// ✅ FIX (kept): pin_spread_line / pin_total_line pulled by (event_id + team) not team-only
+// ✅ SHARP LOGIC (kept):
 //      1) Prefer Pinnacle paired lines nearest soft line
 //      2) If Pinnacle missing -> use BetOnlineAG paired lines
-//      3) If both missing OR translate fails -> MODEL-ONLY fallback (still inserts)
-// ✅ NEW: Enrich player_props_snapshot with position + picture_url (so UI can read snapshot only)
-//      - Adds columns if missing (safe)
-//      - Updates rows for FUTURE events only (safe + fast)
+//      3) If both missing OR translate fails -> NEW fallback:
+//           -> MARKET-AVG (devig’d) at SAME target line using ALL books that have both sides
+//           -> If still missing -> MODEL-ONLY (still inserts)
+// ✅ NEW (your request):
+//      - If has_sharp === false, we DO NOT go model_only immediately
+//      - We use MARKET-AVG (all bookmakers) + model to create p_quantum
+// ✅ Snapshot enrichment (kept): position + picture_url stored in player_props_snapshot (future slate only)
 // ✅ Outputs ONLY SOFT books into player_prop_ev_latest (DK/FD/MGM)
 //
 // Run: npm run nba:props:ev:build
@@ -36,7 +39,10 @@ const W = { szn: 0.4, d15: 0.3, d7: 0.3 };
 const NBA_AVG_TOTAL = 228;
 const NBA_AVG_TEAM_TOTAL = NBA_AVG_TOTAL / 2;
 
-// quantum blend (if sharp exists)
+// quantum blend weights
+// - if SHARP exists, we blend: model + sharp
+// - if SHARP missing, we blend: model + MARKET_AVG (new)
+// - if both missing, model-only
 const QUANTUM_BLEND_MODEL = 0.2;
 const QUANTUM_BLEND_SHARP = 0.8;
 
@@ -59,6 +65,9 @@ const DEVIG_MPTO_POWER_HI = 3.0;
 // Snapshot enrichment controls
 const ENRICH_SNAPSHOT = true; // set false if you ever want to skip
 const SNAP_UPDATE_CHUNK = 500;
+
+// Market-average line tolerance (for floats like 24.5)
+const LINE_TOL = 1e-6;
 
 /* =========================================================
    TYPES
@@ -124,12 +133,19 @@ type PropsRow = {
 
   bookmaker: string;
 
-  // NEW in v3.6 (optional fields now stored in snapshot)
+  // optional fields now stored in snapshot
   position?: string | null;
   picture_url?: string | null;
 };
 
 type SharpPair = {
+  line: number;
+  over_odds: number;
+  under_odds: number;
+};
+
+type PairAnyBook = {
+  bookmaker: string;
   line: number;
   over_odds: number;
   under_odds: number;
@@ -231,6 +247,10 @@ function chunk<T>(arr: T[], n: number): T[][] {
   return out;
 }
 
+function nearlyEqual(a: number, b: number, tol = LINE_TOL) {
+  return Math.abs(a - b) <= tol;
+}
+
 /* =========================================================
    HYBRID DEVIG (Equal Margin ↔ MPTO)
 ========================================================= */
@@ -246,8 +266,7 @@ function devigEqualMargin(pOverImp: number, pUnderImp: number) {
 function devigPairMPTO_power(pOverImp: number, pUnderImp: number) {
   const skew = Math.abs(pOverImp - pUnderImp);
   const t = clamp(
-    (skew - DEVIG_SKEW_EQ_MAX) /
-      Math.max(DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX, 1e-6),
+    (skew - DEVIG_SKEW_EQ_MAX) / Math.max(DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX, 1e-6),
     0,
     1
   );
@@ -270,11 +289,7 @@ function devigHybrid(pOverImp: number, pUnderImp: number) {
   if (skew <= DEVIG_SKEW_EQ_MAX) return { ...eq, method: "equal_margin" as const, alpha: 0 };
   if (skew >= DEVIG_SKEW_MPTO_MIN) return { ...mp, method: "mpto" as const, alpha: 1 };
 
-  const alpha = clamp(
-    (skew - DEVIG_SKEW_EQ_MAX) / (DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX),
-    0,
-    1
-  );
+  const alpha = clamp((skew - DEVIG_SKEW_EQ_MAX) / (DEVIG_SKEW_MPTO_MIN - DEVIG_SKEW_EQ_MAX), 0, 1);
   const pO = clamp(eq.p_over * (1 - alpha) + mp.p_over * alpha, 1e-6, 1 - 1e-6);
   return { p_over: pO, p_under: 1 - pO, method: "blend" as const, alpha };
 }
@@ -292,9 +307,7 @@ function normalCdf(x: number, mu: number, sigma: number): number {
     a3 = 1.421413741,
     a4 = -1.453152027,
     a5 = 1.061405429;
-  const erf =
-    1 -
-    (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-z * z);
+  const erf = 1 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * Math.exp(-z * z);
   const sign = z >= 0 ? 1 : -1;
   return 0.5 * (1 + sign * erf);
 }
@@ -306,35 +319,10 @@ function pOverNormal(line: number, mu: number, sigma: number): number {
 // Acklam inverse normal CDF approximation
 function invNorm(p: number): number {
   const pp = clamp(p, 1e-12, 1 - 1e-12);
-  const a = [
-    -3.969683028665376e+01,
-    2.209460984245205e+02,
-    -2.759285104469687e+02,
-    1.383577518672690e+02,
-    -3.066479806614716e+01,
-    2.506628277459239e+00,
-  ];
-  const b = [
-    -5.447609879822406e+01,
-    1.615858368580409e+02,
-    -1.556989798598866e+02,
-    6.680131188771972e+01,
-    -1.328068155288572e+01,
-  ];
-  const c = [
-    -7.784894002430293e-03,
-    -3.223964580411365e-01,
-    -2.400758277161838e+00,
-    -2.549732539343734e+00,
-    4.374664141464968e+00,
-    2.938163982698783e+00,
-  ];
-  const d = [
-    7.784695709041462e-03,
-    3.224671290700398e-01,
-    2.445134137142996e+00,
-    3.754408661907416e+00,
-  ];
+  const a = [-3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02, 1.38357751867269e02, -3.066479806614716e01, 2.506628277459239];
+  const b = [-5.447609879822406e01, 1.615858368580409e02, -1.556989798598866e02, 6.680131188771972e01, -1.328068155288572e01];
+  const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996, 3.754408661907416];
 
   const plow = 0.02425;
   const phigh = 1 - plow;
@@ -342,26 +330,17 @@ function invNorm(p: number): number {
   let q: number, r: number;
   if (pp < plow) {
     q = Math.sqrt(-2 * Math.log(pp));
-    return (
-      (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
-    );
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
   }
 
   if (pp > phigh) {
     q = Math.sqrt(-2 * Math.log(1 - pp));
-    return -(
-      (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
-    );
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1));
   }
 
   q = pp - 0.5;
   r = q * q;
-  return (
-    (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
-    (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
-  );
+  return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
 
 // Poisson CDF for k <= floor(line)
@@ -409,13 +388,7 @@ function inferLambdaFromPoissonOver(line: number, pOver0: number): number | null
    SIGMA + CONTEXT
 ========================================================= */
 
-function sigmaFromWindows(
-  mu: number,
-  szn: number | null,
-  d7: number | null,
-  d15: number | null,
-  kind: "pts" | "reb" | "ast" | "pm3"
-): number {
+function sigmaFromWindows(mu: number, szn: number | null, d7: number | null, d15: number | null, kind: "pts" | "reb" | "ast" | "pm3"): number {
   let base =
     kind === "pts"
       ? Math.max(3.0, 0.22 * mu)
@@ -512,12 +485,20 @@ function scrapeAvgPage(html: string): Map<number, { base: any; stats: StatPack }
 }
 
 /* =========================================================
-   SHARP KEY + TRANSLATION
+   KEYS
 ========================================================= */
 
 function idxKey(event_id: string, player_name: string, market_raw: string) {
   return `${event_id}|${normName(player_name)}|${String(market_raw || "").trim()}`;
 }
+
+function pairKeyAny(event_id: string, player_name: string, market_raw: string, bookmaker: string, line: number) {
+  return `${event_id}|${normName(player_name)}|${String(market_raw || "").trim()}|${String(bookmaker || "").toLowerCase().trim()}|${line}`;
+}
+
+/* =========================================================
+   SHARP TRANSLATION
+========================================================= */
 
 function translateSharpOverToTarget(opts: {
   marketOut: "points" | "rebounds" | "assists" | "threes";
@@ -530,9 +511,7 @@ function translateSharpOverToTarget(opts: {
 
   if (opts.marketOut !== "threes") {
     const sigma =
-      opts.sigmaAnchor != null && Number.isFinite(opts.sigmaAnchor) && opts.sigmaAnchor > 0
-        ? opts.sigmaAnchor
-        : null;
+      opts.sigmaAnchor != null && Number.isFinite(opts.sigmaAnchor) && opts.sigmaAnchor > 0 ? opts.sigmaAnchor : null;
     if (!sigma) return null;
 
     // p0_over = 1 - Phi((L - mu)/sigma) => mu = L - sigma*z where z = Phi^-1(1 - p0_over)
@@ -551,14 +530,6 @@ function translateSharpOverToTarget(opts: {
 ========================================================= */
 
 async function tryAddSnapshotColumns(supabase: any) {
-  // We avoid hard-failing if you haven't granted RPC/DDL; just log.
-  // Preferred: create this RPC in Supabase once:
-  //   create or replace function public.exec_sql(sql text) returns void
-  //   language plpgsql security definer as $$ begin execute sql; end $$;
-  //
-  // Then allow service role to call it.
-  //
-  // If you don't want RPCs: just run the ALTER TABLE manually once (recommended).
   const ddl = `
     alter table public.player_props_snapshot
       add column if not exists position text,
@@ -585,11 +556,7 @@ async function enrichSnapshotForFutureEvents(opts: {
 }) {
   const { supabase, nowIso, allowedEventIds, baselineByName } = opts;
 
-  // Pull FUTURE snapshot rows missing position/picture_url
-  // NOTE: We only need event_id + player_name + (position/picture_url)
-  // and we update by (event_id + player_name) for the slate.
-  const rows: Array<{ event_id: string; player_name: string; position: string | null; picture_url: string | null }> =
-    [];
+  const rows: Array<{ event_id: string; player_name: string; position: string | null; picture_url: string | null }> = [];
 
   const EVENT_CHUNK = 200;
   for (const eidChunk of chunk(allowedEventIds, EVENT_CHUNK)) {
@@ -606,12 +573,8 @@ async function enrichSnapshotForFutureEvents(opts: {
 
   if (!rows.length) return { updated: 0, missing_baseline: 0 };
 
-  const updates: Array<{
-    event_id: string;
-    player_name: string;
-    position: string | null;
-    picture_url: string | null;
-  }> = [];
+  const updates: Array<{ event_id: string; player_name: string; position: string | null; picture_url: string | null }> =
+    [];
 
   let missing_baseline = 0;
 
@@ -643,15 +606,9 @@ async function enrichSnapshotForFutureEvents(opts: {
 
   if (!updates.length) return { updated: 0, missing_baseline };
 
-  // We update in small batches by event_id to avoid huge fan-out.
-  // This uses individual updates (safe without needing a composite PK).
-  // If you DO have a primary key (id), swap to id-based updates for speed.
   let updated = 0;
 
   for (const batch of chunk(updates, SNAP_UPDATE_CHUNK)) {
-    // Update each row (event_id + player_name)
-    // NOTE: This is N updates; usually fine (few hundred to a couple thousand).
-    // If performance becomes a problem, we can add an RPC to bulk-update with a temp table.
     for (const u of batch) {
       const { error } = await supabase
         .from("player_props_snapshot")
@@ -709,7 +666,6 @@ async function main() {
 
   /* -------------------------------------------------------
      2) Pull props snapshot for FUTURE events (ALL books!)
-        ✅ now includes position/picture_url if present
   -------------------------------------------------------- */
   const props: PropsRow[] = [];
   const eventIdList = Array.from(allowedEventIds);
@@ -842,12 +798,11 @@ async function main() {
   };
 
   /* -------------------------------------------------------
-     4.5) ✅ NEW: Enrich player_props_snapshot with position/picture_url (future slate only)
+     4.5) Enrich snapshot (position/picture_url)
   -------------------------------------------------------- */
   const enrichDiag = { attempted: ENRICH_SNAPSHOT, updated: 0, missing_baseline: 0 };
 
   if (ENRICH_SNAPSHOT) {
-    // If you already ran the ALTER TABLE manually, you can delete this call.
     await tryAddSnapshotColumns(supabase);
 
     const res = await enrichSnapshotForFutureEvents({
@@ -860,11 +815,10 @@ async function main() {
     enrichDiag.updated = res.updated;
     enrichDiag.missing_baseline = res.missing_baseline;
 
-    // Also patch our in-memory props rows so downstream uses snapshot fields immediately
-    const byBase = baselineByName;
+    // Patch in-memory props rows too
     for (const pr of props) {
       if (pr.position && pr.picture_url) continue;
-      const b = byBase.get(normName(pr.player_name || ""));
+      const b = baselineByName.get(normName(pr.player_name || ""));
       if (!b) continue;
       pr.position = pr.position ?? b.position ?? null;
       pr.picture_url = pr.picture_url ?? b.picture_url ?? null;
@@ -875,7 +829,6 @@ async function main() {
      5) Pull odds_wide_latest context
         ✅ FIX: key by event_id + canonical team
   -------------------------------------------------------- */
-
   const { data: oddsRows, error: oErr } = await supabase
     .from("odds_wide_latest")
     .select("event_id, team, pin_spread_line, pin_total_line")
@@ -883,7 +836,6 @@ async function main() {
 
   if (oErr) throw oErr;
 
-  const oddsKey = (event_id: string, teamCanon: string) => `${event_id}|${teamCanon}`;
   const oddsByEventTeam = new Map<string, OddsWide>();
 
   for (const o of (oddsRows || []) as any[]) {
@@ -893,7 +845,7 @@ async function main() {
     const teamCanon = canonTeam((o.team || "").toString().trim());
     if (!teamCanon) continue;
 
-    oddsByEventTeam.set(oddsKey(event_id, teamCanon), {
+    oddsByEventTeam.set(`${event_id}|${teamCanon}`, {
       event_id,
       team: teamCanon,
       pin_spread_line: toNum(o.pin_spread_line),
@@ -902,39 +854,50 @@ async function main() {
   }
 
   /* -------------------------------------------------------
-     6) Build SHARP paired lines index
-        event|player|market -> {pinnacle:[...], betonlineag:[...]}
+     6) Build paired lines indexes
+        A) Sharp paired lines (Pinnacle/BetOnline)
+        B) ANY-book paired lines (ALL books) for MARKET-AVG fallback at target line
   -------------------------------------------------------- */
 
-  type SharpPairsByBook = {
-    pinnacle?: SharpPair[];
-    betonlineag?: SharpPair[];
-  };
-
+  // A) SHARP
+  type SharpPairsByBook = { pinnacle?: SharpPair[]; betonlineag?: SharpPair[] };
   const sharpPairsByKey = new Map<string, SharpPairsByBook>();
   const tmpSharp = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
 
-  for (const r of props) {
-    const book = normBookAnySharp(r.bookmaker);
-    if (!book) continue;
+  // B) ANY BOOK (market avg)
+  const anyPairsByBase = new Map<string, PairAnyBook[]>(); // baseKey(event|player|market) -> pairs across books/lines
+  const tmpAny = new Map<string, { bookmaker: string; line: number; over?: number; under?: number }>();
 
+  for (const r of props) {
     const side = normSide(r.side);
     const line = toNum(r.line);
     const odds = toNum(r.odds);
-    if (!side || line == null || odds == null) continue;
+    const bookAny = String(r.bookmaker || "").toLowerCase().trim();
+    if (!side || line == null || odds == null || !bookAny) continue;
 
-    const base = idxKey(r.event_id, r.player_name, r.market);
-    const k = `${base}|${book}|${line}`;
+    const baseKey = idxKey(r.event_id, r.player_name, r.market);
 
-    const cur = tmpSharp.get(k) ?? { book, line };
-    if (side === "over") cur.over = odds;
-    if (side === "under") cur.under = odds;
-    tmpSharp.set(k, cur);
+    // B) accumulate ANY book pairs
+    const kAny = `${baseKey}|${bookAny}|${line}`;
+    const curAny = tmpAny.get(kAny) ?? { bookmaker: bookAny, line };
+    if (side === "over") curAny.over = odds;
+    if (side === "under") curAny.under = odds;
+    tmpAny.set(kAny, curAny);
+
+    // A) accumulate SHARP pairs (only if sharp book)
+    const sharpBook = normBookAnySharp(bookAny);
+    if (sharpBook) {
+      const kSharp = `${baseKey}|${sharpBook}|${line}`;
+      const curSharp = tmpSharp.get(kSharp) ?? { book: sharpBook, line };
+      if (side === "over") curSharp.over = odds;
+      if (side === "under") curSharp.under = odds;
+      tmpSharp.set(kSharp, curSharp);
+    }
   }
 
+  // Materialize SHARP pairs
   for (const [k, v] of tmpSharp.entries()) {
     if (v.over == null || v.under == null) continue;
-
     const baseKey = k.split("|").slice(0, 3).join("|");
     const bucket = sharpPairsByKey.get(baseKey) ?? {};
     const arr = (bucket[v.book] ?? []) as SharpPair[];
@@ -947,6 +910,23 @@ async function main() {
     if (bucket.pinnacle?.length) bucket.pinnacle.sort((a, b) => a.line - b.line);
     if (bucket.betonlineag?.length) bucket.betonlineag.sort((a, b) => a.line - b.line);
     sharpPairsByKey.set(baseKey, bucket);
+  }
+
+  // Materialize ANY-book pairs
+  for (const v of tmpAny.values()) {
+    if (v.over == null || v.under == null) continue;
+    const parts = (pairKeyAny("", "", "", "", 0) as any); // no-op to satisfy TS lint in some setups
+    void parts;
+
+    // We can recover baseKey from tmpAny key, but we didn’t keep it.
+    // So we’ll re-iterate tmpAny entries instead:
+  }
+  for (const [kAny, v] of tmpAny.entries()) {
+    if (v.over == null || v.under == null) continue;
+    const baseKey = kAny.split("|").slice(0, 3).join("|");
+    const arr = anyPairsByBase.get(baseKey) ?? [];
+    arr.push({ bookmaker: v.bookmaker, line: v.line, over_odds: v.over, under_odds: v.under });
+    anyPairsByBase.set(baseKey, arr);
   }
 
   function nearestSharpPair(baseKey: string, targetLine: number, book: SharpBook): SharpPair | null {
@@ -966,10 +946,7 @@ async function main() {
     return best;
   }
 
-  function bestAvailableSharpPair(
-    baseKey: string,
-    targetLine: number
-  ): { book: SharpBook; pair: SharpPair } | null {
+  function bestAvailableSharpPair(baseKey: string, targetLine: number): { book: SharpBook; pair: SharpPair } | null {
     const pin = nearestSharpPair(baseKey, targetLine, "pinnacle");
     if (pin) return { book: "pinnacle", pair: pin };
 
@@ -977,6 +954,34 @@ async function main() {
     if (bol) return { book: "betonlineag", pair: bol };
 
     return null;
+  }
+
+  /**
+   * ✅ NEW: MARKET-AVG no-vig OVER probability at the SAME target line
+   * Uses ALL books that have both sides for this exact line.
+   */
+  function marketAvgNoVigOverAtLine(baseKey: string, targetLine: number): { p_over: number; n_books: number } | null {
+    const pairs = anyPairsByBase.get(baseKey);
+    if (!pairs?.length) return null;
+
+    const pOvers: number[] = [];
+    let n = 0;
+
+    for (const p of pairs) {
+      if (!nearlyEqual(p.line, targetLine, 1e-6)) continue;
+
+      const pO_imp = americanToImpliedProb(p.over_odds);
+      const pU_imp = americanToImpliedProb(p.under_odds);
+      const dev = devigHybrid(pO_imp, pU_imp);
+      if (!Number.isFinite(dev.p_over)) continue;
+
+      pOvers.push(dev.p_over);
+      n++;
+    }
+
+    if (!pOvers.length) return null;
+    const avg = pOvers.reduce((a, b) => a + b, 0) / pOvers.length;
+    return { p_over: clamp(avg, 1e-6, 1 - 1e-6), n_books: n };
   }
 
   /* -------------------------------------------------------
@@ -993,9 +998,13 @@ async function main() {
 
     used_pinnacle: 0,
     used_betonline: 0,
+
+    used_market_avg: 0, // ✅ NEW
     used_model_only: 0,
 
+    translate_failed_used_market_avg: 0, // ✅ NEW
     translate_failed_model_only: 0,
+
     inserted: 0,
   };
 
@@ -1067,8 +1076,7 @@ async function main() {
 
     const implied_team_total =
       pin_total_line != null && pin_spread_line != null ? pin_total_line / 2 - pin_spread_line / 2 : null;
-    const team_total_factor =
-      implied_team_total != null ? clamp(implied_team_total / NBA_AVG_TEAM_TOTAL, 0.85, 1.15) : null;
+    const team_total_factor = implied_team_total != null ? clamp(implied_team_total / NBA_AVG_TEAM_TOTAL, 0.85, 1.15) : null;
 
     // Minutes mean + adjusted
     const min_base = weightedAvg(base.min_szn, base.min_7, base.min_15);
@@ -1124,12 +1132,14 @@ async function main() {
       continue;
     }
 
-    // Sharp fallback (Pinnacle -> BetOnline -> model-only)
+    // ------------------------------------------------------
+    // SHARP -> MARKET_AVG -> MODEL_ONLY
+    // ------------------------------------------------------
     const baseKey = idxKey(r.event_id, r.player_name, r.market);
     const sharpPick = bestAvailableSharpPair(baseKey, line);
 
-    let p_sharp: number | null = null;
-    let sharp_source: "pinnacle" | "betonlineag" | "model_only" = "model_only";
+    let p_ref: number | null = null; // "sharp-like" reference prob (sharp or market avg)
+    let ref_source: "pinnacle" | "betonlineag" | "market_avg" | "model_only" = "model_only";
     let has_sharp = false;
 
     if (sharpPick) {
@@ -1149,31 +1159,52 @@ async function main() {
       });
 
       if (pOverTarget == null) {
-        // translate fails -> model-only
-        diag.translate_failed_model_only++;
-        p_sharp = null;
-        sharp_source = "model_only";
-        has_sharp = false;
+        // translate failed: try MARKET AVG at SAME line
+        const mav = marketAvgNoVigOverAtLine(baseKey, line);
+        if (mav) {
+          p_ref = side === "over" ? mav.p_over : 1 - mav.p_over;
+          ref_source = "market_avg";
+          has_sharp = false;
+          diag.translate_failed_used_market_avg++;
+          diag.used_market_avg++;
+        } else {
+          // final fallback: model only
+          p_ref = null;
+          ref_source = "model_only";
+          has_sharp = false;
+          diag.translate_failed_model_only++;
+          diag.used_model_only++;
+        }
       } else {
-        p_sharp = side === "over" ? pOverTarget : 1 - pOverTarget;
-        sharp_source = sharpPick.book;
+        p_ref = side === "over" ? pOverTarget : 1 - pOverTarget;
+        ref_source = sharpPick.book;
         has_sharp = true;
 
         if (sharpPick.book === "pinnacle") diag.used_pinnacle++;
         else diag.used_betonline++;
       }
     } else {
-      diag.used_model_only++;
-      p_sharp = null;
-      sharp_source = "model_only";
-      has_sharp = false;
+      // no sharp: try MARKET AVG at SAME line
+      const mav = marketAvgNoVigOverAtLine(baseKey, line);
+      if (mav) {
+        p_ref = side === "over" ? mav.p_over : 1 - mav.p_over;
+        ref_source = "market_avg";
+        has_sharp = false;
+        diag.used_market_avg++;
+      } else {
+        p_ref = null;
+        ref_source = "model_only";
+        has_sharp = false;
+        diag.used_model_only++;
+      }
     }
 
-    // Quantum blend (no sharp => model-only)
+    // ✅ NEW: Quantum blend
+    // - If sharp exists => model + sharp (as before)
+    // - Else if market_avg exists => model + market_avg (your request)
+    // - Else => model only
     const p_quantum =
-      has_sharp && p_sharp != null
-        ? clamp(p_model * QUANTUM_BLEND_MODEL + p_sharp * QUANTUM_BLEND_SHARP, 0, 1)
-        : clamp(p_model, 0, 1);
+      p_ref != null ? clamp(p_model * QUANTUM_BLEND_MODEL + p_ref * QUANTUM_BLEND_SHARP, 0, 1) : clamp(p_model, 0, 1);
 
     // EV + sizing
     const quantum_fair_odds = impliedProbToAmerican(p_quantum);
@@ -1196,7 +1227,7 @@ async function main() {
       fp_id: base.fp_id,
       player_name: base.player_name,
 
-      // ✅ prefer snapshot’s stored fields (now enriched), fallback to baseline
+      // prefer snapshot’s stored fields (now enriched), fallback to baseline
       position: (r.position ?? null) ?? base.position ?? null,
       picture_url: (r.picture_url ?? null) ?? base.picture_url ?? null,
 
@@ -1221,10 +1252,11 @@ async function main() {
       sigma,
       p_model,
 
-      // sharp / quantum (keep in ev table; UI can ignore)
+      // sharp/market avg
       has_sharp,
-      sharp_source,
-      p_sharp,
+      sharp_source: ref_source, // now can be "market_avg"
+      p_sharp: has_sharp ? p_ref : null, // keep old column semantics: only populate when has_sharp=true
+      p_market_avg: ref_source === "market_avg" ? p_ref : null, // ✅ NEW helper field (safe even if column doesn't exist in table)
       p_quantum,
       quantum_fair_odds,
 
@@ -1244,11 +1276,33 @@ async function main() {
   const { error: delErr } = await supabase.from("player_prop_ev_latest").delete().eq("sport_key", SPORT_KEY);
   if (delErr) throw delErr;
 
-  const INSERT_CHUNK = 2000;
-  for (let i = 0; i < out.length; i += INSERT_CHUNK) {
-    const batch = out.slice(i, i + INSERT_CHUNK);
-    const { error: insErr } = await supabase.from("player_prop_ev_latest").insert(batch);
-    if (insErr) throw insErr;
+  // If your table doesn't have p_market_avg, remove it from out rows automatically.
+  // We'll strip unknown columns by using the table's error message if needed:
+  // But simplest: attempt insert, and if it fails, retry without p_market_avg.
+  async function insertRows(rows: any[]) {
+    const INSERT_CHUNK = 2000;
+    for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+      const batch = rows.slice(i, i + INSERT_CHUNK);
+      const { error: insErr } = await supabase.from("player_prop_ev_latest").insert(batch);
+      if (insErr) throw insErr;
+    }
+  }
+
+  try {
+    await insertRows(out);
+  } catch (e: any) {
+    const msg = String(e?.message || e || "");
+    // common: "column \"p_market_avg\" of relation \"player_prop_ev_latest\" does not exist"
+    if (/p_market_avg/i.test(msg) || /column .* does not exist/i.test(msg)) {
+      console.log("[warn] player_prop_ev_latest missing p_market_avg column; retrying insert without it.");
+      const stripped = out.map((r) => {
+        const { p_market_avg, ...rest } = r;
+        return rest;
+      });
+      await insertRows(stripped);
+    } else {
+      throw e;
+    }
   }
 
   console.log(
@@ -1264,21 +1318,18 @@ async function main() {
           dropped_no_team: diag.dropped_no_team,
           dropped_no_model: diag.dropped_no_model,
         },
-        sharp_usage: {
+        usage: {
           used_pinnacle: diag.used_pinnacle,
           used_betonline: diag.used_betonline,
+          used_market_avg: diag.used_market_avg,
           used_model_only: diag.used_model_only,
+          translate_failed_used_market_avg: diag.translate_failed_used_market_avg,
           translate_failed_model_only: diag.translate_failed_model_only,
         },
         notes: {
+          new_fallback: "If sharp missing or translate fails => use market-avg devig at SAME line (all books) + model",
+          sharp_fallbacks: "pinnacle -> betonlineag -> market_avg(same-line) -> model_only",
           context_fix: "odds_wide_latest indexed by (event_id + canonical team)",
-          sharp_fallbacks: "pinnacle -> betonlineag -> model_only",
-          snapshot_fix: "position + picture_url are now stored on player_props_snapshot",
-          devig: {
-            eq_if_skew_le: DEVIG_SKEW_EQ_MAX,
-            mpto_if_skew_ge: DEVIG_SKEW_MPTO_MIN,
-            blend_between: [DEVIG_SKEW_EQ_MAX, DEVIG_SKEW_MPTO_MIN],
-          },
         },
       },
       null,
