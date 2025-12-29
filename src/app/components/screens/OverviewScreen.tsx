@@ -1,10 +1,16 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Mobile spacing fixed: less crammed, better stacking)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Polish pass: clearer Fair Odds, EV color intensity, subtitle de-emphasis, naming consistency)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Top Plays filter: ONLY score >= 50
 // ✅ Score === 100 shows 🔥
-// ✅ Shows BOTH: Book odds + Quantum fair odds
+// ✅ Shows BOTH: Book odds + Fair odds (formerly "Quantum")
 // ✅ Mobile layout: single-column rhythm, bigger tap targets, stats stack 2x2, less dense text
 // ✅ Desktop layout unchanged vibe
+//
+// POLISH UPDATES (only):
+// 1) "Quantum" stat label -> "Fair Odds" (clearer)
+// 2) EV stat uses intensity coloring (emerald/gold/gray) based on EV magnitude
+// 3) Subtitle text slightly de-emphasized (#a8a8a8)
+// 4) Consistent naming: card header uses "Game Line" (tabs remain plural)
 
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -263,6 +269,14 @@ function getPropFairOdds(row: PropEvRow) {
   return Math.trunc(n);
 }
 
+/* ✅ POLISH: EV intensity coloring */
+function evTextClass(ev: number | null) {
+  if (ev == null) return "text-white";
+  if (ev >= 7) return "text-emerald-400";
+  if (ev >= 3) return "text-[#d4af37]";
+  return "text-[#b0b0b0]";
+}
+
 /* =========================================================
    DEDUPE
 ========================================================= */
@@ -355,9 +369,11 @@ export function OverviewScreen() {
       soft ? setLoadingSoft(true) : setLoading(true);
       setError(null);
 
-      const runQ = supabase.from("monte_carlo_runs").select("id,created_at,sport_key").order("created_at", {
-        ascending: false,
-      }).limit(1);
+      const runQ = supabase
+        .from("monte_carlo_runs")
+        .select("id,created_at,sport_key")
+        .order("created_at", { ascending: false })
+        .limit(1);
 
       const versionQ = supabase
         .from("model_versions")
@@ -367,9 +383,11 @@ export function OverviewScreen() {
         .order("release_date", { ascending: false })
         .limit(1);
 
-      const changelogQ = supabase.from("model_changelog").select("version,date,changes").order("date", {
-        ascending: false,
-      }).limit(5);
+      const changelogQ = supabase
+        .from("model_changelog")
+        .select("version,date,changes")
+        .order("date", { ascending: false })
+        .limit(5);
 
       const evQ = supabase.from("ev_plays").select("*").order("created_at", { ascending: false }).limit(250);
 
@@ -433,19 +451,11 @@ export function OverviewScreen() {
   useEffect(() => {
     const channel = supabase
       .channel("overview-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "monte_carlo_runs" }, () =>
-        loadAll({ soft: true })
-      )
-      .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () =>
-        loadAll({ soft: true })
-      )
-      .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () =>
-        loadAll({ soft: true })
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "monte_carlo_runs" }, () => loadAll({ soft: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () => loadAll({ soft: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "ev_plays" }, () => loadAll({ soft: true }))
-      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () =>
-        loadAll({ soft: true })
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () => loadAll({ soft: true }))
       .subscribe();
 
     return () => {
@@ -937,11 +947,26 @@ function PipelineStep({ icon: Icon, label, sublabel }: { icon: any; label: strin
   );
 }
 
-function MiniStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function MiniStat({
+  label,
+  value,
+  accent,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+  valueClassName?: string;
+}) {
   return (
     <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-2.5 py-2.5">
       <div className="text-[10px] text-[#606060]">{label}</div>
-      <div className={["text-xs mt-0.5 whitespace-nowrap truncate", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>
+      <div
+        className={[
+          "text-xs mt-0.5 whitespace-nowrap truncate",
+          valueClassName ? valueClassName : accent ? "text-[#d4af37]" : "text-white",
+        ].join(" ")}
+      >
         {value}
       </div>
     </div>
@@ -1082,15 +1107,20 @@ function TopPlayCard({
           </div>
         </div>
 
-        {/* Slightly more line-height on mobile */}
-        <div className="text-xs text-[#b0b0b0] leading-relaxed">{subtitle}</div>
+        {/* ✅ POLISH: subtitle slightly de-emphasized */}
+        <div className="text-xs text-[#a8a8a8] leading-relaxed">{subtitle}</div>
 
         {/* Mobile: 2x2 stats. Desktop+: 4 across */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-          <MiniStat label="EV" value={evText} accent />
+          {/* ✅ POLISH: EV intensity */}
+          <MiniStat label="EV" value={evText} valueClassName={evTextClass(ev)} />
+
           <MiniStat label="Book" value={book} />
+
           <MiniStat label="Book Odds" value={fmtOdds(odds)} />
-          <MiniStat label="Quantum" value={fmtOdds(fairOdds)} />
+
+          {/* ✅ POLISH: "Fair Odds" (clearer than Quantum) and keep branded accent */}
+          <MiniStat label="Fair Odds" value={fmtOdds(fairOdds)} accent />
         </div>
 
         {commence ? <div className="text-[11px] text-[#606060] pt-0.5">{commence}</div> : null}
@@ -1098,4 +1128,5 @@ function TopPlayCard({
     </div>
   );
 }
+
 
