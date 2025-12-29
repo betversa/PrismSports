@@ -2209,11 +2209,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                       </div>
                     </div>
 
-                    <div className="mt-2 text-[11px] text-[#b0b0b0]">
-                      Projected Margin Home: <span className="text-white font-extrabold tabular-nums">{predRow.projected_margin_home ?? "—"}</span>
-                    </div>
-                  </div>
-
                   <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
                     <div className="flex items-center justify-between">
                       <div className="text-white font-extrabold text-[12px]">Total</div>
@@ -2235,10 +2230,6 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                         <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
                         <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
                       </div>
-                    </div>
-
-                    <div className="mt-2 text-[11px] text-[#b0b0b0]">
-                      Projected Total: <span className="text-white font-extrabold tabular-nums">{predRow.projected_total ?? "—"}</span>
                     </div>
                   </div>
                 </div>
