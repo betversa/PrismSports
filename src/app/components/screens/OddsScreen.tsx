@@ -1,18 +1,9 @@
 // screens/OddsScreen.tsx — FULL REWRITE (ONLY requested updates applied)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ Main page background: richer (gradient + subtle noise), not “all black”
-// ✅ Header chips trimmed: no Sport/Market/Books/Refresh chips; show ONLY game count for the selected day (+ last updated)
-// ✅ Modal: Predictions tab opens FIRST
-// ✅ Last-5: basketballref_games_nba uses column "date" (not game_date)
-// ✅ Predictions: “Key Lines” condensed / less clutter; ML/Spread/Total info combined into fewer sections
-// ✅ Modal menus: sticky without causing scroll-jump; tabs stay visible; props market buttons stay visible
-// ✅ Fix: scroll jump when tapping sticky buttons (props + tabs) via scrollPaddingTop + prevent focus-scroll
-// ✅ Remove the extra footer sentences in Props and Predictions (as requested)
-// ✅ Mobile layout tightened so it fits better
-// ✅ Keeps: single Game Details button, single Market buttons ONLY in Line Movement tab
-// ✅ Keeps: Player Props tab = one row per player, books in same row
-// ✅ Keeps: modal background gradient + subtle noise
-// ✅ Tooltip on charts shows DATE + TIME (CT) and line+odds for spread/total
+// ✅ Player Props modal: headers (Points / “14 players” / Player Team Line Over Under) are STICKY while scrolling
+// ✅ Predictions “Key Lines”: remove Quantum ML block (consensus only; quantum ML already shown by team logos)
+// ✅ Mobile Predictions: smaller logos + team names in a compact row ABOVE the win% bar (both teams above the bar)
+// ✅ Everything else unchanged from your provided script
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -108,7 +99,8 @@ const LIVE_BADGE =
 const LIVE_TX = "text-[11px] font-extrabold text-[#d0d0d0]";
 const LIVE_DOT = "inline-block w-2 h-2 rounded-full bg-emerald-500";
 
-const PANEL_INNER = "border border-[#2a2a2a] bg-black/20 rounded-xl overflow-hidden backdrop-blur-[2px]";
+const PANEL_INNER =
+  "border border-[#2a2a2a] bg-black/20 rounded-xl overflow-hidden backdrop-blur-[2px]";
 
 const BTN_BASE =
   "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors whitespace-nowrap";
@@ -241,14 +233,29 @@ function pickTs(row: any): string | null {
 }
 
 function pickOdds(row: any): number | null {
-  const raw = pickAny(row, ["odds", "price", "american_odds", "odds_american", "book_odds"]);
+  const raw = pickAny(row, [
+    "odds",
+    "price",
+    "american_odds",
+    "odds_american",
+    "book_odds",
+  ]);
   if (raw == null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
 function pickLine(row: any): number | null {
-  const raw = pickAny(row, ["line", "points", "point", "total", "spread_line", "total_line", "prop_line", "value"]);
+  const raw = pickAny(row, [
+    "line",
+    "points",
+    "point",
+    "total",
+    "spread_line",
+    "total_line",
+    "prop_line",
+    "value",
+  ]);
   if (raw == null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
@@ -327,11 +334,31 @@ function mapWideRowToSideOdds(row: any): SideOdds {
     },
 
     total: {
-      dk: { line: row.dk_total_line ?? null, over: row.dk_total_over_odds ?? null, under: row.dk_total_under_odds ?? null },
-      fd: { line: row.fd_total_line ?? null, over: row.fd_total_over_odds ?? null, under: row.fd_total_under_odds ?? null },
-      mgm: { line: row.mgm_total_line ?? null, over: row.mgm_total_over_odds ?? null, under: row.mgm_total_under_odds ?? null },
-      pin: { line: row.pin_total_line ?? null, over: row.pin_total_over_odds ?? null, under: row.pin_total_under_odds ?? null },
-      bol: { line: row.bol_total_line ?? null, over: row.bol_total_over_odds ?? null, under: row.bol_total_under_odds ?? null },
+      dk: {
+        line: row.dk_total_line ?? null,
+        over: row.dk_total_over_odds ?? null,
+        under: row.dk_total_under_odds ?? null,
+      },
+      fd: {
+        line: row.fd_total_line ?? null,
+        over: row.fd_total_over_odds ?? null,
+        under: row.fd_total_under_odds ?? null,
+      },
+      mgm: {
+        line: row.mgm_total_line ?? null,
+        over: row.mgm_total_over_odds ?? null,
+        under: row.mgm_total_under_odds ?? null,
+      },
+      pin: {
+        line: row.pin_total_line ?? null,
+        over: row.pin_total_over_odds ?? null,
+        under: row.pin_total_under_odds ?? null,
+      },
+      bol: {
+        line: row.bol_total_line ?? null,
+        over: row.bol_total_over_odds ?? null,
+        under: row.bol_total_under_odds ?? null,
+      },
     },
   };
 }
@@ -367,7 +394,11 @@ function renderCellParts(parts: CellParts) {
   );
 }
 
-function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOME"): CellParts {
+function consensusPartsForRow(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME"
+): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
 
   if (market === "ml") {
@@ -421,7 +452,12 @@ function consensusPartsForRow(ev: EventOdds, market: Market, side: "AWAY" | "HOM
   return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
 }
 
-function partsForBookSide(ev: EventOdds, market: Market, side: "AWAY" | "HOME", book: BookKey): CellParts {
+function partsForBookSide(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  book: BookKey
+): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
   if (!src) return { top: "—" };
 
@@ -1365,10 +1401,7 @@ async function fetchLast5ForTeam({
 
   const candidates: Array<{ table: string; dateCol: string; colA: string; colB: string }> =
     sportKey === "basketball_nba"
-      ? [
-          // ✅ basketballref_games_nba uses "date"
-          { table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" },
-        ]
+      ? [{ table: "basketballref_games_nba", dateCol: "date", colA: "away_team", colB: "home_team" }]
       : sportKey === "basketball_ncaab"
       ? [
           { table: "kenpom_games", dateCol: "date", colA: "team1", colB: "team2" },
@@ -1860,6 +1893,10 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
   const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
   const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
 
+  // Sticky math for Props headers (under sticky tabs + sticky prop market bar)
+  const PROPS_TABLE_STICKY_TOP = 148; // approx: tabs bar (~72) + prop bar (~76)
+  const PROPS_TABLE_HDR_ROW_H = 46;
+
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
       {/* ✅ Sticky tabs bar (does NOT shift content on scroll) */}
@@ -1962,21 +1999,13 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
             <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
           ) : (
             <div className="space-y-3">
-              {/* ✅ Condensed “Key Lines” (less clutter) */}
+              {/* ✅ Key Lines: remove Quantum ML block; keep consensus lines only */}
               <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-white font-extrabold text-[13px]">Key Lines</div>
                     <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
-                      Quantum ML + consensus lines in one place
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 px-3 py-2">
-                    <div className="text-[10px] text-[#b0b0b0] font-semibold">Quantum ML</div>
-                    <div className="text-white font-extrabold tabular-nums text-[12px]">
-                      {awayTeam}: <span style={{ color: colors.awayHex }}>{probToAmerican(awayP)}</span> • {homeTeam}:{" "}
-                      <span style={{ color: colors.homeHex }}>{probToAmerican(homeP)}</span>
+                      Consensus lines in one place
                     </div>
                   </div>
                 </div>
@@ -1992,18 +2021,22 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                   <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                      {awayTeam}: {consSprAway.top} {consSprAway.bottom ? <span className="text-[#b0b0b0]">{consSprAway.bottom}</span> : null}
+                      {awayTeam}: {consSprAway.top}{" "}
+                      {consSprAway.bottom ? <span className="text-[#b0b0b0]">{consSprAway.bottom}</span> : null}
                       <span className="text-[#808080] mx-2">|</span>
-                      {homeTeam}: {consSprHome.top} {consSprHome.bottom ? <span className="text-[#b0b0b0]">{consSprHome.bottom}</span> : null}
+                      {homeTeam}: {consSprHome.top}{" "}
+                      {consSprHome.bottom ? <span className="text-[#b0b0b0]">{consSprHome.bottom}</span> : null}
                     </div>
                   </div>
 
                   <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
                     <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Total</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
-                      Over: {consTotOver.top} {consTotOver.bottom ? <span className="text-[#b0b0b0]">{consTotOver.bottom}</span> : null}
+                      Over: {consTotOver.top}{" "}
+                      {consTotOver.bottom ? <span className="text-[#b0b0b0]">{consTotOver.bottom}</span> : null}
                       <span className="text-[#808080] mx-2">|</span>
-                      Under: {consTotUnder.top} {consTotUnder.bottom ? <span className="text-[#b0b0b0]">{consTotUnder.bottom}</span> : null}
+                      Under: {consTotUnder.top}{" "}
+                      {consTotUnder.bottom ? <span className="text-[#b0b0b0]">{consTotUnder.bottom}</span> : null}
                     </div>
                   </div>
                 </div>
@@ -2011,7 +2044,69 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
 
               {/* Win% meter */}
               <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
+                {/* ✅ MOBILE: small logos + names ABOVE bar (both teams above the bar) */}
+                <div className="lg:hidden">
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {awayLogo ? (
+                        <img
+                          src={awayLogo}
+                          alt={`${awayTeam} logo`}
+                          className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                          loading="lazy"
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-white font-extrabold text-[12px] truncate">{awayTeam}</div>
+                        <div className="text-[10px] text-[#b0b0b0] font-semibold">
+                          QML:{" "}
+                          <span className="font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
+                            {probToAmerican(awayP)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 justify-end min-w-0">
+                      <div className="min-w-0 text-right">
+                        <div className="text-white font-extrabold text-[12px] truncate">{homeTeam}</div>
+                        <div className="text-[10px] text-[#b0b0b0] font-semibold">
+                          QML:{" "}
+                          <span className="font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
+                            {probToAmerican(homeP)}
+                          </span>
+                        </div>
+                      </div>
+                      {homeLogo ? (
+                        <img
+                          src={homeLogo}
+                          alt={`${homeTeam} logo`}
+                          className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1"
+                          loading="lazy"
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
+                      )}
+                    </div>
+                  </div>
+
+                  <WinSplitMeter
+                    awayP={awayP}
+                    homeP={homeP}
+                    awayLabel="Away"
+                    homeLabel="Home"
+                    awayColor={colors.awayHex}
+                    homeColor={colors.homeHex}
+                    scoreText={scoreText}
+                  />
+                </div>
+
+                {/* ✅ DESKTOP: keep existing layout */}
+                <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
                   <div className="flex items-center gap-3">
                     {awayLogo ? (
                       <img
@@ -2077,9 +2172,15 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="text-white font-extrabold text-[13px]">Model Probabilities</div>
                   <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                    Proj Total: <span className="text-white font-extrabold tabular-nums">{predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}</span>{" "}
+                    Proj Total:{" "}
+                    <span className="text-white font-extrabold tabular-nums">
+                      {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
+                    </span>{" "}
                     <span className="text-[#808080] mx-2">|</span>
-                    Margin (H): <span className="text-white font-extrabold tabular-nums">{predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}</span>
+                    Margin (H):{" "}
+                    <span className="text-white font-extrabold tabular-nums">
+                      {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
+                    </span>
                   </div>
                 </div>
 
@@ -2088,7 +2189,8 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                     <div className="flex items-center justify-between">
                       <div className="text-white font-extrabold text-[12px]">Spread</div>
                       <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                        Line (Home): <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                        Line (Home):{" "}
+                        <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
                       </div>
                     </div>
 
@@ -2175,9 +2277,7 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
                 ))}
               </div>
 
-              <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                Newest per (player, side, book)
-              </div>
+              <div className="text-[11px] text-[#b0b0b0] font-semibold">Newest per (player, side, book)</div>
             </div>
           </div>
 
@@ -2189,7 +2289,11 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
             <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
           ) : (
             <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] overflow-hidden">
-              <div className="px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between">
+              {/* ✅ STICKY: Points header + count */}
+              <div
+                className="sticky z-20 px-4 py-3 border-b border-[#2a2a2a] flex items-center justify-between bg-[#0b0b0b]/92 backdrop-blur-[6px]"
+                style={{ top: 118 }} // below tabs + within props context
+              >
                 <div className="text-white font-extrabold text-sm">{propMarket}</div>
                 <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
               </div>
@@ -2197,14 +2301,31 @@ function GameDetailsModal({ sportKey, ev, onClose }: { sportKey: string; ev: Eve
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b border-[#232323] bg-[#0b0b0b]">
+                    {/* ✅ STICKY HEADER ROW 1 */}
+                    <tr
+                      className="border-b border-[#232323] bg-[#0b0b0b]"
+                      style={{
+                        position: "sticky" as any,
+                        top: PROPS_TABLE_STICKY_TOP,
+                        zIndex: 30,
+                      }}
+                    >
                       <th className="text-left px-4 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
                       <th className="text-left px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
                       <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
                       <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
                       <th className="text-center px-3 py-3 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
                     </tr>
-                    <tr className="border-b border-[#1a1a1a] bg-[#0b0b0b]">
+
+                    {/* ✅ STICKY HEADER ROW 2 */}
+                    <tr
+                      className="border-b border-[#1a1a1a] bg-[#0b0b0b]"
+                      style={{
+                        position: "sticky" as any,
+                        top: PROPS_TABLE_STICKY_TOP + PROPS_TABLE_HDR_ROW_H,
+                        zIndex: 29,
+                      }}
+                    >
                       <th />
                       <th />
                       <th />
