@@ -1,31 +1,24 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Black-forward “new look”, color only where it matters)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Plain-language UI + Book square logos)
 // -----------------------------------------------------------------------------------------------------
-// ✅ New look: mostly-black glass + subtle spectrum only in HEADER + Top3 glow (no loud gradients everywhere)
-// ✅ Removed Score=100 🔥 emoji (you already have the Flame icon on the card)
-// ✅ Top Plays filter: ONLY score >= 50
-// ✅ Shows BOTH: Book odds + Fair odds
-// ✅ EV stat uses intensity (subtle) + optional bar
-// ✅ Mobile layout: single-column rhythm, bigger tap targets, 2x2 stats
-// ✅ Desktop layout: same vibe, cleaner typography, less visual noise
-//
-// Notes on “color discipline”:
-// - GOLD only for “brand” touches (pills, icons, tiny borders).
-// - Spectrum only in hero hairline + very soft top glow (not inside every card).
-// - Top 3 gets a soft gold halo; everything else stays neutral.
+// ✅ Makes the screen usable for new + experienced users (less “model jargon”, clearer labels)
+// ✅ Top Play cards use book square logos from /public:
+//    - dksquare.png, fdsquare.png, mgmsquare.png, pinsquare.png, betonlinesquare.png (fallback supported)
+// ✅ Keeps your existing data plumbing + dedupe + Score>=50 behavior
+// ✅ Replaces “Processing Pipeline / Anchor / No-vig” copy with simple “How it works” steps
+// ✅ Simplifies “Model” box to “System Info” (version + last update only)
+// ✅ Keeps changelog section but renames it and trims wording
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  Anchor,
   Calculator,
   Database,
   DollarSign,
   Flame,
   RefreshCw,
-  Target,
-  TrendingUp,
-  Trophy,
   Sparkles,
+  Target,
+  Trophy,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -150,6 +143,17 @@ function normalizeBook(b?: string | null) {
   if (x.includes("pinnacle") || x === "pin") return "Pinnacle";
   if (x.includes("betonline")) return "BetOnline";
   return b;
+}
+
+/** map normalized book to /public square logo filenames */
+function bookSquareLogoSrc(bookName: string) {
+  const x = (bookName || "").toLowerCase();
+  if (x.includes("draft")) return "/dksquare.png";
+  if (x.includes("fanduel")) return "/fdsquare.png";
+  if (x.includes("mgm")) return "/mgmsquare.png";
+  if (x.includes("pinnacle") || x === "pin") return "/pinsquare.png";
+  if (x.includes("betonline")) return "/betonlinesquare.png";
+  return null;
 }
 
 function marketLabel(m?: string | null) {
@@ -279,9 +283,8 @@ function evTextClass(ev: number | null) {
 
 function evBarStyle(ev: number | null): React.CSSProperties {
   if (ev == null) return { width: "0%" };
-  const mag = clamp(ev, 0, 12); // cap visual
+  const mag = clamp(ev, 0, 12);
   const w = (mag / 12) * 100;
-  // keep bar mostly neutral; only tiny tint by tier
   const color =
     ev >= 7 ? "rgba(52, 211, 153, 0.35)" : ev >= 3 ? "rgba(212, 175, 55, 0.40)" : "rgba(255,255,255,0.10)";
   return { width: `${w}%`, background: color };
@@ -387,9 +390,7 @@ export function OverviewScreen() {
 
       const versionQ = supabase
         .from("model_versions")
-        .select(
-          "version,release_date,status,simulations,calib_window,anchor_weight_min,anchor_weight_max,min_ev_threshold,updated_at"
-        )
+        .select("version,status,simulations,updated_at")
         .order("release_date", { ascending: false })
         .limit(1);
 
@@ -465,11 +466,7 @@ export function OverviewScreen() {
       .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "ev_plays" }, () => loadAll({ soft: true }))
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "player_prop_ev_latest" },
-        () => loadAll({ soft: true })
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () => loadAll({ soft: true }))
       .subscribe();
 
     return () => {
@@ -480,26 +477,12 @@ export function OverviewScreen() {
 
   const activeSport = latestRun?.sport_key ?? null;
 
-  const meta = useMemo(() => {
-    const sims = latestVersion?.simulations ?? null;
-    const anchorMin = latestVersion?.anchor_weight_min;
-    const anchorMax = latestVersion?.anchor_weight_max;
-
-    const minEv = latestVersion?.min_ev_threshold;
-    const minEvPct =
-      minEv == null ? "—" : minEv <= 1 ? `${(minEv * 100).toFixed(1)}%` : `${Number(minEv).toFixed(1)}%`;
-
-    const anchorRange =
-      anchorMin != null && anchorMax != null ? `${anchorMin.toFixed(2)}–${anchorMax.toFixed(2)}` : "—";
-
+  const simpleMeta = useMemo(() => {
     return {
       version: latestVersion?.version ?? "—",
       status: latestVersion?.status ?? "—",
       updatedAt: latestVersion?.updated_at ? formatTsShort(latestVersion.updated_at) : null,
-      sims: sims != null ? formatInt(sims) : "—",
-      calibWindow: latestVersion?.calib_window ?? "—",
-      anchorWeight: anchorRange,
-      minEv: minEvPct,
+      sims: latestVersion?.simulations ?? null,
     };
   }, [latestVersion]);
 
@@ -585,17 +568,15 @@ export function OverviewScreen() {
     return { gameCount, propCount, bestScore, freshness };
   }, [evFiltered.length, propsFiltered.length, topAll, latestRun?.created_at]);
 
-  const pipeline = useMemo(() => {
-    const sims = latestVersion?.simulations ?? 10000;
+  const howItWorks = useMemo(() => {
+    const sims = simpleMeta.sims ?? 10000;
     return [
-      { icon: Database, label: "Odds", sub: "Books + snapshots" },
-      { icon: Calculator, label: "Monte Carlo", sub: `${formatInt(sims)} sims` },
-      { icon: Anchor, label: "Anchor", sub: "Sharp market" },
-      { icon: DollarSign, label: "No-vig", sub: "True odds" },
-      { icon: Target, label: "EV", sub: "Edge scan" },
-      { icon: TrendingUp, label: "Track", sub: "Results" },
+      { icon: Database, label: "Pull odds", sub: "From books" },
+      { icon: Calculator, label: "Project game", sub: `${formatInt(sims)} sims` },
+      { icon: Target, label: "Find edges", sub: "Score + EV" },
+      { icon: DollarSign, label: "Price check", sub: "Fair vs book" },
     ];
-  }, [latestVersion?.simulations]);
+  }, [simpleMeta.sims]);
 
   const playsToRender = useMemo(() => {
     if (tab === "game") return topGames.map((r) => ({ kind: "game" as const, row: r }));
@@ -603,17 +584,12 @@ export function OverviewScreen() {
     return topAll;
   }, [tab, topAll, topGames, topProps]);
 
-  /* =========================================================
-     RENDER
-  ========================================================= */
-
   return (
     <div className="space-y-8 sm:space-y-10">
       {/* HERO */}
       <div className="relative overflow-hidden rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4 sm:p-6">
-        {/* “new look” = black glass + a thin spectrum hairline only */}
+        {/* black-forward glass + thin spectrum hairline */}
         <div className="pointer-events-none absolute inset-0">
-          {/* soft top glow (very subtle) */}
           <div
             className="absolute inset-0 opacity-90"
             style={{
@@ -624,7 +600,6 @@ export function OverviewScreen() {
               ].join(", "),
             }}
           />
-          {/* spectrum hairline */}
           <div
             className="absolute left-0 right-0 top-0 h-[2px] opacity-70"
             style={{
@@ -632,7 +607,6 @@ export function OverviewScreen() {
                 "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.35), rgba(0,200,120,0.35), rgba(212,175,55,0.45), rgba(255,140,0,0.34), rgba(255,60,60,0.28), rgba(170,70,255,0.28), rgba(0,0,0,0))",
             }}
           />
-          {/* bottom gold anchor */}
           <div
             className="absolute left-0 right-0 bottom-0 h-[1px] opacity-60"
             style={{
@@ -651,16 +625,17 @@ export function OverviewScreen() {
               </div>
 
               <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
-                Today’s Best Edges <span className="text-[#6f6f6f]">—</span> Live
+                Best Plays Today <span className="text-[#6f6f6f]">—</span> Live
               </h2>
 
               <p className="text-sm text-[#a8a8a8] leading-relaxed max-w-3xl">
-                Top-rated +EV plays built from Monte Carlo projections, sharp anchoring, and no-vig pricing.
+                Simple view of the strongest plays right now. Each card shows the book price vs a fair price, plus a
+                0–100 score.
               </p>
 
               <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
                 <StatusPill
-                  label="Latest Run"
+                  label="Updated"
                   value={
                     latestRun?.created_at
                       ? `${formatTsShort(latestRun.created_at)} • ${heroStats.freshness}`
@@ -670,10 +645,10 @@ export function OverviewScreen() {
                   }
                 />
                 <StatusPill label="Sport" value={latestRun?.sport_key ?? "—"} />
-                <StatusPill label="Game edges" value={loading ? "…" : String(heroStats.gameCount)} />
-                <StatusPill label="Prop edges" value={loading ? "…" : String(heroStats.propCount)} />
+                <StatusPill label="Game plays" value={loading ? "…" : String(heroStats.gameCount)} />
+                <StatusPill label="Prop plays" value={loading ? "…" : String(heroStats.propCount)} />
                 <StatusPill
-                  label="Best score"
+                  label="Top score"
                   value={heroStats.bestScore == null ? "—" : `${heroStats.bestScore.toFixed(0)}/100`}
                   accent
                 />
@@ -707,9 +682,9 @@ export function OverviewScreen() {
 
           {/* Quick Actions */}
           <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-            <QuickAction title="Odds" sub="Market grid + history" icon={Database} href="/odds" />
-            <QuickAction title="Monte Carlo" sub="Projected scores + win%" icon={Calculator} href="/monte-carlo" />
-            <QuickAction title="Model Picks" sub="Best +EV plays" icon={Trophy} href="/model" />
+            <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
+            <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
+            <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
           </div>
         </div>
       </div>
@@ -718,10 +693,8 @@ export function OverviewScreen() {
       <section>
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3 sm:mb-4">
           <div>
-            <h3 className="text-base text-white">Top Plays Right Now</h3>
-            <div className="text-xs text-[#6a6a6a]">
-              Ranked by Score then EV%. Deduped to one card per play.
-            </div>
+            <h3 className="text-base text-white">Top Plays</h3>
+            <div className="text-xs text-[#6a6a6a]">One card per play (best book shown).</div>
           </div>
 
           <div className="w-full sm:w-auto">
@@ -739,12 +712,7 @@ export function OverviewScreen() {
             </>
           ) : playsToRender.length === 0 ? (
             <div className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-5 text-sm text-[#b0b0b0]">
-              No top plays found for the current filter.
-              <div className="text-xs text-[#6a6a6a] mt-1">
-                Ensure <span className="text-white">ev_plays</span> /{" "}
-                <span className="text-white">player_prop_ev_latest</span> have upcoming rows with{" "}
-                <span className="text-white">score ≥ {TOP_SCORE_MIN}</span>.
-              </div>
+              No plays found for this filter.
             </div>
           ) : (
             playsToRender.map((p, idx) => {
@@ -752,6 +720,7 @@ export function OverviewScreen() {
 
               if (p.kind === "game") {
                 const r = p.row as EvPlayRow;
+                const bookName = normalizeBook(r.bookmaker);
                 return (
                   <TopPlayCard
                     key={`game-${r.id ?? idx}`}
@@ -762,7 +731,8 @@ export function OverviewScreen() {
                     subtitle={gameSubtitle(r)}
                     score={getGameScore(r)}
                     ev={getEvPct(r)}
-                    book={normalizeBook(r.bookmaker)}
+                    bookName={bookName}
+                    bookLogoSrc={bookSquareLogoSrc(bookName)}
                     odds={getGameOdds(r)}
                     fairOdds={getGameFairOdds(r)}
                     commence={r.commence_time ? formatTsShort(r.commence_time) : null}
@@ -771,6 +741,7 @@ export function OverviewScreen() {
               }
 
               const r = p.row as PropEvRow;
+              const bookName = normalizeBook(r.book ?? r.bookmaker);
               return (
                 <TopPlayCard
                   key={`prop-${r.id ?? idx}`}
@@ -781,7 +752,8 @@ export function OverviewScreen() {
                   subtitle={propSubtitle(r)}
                   score={getPropScore(r)}
                   ev={getEvPct(r)}
-                  book={normalizeBook(r.book ?? r.bookmaker)}
+                  bookName={bookName}
+                  bookLogoSrc={bookSquareLogoSrc(bookName)}
                   odds={getPropOdds(r)}
                   fairOdds={getPropFairOdds(r)}
                   commence={r.commence_time ? formatTsShort(r.commence_time) : null}
@@ -793,67 +765,60 @@ export function OverviewScreen() {
         </div>
       </section>
 
-      {/* PIPELINE + MODEL META */}
+      {/* HOW IT WORKS + SYSTEM INFO */}
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
         <div className="lg:col-span-2 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 sm:p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <div className="text-base text-white">Processing Pipeline</div>
-              <div className="text-xs text-[#6a6a6a]">How an edge becomes a play.</div>
+              <div className="text-base text-white">How it works</div>
+              <div className="text-xs text-[#6a6a6a]">A quick, simple overview.</div>
             </div>
             <div className="text-[11px] text-[#808080]">
-              Model{" "}
-              <span className={meta.status === "Production" ? "text-emerald-400" : "text-[#d4af37]"}>
-                {meta.status}
+              Status{" "}
+              <span className={simpleMeta.status === "Production" ? "text-emerald-400" : "text-[#d4af37]"}>
+                {simpleMeta.status}
               </span>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
-            {pipeline.map((step, i) => (
-              <div key={step.label} className="flex items-center sm:flex-1 min-w-0">
-                <PipelineStep icon={step.icon} label={step.label} sublabel={step.sub} />
-                {i < pipeline.length - 1 ? (
-                  <div className="hidden sm:flex items-center justify-center w-10">
-                    <div className="h-[1px] w-full bg-[#2a2a2a]" />
-                  </div>
-                ) : null}
-              </div>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+            {howItWorks.map((step) => (
+              <HowStep key={step.label} icon={step.icon} label={step.label} sub={step.sub} />
             ))}
           </div>
         </div>
 
         <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 sm:p-5">
           <div className="flex items-center justify-between mb-3">
-            <div className="text-base text-white">Model</div>
-            <div className="text-[11px] text-[#6a6a6a]">{meta.updatedAt ? `Updated ${meta.updatedAt}` : ""}</div>
+            <div className="text-base text-white">System Info</div>
+            <div className="text-[11px] text-[#6a6a6a]">{simpleMeta.updatedAt ? `Updated ${simpleMeta.updatedAt}` : ""}</div>
           </div>
 
           <div className="space-y-2 text-xs">
-            <MetaLine label="Version" value={meta.version} warn={meta.version === "—"} />
-            <MetaLine label="Simulations" value={meta.sims} />
-            <MetaLine label="Calibration" value={meta.calibWindow} />
-            <MetaLine label="Anchor Weight" value={meta.anchorWeight} />
-            <MetaLine label="Min EV" value={meta.minEv} />
+            <MetaLine label="Version" value={simpleMeta.version} warn={simpleMeta.version === "—"} />
+            <MetaLine
+              label="Sim runs"
+              value={simpleMeta.sims == null ? "—" : formatInt(simpleMeta.sims)}
+            />
           </div>
 
-          {meta.version === "—" ? (
+          {simpleMeta.version === "—" ? (
             <div className="mt-3 text-[11px] text-[#6a6a6a]">
-              Add a row to <span className="text-white">model_versions</span> to populate metadata.
+              Add a row to <span className="text-white">model_versions</span> to populate this box.
             </div>
           ) : null}
         </div>
       </section>
 
-      {/* CHANGELOG */}
+      {/* UPDATES */}
       <section>
-        <h3 className="text-base text-white mb-3 sm:mb-4">What Changed</h3>
+        <h3 className="text-base text-white mb-3 sm:mb-4">Recent Updates</h3>
         <div className="bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl divide-y divide-[#2a2a2a]">
           {loading ? (
-            <div className="p-4 text-xs text-[#b0b0b0]">Loading changelog…</div>
+            <div className="p-4 text-xs text-[#b0b0b0]">Loading…</div>
           ) : changelog.length === 0 ? (
             <div className="p-4 text-xs text-[#b0b0b0]">
-              No changelog entries yet. Add rows to <span className="text-white">model_changelog</span>.
+              No updates yet. Add rows to <span className="text-white">model_changelog</span>.
             </div>
           ) : (
             changelog.map((entry, idx) => (
@@ -955,7 +920,7 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
   return (
     <div className="grid grid-cols-3 gap-2 sm:inline-flex sm:items-center sm:gap-2">
       {btn("all", "All")}
-      {btn("game", "Game Lines")}
+      {btn("game", "Games")}
       {btn("props", "Props")}
     </div>
   );
@@ -978,15 +943,17 @@ function StatusPill({ label, value, accent }: { label: string; value: string; ac
   );
 }
 
-function PipelineStep({ icon: Icon, label, sublabel }: { icon: any; label: string; sublabel: string }) {
+function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: string }) {
   return (
-    <div className="flex items-center gap-3 sm:flex-col sm:gap-0 sm:items-center flex-1 min-w-0">
-      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-[#121212] border border-[#d4af37]/18 rounded-lg flex items-center justify-center shrink-0 sm:mb-2">
-        <Icon className="w-5 h-5" style={{ color: GOLD }} />
-      </div>
-      <div className="min-w-0">
-        <div className="text-xs text-white sm:text-center mb-0.5">{label}</div>
-        <div className="text-[10px] text-[#6a6a6a] sm:text-center">{sublabel}</div>
+    <div className="rounded-xl border border-[#2a2a2a] bg-black/35 p-3">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-lg bg-[#121212] border border-[#d4af37]/18 flex items-center justify-center shrink-0">
+          <Icon className="w-4 h-4" style={{ color: GOLD }} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-xs text-white">{label}</div>
+          <div className="text-[11px] text-[#6a6a6a]">{sub}</div>
+        </div>
       </div>
     </div>
   );
@@ -998,20 +965,33 @@ function MiniStat({
   valueClassName,
   accent,
   barValue,
+  leftIconSrc,
 }: {
   label: string;
   value: string;
   valueClassName?: string;
   accent?: boolean;
   barValue?: number | null;
+  leftIconSrc?: string | null;
 }) {
   const bar = barValue != null;
   return (
     <div className="rounded-lg border border-[#2a2a2a] bg-black/35 px-2.5 py-2.5 overflow-hidden">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] text-[#6a6a6a]">{label}</div>
+        <div className="flex items-center gap-2 min-w-0">
+          {leftIconSrc ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={leftIconSrc}
+              alt=""
+              className="w-4 h-4 rounded-[4px] object-cover border border-white/10 shrink-0"
+            />
+          ) : null}
+          <div className="text-[10px] text-[#6a6a6a] truncate">{label}</div>
+        </div>
+
         {bar ? (
-          <div className="h-[6px] w-16 rounded-full bg-white/10 overflow-hidden">
+          <div className="h-[6px] w-16 rounded-full bg-white/10 overflow-hidden shrink-0">
             <div className="h-full rounded-full" style={evBarStyle(barValue)} />
           </div>
         ) : null}
@@ -1088,7 +1068,8 @@ function TopPlayCard({
   subtitle,
   score,
   ev,
-  book,
+  bookName,
+  bookLogoSrc,
   odds,
   fairOdds,
   commence,
@@ -1101,7 +1082,8 @@ function TopPlayCard({
   subtitle: string;
   score: number | null;
   ev: number | null;
-  book: string;
+  bookName: string;
+  bookLogoSrc: string | null;
   odds: number | null;
   fairOdds: number | null;
   commence: string | null;
@@ -1109,10 +1091,7 @@ function TopPlayCard({
 }) {
   const scoreRounded = score == null ? null : Math.round(score);
   const scoreText = scoreRounded == null ? "—" : `${scoreRounded}`;
-
   const evText = ev == null ? "—" : `${ev.toFixed(1)}%`;
-
-  // ✅ Removed 🔥 emoji; flame icon is enough.
   const showFlame = scoreRounded === 100;
 
   return (
@@ -1127,7 +1106,6 @@ function TopPlayCard({
         />
       ) : null}
 
-      {/* Fine top hairline (neutral) */}
       <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
 
       <div className="relative space-y-3">
@@ -1156,7 +1134,7 @@ function TopPlayCard({
             ) : null}
 
             <div className="min-w-0">
-              <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player Prop" : "Game Line"}</div>
+              <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game line"}</div>
               <div className="text-[15px] sm:text-sm text-white leading-snug truncate">{title}</div>
             </div>
           </div>
@@ -1170,10 +1148,10 @@ function TopPlayCard({
         <div className="text-xs text-[#a8a8a8] leading-relaxed">{subtitle}</div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-          <MiniStat label="EV" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
-          <MiniStat label="Book" value={book} />
-          <MiniStat label="Book Odds" value={fmtOdds(odds)} />
-          <MiniStat label="Fair Odds" value={fmtOdds(fairOdds)} accent />
+          <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
+          <MiniStat label="Book" value={bookName} leftIconSrc={bookLogoSrc} />
+          <MiniStat label="Book price" value={fmtOdds(odds)} />
+          <MiniStat label="Fair price" value={fmtOdds(fairOdds)} accent />
         </div>
 
         {commence ? <div className="text-[11px] text-[#6a6a6a] pt-0.5">{commence}</div> : null}
@@ -1181,5 +1159,4 @@ function TopPlayCard({
     </div>
   );
 }
-
 
