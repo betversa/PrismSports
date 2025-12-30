@@ -1,7 +1,8 @@
-// components/Header.tsx — FULL REWRITE (Desktop tighter height / padding; mobile unchanged)
+// components/Header.tsx — FULL REWRITE (Desktop nav centered; tighter desktop; mobile unchanged)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Desktop: reduced vertical padding + slightly smaller logo to reclaim space
-// ✅ Mobile: unchanged (same height + overlays)
+// ✅ Desktop: nav moved to the CENTER of the header (true center block)
+// ✅ Desktop: slightly tighter padding + logo size kept compact
+// ✅ Mobile: unchanged layout + overlays + hamburger
 // ✅ Tagline underline hugs tagline width
 // ✅ Clicking logo -> Overview
 // ✅ Logo path: /logos/Logo.png
@@ -42,9 +43,6 @@ const DROPDOWN_CLOSE_DELAY_MS = 240;
 
 const TAGLINE = "Sports Models · Projections · Analysis";
 
-/**
- * Subtle spectrum (existing look).
- */
 const PRISM_DESKTOP = {
   blue: "rgba(0, 146, 255, 0.08)",
   teal: "rgba(0, 201, 255, 0.06)",
@@ -243,6 +241,7 @@ function HoverDropdown({
               ].join(", "),
             }}
           />
+
           <div className="relative">
             {SPORTS.map((ui) => {
               const db = uiToDbSport(ui);
@@ -318,7 +317,7 @@ export function Header({
   return (
     <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
       <div className="pointer-events-none absolute inset-0">
-        {/* MOBILE overlay (full spectrum visible + MORE black) */}
+        {/* MOBILE overlay */}
         <div
           className="absolute inset-0 md:hidden"
           style={{
@@ -341,7 +340,7 @@ export function Header({
           }}
         />
 
-        {/* DESKTOP overlay (extra subtle) */}
+        {/* DESKTOP overlay */}
         <div
           className="absolute inset-0 hidden md:block"
           style={{
@@ -359,7 +358,6 @@ export function Header({
           }}
         />
 
-        {/* Top hairline */}
         <div
           className="absolute left-0 right-0 top-0 h-[1px] opacity-72 md:opacity-55"
           style={{
@@ -368,7 +366,6 @@ export function Header({
           }}
         />
 
-        {/* Gold anchor */}
         <div
           className="absolute left-0 right-0 bottom-0 h-[1px] opacity-65"
           style={{
@@ -378,66 +375,68 @@ export function Header({
         />
       </div>
 
-      {/* ✅ DESKTOP padding tightened: md:pt-2 md:pb-1 (was bigger) */}
-      <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-2 pb-2 md:pb-1">
-        <div className="flex items-start min-w-0">
-          <button
-            onClick={onOpenMenu}
-            className="md:hidden mt-1.5 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
-            aria-label="Open menu"
-            type="button"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
+      {/* ✅ Desktop tightened padding; nav centered via 3-column grid */}
+      <div className="relative w-full px-3 md:px-6 pt-2.5 md:pt-2 pb-2 md:pb-1">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center gap-2">
+          {/* LEFT: brand (mobile + desktop) */}
+          <div className="flex items-start min-w-0">
+            <button
+              onClick={onOpenMenu}
+              className="md:hidden mt-1.5 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
+              aria-label="Open menu"
+              type="button"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
 
-          <div className="flex flex-col items-start gap-2 min-w-0">
-            {/* Brand row */}
-            <div className="flex items-center gap-3 min-w-0 w-full">
-              <button
-                type="button"
-                onClick={() => onNavigate?.("overview")}
-                className="group flex items-center rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-                aria-label="Go to Overview"
-              >
-                <img
-                  src="/logos/Logo.png"
-                  alt="PrismSports"
-                  className={[
-                    // ✅ DESKTOP logo slightly smaller to reclaim space (mobile unchanged)
-                    "h-14 sm:h-16 md:h-16 w-auto object-contain select-none flex-shrink-0",
-                    "transition-transform duration-200 group-hover:scale-[1.01]",
-                  ].join(" ")}
-                  draggable={false}
-                />
-              </button>
-
-              {/* underline hugs the tagline text width */}
-              <div className="flex-1 min-w-0 w-full">
-                <div className="inline-block w-fit max-w-full">
-                  <div
+            <div className="flex flex-col items-start gap-2 min-w-0">
+              <div className="flex items-center gap-3 min-w-0 w-full">
+                <button
+                  type="button"
+                  onClick={() => onNavigate?.("overview")}
+                  className="group flex items-center rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+                  aria-label="Go to Overview"
+                >
+                  <img
+                    src="/logos/Logo.png"
+                    alt="PrismSports"
                     className={[
-                      "text-[#9a9a9a] font-medium tracking-wide leading-snug",
-                      "text-[11px] sm:text-[12px] md:text-[12px]",
-                      "truncate",
+                      "h-14 sm:h-16 md:h-16 w-auto object-contain select-none flex-shrink-0",
+                      "transition-transform duration-200 group-hover:scale-[1.01]",
                     ].join(" ")}
-                    title={TAGLINE}
-                  >
-                    {TAGLINE}
-                  </div>
-
-                  <span
-                    className="block mt-1 h-[2px] w-full rounded-full opacity-60 md:opacity-45"
-                    style={{
-                      background:
-                        "linear-gradient(90deg, rgba(0,146,255,0.52), rgba(0,200,120,0.52), rgba(212,175,55,0.70), rgba(255,140,0,0.52), rgba(255,60,60,0.42), rgba(170,70,255,0.42))",
-                    }}
+                    draggable={false}
                   />
+                </button>
+
+                <div className="flex-1 min-w-0 w-full">
+                  <div className="inline-block w-fit max-w-full">
+                    <div
+                      className={[
+                        "text-[#9a9a9a] font-medium tracking-wide leading-snug",
+                        "text-[11px] sm:text-[12px] md:text-[12px]",
+                        "truncate",
+                      ].join(" ")}
+                      title={TAGLINE}
+                    >
+                      {TAGLINE}
+                    </div>
+
+                    <span
+                      className="block mt-1 h-[2px] w-full rounded-full opacity-60 md:opacity-45"
+                      style={{
+                        background:
+                          "linear-gradient(90deg, rgba(0,146,255,0.52), rgba(0,200,120,0.52), rgba(212,175,55,0.70), rgba(255,140,0,0.52), rgba(255,60,60,0.42), rgba(170,70,255,0.42))",
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* ✅ DESKTOP nav spacing tightened a bit */}
-            <nav className="hidden md:flex items-center gap-6 pb-1 pt-0.5">
+          {/* CENTER: desktop nav (centered) */}
+          <div className="hidden md:flex justify-center">
+            <nav className="flex items-center gap-7 pb-1 pt-0.5">
               <HoverDropdown
                 label="Odds"
                 suffix="Odds"
@@ -467,17 +466,31 @@ export function Header({
               <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
             </nav>
           </div>
-        </div>
 
-        <div className="hidden sm:flex items-center">
-          <div
-            className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
-            style={{
-              background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
-            }}
-          >
-            <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
-            <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
+          {/* RIGHT: live pill (kept right aligned on desktop) */}
+          <div className="hidden md:flex items-center justify-end">
+            <div
+              className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
+              style={{
+                background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+              }}
+            >
+              <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
+              <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
+            </div>
+          </div>
+
+          {/* MOBILE: keep the live pill on the right like before */}
+          <div className="hidden sm:flex md:hidden items-center justify-end">
+            <div
+              className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
+              style={{
+                background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+              }}
+            >
+              <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
+              <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
+            </div>
           </div>
         </div>
       </div>
