@@ -398,7 +398,7 @@ export function Header({
                     alt="PrismSports"
                     className={[
                       // ✅ BIGGER logo (mobile + desktop)
-                      "h-16 sm:h-20 md:h-20 w-auto object-contain select-none flex-shrink-0",
+                      "h-16 sm:h-20 md:h-24 w-auto object-contain select-none flex-shrink-0",
                       "transition-transform duration-200 group-hover:scale-[1.01]",
                     ].join(" ")}
                     draggable={false}
