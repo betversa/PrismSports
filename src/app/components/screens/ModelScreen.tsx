@@ -1,19 +1,21 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Polish fixes + working game logs + modal fits)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Hero edge fixed + Modal tabs + no-scroll modal)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Removes rainbow/top-edge “glow” on hero (no gradient bleeding)
-// ✅ Line movement chart + game logs fit inside modal without requiring modal-body scroll
-//    - Modal body does NOT scroll; charts are height-capped + responsive
-// ✅ FantasyPros Game Logs BAR CHART fixed (robust stat parsing: "", "—", "DNP", etc.)
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
 // ✅ Filters: Play Type + Book
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
+//
 // ✅ LINE MOVEMENT = LINE CHART (DK/FD/MGM/PIN) with tooltip showing DATE + TIME (CT)
+// ✅ Modal is NOT scrollable (fixed height)
+// ✅ Modal uses tabs: "Line History" and "Hit Rate"
+//    - Line History: odds history chart (fits without scrolling)
+//    - Hit Rate: FantasyPros game logs BAR chart (works; fixed height, no clipping)
+// ✅ Projection label uses μ symbol
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
-// ✅ Adds Pinnacle odds to line movement (when present)
-// ✅ Colors each book uniquely (DK/FD/MGM/PIN)
-// ✅ Exports BOTH named + default export (import mismatch safe)
+//
+// IMPORTANT: App.tsx imports as: `import { ModelScreen } from "./components/screens/ModelScreen";`
+// This file exports BOTH a named export and a default export to avoid import/export mismatch.
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -149,8 +151,8 @@ type AggregatedPlay = {
     side: string | null;
     picture_url: string | null;
     position: string | null;
-    mu: number | null;
-    line: number | null;
+    mu: number | null; // projection shown in modal
+    line: number | null; // today line shown on bar chart
   };
 
   offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>;
@@ -767,14 +769,12 @@ export const ModelScreen = () => {
       // preserve mu/line if missing
       if (base.propMeta) {
         const nextMu = (r.mu ?? null) as number | null;
-        if (nextMu != null && Number.isFinite(nextMu) && (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu))) {
+        if (nextMu != null && Number.isFinite(nextMu) && (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu)))
           base.propMeta.mu = nextMu;
-        }
 
         const nextLine = (r.line ?? null) as number | null;
-        if (nextLine != null && Number.isFinite(nextLine) && (base.propMeta.line == null || !Number.isFinite(base.propMeta.line))) {
+        if (nextLine != null && Number.isFinite(nextLine) && (base.propMeta.line == null || !Number.isFinite(base.propMeta.line)))
           base.propMeta.line = nextLine;
-        }
       }
 
       map.set(key, base);
@@ -790,12 +790,12 @@ export const ModelScreen = () => {
 
   const filtered = useMemo(() => {
     let list = aggregated;
-
     if (kindFilter !== "all") list = list.filter((p) => p.kind === kindFilter);
 
     if (bookFilter !== "all") {
       if (bookFilter === "pinnacle") {
-        list = list; // history-only option; do not filter rows
+        // history-only option; don't filter rows
+        list = list;
       } else {
         list = list.filter((p) => !!p.offers[bookFilter]);
       }
@@ -819,20 +819,26 @@ export const ModelScreen = () => {
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
       {/* HERO / HEADER (NO rainbow edge) */}
       <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 md:p-5">
-        {/* keep hero overlay INSET so it never bleeds to top border */}
-        <div className="pointer-events-none absolute inset-[1px] opacity-95">
-          <div
-            className="absolute inset-0"
-            style={{
-              background:
-                "radial-gradient(900px 260px at 18% 0%, rgba(212,175,55,0.18), transparent 62%), radial-gradient(700px 240px at 85% 12%, rgba(255,255,255,0.05), transparent 60%)",
-            }}
-          />
-        </div>
+        {/* Subtle neutral hero glow — ONLY gold + soft white, no rainbow */}
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(900px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 62%), radial-gradient(700px 240px at 85% 10%, rgba(255,255,255,0.04), transparent 60%)",
+          }}
+        />
+        {/* Optional tiny neutral noise layer */}
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.06]"
+          style={{
+            backgroundImage:
+              "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.25'/%3E%3C/svg%3E\")",
+          }}
+        />
 
         <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#080808] px-3 py-1 text-[11px] text-[#b0b0b0]">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#090909] px-3 py-1 text-[11px] text-[#b0b0b0]">
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
               Prism Model Picks
             </div>
@@ -840,7 +846,7 @@ export const ModelScreen = () => {
             <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Best +EV Plays</h2>
 
             <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
-              Aggregated to 1 row per play. Tap/click the <span className="text-white">Pick</span> to open charts.
+              Aggregated to 1 row per play. Tap/click the <span className="text-white">Pick</span> to open details.
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -855,7 +861,7 @@ export const ModelScreen = () => {
           {/* Filters */}
           <div className="w-full md:w-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-2">
-              <div className="inline-flex items-center bg-[#080808] border border-[#2a2a2a] rounded-lg overflow-hidden">
+              <div className="inline-flex items-center bg-[#090909] border border-[#2a2a2a] rounded-lg overflow-hidden">
                 <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
                 <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
                 <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
@@ -864,7 +870,7 @@ export const ModelScreen = () => {
               <select
                 value={bookFilter}
                 onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
-                className="px-3 py-2 bg-[#080808] border border-[#2a2a2a] rounded-lg text-[#d0d0d0] outline-none text-xs"
+                className="px-3 py-2 bg-[#090909] border border-[#2a2a2a] rounded-lg text-[#d0d0d0] outline-none text-xs"
               >
                 {SOFT_BOOKS.map((b) => (
                   <option key={b.key} value={b.key}>
@@ -877,26 +883,26 @@ export const ModelScreen = () => {
         </div>
 
         {loading ? (
-          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-[#080808] border border-[#2a2a2a] rounded-lg">
+          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-[#090909] border border-[#2a2a2a] rounded-lg">
             Loading EV plays…
           </div>
         ) : null}
 
         {error ? (
-          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-[#080808] border border-red-900/50 rounded-lg">
+          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-[#090909] border border-red-900/50 rounded-lg">
             Failed to load ev_plays: {error}
           </div>
         ) : null}
       </div>
 
       {/* Desktop table */}
-      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
+      <div className="hidden md:block bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl overflow-hidden">
         <div className="max-h-[70vh] overflow-y-auto">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
-                <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">Matchup</th>
+                <tr className="bg-[#070707] border-b border-[#2a2a2a]">
+                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#070707] z-30 min-w-[360px]">Matchup</th>
                   <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
                   <th className="text-left p-3 text-[#808080] min-w-[280px]">Pick</th>
                   <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
@@ -942,7 +948,7 @@ export const ModelScreen = () => {
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {!loading && !filtered.length ? (
-          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
+          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl text-center">
             No positive EV plays found for this filter.
           </div>
         ) : null}
@@ -996,7 +1002,7 @@ function PlayRow({
 
   return (
     <tr className="transition-colors hover:bg-white/[0.02]">
-      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[360px]">
+      <td className="p-3 sticky left-0 bg-[#0b0b0b] z-10 min-w-[360px]">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="text-white truncate">
@@ -1036,7 +1042,7 @@ function PlayRow({
 
       {/* PICK (clickable) */}
       <td className="p-3 text-left">
-        <button type="button" onClick={onOpenDetails} className="w-full text-left hover:opacity-90" title="Open charts">
+        <button type="button" onClick={onOpenDetails} className="w-full text-left hover:opacity-90" title="Open details">
           {play.kind === "prop" ? (
             <PropPickInline
               name={play.pickLabel}
@@ -1080,12 +1086,7 @@ function PlayRow({
 
       <td className="p-3 text-center">
         <div
-          className={[
-            "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
-            sTone.bg,
-            sTone.border,
-            sTone.text,
-          ].join(" ")}
+          className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}
         >
           {score}
         </div>
@@ -1121,7 +1122,7 @@ function PlayCard({
   const sTone = scoreTone(score);
 
   return (
-    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
+    <div className="bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-white text-sm truncate">
@@ -1140,12 +1141,7 @@ function PlayCard({
         <div className="shrink-0 text-right">
           <div className="inline-flex items-center gap-2">
             <div
-              className={[
-                "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
-                sTone.bg,
-                sTone.border,
-                sTone.text,
-              ].join(" ")}
+              className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}
             >
               {score}
             </div>
@@ -1158,7 +1154,7 @@ function PlayCard({
       </div>
 
       {/* PICK (clickable) */}
-      <button type="button" onClick={onOpenDetails} className="mt-3 w-full text-left hover:opacity-90" title="Open charts">
+      <button type="button" onClick={onOpenDetails} className="mt-3 w-full text-left hover:opacity-90" title="Open details">
         {play.kind === "prop" ? (
           <div className="flex items-center gap-3">
             <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
@@ -1199,15 +1195,17 @@ function PlayCard({
           <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
         </div>
 
-        <div className="text-[10px] text-[#606060]">Tap pick for charts</div>
+        <div className="text-[10px] text-[#606060]">Tap pick for details</div>
       </div>
     </div>
   );
 }
 
 /* =========================================================
-   Details Modal (NO modal body scroll; charts fit)
+   Details Modal (NO SCROLL) — Tabs: Line History / Hit Rate
 ========================================================= */
+
+type DetailsTab = "history" | "hit_rate";
 
 function PlayDetailsModal({
   open,
@@ -1224,6 +1222,14 @@ function PlayDetailsModal({
   kellyFactor: number;
   settingsReady: boolean;
 }) {
+  const [tab, setTab] = useState<DetailsTab>("history");
+
+  useEffect(() => {
+    if (!open) return;
+    // default to history each open
+    setTab("history");
+  }, [open, play?.playKey]);
+
   if (!open || !play) return null;
 
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
@@ -1240,10 +1246,10 @@ function PlayDetailsModal({
           paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
         }}
       >
-        {/* Fixed-height shell: header + body + footer, body does not scroll */}
-        <div className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col h-[92vh] md:h-[85vh]">
+        {/* Fixed-height modal; NO internal scroll */}
+        <div className="relative w-full md:max-w-4xl bg-[#090909] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col">
           {/* Header */}
-          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
+          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#070707]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-white text-sm md:text-base truncate">
@@ -1283,32 +1289,36 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
-              <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
-              <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
-              <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
-              <LegendDot label="PIN" color={BOOK_COLOR.pinnacle} />
-              <span className="text-[#404040]">·</span>
-              <span>Tooltip shows date + time (CT)</span>
+            {/* Tabs (no scroll; switches content) */}
+            <div className="mt-3 flex items-center gap-2">
+              <TabButton active={tab === "history"} onClick={() => setTab("history")} label="Line History" />
+              <TabButton active={tab === "hit_rate"} onClick={() => setTab("hit_rate")} label="Hit Rate" />
             </div>
+
+            {/* Legend hint (only for history tab) */}
+            {tab === "history" ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
+                <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
+                <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
+                <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
+                <LegendDot label="PIN" color={BOOK_COLOR.pinnacle} />
+                <span className="text-[#404040]">·</span>
+                <span>Tooltip shows date + time (CT)</span>
+              </div>
+            ) : null}
           </div>
 
-          {/* Body: NO scroll. Charts are height-capped and must fit. */}
-          <div className="flex-1 p-4">
-            <div
-              className={[
-                "grid gap-3 h-full",
-                play.kind === "prop" ? "grid-rows-[1fr_1fr]" : "grid-rows-[1fr]",
-              ].join(" ")}
-            >
-              <OddsHistoryMiniChart play={play} compact />
-
-              {play.kind === "prop" ? <FantasyProsGameLogs play={play} compact /> : null}
-            </div>
+          {/* Body (NO scroll) */}
+          <div className="p-4">
+            {tab === "history" ? (
+              <OddsHistoryFixed play={play} />
+            ) : (
+              <HitRateFixed play={play} />
+            )}
           </div>
 
           {/* Footer */}
-          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
+          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#070707] flex items-center justify-end">
             <button
               type="button"
               onClick={onClose}
@@ -1324,10 +1334,10 @@ function PlayDetailsModal({
 }
 
 /* =========================================================
-   Odds History (LINE GRAPH + tooltip includes date + time CT)
+   TAB CONTENT: Line History (fixed height; fits modal)
 ========================================================= */
 
-function OddsHistoryMiniChart({ play, compact }: { play: AggregatedPlay; compact?: boolean }) {
+function OddsHistoryFixed({ play }: { play: AggregatedPlay }) {
   const [series, setSeries] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [debug, setDebug] = useState<string>("");
@@ -1350,9 +1360,7 @@ function OddsHistoryMiniChart({ play, compact }: { play: AggregatedPlay; compact
 
           if (!player_name || !marketKey || !["over", "under"].includes(sideCanon)) {
             if (mounted) {
-              setDebug(
-                `props keys missing: player="${player_name || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`
-              );
+              setDebug(`props keys missing: player="${player_name || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`);
             }
             return;
           }
@@ -1378,9 +1386,7 @@ function OddsHistoryMiniChart({ play, compact }: { play: AggregatedPlay; compact
           setSeries(pts);
 
           if (!pts.length) {
-            setDebug(
-              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`
-            );
+            setDebug(`no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`);
           }
           return;
         }
@@ -1429,24 +1435,6 @@ function OddsHistoryMiniChart({ play, compact }: { play: AggregatedPlay; compact
       mounted = false;
     };
   }, [play.playKey]);
-
-  if (loading && !series.length) {
-    return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4 h-full">
-        <div className="text-xs text-[#808080]">Loading line movement…</div>
-      </div>
-    );
-  }
-
-  if (!series.length) {
-    return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4 h-full flex flex-col justify-center">
-        <div className="text-[10px] text-[#606060] mb-1">Line Movement (this side)</div>
-        <div className="text-xs text-[#808080]">No odds history available for this side.</div>
-        {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
-      </div>
-    );
-  }
 
   const hasAny = (k: AnyBook) => series.some((p) => Number.isFinite((p as any)[k]));
 
@@ -1515,86 +1503,92 @@ function OddsHistoryMiniChart({ play, compact }: { play: AggregatedPlay; compact
     );
   };
 
-  const chartHeight = compact ? 220 : 280;
-
+  // Fixed height ensures it fits modal without scrolling
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4 h-full flex flex-col">
+    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
       <div className="text-[10px] text-[#606060] mb-2">Line Movement (this side)</div>
 
-      <div className="flex-1" style={{ minHeight: chartHeight }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={series}>
-            <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-            <XAxis
-              dataKey="ts"
-              tickFormatter={fmtHourMinCT}
-              tick={{ fontSize: 10, fill: "#808080" }}
-              axisLine={{ stroke: "#2a2a2a" }}
-              tickLine={{ stroke: "#2a2a2a" }}
-              minTickGap={18}
-            />
-            <YAxis
-              tickFormatter={(v) => american(Number(v))}
-              tick={{ fontSize: 10, fill: "#808080" }}
-              axisLine={{ stroke: "#2a2a2a" }}
-              tickLine={{ stroke: "#2a2a2a" }}
-              width={58}
-              domain={["auto", "auto"]}
-            />
+      <div className="h-[300px]">
+        {loading && !series.length ? (
+          <div className="text-xs text-[#808080]">Loading line movement…</div>
+        ) : !series.length ? (
+          <div className="text-xs text-[#808080]">
+            No odds history available for this side.
+            {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={series}>
+              <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
+              <XAxis
+                dataKey="ts"
+                tickFormatter={fmtHourMinCT}
+                tick={{ fontSize: 10, fill: "#808080" }}
+                axisLine={{ stroke: "#2a2a2a" }}
+                tickLine={{ stroke: "#2a2a2a" }}
+                minTickGap={18}
+              />
+              <YAxis
+                tickFormatter={(v) => american(Number(v))}
+                tick={{ fontSize: 10, fill: "#808080" }}
+                axisLine={{ stroke: "#2a2a2a" }}
+                tickLine={{ stroke: "#2a2a2a" }}
+                width={58}
+                domain={["auto", "auto"]}
+              />
 
-            <Tooltip content={TooltipContent} />
-            <Legend
-              wrapperStyle={{ fontSize: 11, color: "#808080" }}
-              formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
-            />
+              <Tooltip content={TooltipContent} />
+              <Legend
+                wrapperStyle={{ fontSize: 11, color: "#808080" }}
+                formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
+              />
 
-            {hasAny("draftkings") ? (
-              <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-            ) : null}
+              {hasAny("draftkings") ? (
+                <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
 
-            {hasAny("fanduel") ? (
-              <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-            ) : null}
+              {hasAny("fanduel") ? (
+                <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
 
-            {hasAny("betmgm") ? (
-              <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-            ) : null}
+              {hasAny("betmgm") ? (
+                <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
 
-            {hasAny("pinnacle") ? (
-              <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-            ) : null}
-          </LineChart>
-        </ResponsiveContainer>
+              {hasAny("pinnacle") ? (
+                <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+            </LineChart>
+          </ResponsiveContainer>
+        )}
       </div>
-
-      {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
     </div>
   );
 }
 
 /* =========================================================
-   FantasyPros Game Logs (props only) — BAR CHART (FIXED)
+   TAB CONTENT: Hit Rate (FantasyPros game logs) — fixed height
 ========================================================= */
 
-function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?: boolean }) {
+function HitRateFixed({ play }: { play: AggregatedPlay }) {
+  // Only props have logs; for game lines, show a clean empty state
+  if (play.kind !== "prop") {
+    return (
+      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+        <div className="text-xs text-[#808080]">Hit rate is only available for player props.</div>
+      </div>
+    );
+  }
+
+  return <FantasyProsGameLogsFixed play={play} />;
+}
+
+function FantasyProsGameLogsFixed({ play }: { play: AggregatedPlay }) {
   const [rows, setRows] = useState<FantasyProsLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [debug, setDebug] = useState<string>("");
 
   const todayLine = play.propMeta?.line ?? null;
-
-  const parseStat = (v: any): number | null => {
-    if (v == null) return null;
-    const s = String(v).trim();
-    if (!s) return null;
-
-    const bad = ["—", "-", "DNP", "N/A", "NA", "NULL", "null"];
-    if (bad.includes(s)) return null;
-
-    const cleaned = s.replace(/[^\d.\-]/g, "");
-    const n = Number(cleaned);
-    return Number.isFinite(n) ? n : null;
-  };
 
   useEffect(() => {
     let mounted = true;
@@ -1624,10 +1618,10 @@ function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?
           return;
         }
 
-        const out = Array.isArray(json.rows) ? json.rows : [];
-        setRows(out);
-
-        if (!out.length) setDebug(`FantasyPros logs: parsed 0 rows (${json.url})`);
+        setRows(json.rows ?? []);
+        if (!(json.rows ?? []).length) {
+          setDebug(`FantasyPros logs: parsed 0 rows (${json.url})`);
+        }
       } catch (e: any) {
         if (!mounted) return;
         setDebug(`FantasyPros logs error: ${e?.message ?? String(e)}`);
@@ -1645,45 +1639,24 @@ function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?
   const marketKey = historyPropMarketKey(play.propMeta?.market ?? null);
 
   const statKey: "pts" | "reb" | "ast" | "threes" =
-    marketKey === "player_rebounds"
-      ? "reb"
-      : marketKey === "player_assists"
-      ? "ast"
-      : marketKey === "player_threes"
-      ? "threes"
-      : "pts";
+    marketKey === "player_rebounds" ? "reb" : marketKey === "player_assists" ? "ast" : marketKey === "player_threes" ? "threes" : "pts";
 
   const statLabel = statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
 
   const chartData = useMemo(() => {
-    const last10 = (rows ?? []).slice(0, 10).slice().reverse();
-
-    return last10
-      .map((r) => {
-        const min = parseStat(r.min);
-        const pts = parseStat(r.pts);
-        const reb = parseStat(r.reb);
-        const ast = parseStat(r.ast);
-        const threes = parseStat(r.threes);
-
-        const val = statKey === "pts" ? pts : statKey === "reb" ? reb : statKey === "ast" ? ast : threes;
-
-        return {
-          date: r.date || "",
-          opp: r.opp || "",
-          score: r.score || "",
-          min: min ?? 0,
-          pts: pts ?? 0,
-          reb: reb ?? 0,
-          ast: ast ?? 0,
-          threes: threes ?? 0,
-          _val: val, // nullable real value
-        };
-      })
-      .filter((d) => d.date);
-  }, [rows, statKey]);
-
-  const hasAnyBars = useMemo(() => chartData.some((d) => d._val != null), [chartData]);
+    // show most recent 10 but plot oldest->newest left-to-right
+    const last = (rows ?? []).slice(0, 10).slice().reverse();
+    return last.map((r) => ({
+      date: r.date,
+      opp: r.opp,
+      score: r.score,
+      min: safeNum(r.min, 0),
+      pts: safeNum(r.pts, 0),
+      reb: safeNum(r.reb, 0),
+      ast: safeNum(r.ast, 0),
+      threes: safeNum(r.threes, 0),
+    }));
+  }, [rows]);
 
   const LogsTooltip = (props: any) => {
     const { active, payload, label } = props;
@@ -1692,10 +1665,10 @@ function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?
     const d = payload[0]?.payload;
     if (!d) return null;
 
-    const vRaw = d._val;
-    const v = vRaw == null ? null : Number(vRaw);
+    const v = safeNum(d[statKey], NaN);
     const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
-    const overUnder = line != null && v != null ? (v >= line ? "OVER" : "UNDER") : undefined;
+
+    const overUnder = line != null && Number.isFinite(v) ? (v >= line ? "OVER" : "UNDER") : undefined;
 
     return (
       <div
@@ -1724,7 +1697,7 @@ function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?
 
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span style={{ color: "#808080" }}>{statLabel}</span>
-              <span style={{ color: "#fff" }}>{v != null ? v : "—"}</span>
+              <span style={{ color: "#fff" }}>{Number.isFinite(v) ? v : "—"}</span>
             </div>
 
             {line != null ? (
@@ -1734,9 +1707,7 @@ function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?
                   <span style={{ color: "#fff" }}>{line}</span>
                 </div>
                 {overUnder ? (
-                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>
-                    {overUnder}
-                  </div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>{overUnder}</div>
                 ) : null}
               </>
             ) : null}
@@ -1746,10 +1717,10 @@ function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?
     );
   };
 
-  const chartHeight = compact ? 210 : 230;
+  const activeBarStyle = { stroke: "#ffffff", strokeWidth: 1, fillOpacity: 1 };
 
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4 h-full flex flex-col">
+    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
       <div className="flex items-center justify-between gap-3 mb-2">
         <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
         {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
@@ -1758,57 +1729,52 @@ function FantasyProsGameLogs({ play, compact }: { play: AggregatedPlay; compact?
       {chartData.length ? (
         <>
           <div className="text-[10px] text-[#606060] mb-2">
-            Last {chartData.length} games · {statLabel}
+            Last {chartData.length} games · {statLabel} bars
             {todayLine != null && Number.isFinite(todayLine) ? <span className="text-[#808080]"> · Today Line {todayLine}</span> : null}
           </div>
 
-          {!hasAnyBars ? (
-            <div className="text-xs text-[#808080] flex-1 flex items-center justify-center">
-              No numeric game log values available for this stat (DNP/empty rows).
-            </div>
-          ) : (
-            <div className="flex-1" style={{ minHeight: chartHeight }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} barCategoryGap={12}>
-                  <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
-                  <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} allowDecimals={false} />
+          {/* Fixed height so it ALWAYS renders inside modal without scroll */}
+          <div className="h-[320px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} barCategoryGap={12}>
+                <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
+                <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
 
-                  <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
+                {/* Tooltip cursor transparent so it doesn't shade the whole plot */}
+                <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
 
-                  {todayLine != null && Number.isFinite(todayLine) ? (
-                    <ReferenceLine
-                      y={todayLine}
-                      stroke="#d0d0d0"
-                      strokeDasharray="4 4"
-                      ifOverflow="extendDomain"
-                      label={{ value: "Today Line", position: "right", fill: "#808080", fontSize: 10 }}
-                    />
-                  ) : null}
+                {/* Today's line reference */}
+                {todayLine != null && Number.isFinite(todayLine) ? (
+                  <ReferenceLine
+                    y={todayLine}
+                    stroke="#d0d0d0"
+                    strokeDasharray="4 4"
+                    ifOverflow="extendDomain"
+                    label={{ value: "Today Line", position: "right", fill: "#808080", fontSize: 10 }}
+                  />
+                ) : null}
 
-                  <Bar dataKey={statKey} name={statLabel} isAnimationActive={false}>
-                    {chartData.map((d, idx) => {
-                      const v = d._val;
-                      const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
-
-                      if (v == null || !Number.isFinite(Number(v))) return <Cell key={idx} fill="#2a2a2a" />;
-
-                      const isOver = line != null ? Number(v) >= line : true;
-                      return <Cell key={idx} fill={isOver ? OVER_GREEN : UNDER_RED} />;
-                    })}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+                <Bar dataKey={statKey} name={statLabel} isAnimationActive={false} activeBar={activeBarStyle}>
+                  {chartData.map((d, idx) => {
+                    const v = safeNum((d as any)[statKey], NaN);
+                    const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
+                    const isOver = line != null && Number.isFinite(v) ? v >= line : true;
+                    return <Cell key={idx} fill={isOver ? OVER_GREEN : UNDER_RED} />;
+                  })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </>
-      ) : (
-        <div className="text-xs text-[#808080] flex-1 flex items-center justify-center">
-          No game logs available.
-        </div>
-      )}
+      ) : null}
 
-      {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+      {!loading && !rows.length ? (
+        <div className="text-xs text-[#808080]">
+          No game logs available.
+          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1834,7 +1800,7 @@ function KindPill({ active, onClick, label }: { active: boolean; onClick: () => 
 
 function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#080808] px-3 py-1">
+    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#090909] px-3 py-1">
       <div className="text-[11px] text-[#808080]">{label}</div>
       <div className={["text-[11px] font-medium tabular-nums", tone ? tone : "text-white"].join(" ")}>{value}</div>
     </div>
@@ -1847,6 +1813,23 @@ function LegendDot({ label, color }: { label: string; color: string }) {
       <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
       <span>{label}</span>
     </div>
+  );
+}
+
+function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-2 rounded-lg border text-[11px] transition-colors",
+        active
+          ? "bg-[#d4af37]/10 border-[#d4af37]/30 text-[#d4af37]"
+          : "bg-[#0b0b0b] border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:bg-[#111]",
+      ].join(" ")}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -1996,4 +1979,3 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
 export default ModelScreen;
-
