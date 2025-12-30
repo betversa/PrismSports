@@ -1,18 +1,22 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Hero edge fixed + Modal tabs + no-scroll modal)
-// -----------------------------------------------------------------------------------------------------
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Final: no rainbow edge + modal fits on desktop/mobile)
+// -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
 // ✅ Filters: Play Type + Book
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
 //
-// ✅ LINE MOVEMENT = LINE CHART (DK/FD/MGM/PIN) with tooltip showing DATE + TIME (CT)
-// ✅ Modal is NOT scrollable (fixed height)
-// ✅ Modal uses tabs: "Line History" and "Hit Rate"
-//    - Line History: odds history chart (fits without scrolling)
-//    - Hit Rate: FantasyPros game logs BAR chart (works; fixed height, no clipping)
-// ✅ Projection label uses μ symbol
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
+// ✅ Modal: NO scrolling required to reach Done (header/footer fixed, safe-area aware)
+// ✅ Modal: Tabs instead of scroll: "Line History" + "Hit Rate"
+// ✅ Line History: LINE CHART (DK/FD/MGM/PIN) with tooltip showing DATE + TIME (CT)
+// ✅ Hit Rate tab: FantasyPros GAME LOGS = BAR CHART (single stat bars)
+//    - Reference line for TODAY’S line (prop line)
+//    - Bars colored OVER (green) / UNDER (red)
+//    - Tooltip cursor is transparent (no shaded plot)
+//
+// ✅ Adds Pinnacle odds to line history (when present)
+// ✅ Colors each book uniquely (DK/FD/MGM/PIN)
 //
 // IMPORTANT: App.tsx imports as: `import { ModelScreen } from "./components/screens/ModelScreen";`
 // This file exports BOTH a named export and a default export to avoid import/export mismatch.
@@ -105,7 +109,7 @@ type PlayerPropEvLatestRow = {
   odds: number;
 
   // model outputs
-  mu?: number | null; // projection
+  mu?: number | null;
   p_quantum: number | null;
   quantum_fair_odds: number;
 
@@ -151,8 +155,8 @@ type AggregatedPlay = {
     side: string | null;
     picture_url: string | null;
     position: string | null;
-    mu: number | null; // projection shown in modal
-    line: number | null; // today line shown on bar chart
+    mu: number | null;
+    line: number | null;
   };
 
   offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>;
@@ -615,7 +619,11 @@ export const ModelScreen = () => {
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      const settingsQ = supabase.from("app_settings").select("id,bankroll,kelly_factor,updated_at").eq("id", 1).limit(1);
+      const settingsQ = supabase
+        .from("app_settings")
+        .select("id,bankroll,kelly_factor,updated_at")
+        .eq("id", 1)
+        .limit(1);
 
       const [evRes, prRes, sRes] = await Promise.all([evQ, propsQ, settingsQ]);
 
@@ -817,28 +825,20 @@ export const ModelScreen = () => {
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      {/* HERO / HEADER (NO rainbow edge) */}
+      {/* HERO / HEADER (NO rainbow edge: no full-bleed gradient overlay) */}
       <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 md:p-5">
-        {/* Subtle neutral hero glow — ONLY gold + soft white, no rainbow */}
+        {/* subtle radials only, clipped within card; no top-edge banding */}
         <div
-          className="pointer-events-none absolute inset-0"
+          className="pointer-events-none absolute inset-0 opacity-100"
           style={{
             background:
-              "radial-gradient(900px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 62%), radial-gradient(700px 240px at 85% 10%, rgba(255,255,255,0.04), transparent 60%)",
-          }}
-        />
-        {/* Optional tiny neutral noise layer */}
-        <div
-          className="pointer-events-none absolute inset-0 opacity-[0.06]"
-          style={{
-            backgroundImage:
-              "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.25'/%3E%3C/svg%3E\")",
+              "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
           }}
         />
 
         <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#090909] px-3 py-1 text-[11px] text-[#b0b0b0]">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
               Prism Model Picks
             </div>
@@ -861,7 +861,7 @@ export const ModelScreen = () => {
           {/* Filters */}
           <div className="w-full md:w-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-2">
-              <div className="inline-flex items-center bg-[#090909] border border-[#2a2a2a] rounded-lg overflow-hidden">
+              <div className="inline-flex items-center bg-black/40 border border-[#2a2a2a] rounded-lg overflow-hidden">
                 <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
                 <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
                 <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
@@ -870,7 +870,7 @@ export const ModelScreen = () => {
               <select
                 value={bookFilter}
                 onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
-                className="px-3 py-2 bg-[#090909] border border-[#2a2a2a] rounded-lg text-[#d0d0d0] outline-none text-xs"
+                className="px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg text-[#d0d0d0] outline-none text-xs"
               >
                 {SOFT_BOOKS.map((b) => (
                   <option key={b.key} value={b.key}>
@@ -883,26 +883,26 @@ export const ModelScreen = () => {
         </div>
 
         {loading ? (
-          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-[#090909] border border-[#2a2a2a] rounded-lg">
+          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg">
             Loading EV plays…
           </div>
         ) : null}
 
         {error ? (
-          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-[#090909] border border-red-900/50 rounded-lg">
+          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/40 border border-red-900/50 rounded-lg">
             Failed to load ev_plays: {error}
           </div>
         ) : null}
       </div>
 
       {/* Desktop table */}
-      <div className="hidden md:block bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl overflow-hidden">
+      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
         <div className="max-h-[70vh] overflow-y-auto">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
-                <tr className="bg-[#070707] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#070707] z-30 min-w-[360px]">Matchup</th>
+                <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
+                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">Matchup</th>
                   <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
                   <th className="text-left p-3 text-[#808080] min-w-[280px]">Pick</th>
                   <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
@@ -948,7 +948,7 @@ export const ModelScreen = () => {
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {!loading && !filtered.length ? (
-          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl text-center">
+          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
             No positive EV plays found for this filter.
           </div>
         ) : null}
@@ -1002,7 +1002,7 @@ function PlayRow({
 
   return (
     <tr className="transition-colors hover:bg-white/[0.02]">
-      <td className="p-3 sticky left-0 bg-[#0b0b0b] z-10 min-w-[360px]">
+      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[360px]">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="text-white truncate">
@@ -1122,7 +1122,7 @@ function PlayCard({
   const sTone = scoreTone(score);
 
   return (
-    <div className="bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl p-4">
+    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-white text-sm truncate">
@@ -1195,17 +1195,17 @@ function PlayCard({
           <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
         </div>
 
-        <div className="text-[10px] text-[#606060]">Tap pick for details</div>
+        <div className="text-[10px] text-[#606060]">Tap pick for charts</div>
       </div>
     </div>
   );
 }
 
 /* =========================================================
-   Details Modal (NO SCROLL) — Tabs: Line History / Hit Rate
+   Details Modal (NO scroll-to-find footer; tabbed content)
 ========================================================= */
 
-type DetailsTab = "history" | "hit_rate";
+type ModalTab = "line" | "hit";
 
 function PlayDetailsModal({
   open,
@@ -1222,12 +1222,11 @@ function PlayDetailsModal({
   kellyFactor: number;
   settingsReady: boolean;
 }) {
-  const [tab, setTab] = useState<DetailsTab>("history");
+  const [tab, setTab] = useState<ModalTab>("line");
 
+  // reset tab when opening a different play
   useEffect(() => {
-    if (!open) return;
-    // default to history each open
-    setTab("history");
+    if (open) setTab("line");
   }, [open, play?.playKey]);
 
   if (!open || !play) return null;
@@ -1235,21 +1234,36 @@ function PlayDetailsModal({
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
   const mu = play.propMeta?.mu ?? null;
 
+  const canShowHitRate = play.kind === "prop";
+
   return (
     <div className="fixed inset-0 z-[100]">
       <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
 
+      {/* viewport-safe wrapper */}
       <div
-        className="absolute inset-0 md:flex md:items-center md:justify-center p-0 md:p-6"
+        className="absolute inset-0 flex items-end md:items-center md:justify-center"
         style={{
           paddingTop: "max(env(safe-area-inset-top), 12px)",
           paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
         }}
       >
-        {/* Fixed-height modal; NO internal scroll */}
-        <div className="relative w-full md:max-w-4xl bg-[#090909] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col">
-          {/* Header */}
-          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#070707]">
+        {/* modal frame */}
+        <div
+          className="
+            relative w-full md:max-w-4xl
+            bg-[#0b0b0b] border border-[#2a2a2a]
+            md:rounded-2xl rounded-t-2xl
+            overflow-hidden
+            flex flex-col
+          "
+          style={{
+            // ensures DONE never clips (no internal scrolling required to reach footer)
+            maxHeight: "min(92vh, 920px)",
+          }}
+        >
+          {/* Header (fixed) */}
+          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-white text-sm md:text-base truncate">
@@ -1289,15 +1303,14 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            {/* Tabs (no scroll; switches content) */}
-            <div className="mt-3 flex items-center gap-2">
-              <TabButton active={tab === "history"} onClick={() => setTab("history")} label="Line History" />
-              <TabButton active={tab === "hit_rate"} onClick={() => setTab("hit_rate")} label="Hit Rate" />
-            </div>
+            {/* Tabs (fixed) */}
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <div className="inline-flex items-center rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+                <TabButton active={tab === "line"} onClick={() => setTab("line")} label="Line History" />
+                <TabButton active={tab === "hit"} onClick={() => setTab("hit")} label="Hit Rate" disabled={!canShowHitRate} />
+              </div>
 
-            {/* Legend hint (only for history tab) */}
-            {tab === "history" ? (
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
+              <div className="hidden sm:flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
                 <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
                 <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
                 <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
@@ -1305,24 +1318,20 @@ function PlayDetailsModal({
                 <span className="text-[#404040]">·</span>
                 <span>Tooltip shows date + time (CT)</span>
               </div>
-            ) : null}
+            </div>
           </div>
 
-          {/* Body (NO scroll) */}
-          <div className="p-4">
-            {tab === "history" ? (
-              <OddsHistoryFixed play={play} />
-            ) : (
-              <HitRateFixed play={play} />
-            )}
+          {/* Body (NO scrolling; content sized to fit remaining space) */}
+          <div className="flex-1 min-h-0 p-4">
+            {tab === "line" ? <OddsHistoryPanel play={play} /> : <HitRatePanel play={play} />}
           </div>
 
-          {/* Footer */}
-          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#070707] flex items-center justify-end">
+          {/* Footer (always visible) */}
+          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a]">
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
+              className="w-full md:w-auto md:ml-auto md:flex md:justify-end px-4 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[12px] text-[#d0d0d0] hover:bg-[#141414]"
             >
               Done
             </button>
@@ -1333,11 +1342,28 @@ function PlayDetailsModal({
   );
 }
 
+function TabButton({ active, onClick, label, disabled }: { active: boolean; onClick: () => void; label: string; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!!disabled}
+      className={[
+        "px-3 py-2 text-xs transition-colors",
+        disabled ? "text-[#4a4a4a] cursor-not-allowed" : active ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+      ].join(" ")}
+      title={disabled ? "Hit Rate available for props only" : label}
+    >
+      {label}
+    </button>
+  );
+}
+
 /* =========================================================
-   TAB CONTENT: Line History (fixed height; fits modal)
+   Line History Panel (fits, no scrolling)
 ========================================================= */
 
-function OddsHistoryFixed({ play }: { play: AggregatedPlay }) {
+function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
   const [series, setSeries] = useState<HistoryPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [debug, setDebug] = useState<string>("");
@@ -1485,8 +1511,7 @@ function OddsHistoryFixed({ play }: { play: AggregatedPlay }) {
 
           {play.kind === "prop" ? (
             <div style={{ color: "#808080" }}>
-              μ Projection:{" "}
-              <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
+              μ Projection: <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
             </div>
           ) : null}
         </div>
@@ -1503,20 +1528,28 @@ function OddsHistoryFixed({ play }: { play: AggregatedPlay }) {
     );
   };
 
-  // Fixed height ensures it fits modal without scrolling
+  // height that reliably fits between modal header/footer on mobile + desktop
+  const chartHeightClass = "h-[min(44vh,360px)]";
+
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+    <div className="h-full flex flex-col min-h-0">
       <div className="text-[10px] text-[#606060] mb-2">Line Movement (this side)</div>
 
-      <div className="h-[300px]">
-        {loading && !series.length ? (
+      {loading && !series.length ? (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
           <div className="text-xs text-[#808080]">Loading line movement…</div>
-        ) : !series.length ? (
-          <div className="text-xs text-[#808080]">
-            No odds history available for this side.
-            {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
-          </div>
-        ) : (
+        </div>
+      ) : null}
+
+      {!loading && !series.length ? (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+          <div className="text-xs text-[#808080]">No odds history available for this side.</div>
+          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+        </div>
+      ) : null}
+
+      {!!series.length ? (
+        <div className={["bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-3", chartHeightClass].join(" ")}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={series}>
               <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
@@ -1560,30 +1593,34 @@ function OddsHistoryFixed({ play }: { play: AggregatedPlay }) {
               ) : null}
             </LineChart>
           </ResponsiveContainer>
-        )}
-      </div>
+        </div>
+      ) : null}
+
+      {debug && series.length ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
     </div>
   );
 }
 
 /* =========================================================
-   TAB CONTENT: Hit Rate (FantasyPros game logs) — fixed height
+   Hit Rate Panel (FantasyPros Game Logs bar chart) — props only
 ========================================================= */
 
-function HitRateFixed({ play }: { play: AggregatedPlay }) {
-  // Only props have logs; for game lines, show a clean empty state
+function HitRatePanel({ play }: { play: AggregatedPlay }) {
   if (play.kind !== "prop") {
     return (
       <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
-        <div className="text-xs text-[#808080]">Hit rate is only available for player props.</div>
+        <div className="text-xs text-[#808080]">Hit Rate is available for player props only.</div>
       </div>
     );
   }
-
-  return <FantasyProsGameLogsFixed play={play} />;
+  return <FantasyProsGameLogs play={play} />;
 }
 
-function FantasyProsGameLogsFixed({ play }: { play: AggregatedPlay }) {
+/* =========================================================
+   FantasyPros Game Logs — BAR CHART (works: ResponsiveContainer has explicit height)
+========================================================= */
+
+function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const [rows, setRows] = useState<FantasyProsLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [debug, setDebug] = useState<string>("");
@@ -1667,7 +1704,6 @@ function FantasyProsGameLogsFixed({ play }: { play: AggregatedPlay }) {
 
     const v = safeNum(d[statKey], NaN);
     const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
-
     const overUnder = line != null && Number.isFinite(v) ? (v >= line ? "OVER" : "UNDER") : undefined;
 
     return (
@@ -1706,9 +1742,7 @@ function FantasyProsGameLogsFixed({ play }: { play: AggregatedPlay }) {
                   <span style={{ color: "#808080" }}>Today Line</span>
                   <span style={{ color: "#fff" }}>{line}</span>
                 </div>
-                {overUnder ? (
-                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>{overUnder}</div>
-                ) : null}
+                {overUnder ? <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>{overUnder}</div> : null}
               </>
             ) : null}
           </div>
@@ -1719,32 +1753,38 @@ function FantasyProsGameLogsFixed({ play }: { play: AggregatedPlay }) {
 
   const activeBarStyle = { stroke: "#ffffff", strokeWidth: 1, fillOpacity: 1 };
 
+  // height that fits without scrolling (remaining modal area)
+  const chartWrapClass = "h-[min(44vh,340px)]";
+
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+    <div className="h-full flex flex-col min-h-0">
       <div className="flex items-center justify-between gap-3 mb-2">
         <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
         {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
       </div>
 
       {chartData.length ? (
-        <>
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-3">
           <div className="text-[10px] text-[#606060] mb-2">
             Last {chartData.length} games · {statLabel} bars
             {todayLine != null && Number.isFinite(todayLine) ? <span className="text-[#808080]"> · Today Line {todayLine}</span> : null}
           </div>
 
-          {/* Fixed height so it ALWAYS renders inside modal without scroll */}
-          <div className="h-[320px]">
+          <div className={chartWrapClass}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} barCategoryGap={12}>
                 <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "#808080" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  minTickGap={12}
+                />
                 <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
 
-                {/* Tooltip cursor transparent so it doesn't shade the whole plot */}
                 <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
 
-                {/* Today's line reference */}
                 {todayLine != null && Number.isFinite(todayLine) ? (
                   <ReferenceLine
                     y={todayLine}
@@ -1766,15 +1806,13 @@ function FantasyProsGameLogsFixed({ play }: { play: AggregatedPlay }) {
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </>
-      ) : null}
-
-      {!loading && !rows.length ? (
-        <div className="text-xs text-[#808080]">
-          No game logs available.
+        </div>
+      ) : (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+          <div className="text-xs text-[#808080]">No game logs available.</div>
           {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -1800,7 +1838,7 @@ function KindPill({ active, onClick, label }: { active: boolean; onClick: () => 
 
 function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#090909] px-3 py-1">
+    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1">
       <div className="text-[11px] text-[#808080]">{label}</div>
       <div className={["text-[11px] font-medium tabular-nums", tone ? tone : "text-white"].join(" ")}>{value}</div>
     </div>
@@ -1813,23 +1851,6 @@ function LegendDot({ label, color }: { label: string; color: string }) {
       <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
       <span>{label}</span>
     </div>
-  );
-}
-
-function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-2 rounded-lg border text-[11px] transition-colors",
-        active
-          ? "bg-[#d4af37]/10 border-[#d4af37]/30 text-[#d4af37]"
-          : "bg-[#0b0b0b] border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:bg-[#111]",
-      ].join(" ")}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -1979,3 +2000,4 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
 export default ModelScreen;
+
