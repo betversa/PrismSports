@@ -1,19 +1,19 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Compact square stat tiles + lower padding)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Matches Prism black/gold/slate theme + subtle white pop)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Stat tiles inside Top Play cards are now TRUE squares (aspect-square) + tighter padding
+// ✅ Stat tiles inside Top Play cards are TRUE squares (aspect-square) + tighter padding
 // ✅ Tile content (label/value/logo) stays vertically centered
 // ✅ Book tile shows LABEL + logo below (no book name text). Logos in /public/books/ => "/books/...png"
 // ✅ Team abbreviations show on BOTH game + prop cards via team_map (canonical → Abbreviation)
 //    - Exact match + substring fallback
 // ✅ Titles/subtitles WRAP (no truncation); fixes “Book price” cut off
 // ✅ Keeps: realtime refresh, dedupe, score>=50 filter, book vs fair odds, subtle EV bar
+// ✅ Visual update: black glass + gold glow + slate sheen + SMALL white highlight for pop (not too much)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Calculator,
   Database,
-  DollarSign,
   Flame,
   RefreshCw,
   Sparkles,
@@ -109,10 +109,15 @@ type PropEvRow = {
 };
 
 /* =========================================================
-   CONSTANTS
+   THEME
 ========================================================= */
 
-const GOLD = "#d4af37";
+const GOLD = "#d89211"; // logo-like gold
+const PANEL = "#0b0b0b";
+const PANEL_2 = "#101010";
+const BORDER = "#2a2a2a";
+const SLATE = "rgba(87,90,98,0.26)";
+
 type PlayTab = "all" | "game" | "props";
 const TOP_SCORE_MIN = 50;
 
@@ -192,37 +197,10 @@ function fmtLine(line?: number | null) {
   return n > 0 ? `+${n}` : `${n}`;
 }
 
-function formatInt(n: number) {
-  try {
-    return new Intl.NumberFormat().format(n);
-  } catch {
-    return String(n);
-  }
-}
-
-function formatDate(ts: string) {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
-}
-
 function formatTsShort(ts: string) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function timeAgo(ts: string) {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return "—";
-  const diff = Date.now() - d.getTime();
-  const mins = Math.round(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.round(hrs / 24);
-  return `${days}d ago`;
 }
 
 function getEvPct(row: { ev_pct?: number | null; ev?: number | null }) {
@@ -278,7 +256,7 @@ function getPropFairOdds(row: PropEvRow) {
 function evTextClass(ev: number | null) {
   if (ev == null) return "text-white";
   if (ev >= 7) return "text-emerald-300";
-  if (ev >= 3) return "text-[#d4af37]";
+  if (ev >= 3) return "text-[#d89211]";
   return "text-[#b0b0b0]";
 }
 
@@ -286,8 +264,14 @@ function evBarStyle(ev: number | null): React.CSSProperties {
   if (ev == null) return { width: "0%" };
   const mag = clamp(ev, 0, 12);
   const w = (mag / 12) * 100;
+
   const color =
-    ev >= 7 ? "rgba(52, 211, 153, 0.35)" : ev >= 3 ? "rgba(212, 175, 55, 0.40)" : "rgba(255,255,255,0.10)";
+    ev >= 7
+      ? "rgba(52, 211, 153, 0.28)"
+      : ev >= 3
+      ? "rgba(216, 146, 17, 0.34)"
+      : "rgba(255,255,255,0.10)";
+
   return { width: `${w}%`, background: color };
 }
 
@@ -474,14 +458,29 @@ function QuickAction({
     <button
       type="button"
       onClick={() => (window.location.href = href)}
-      className="text-left rounded-xl border border-[#2a2a2a] bg-black/35 p-4 hover:border-[#3a3a3a] transition-colors"
+      className={[
+        "text-left rounded-xl border p-4 transition-colors",
+        "hover:border-[#3a3a3a]",
+      ].join(" ")}
+      style={{
+        borderColor: BORDER,
+        background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
+      }}
     >
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-sm text-white">{title}</div>
-          <div className="text-xs text-[#6a6a6a] mt-0.5">{sub}</div>
+          <div className="text-xs text-[#a7a7a7] mt-0.5">{sub}</div>
         </div>
-        <div className="w-9 h-9 rounded-lg bg-[#121212] border border-[#d4af37]/20 flex items-center justify-center shrink-0">
+
+        <div
+          className="w-9 h-9 rounded-lg border flex items-center justify-center shrink-0"
+          style={{
+            borderColor: "rgba(216,146,17,0.22)",
+            background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.10))",
+            boxShadow: "0 10px 28px rgba(0,0,0,0.35)",
+          }}
+        >
           <Icon className="w-4 h-4" style={{ color: GOLD }} />
         </div>
       </div>
@@ -498,10 +497,14 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
         onClick={() => onChange(v)}
         className={[
           "px-3 py-2 rounded-lg text-xs border transition-colors w-full sm:w-auto",
-          active
-            ? "bg-[#141414] border-[#d4af37]/40 text-white"
-            : "bg-black/35 border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:border-[#3a3a3a]",
+          active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
+        style={{
+          borderColor: active ? "rgba(216,146,17,0.34)" : BORDER,
+          background: active
+            ? "linear-gradient(180deg, rgba(216,146,17,0.10), rgba(0,0,0,0.25))"
+            : "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.12))",
+        }}
       >
         {label}
       </button>
@@ -517,33 +520,28 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
   );
 }
 
-function StatusPill({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div
-      className={[
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1",
-        "bg-black/35",
-        accent ? "border-[#d4af37]/35" : "border-[#2a2a2a]",
-      ].join(" ")}
-    >
-      <div className="text-[11px] text-[#808080]">{label}</div>
-      <div className={["text-[11px] font-medium", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
 function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: string }) {
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-black/35 p-3">
+    <div
+      className="rounded-xl border p-3"
+      style={{
+        borderColor: BORDER,
+        background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.14))",
+      }}
+    >
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-lg bg-[#121212] border border-[#d4af37]/18 flex items-center justify-center shrink-0">
+        <div
+          className="w-10 h-10 rounded-lg border flex items-center justify-center shrink-0"
+          style={{
+            borderColor: "rgba(216,146,17,0.18)",
+            background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.10))",
+          }}
+        >
           <Icon className="w-4 h-4" style={{ color: GOLD }} />
         </div>
         <div className="min-w-0">
           <div className="text-xs text-white">{label}</div>
-          <div className="text-[11px] text-[#6a6a6a]">{sub}</div>
+          <div className="text-[11px] text-[#a7a7a7]">{sub}</div>
         </div>
       </div>
     </div>
@@ -570,9 +568,18 @@ function MiniStat({
   const bar = barValue != null;
 
   return (
-    <div className="rounded-lg border border-[#2a2a2a] bg-black/35 overflow-hidden text-center aspect-square p-2 sm:p-2.5">
+    <div
+      className="rounded-lg border overflow-hidden text-center aspect-square p-2 sm:p-2.5"
+      style={{
+        borderColor: BORDER,
+        background: [
+          "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.18))",
+          `radial-gradient(280px 120px at 50% 0%, rgba(216,146,17,0.06), transparent 60%)`,
+        ].join(", "),
+      }}
+    >
       <div className="h-full flex flex-col items-center justify-center gap-1">
-        <div className="text-[10px] text-[#6a6a6a] whitespace-normal leading-snug">{label}</div>
+        <div className="text-[10px] text-[#a9a9a9] whitespace-normal leading-snug">{label}</div>
 
         {iconBelowLabelSrc ? (
           <div className="flex justify-center">
@@ -580,7 +587,8 @@ function MiniStat({
             <img
               src={iconBelowLabelSrc}
               alt=""
-              className="w-7 h-7 rounded-[8px] object-cover border border-white/10"
+              className="w-7 h-7 rounded-[8px] object-cover border"
+              style={{ borderColor: "rgba(255,255,255,0.10)" }}
             />
           </div>
         ) : null}
@@ -589,7 +597,7 @@ function MiniStat({
           <div
             className={[
               "text-xs whitespace-normal break-words leading-snug",
-              valueClassName ? valueClassName : accent ? "text-[#d4af37]" : "text-white",
+              valueClassName ? valueClassName : accent ? "text-[#d89211]" : "text-white",
             ].join(" ")}
           >
             {value ?? "—"}
@@ -606,18 +614,15 @@ function MiniStat({
   );
 }
 
-function MetaLine({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="text-[#808080]">{label}</div>
-      <div className={["text-white text-right", warn ? "text-amber-300" : ""].join(" ")}>{value}</div>
-    </div>
-  );
-}
-
 function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+    <div
+      className="rounded-xl border p-4"
+      style={{
+        borderColor: BORDER,
+        background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.16))",
+      }}
+    >
       <div className="animate-pulse space-y-3">
         <div className="h-4 w-2/3 bg-[#1a1a1a] rounded mx-auto" />
         <div className="h-3 w-1/2 bg-[#1a1a1a] rounded mx-auto" />
@@ -632,34 +637,12 @@ function SkeletonCard() {
   );
 }
 
-function ChangeLogEntry({ version, date, changes }: { version: string; date: string; changes: string[] }) {
-  return (
-    <div className="p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm text-white">{version}</div>
-        <div className="text-xs text-[#6a6a6a]">{date}</div>
-      </div>
-      <ul className="space-y-1.5">
-        {changes.map((change, idx) => (
-          <li
-            key={idx}
-            className="text-xs text-[#b0b0b0] pl-4 relative before:content-['•'] before:absolute before:left-0 before:text-[#d4af37]"
-          >
-            {change}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 /* =========================================================
    TOP PLAY CARD
 ========================================================= */
 
 function TopPlayCard({
   kind,
-  rank,
   isTop3,
   title,
   subtitle,
@@ -690,58 +673,90 @@ function TopPlayCard({
   const showFlame = scoreRounded === 100;
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
-      {isTop3 ? (
-        <div
-          className="pointer-events-none absolute inset-0 opacity-60"
-          style={{
-            background: "radial-gradient(520px 220px at 50% 0%, rgba(212,175,55,0.18), transparent 60%)",
-          }}
-        />
-      ) : null}
-
+    <div
+      className="relative overflow-hidden rounded-xl border p-4"
+      style={{
+        borderColor: BORDER,
+        background: [
+          // base glass
+          "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.014) 55%, rgba(0,0,0,0.20))",
+          // subtle gold glow (top3 slightly stronger below)
+          `radial-gradient(680px 240px at 50% 0%, rgba(216,146,17,${isTop3 ? "0.16" : "0.10"}), transparent 62%)`,
+          // slate sheen to break up gold
+          `radial-gradient(720px 260px at 85% 20%, ${SLATE}, transparent 64%)`,
+          // deep vignette
+          "linear-gradient(180deg, rgba(0,0,0,0.22), rgba(0,0,0,0.62) 55%, rgba(0,0,0,0.82) 100%)",
+        ].join(", "),
+      }}
+    >
+      {/* tiny white top hairline for pop */}
       <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
+
+      {/* gold bottom hairline (anchor) */}
+      <div
+        className="pointer-events-none absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
+        style={{
+          background:
+            "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
+        }}
+      />
 
       <div className="relative space-y-3">
         <div className="flex items-start gap-3">
           <div className="flex items-center gap-2 shrink-0">
-            <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center">
+            <div
+              className="w-9 h-9 rounded-lg border flex items-center justify-center"
+              style={{
+                borderColor: isTop3 ? "rgba(216,146,17,0.22)" : BORDER,
+                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
+              }}
+            >
               {showFlame ? (
                 <Flame className="w-4 h-4" style={{ color: GOLD }} />
               ) : (
-                <Trophy className={["w-4 h-4", isTop3 ? "text-[#d4af37]" : "text-[#808080]"].join(" ")} />
+                <Trophy className={["w-4 h-4", isTop3 ? "text-[#d89211]" : "text-[#9a9a9a]"].join(" ")} />
               )}
             </div>
 
             {kind === "prop" ? (
-              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 overflow-hidden">
+              <div
+                className="w-9 h-9 rounded-lg border overflow-hidden"
+                style={{
+                  borderColor: BORDER,
+                  background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
+                }}
+              >
                 {pictureUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={pictureUrl} alt="" className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-[10px] text-[#6a6a6a]">—</div>
+                  <div className="w-full h-full flex items-center justify-center text-[10px] text-[#a7a7a7]">
+                    —
+                  </div>
                 )}
               </div>
             ) : null}
           </div>
 
           <div className="flex-1 min-w-0 text-center">
-            <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game"}</div>
+            <div className="text-[11px] text-[#a7a7a7]">{kind === "prop" ? "Player prop" : "Game"}</div>
+
+            {/* subtle white pop via slightly brighter title */}
             <div className="text-[15px] sm:text-sm text-white leading-snug whitespace-normal break-words">
               {title}
             </div>
-            <div className="text-xs text-[#a8a8a8] leading-relaxed mt-1 whitespace-normal break-words">
+
+            <div className="text-xs text-[#c7c7c7] leading-relaxed mt-1 whitespace-normal break-words">
               {subtitle}
             </div>
           </div>
 
           <div className="shrink-0 text-right">
-            <div className="text-[10px] text-[#6a6a6a]">Score</div>
+            <div className="text-[10px] text-[#a7a7a7]">Score</div>
             <div className="text-sm text-white">{scoreText}</div>
           </div>
         </div>
 
-        {/* ✅ tighter gap so squares feel compact */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-xs">
           <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
           <MiniStat label="Book" iconBelowLabelSrc={bookLogoSrc} showValue={false} />
@@ -749,7 +764,9 @@ function TopPlayCard({
           <MiniStat label="Fair price" value={fmtOdds(fairOdds)} accent />
         </div>
 
-        {commence ? <div className="text-[11px] text-[#6a6a6a] pt-0.5 text-center">{commence}</div> : null}
+        {commence ? (
+          <div className="text-[11px] text-[#a7a7a7] pt-0.5 text-center">{commence}</div>
+        ) : null}
       </div>
     </div>
   );
@@ -875,11 +892,7 @@ export function OverviewScreen() {
       .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "ev_plays" }, () => loadAll({ soft: true }))
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "player_prop_ev_latest" },
-        () => loadAll({ soft: true })
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "team_map" }, () => loadAll({ soft: true }))
       .subscribe();
 
@@ -972,30 +985,42 @@ export function OverviewScreen() {
   return (
     <div className="space-y-8 sm:space-y-10">
       {/* HERO */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4 sm:p-6">
+      <div
+        className="relative overflow-hidden rounded-2xl border p-4 sm:p-6"
+        style={{
+          borderColor: "rgba(255,255,255,0.08)",
+          background: PANEL,
+        }}
+      >
         <div className="pointer-events-none absolute inset-0">
           <div
-            className="absolute inset-0 opacity-90"
+            className="absolute inset-0"
             style={{
               background: [
-                "radial-gradient(900px 260px at 16% 0%, rgba(212,175,55,0.14), transparent 60%)",
-                "radial-gradient(760px 240px at 88% 10%, rgba(255,255,255,0.04), transparent 62%)",
-                "linear-gradient(180deg, rgba(0,0,0,0.40), rgba(0,0,0,0.72) 55%, rgba(0,0,0,0.90) 100%)",
+                // gold glow
+                "radial-gradient(900px 260px at 18% 0%, rgba(216,146,17,0.16), transparent 60%)",
+                // slate sheen
+                `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
+                // tiny white highlight band for "pop"
+                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
+                // deep glass
+                "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.86) 100%)",
               ].join(", "),
             }}
           />
+
           <div
-            className="absolute left-0 right-0 top-0 h-[2px] opacity-70"
+            className="absolute left-0 right-0 top-0 h-[1px] opacity-75"
             style={{
               background:
-                "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.35), rgba(0,200,120,0.35), rgba(212,175,55,0.45), rgba(255,140,0,0.34), rgba(255,60,60,0.28), rgba(170,70,255,0.28), rgba(0,0,0,0))",
+                "linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.10), rgba(255,255,255,0.0))",
             }}
           />
           <div
-            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-60"
+            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
             style={{
               background:
-                "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.38), rgba(212,175,55,0.0))",
+                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
             }}
           />
         </div>
@@ -1003,16 +1028,23 @@ export function OverviewScreen() {
         <div className="relative space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="min-w-0">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
+              <div
+                className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
+                style={{
+                  borderColor: "rgba(216,146,17,0.22)",
+                  background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
+                  color: "rgba(255,255,255,0.82)",
+                }}
+              >
                 <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
                 Prism Command Center
               </div>
 
               <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
-                Best Plays Today <span className="text-[#6f6f6f]">—</span> Live
+                Best Plays Today <span className="text-[#7b7b7b]">—</span> Live
               </h2>
 
-              <p className="text-sm text-[#a8a8a8] leading-relaxed max-w-3xl">
+              <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl">
                 Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
               </p>
             </div>
@@ -1020,7 +1052,12 @@ export function OverviewScreen() {
             <button
               type="button"
               onClick={() => loadAll({ soft: false })}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#2a2a2a] bg-black/40 px-3 py-2 text-xs text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-white transition-colors w-full sm:w-auto"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors w-full sm:w-auto"
+              style={{
+                borderColor: "rgba(255,255,255,0.10)",
+                background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.18))",
+                color: "rgba(255,255,255,0.86)",
+              }}
               title="Refresh"
             >
               <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
@@ -1029,7 +1066,14 @@ export function OverviewScreen() {
           </div>
 
           {error ? (
-            <div className="rounded-lg border border-[#2a2a2a] bg-black/40 p-3 text-xs text-red-300">
+            <div
+              className="rounded-lg border p-3 text-xs"
+              style={{
+                borderColor: "rgba(255,255,255,0.10)",
+                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
+                color: "rgba(255,140,140,0.92)",
+              }}
+            >
               Supabase error: {error}
             </div>
           ) : null}
@@ -1047,7 +1091,7 @@ export function OverviewScreen() {
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3 sm:mb-4">
           <div>
             <h3 className="text-base text-white">Top Plays</h3>
-            <div className="text-xs text-[#6a6a6a]">One card per play (best book shown).</div>
+            <div className="text-xs text-[#b0b0b0]">One card per play (best book shown).</div>
           </div>
 
           <div className="w-full sm:w-auto">
@@ -1064,7 +1108,14 @@ export function OverviewScreen() {
               <SkeletonCard />
             </>
           ) : playsToRender.length === 0 ? (
-            <div className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-5 text-sm text-[#b0b0b0]">
+            <div
+              className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border p-5 text-sm"
+              style={{
+                borderColor: "rgba(255,255,255,0.10)",
+                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
+                color: "rgba(255,255,255,0.78)",
+              }}
+            >
               No plays found for this filter.
             </div>
           ) : (
