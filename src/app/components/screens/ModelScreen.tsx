@@ -1167,7 +1167,7 @@ function PlayCard({
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel}
               </div>
               <div className="text-[11px] text-[#b0b0b0] mt-0.5">
-                μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
+                Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
               </div>
             </div>
           </div>
@@ -1290,7 +1290,7 @@ function PlayDetailsModal({
 
                 {play.kind === "prop" ? (
                   <div className="mt-1 text-[11px] text-[#b0b0b0]">
-                    μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
+                    Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
                   </div>
                 ) : null}
               </div>
@@ -1511,7 +1511,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
 
           {play.kind === "prop" ? (
             <div style={{ color: "#808080" }}>
-              μ Projection: <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
+              Projection: <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
             </div>
           ) : null}
         </div>
@@ -1982,7 +1982,7 @@ function PropPickInline({
         </div>
         {sub ? <div className="text-[10px] text-[#606060] mt-0.5 truncate">{sub}</div> : null}
         <div className="text-[10px] text-[#b0b0b0] mt-0.5">
-          μ Projection: <span className="text-white tabular-nums">{fmtMu(mu ?? null)}</span>
+          Projection: <span className="text-white tabular-nums">{fmtMu(mu ?? null)}</span>
         </div>
       </div>
     </div>
