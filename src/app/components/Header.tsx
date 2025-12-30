@@ -1,12 +1,13 @@
-// components/Header.tsx — FULL REWRITE (Mobile darker + Desktop tagline underline hugs text + Logo.png)
+// components/Header.tsx — FULL REWRITE (Desktop auto-hide on scroll down / reveal on scroll up)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Mobile: add MORE black (stronger glass) while keeping full spectrum visible
-// ✅ Desktop FIX: tagline underline now matches the *tagline text width* (not the whole column)
+// ✅ Desktop ONLY: header slides up + hides when scrolling down, re-appears when scrolling up
+// ✅ Mobile unchanged (always visible; darker glass; full spectrum)
+// ✅ Desktop tagline underline hugs text width
 // ✅ Clicking logo -> Overview
-// ✅ Logo path updated: /logos/Logo.png
+// ✅ Logo path: /logos/Logo.png
 // ✅ Everything else unchanged
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
 import type { SportKey } from "../App";
 
@@ -77,6 +78,103 @@ const BLACK_GLASS_MOBILE = {
   mid: "rgba(0,0,0,0.74)",
   bottom: "rgba(0,0,0,0.90)",
 };
+
+/* =========================================================
+   DESKTOP AUTO-HIDE ON SCROLL (ONLY md+)
+========================================================= */
+
+function useDesktopHeaderAutoHide(opts?: { revealThresholdPx?: number; minDeltaPx?: number }) {
+  const revealThresholdPx = opts?.revealThresholdPx ?? 8;
+  const minDeltaPx = opts?.minDeltaPx ?? 6;
+
+  const [hidden, setHidden] = useState(false);
+
+  const lastY = useRef(0);
+  const lastDir = useRef<"up" | "down" | null>(null);
+  const ticking = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const mq = window.matchMedia("(min-width: 768px)"); // md+
+    const isDesktopNow = () => mq.matches;
+
+    // If switching to mobile, ensure header is shown.
+    const resetToVisible = () => {
+      lastY.current = window.scrollY || 0;
+      lastDir.current = null;
+      setHidden(false);
+    };
+
+    resetToVisible();
+
+    const onScroll = () => {
+      if (!isDesktopNow()) return; // ✅ desktop only
+      if (ticking.current) return;
+
+      ticking.current = true;
+      window.requestAnimationFrame(() => {
+        const y = window.scrollY || 0;
+        const dy = y - lastY.current;
+
+        // Ignore tiny jitter
+        if (Math.abs(dy) < minDeltaPx) {
+          ticking.current = false;
+          return;
+        }
+
+        const dir: "up" | "down" = dy > 0 ? "down" : "up";
+
+        // Near top: always visible
+        if (y <= 4) {
+          setHidden(false);
+          lastDir.current = dir;
+          lastY.current = y;
+          ticking.current = false;
+          return;
+        }
+
+        // Scrolling down => hide
+        if (dir === "down") {
+          setHidden(true);
+        } else {
+          // Scrolling up => show (but require a tiny up movement)
+          if (Math.abs(dy) >= revealThresholdPx) setHidden(false);
+        }
+
+        lastDir.current = dir;
+        lastY.current = y;
+        ticking.current = false;
+      });
+    };
+
+    const onResizeOrMq = () => {
+      // If leaving desktop, force visible
+      if (!isDesktopNow()) setHidden(false);
+      // Reset direction baselines to avoid jumpy first scroll
+      lastY.current = window.scrollY || 0;
+      lastDir.current = null;
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onResizeOrMq);
+
+    // MediaQuery change listener (Safari uses addListener)
+    if (typeof mq.addEventListener === "function") mq.addEventListener("change", onResizeOrMq);
+    // @ts-ignore
+    else if (typeof mq.addListener === "function") mq.addListener(onResizeOrMq);
+
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResizeOrMq);
+      if (typeof mq.removeEventListener === "function") mq.removeEventListener("change", onResizeOrMq);
+      // @ts-ignore
+      else if (typeof mq.removeListener === "function") mq.removeListener(onResizeOrMq);
+    };
+  }, [minDeltaPx, revealThresholdPx]);
+
+  return hidden;
+}
 
 /** =========================
  * SPORT MAPPING
@@ -297,6 +395,9 @@ export function Header({
 }: HeaderProps) {
   const headerRef = useRef<HTMLElement>(null);
 
+  // ✅ Desktop-only hide/reveal
+  const desktopHidden = useDesktopHeaderAutoHide({ revealThresholdPx: 8, minDeltaPx: 6 });
+
   useLayoutEffect(() => {
     if (!headerRef.current || !onHeightChange) return;
     const el = headerRef.current;
@@ -317,7 +418,15 @@ export function Header({
   const predsActive = activeScreen === "monte-carlo";
 
   return (
-    <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
+    <header
+      ref={headerRef}
+      className={[
+        "fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]",
+        "transform-gpu transition-transform duration-200 ease-out",
+        // ✅ Only hide on desktop; mobile stays pinned/visible
+        desktopHidden ? "md:-translate-y-full" : "md:translate-y-0",
+      ].join(" ")}
+    >
       <div className="pointer-events-none absolute inset-0">
         {/* MOBILE overlay (full spectrum visible + MORE black) */}
         <div
@@ -410,7 +519,7 @@ export function Header({
                 />
               </button>
 
-              {/* ✅ FIX: underline hugs the tagline text width on desktop */}
+              {/* Underline hugs tagline text width on desktop */}
               <div className="flex-1 min-w-0 w-full">
                 <div className="inline-block w-fit max-w-full">
                   <div
@@ -483,4 +592,3 @@ export function Header({
     </header>
   );
 }
-
