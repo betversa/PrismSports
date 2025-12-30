@@ -1,6 +1,6 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.7.1: MARKET-AVG FALLBACK + BUILD FIX)
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.7.2: Abbreviation2 fallback)
 // ------------------------------------------------------------------------------------------------------
 // ✅ FIX (kept): pin_spread_line / pin_total_line pulled by (event_id + team) not team-only
 // ✅ SHARP LOGIC (kept):
@@ -10,11 +10,11 @@
 //           -> MARKET-AVG (devig’d) at SAME target line using ALL books that have both sides
 //           -> If still missing -> MODEL-ONLY (still inserts)
 // ✅ NEW (your request):
-//      - If has_sharp === false, we DO NOT go model_only immediately
-//      - We use MARKET-AVG (all bookmakers) + model to create p_quantum
+//      - Team canonicalization: if FantasyPros team abbr not found in team_map.Abbreviation
+//        then try team_map.Abbreviation2, then fallback to raw abbr
 // ✅ Snapshot enrichment (kept): position + picture_url stored in player_props_snapshot (future slate only)
 // ✅ Outputs ONLY SOFT books into player_prop_ev_latest (DK/FD/MGM)
-// ✅ BUILD FIX: invNorm() had an extra “)” in the pp > phigh branch (esbuild error). Fixed.
+// ✅ BUILD FIX (kept): invNorm() pp>phigh branch extra “)” removed.
 //
 // Run: npm run nba:props:ev:build
 
@@ -42,7 +42,7 @@ const NBA_AVG_TEAM_TOTAL = NBA_AVG_TOTAL / 2;
 
 // quantum blend weights
 // - if SHARP exists, we blend: model + sharp
-// - if SHARP missing, we blend: model + MARKET_AVG (new)
+// - if SHARP missing, we blend: model + MARKET_AVG
 // - if both missing, model-only
 const QUANTUM_BLEND_MODEL = 0.2;
 const QUANTUM_BLEND_SHARP = 0.8;
@@ -64,7 +64,7 @@ const DEVIG_MPTO_POWER_LO = 0.5;
 const DEVIG_MPTO_POWER_HI = 3.0;
 
 // Snapshot enrichment controls
-const ENRICH_SNAPSHOT = true; // set false if you ever want to skip
+const ENRICH_SNAPSHOT = true;
 const SNAP_UPDATE_CHUNK = 500;
 
 // Market-average line tolerance (for floats like 24.5)
@@ -134,7 +134,6 @@ type PropsRow = {
 
   bookmaker: string;
 
-  // optional fields now stored in snapshot
   position?: string | null;
   picture_url?: string | null;
 };
@@ -371,7 +370,6 @@ function invNorm(p: number): number {
     );
   }
 
-  // ✅ BUILD FIX: this branch previously had an extra trailing ')'
   if (pp > phigh) {
     q = Math.sqrt(-2 * Math.log(1 - pp));
     return -(
@@ -602,7 +600,8 @@ async function enrichSnapshotForFutureEvents(opts: {
 }) {
   const { supabase, nowIso, allowedEventIds, baselineByName } = opts;
 
-  const rows: Array<{ event_id: string; player_name: string; position: string | null; picture_url: string | null }> = [];
+  const rows: Array<{ event_id: string; player_name: string; position: string | null; picture_url: string | null }> =
+    [];
 
   const EVENT_CHUNK = 200;
   for (const eidChunk of chunk(allowedEventIds, EVENT_CHUNK)) {
@@ -716,7 +715,7 @@ async function main() {
   }
 
   /* -------------------------------------------------------
-     2) Pull props snapshot for FUTURE events (ALL books!)
+     2) Pull props snapshot for FUTURE events (ALL books)
   -------------------------------------------------------- */
   const props: PropsRow[] = [];
   const eventIdList = Array.from(allowedEventIds);
@@ -810,15 +809,19 @@ async function main() {
 
   /* -------------------------------------------------------
      4) Team canonicalization (team_map)
+        ✅ NEW: Abbreviation2 fallback if Abbreviation miss
   -------------------------------------------------------- */
   const { data: teamMapRows, error: tmErr } = await supabase
     .from("team_map")
-    .select('canonical,"Abbreviation","The Odds API","ESPN_Long","SR_School","SR_School_Short","KenPom","Elo"')
+    .select(
+      'canonical,"Abbreviation","Abbreviation2","The Odds API","ESPN_Long","SR_School","SR_School_Short","KenPom","Elo"'
+    )
     .limit(4000);
 
   if (tmErr) throw tmErr;
 
   const abbrToCanon = new Map<string, string>();
+  const abbr2ToCanon = new Map<string, string>();
   const aliasToCanon = new Map<string, string>();
 
   for (const r of teamMapRows || []) {
@@ -830,14 +833,19 @@ async function main() {
     const abbr = (r as any)["Abbreviation"]?.toString().trim();
     if (abbr) abbrToCanon.set(abbr, canon);
 
+    const abbr2 = (r as any)["Abbreviation2"]?.toString().trim();
+    if (abbr2) abbr2ToCanon.set(abbr2, canon);
+
     for (const v of Object.values(r as any)) {
       if (typeof v === "string" && v.trim()) aliasToCanon.set(normalizeTeamKey(v), canon);
     }
   }
 
+  // ✅ FP team_abbr_raw -> canonical:
+  //    Abbreviation -> Abbreviation2 -> raw
   for (const b of baselines.values()) {
     const raw = (b.team_abbr_raw || "").trim();
-    b.canonical = raw ? abbrToCanon.get(raw) ?? raw : null;
+    b.canonical = raw ? abbrToCanon.get(raw) ?? abbr2ToCanon.get(raw) ?? raw : null;
   }
 
   const baselineByName = new Map<string, PlayerBaseline>();
@@ -916,7 +924,7 @@ async function main() {
   const tmpSharp = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
 
   // B) ANY BOOK (market avg)
-  const anyPairsByBase = new Map<string, PairAnyBook[]>(); // baseKey(event|player|market) -> pairs across books/lines
+  const anyPairsByBase = new Map<string, PairAnyBook[]>();
   const tmpAny = new Map<string, { baseKey: string; bookmaker: string; line: number; over?: number; under?: number }>();
 
   for (const r of props) {
@@ -935,7 +943,7 @@ async function main() {
     if (side === "under") curAny.under = odds;
     tmpAny.set(kAny, curAny);
 
-    // A) accumulate SHARP pairs (only if sharp book)
+    // A) accumulate SHARP pairs
     const sharpBook = normBookAnySharp(bookAny);
     if (sharpBook) {
       const kSharp = `${baseKey}|${sharpBook}|${line}`;
@@ -963,7 +971,7 @@ async function main() {
     sharpPairsByKey.set(baseKey, bucket);
   }
 
-  // Materialize ANY-book pairs (fixed: we keep baseKey in tmpAny)
+  // Materialize ANY-book pairs
   for (const v of tmpAny.values()) {
     if (v.over == null || v.under == null) continue;
     const arr = anyPairsByBase.get(v.baseKey) ?? [];
@@ -999,7 +1007,7 @@ async function main() {
   }
 
   /**
-   * ✅ MARKET-AVG no-vig OVER probability at the SAME target line
+   * MARKET-AVG no-vig OVER probability at the SAME target line
    * Uses ALL books that have both sides for this exact line.
    */
   function marketAvgNoVigOverAtLine(baseKey: string, targetLine: number): { p_over: number; n_books: number } | null {
@@ -1179,7 +1187,7 @@ async function main() {
     const baseKey = idxKey(r.event_id, r.player_name, r.market);
     const sharpPick = bestAvailableSharpPair(baseKey, line);
 
-    let p_ref: number | null = null; // sharp-like reference prob (sharp or market avg)
+    let p_ref: number | null = null;
     let ref_source: "pinnacle" | "betonlineag" | "market_avg" | "model_only" = "model_only";
     let has_sharp = false;
 
@@ -1200,7 +1208,6 @@ async function main() {
       });
 
       if (pOverTarget == null) {
-        // translate failed: try MARKET AVG at SAME line
         const mav = marketAvgNoVigOverAtLine(baseKey, line);
         if (mav) {
           p_ref = side === "over" ? mav.p_over : 1 - mav.p_over;
@@ -1209,7 +1216,6 @@ async function main() {
           diag.translate_failed_used_market_avg++;
           diag.used_market_avg++;
         } else {
-          // final fallback: model only
           p_ref = null;
           ref_source = "model_only";
           has_sharp = false;
@@ -1225,7 +1231,6 @@ async function main() {
         else diag.used_betonline++;
       }
     } else {
-      // no sharp: try MARKET AVG at SAME line
       const mav = marketAvgNoVigOverAtLine(baseKey, line);
       if (mav) {
         p_ref = side === "over" ? mav.p_over : 1 - mav.p_over;
@@ -1267,7 +1272,6 @@ async function main() {
       fp_id: base.fp_id,
       player_name: base.player_name,
 
-      // prefer snapshot’s stored fields (now enriched), fallback to baseline
       position: (r.position ?? null) ?? base.position ?? null,
       picture_url: (r.picture_url ?? null) ?? base.picture_url ?? null,
 
@@ -1292,12 +1296,12 @@ async function main() {
       sigma,
       p_model,
 
-      // ref info (keep old column semantics)
+      // ref info
       has_sharp,
       sharp_source: ref_source,
       p_sharp: has_sharp ? p_ref : null,
 
-      // optional helper column (will be stripped if table doesn’t have it)
+      // optional helper column
       p_market_avg: ref_source === "market_avg" ? p_ref : null,
 
       p_quantum,
@@ -1366,11 +1370,11 @@ async function main() {
           translate_failed_model_only: diag.translate_failed_model_only,
         },
         notes: {
+          team_map_fallback: "FantasyPros team abbr: Abbreviation -> Abbreviation2 -> raw",
           new_fallback:
             "If sharp missing or translate fails => use market-avg devig at SAME line (all books) + model (0.2/0.8)",
           sharp_fallbacks: "pinnacle -> betonlineag -> market_avg(same-line) -> model_only",
           context_fix: "odds_wide_latest indexed by (event_id + canonical team)",
-          build_fix: "invNorm pp>phigh branch had extra ')'",
         },
       },
       null,
