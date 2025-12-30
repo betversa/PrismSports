@@ -1,7 +1,7 @@
-// components/Header.tsx — FULL REWRITE (Desktop nav centered; tighter desktop; mobile unchanged)
+// components/Header.tsx — FULL REWRITE (Desktop nav centered; bigger logo; tight desktop)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Desktop: nav moved to the CENTER of the header (true center block)
-// ✅ Desktop: slightly tighter padding + logo size kept compact
+// ✅ Logo bigger (mobile + desktop) without blowing up header height too much
+// ✅ Desktop: nav centered
 // ✅ Mobile: unchanged layout + overlays + hamburger
 // ✅ Tagline underline hugs tagline width
 // ✅ Clicking logo -> Overview
@@ -241,7 +241,6 @@ function HoverDropdown({
               ].join(", "),
             }}
           />
-
           <div className="relative">
             {SPORTS.map((ui) => {
               const db = uiToDbSport(ui);
@@ -317,7 +316,6 @@ export function Header({
   return (
     <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
       <div className="pointer-events-none absolute inset-0">
-        {/* MOBILE overlay */}
         <div
           className="absolute inset-0 md:hidden"
           style={{
@@ -340,7 +338,6 @@ export function Header({
           }}
         />
 
-        {/* DESKTOP overlay */}
         <div
           className="absolute inset-0 hidden md:block"
           style={{
@@ -375,10 +372,9 @@ export function Header({
         />
       </div>
 
-      {/* ✅ Desktop tightened padding; nav centered via 3-column grid */}
       <div className="relative w-full px-3 md:px-6 pt-2.5 md:pt-2 pb-2 md:pb-1">
         <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center gap-2">
-          {/* LEFT: brand (mobile + desktop) */}
+          {/* LEFT: brand */}
           <div className="flex items-start min-w-0">
             <button
               onClick={onOpenMenu}
@@ -401,7 +397,8 @@ export function Header({
                     src="/logos/Logo.png"
                     alt="PrismSports"
                     className={[
-                      "h-14 sm:h-16 md:h-16 w-auto object-contain select-none flex-shrink-0",
+                      // ✅ BIGGER logo (mobile + desktop)
+                      "h-16 sm:h-20 md:h-20 w-auto object-contain select-none flex-shrink-0",
                       "transition-transform duration-200 group-hover:scale-[1.01]",
                     ].join(" ")}
                     draggable={false}
@@ -434,13 +431,13 @@ export function Header({
             </div>
           </div>
 
-          {/* CENTER: desktop nav (centered) */}
+          {/* CENTER: desktop nav */}
           <div className="hidden md:flex justify-center">
             <nav className="flex items-center gap-7 pb-1 pt-0.5">
               <HoverDropdown
                 label="Odds"
                 suffix="Odds"
-                active={oddsActive}
+                active={activeScreen === "odds"}
                 selectedDbSport={oddsSportKey}
                 onPickDbSport={(k) => {
                   onPickOddsSport(k);
@@ -451,7 +448,7 @@ export function Header({
               <HoverDropdown
                 label="Predictions"
                 suffix="Predictions"
-                active={predsActive}
+                active={activeScreen === "monte-carlo"}
                 selectedDbSport={predSportKey}
                 onPickDbSport={(k) => {
                   onPickPredSport(k);
@@ -467,7 +464,7 @@ export function Header({
             </nav>
           </div>
 
-          {/* RIGHT: live pill (kept right aligned on desktop) */}
+          {/* RIGHT: live pill */}
           <div className="hidden md:flex items-center justify-end">
             <div
               className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
@@ -480,7 +477,7 @@ export function Header({
             </div>
           </div>
 
-          {/* MOBILE: keep the live pill on the right like before */}
+          {/* MOBILE: live pill */}
           <div className="hidden sm:flex md:hidden items-center justify-end">
             <div
               className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
