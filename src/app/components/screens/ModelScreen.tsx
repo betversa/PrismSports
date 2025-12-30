@@ -1,23 +1,11 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Best visual version of itself)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Match Overview visual: balanced color + white pop)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
-// ✅ Game +EV plays from public.ev_plays
-// ✅ Player prop +EV plays from public.player_prop_ev_latest
-// ✅ Filters: Play Type + Book
-// ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
+// ✅ Keeps ALL behavior/features from your current “best visual” ModelScreen
+// ✅ Visual refresh to match OverviewScreen (less mono-black, subtle gradients, a bit of white pop)
+// ✅ Avoids overusing GOLD: gold is accent-only; adds neutral “glass” + soft white highlights
+// ✅ Table + cards + modal polished with consistent surfaces, borders, and spacing
 //
-// ✅ LINE MOVEMENT = LINE CHART (DK/FD/MGM/PIN) with tooltip showing DATE + TIME (CT)
-// ✅ Props modal: FantasyPros GAME LOGS = BAR CHART (single stat bars)
-//    - Adds a horizontal reference line for TODAY’S line (the prop line)
-//    - Bars colored by whether that game was OVER (green) / UNDER (red) today’s line
-//    - Hover does NOT shade the whole chart area; it only highlights the bar
-// ✅ Projection label uses μ symbol
-// ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
-//
-// ✅ Adds Pinnacle odds to line movement (when present)
-// ✅ Colors each book uniquely (DK/FD/MGM/PIN)
-//
-// IMPORTANT: App.tsx imports as: `import { ModelScreen } from "./components/screens/ModelScreen";`
+// NOTE: App.tsx imports as: `import { ModelScreen } from "./components/screens/ModelScreen";`
 // This file exports BOTH a named export and a default export to avoid import/export mismatch.
 
 import { useEffect, useMemo, useState } from "react";
@@ -108,7 +96,7 @@ type PlayerPropEvLatestRow = {
   odds: number;
 
   // model outputs
-  mu?: number | null; // ✅ projection
+  mu?: number | null; // projection
   p_quantum: number | null;
   quantum_fair_odds: number;
 
@@ -130,23 +118,19 @@ type AggregatedPlay = {
   kind: "game" | "prop";
   playKey: string;
 
-  // identity
   sport_key?: string | null;
   event_id: string;
   commence_time: string | null;
   matchup: string | null;
 
-  // display
   marketLabel: string;
   sideLabel: string;
   pickLabel: string;
   lineLabel: string;
 
-  // fair odds
   quantum_odds: number;
   quantum_prob?: number | null;
 
-  // meta for history keys
   gameMeta?: { market: GameMarketKey; side: GameSideKey };
   propMeta?: {
     player_name: string | null;
@@ -154,8 +138,8 @@ type AggregatedPlay = {
     side: string | null;
     picture_url: string | null;
     position: string | null;
-    mu: number | null; // ✅ projection shown in modal
-    line: number | null; // ✅ today line shown on bar chart
+    mu: number | null;
+    line: number | null;
   };
 
   offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>;
@@ -168,7 +152,7 @@ type AggregatedPlay = {
 };
 
 /* =========================================================
-   FantasyPros logs (API response type)
+   FantasyPros logs
 ========================================================= */
 
 type FantasyProsLogRow = {
@@ -207,16 +191,18 @@ const MARKET_COL_PROPS = "market";
 const SIDE_COL_PROPS = "side";
 
 /* =========================================================
-   Books + colors
+   Visual tokens
 ========================================================= */
+
+const GOLD = "#d4af37";
 
 const HISTORY_BOOKS: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
 
 const BOOK_COLOR: Record<AnyBook, string> = {
-  draftkings: "#22c55e", // green
-  fanduel: "#3b82f6", // blue
-  betmgm: "#d4af37", // gold
-  pinnacle: "#a855f7", // purple
+  draftkings: "#22c55e",
+  fanduel: "#3b82f6",
+  betmgm: "#d4af37",
+  pinnacle: "#a855f7",
 };
 
 const OVER_GREEN = "#22c55e";
@@ -329,6 +315,7 @@ function bookFull(book: AnyBook) {
   return "Pinnacle";
 }
 
+/** /public/books/ → "/books/..." */
 function bookLogoSrc(bookmaker: string): string | null {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings" || b === "dk") return "/books/dksquare.png";
@@ -416,7 +403,7 @@ function evTone(ev: number) {
 }
 
 function scoreTone(score: number) {
-  if (score >= 90) return { bg: "bg-[#d4af37]/15", border: "border-[#d4af37]/35", text: "text-[#d4af37]" };
+  if (score >= 90) return { bg: "bg-[#d4af37]/12", border: "border-[#d4af37]/30", text: "text-[#d4af37]" };
   if (score >= 75) return { bg: "bg-white/5", border: "border-white/10", text: "text-white" };
   return { bg: "bg-white/0", border: "border-white/0", text: "text-[#a0a0a0]" };
 }
@@ -618,7 +605,11 @@ export const ModelScreen = () => {
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      const settingsQ = supabase.from("app_settings").select("id,bankroll,kelly_factor,updated_at").eq("id", 1).limit(1);
+      const settingsQ = supabase
+        .from("app_settings")
+        .select("id,bankroll,kelly_factor,updated_at")
+        .eq("id", 1)
+        .limit(1);
 
       const [evRes, prRes, sRes] = await Promise.all([evQ, propsQ, settingsQ]);
 
@@ -772,12 +763,22 @@ export const ModelScreen = () => {
       // preserve mu/line if missing
       if (base.propMeta) {
         const nextMu = (r.mu ?? null) as number | null;
-        if (nextMu != null && Number.isFinite(nextMu) && (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu)))
+        if (
+          nextMu != null &&
+          Number.isFinite(nextMu) &&
+          (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu))
+        ) {
           base.propMeta.mu = nextMu;
+        }
 
         const nextLine = (r.line ?? null) as number | null;
-        if (nextLine != null && Number.isFinite(nextLine) && (base.propMeta.line == null || !Number.isFinite(base.propMeta.line)))
+        if (
+          nextLine != null &&
+          Number.isFinite(nextLine) &&
+          (base.propMeta.line == null || !Number.isFinite(base.propMeta.line))
+        ) {
           base.propMeta.line = nextLine;
+        }
       }
 
       map.set(key, base);
@@ -797,8 +798,7 @@ export const ModelScreen = () => {
 
     if (bookFilter !== "all") {
       if (bookFilter === "pinnacle") {
-        // history-only option; don't filter rows
-        list = list;
+        list = list; // history-only option; don't filter rows
       } else {
         list = list.filter((p) => !!p.offers[bookFilter]);
       }
@@ -820,93 +820,115 @@ export const ModelScreen = () => {
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      {/* HERO / HEADER */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 md:p-5">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-95"
-          style={{
-            background:
-              "radial-gradient(900px 260px at 18% 0%, rgba(212,175,55,0.18), transparent 62%), radial-gradient(700px 240px at 85% 12%, rgba(255,255,255,0.05), transparent 60%)",
-          }}
-        />
-
-        <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1 text-[11px] text-[#b0b0b0]">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
-              Prism Model Picks
-            </div>
-
-            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Best +EV Plays</h2>
-
-            <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
-              Aggregated to 1 row per play. Tap/click the <span className="text-white">Pick</span> to open line movement.
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              <Pill label="Plays" value={loading ? "…" : String(filtered.length)} />
-              <Pill label="Best EV" value={loading ? "…" : pct(headerStats.bestEv, 1)} tone={evTone(headerStats.bestEv)} />
-              <Pill label="Best Score" value={loading ? "…" : String(Math.round(headerStats.bestScore))} />
-              <Pill label="Bankroll" value={bankroll ? formatMoney(bankroll) : "—"} />
-              <Pill label="Kelly" value={settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"} />
-            </div>
-          </div>
-
-          {/* Filters */}
-          <div className="w-full md:w-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-2">
-              <div className="inline-flex items-center bg-[#0b0b0b] border border-[#2a2a2a] rounded-lg overflow-hidden">
-                <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
-                <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
-                <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
-              </div>
-
-              <select
-                value={bookFilter}
-                onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
-                className="px-3 py-2 bg-[#0b0b0b] border border-[#2a2a2a] rounded-lg text-[#d0d0d0] outline-none text-xs"
-              >
-                {SOFT_BOOKS.map((b) => (
-                  <option key={b.key} value={b.key}>
-                    {b.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+      {/* HERO / HEADER (Overview-style: soft gradient + spectrum hairline + white pop) */}
+      <div className="relative overflow-hidden rounded-2xl border border-[#242424] bg-[#0b0b0b]">
+        <div className="pointer-events-none absolute inset-0">
+          <div
+            className="absolute inset-0 opacity-95"
+            style={{
+              background: [
+                "radial-gradient(900px 260px at 14% 0%, rgba(212,175,55,0.16), transparent 60%)",
+                "radial-gradient(780px 260px at 88% 12%, rgba(255,255,255,0.06), transparent 62%)",
+                "linear-gradient(180deg, rgba(0,0,0,0.40), rgba(0,0,0,0.74) 55%, rgba(0,0,0,0.92) 100%)",
+              ].join(", "),
+            }}
+          />
+          <div
+            className="absolute left-0 right-0 top-0 h-[2px] opacity-70"
+            style={{
+              background:
+                "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.30), rgba(0,200,120,0.30), rgba(212,175,55,0.44), rgba(255,140,0,0.28), rgba(255,60,60,0.22), rgba(170,70,255,0.22), rgba(0,0,0,0))",
+            }}
+          />
+          <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: "radial-gradient(#ffffff 1px, transparent 1px)", backgroundSize: "18px 18px" }} />
         </div>
 
-        {loading ? (
-          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-[#0b0b0b] border border-[#2a2a2a] rounded-lg">
-            Loading EV plays…
-          </div>
-        ) : null}
+        <div className="relative p-4 md:p-5">
+          <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+            <div className="min-w-0">
+              <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: GOLD }} />
+                Prism Model Picks
+              </div>
 
-        {error ? (
-          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-[#0b0b0b] border border-red-900/50 rounded-lg">
-            Failed to load ev_plays: {error}
+              <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">
+                Best +EV Plays <span className="text-[#6f6f6f]">—</span>{" "}
+                <span className="text-white/80">Aggregated</span>
+              </h2>
+
+              <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed max-w-2xl">
+                One row per play. Click/tap the{" "}
+                <span className="text-white">Pick</span> to open line movement (DK/FD/MGM/PIN) and
+                FantasyPros game logs for props.
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <Pill label="Plays" value={loading ? "…" : String(filtered.length)} />
+                <Pill label="Best EV" value={loading ? "…" : pct(headerStats.bestEv, 1)} tone={evTone(headerStats.bestEv)} />
+                <Pill label="Best Score" value={loading ? "…" : String(Math.round(headerStats.bestScore))} />
+                <Pill label="Bankroll" value={bankroll ? formatMoney(bankroll) : "—"} />
+                <Pill label="Kelly" value={settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"} />
+              </div>
+            </div>
+
+            {/* Filters */}
+            <div className="w-full md:w-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-2">
+                <div className="inline-flex items-center rounded-xl overflow-hidden border border-[#2a2a2a] bg-black/35">
+                  <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")} label="All" />
+                  <KindPill active={kindFilter === "game"} onClick={() => setKindFilter("game")} label="Game Lines" />
+                  <KindPill active={kindFilter === "prop"} onClick={() => setKindFilter("prop")} label="Player Props" />
+                </div>
+
+                <select
+                  value={bookFilter}
+                  onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
+                  className="px-3 py-2 bg-black/35 border border-[#2a2a2a] rounded-xl text-[#e0e0e0] outline-none text-xs"
+                >
+                  {SOFT_BOOKS.map((b) => (
+                    <option key={b.key} value={b.key}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
-        ) : null}
+
+          {loading ? (
+            <div className="mt-4 text-xs text-[#9a9a9a] px-3 py-2 bg-black/35 border border-[#2a2a2a] rounded-xl">
+              Loading EV plays…
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="mt-3 text-xs text-red-300 px-3 py-2 bg-black/35 border border-red-900/50 rounded-xl">
+              Failed to load ev_plays: {error}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* Desktop table */}
-      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
+      <div className="hidden md:block rounded-2xl border border-[#242424] bg-[#0b0b0b] overflow-hidden">
         <div className="max-h-[70vh] overflow-y-auto">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
-                <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">Matchup</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[280px]">Pick</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">Fair Odds</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">DK</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">FD</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">MGM</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">EV</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">Bet $</th>
+                <tr className="bg-black/70 backdrop-blur border-b border-[#242424]">
+                  <th className="text-left p-3 text-[#9a9a9a] sticky left-0 bg-black/70 backdrop-blur z-30 min-w-[360px]">
+                    Matchup
+                  </th>
+                  <th className="text-left p-3 text-[#9a9a9a] min-w-[120px]">Market</th>
+                  <th className="text-left p-3 text-[#9a9a9a] min-w-[280px]">Pick</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[80px]">Line</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[120px]">Fair Odds</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[120px]">DK</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[120px]">FD</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[120px]">MGM</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[110px]">EV</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[90px]">Score</th>
+                  <th className="text-center p-3 text-[#9a9a9a] min-w-[120px]">Bet $</th>
                 </tr>
               </thead>
 
@@ -924,10 +946,10 @@ export const ModelScreen = () => {
 
                 {!loading && !filtered.length ? (
                   <tr>
-                    <td colSpan={11} className="p-10 text-center text-xs text-[#808080]">
+                    <td colSpan={11} className="p-10 text-center text-xs text-[#9a9a9a]">
                       No positive EV plays found for this filter.
-                      <div className="text-[11px] text-[#606060] mt-1">
-                        If this seems wrong, confirm <span className="text-white">commence_time</span> is in the future and{" "}
+                      <div className="text-[11px] text-[#6a6a6a] mt-1">
+                        Confirm <span className="text-white">commence_time</span> is in the future and{" "}
                         <span className="text-white">ev_pct</span> is &gt; 0 for DK/FD/MGM rows.
                       </div>
                     </td>
@@ -942,7 +964,7 @@ export const ModelScreen = () => {
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {!loading && !filtered.length ? (
-          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
+          <div className="text-xs text-[#9a9a9a] px-3 py-10 bg-[#0b0b0b] border border-[#242424] rounded-2xl text-center">
             No positive EV plays found for this filter.
           </div>
         ) : null}
@@ -959,7 +981,14 @@ export const ModelScreen = () => {
         ))}
       </div>
 
-      <PlayDetailsModal open={detailsOpen} play={selected} onClose={closeDetails} bankroll={bankroll} kellyFactor={kellyFactor} settingsReady={settingsReady} />
+      <PlayDetailsModal
+        open={detailsOpen}
+        play={selected}
+        onClose={closeDetails}
+        bankroll={bankroll}
+        kellyFactor={kellyFactor}
+        settingsReady={settingsReady}
+      />
     </div>
   );
 };
@@ -988,25 +1017,26 @@ function PlayRow({
   const bestOffer = play.bestBook ? play.offers[play.bestBook] : null;
 
   return (
-    <tr className="transition-colors hover:bg-white/[0.02]">
-      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[360px]">
+    <tr className="transition-colors hover:bg-white/[0.03]">
+      <td className="p-3 sticky left-0 bg-[#0b0b0b] z-10 min-w-[360px]">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="text-white truncate">
               {play.matchup ?? "—"}
-              <span className="text-[#404040]"> · </span>
-              <span className="text-[#b0b0b0]">{fmtDateCentral(play.commence_time)}</span>
-              <span className="text-[#404040]"> </span>
-              <span className="text-[#b0b0b0]">{fmtTimeCentral(play.commence_time)}</span>
+              <span className="text-white/15"> · </span>
+              <span className="text-[#cfcfcf]">{fmtDateCentral(play.commence_time)}</span>
+              <span className="text-white/15"> </span>
+              <span className="text-[#cfcfcf]">{fmtTimeCentral(play.commence_time)}</span>
 
               {play.kind === "prop" ? (
-                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] text-white/80">
                   PROP
                 </span>
               ) : null}
             </div>
-            <div className="text-[10px] text-[#606060] mt-0.5 truncate">
-              Event: <span className="text-[#404040]">{play.event_id}</span>
+
+            <div className="text-[10px] text-[#7a7a7a] mt-0.5 truncate">
+              Event: <span className="text-white/30">{play.event_id}</span>
             </div>
           </div>
 
@@ -1017,7 +1047,7 @@ function PlayRow({
               title={`Best book: ${bookFull(bestOffer.book)} (${pct(bestOffer.ev_pct, 1)})`}
             >
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[bestOffer.book] }} />
-              <span className="text-[10px] text-[#b0b0b0]">{bookShort(bestOffer.book)}</span>
+              <span className="text-[10px] text-[#cfcfcf]">{bookShort(bestOffer.book)}</span>
             </div>
           ) : null}
         </div>
@@ -1025,12 +1055,17 @@ function PlayRow({
 
       <td className="p-3 text-left">
         <div className="text-white">{play.marketLabel}</div>
-        <div className="text-[10px] text-[#606060] mt-0.5">{play.sideLabel}</div>
+        <div className="text-[10px] text-[#7a7a7a] mt-0.5">{play.sideLabel}</div>
       </td>
 
       {/* PICK (clickable) */}
       <td className="p-3 text-left">
-        <button type="button" onClick={onOpenDetails} className="w-full text-left hover:opacity-90" title="Open line movement">
+        <button
+          type="button"
+          onClick={onOpenDetails}
+          className="w-full text-left hover:opacity-95"
+          title="Open line movement"
+        >
           {play.kind === "prop" ? (
             <PropPickInline
               name={play.pickLabel}
@@ -1042,7 +1077,7 @@ function PlayRow({
           ) : (
             <div className="min-w-0">
               <div className="text-white truncate">{play.pickLabel}</div>
-              <div className="text-[10px] text-[#606060] mt-0.5 truncate">
+              <div className="text-[10px] text-[#7a7a7a] mt-0.5 truncate">
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
               </div>
             </div>
@@ -1074,7 +1109,12 @@ function PlayRow({
 
       <td className="p-3 text-center">
         <div
-          className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}
+          className={[
+            "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+            sTone.bg,
+            sTone.border,
+            sTone.text,
+          ].join(" ")}
         >
           {score}
         </div>
@@ -1110,87 +1150,108 @@ function PlayCard({
   const sTone = scoreTone(score);
 
   return (
-    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-white text-sm truncate">
-            {play.matchup ?? "—"}
-            {play.kind === "prop" ? (
-              <span className="ml-2 align-middle inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
-                PROP
+    <div className="relative overflow-hidden rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-80"
+        style={{
+          background:
+            "radial-gradient(520px 180px at 22% 0%, rgba(255,255,255,0.05), transparent 60%), radial-gradient(540px 180px at 82% 12%, rgba(212,175,55,0.10), transparent 62%)",
+        }}
+      />
+      <div className="relative">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-white text-sm truncate">
+              {play.matchup ?? "—"}
+              {play.kind === "prop" ? (
+                <span className="ml-2 align-middle inline-flex items-center px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] text-white/80">
+                  PROP
+                </span>
+              ) : null}
+            </div>
+            <div className="text-[11px] text-[#9a9a9a] mt-1">
+              {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)}
+            </div>
+          </div>
+
+          <div className="shrink-0 text-right">
+            <div className="inline-flex items-center gap-2">
+              <div
+                className={[
+                  "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+                  sTone.bg,
+                  sTone.border,
+                  sTone.text,
+                ].join(" ")}
+              >
+                {score}
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] text-[#7a7a7a]">Bet</div>
+                <div className="text-white font-semibold tabular-nums">
+                  {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* PICK (clickable) */}
+        <button
+          type="button"
+          onClick={onOpenDetails}
+          className="mt-3 w-full text-left hover:opacity-95"
+          title="Open line movement"
+        >
+          {play.kind === "prop" ? (
+            <div className="flex items-center gap-3">
+              <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
+              <div className="min-w-0">
+                <div className="text-white text-sm truncate">
+                  {play.pickLabel}
+                  {play.propMeta?.position ? <span className="text-[#9a9a9a]"> · {play.propMeta.position}</span> : null}
+                </div>
+                <div className="text-[11px] text-[#9a9a9a] mt-0.5 truncate">
+                  {play.marketLabel} · {play.sideLabel} {play.lineLabel}
+                </div>
+                <div className="text-[11px] text-white/85 mt-0.5">
+                  μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-white text-sm">
+              {play.pickLabel}{" "}
+              <span className="text-[#9a9a9a] text-xs">
+                · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
               </span>
-            ) : null}
-          </div>
-          <div className="text-[11px] text-[#808080] mt-1">
-            {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)}
-          </div>
+            </div>
+          )}
+        </button>
+
+        {/* Offers strip */}
+        <div className="mt-3 grid grid-cols-4 gap-2 items-stretch">
+          <StatChip label="Fair" value={american(play.quantum_odds)} accent />
+          <BookChip offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
+          <BookChip offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
+          <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
         </div>
 
-        <div className="shrink-0 text-right">
-          <div className="inline-flex items-center gap-2">
-            <div
-              className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}
-            >
-              {score}
-            </div>
-            <div className="text-right">
-              <div className="text-[10px] text-[#606060]">Bet</div>
-              <div className="text-[#d4af37] font-semibold tabular-nums">{settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}</div>
-            </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[10px] text-[#7a7a7a]">EV (best)</div>
+            <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
           </div>
+
+          <div className="text-[10px] text-[#7a7a7a]">Tap pick for charts</div>
         </div>
-      </div>
-
-      {/* PICK (clickable) */}
-      <button type="button" onClick={onOpenDetails} className="mt-3 w-full text-left hover:opacity-90" title="Open line movement">
-        {play.kind === "prop" ? (
-          <div className="flex items-center gap-3">
-            <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
-            <div className="min-w-0">
-              <div className="text-white text-sm truncate">
-                {play.pickLabel}
-                {play.propMeta?.position ? <span className="text-[#808080]"> · {play.propMeta.position}</span> : null}
-              </div>
-              <div className="text-[11px] text-[#808080] mt-0.5 truncate">
-                {play.marketLabel} · {play.sideLabel} {play.lineLabel}
-              </div>
-              <div className="text-[11px] text-[#b0b0b0] mt-0.5">
-                μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-white text-sm">
-            {play.pickLabel}{" "}
-            <span className="text-[#808080] text-xs">
-              · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
-            </span>
-          </div>
-        )}
-      </button>
-
-      {/* Offers strip */}
-      <div className="mt-3 grid grid-cols-4 gap-2 items-stretch">
-        <StatChip label="Fair" value={american(play.quantum_odds)} accent />
-        <BookChip offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
-        <BookChip offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
-        <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
-      </div>
-
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[10px] text-[#606060]">EV (best)</div>
-          <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
-        </div>
-
-        <div className="text-[10px] text-[#606060]">Tap pick for charts</div>
       </div>
     </div>
   );
 }
 
 /* =========================================================
-   Details Modal (LINE MOVEMENT line chart + FantasyPros BAR logs)
+   Details Modal (LINE MOVEMENT + FantasyPros BAR logs)
 ========================================================= */
 
 function PlayDetailsModal({
@@ -1224,56 +1285,79 @@ function PlayDetailsModal({
           paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
         }}
       >
-        <div className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col max-h-[92vh] md:max-h-[85vh]">
+        <div className="relative w-full md:max-w-4xl overflow-hidden flex flex-col max-h-[92vh] md:max-h-[85vh] rounded-t-2xl md:rounded-2xl border border-[#242424] bg-[#0b0b0b]">
           {/* Header */}
-          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-white text-sm md:text-base truncate">
-                  {play.matchup ?? "—"}{" "}
-                  {play.kind === "prop" ? (
-                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
-                      PROP
+          <div className="relative shrink-0 border-b border-[#1f1f1f]">
+            <div
+              className="pointer-events-none absolute inset-0 opacity-95"
+              style={{
+                background: [
+                  "radial-gradient(740px 220px at 14% 0%, rgba(212,175,55,0.16), transparent 62%)",
+                  "radial-gradient(760px 220px at 86% 18%, rgba(255,255,255,0.06), transparent 60%)",
+                  "linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.78))",
+                ].join(", "),
+              }}
+            />
+            <div
+              className="pointer-events-none absolute left-0 right-0 top-0 h-[2px] opacity-70"
+              style={{
+                background:
+                  "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.26), rgba(0,200,120,0.26), rgba(212,175,55,0.42), rgba(255,140,0,0.22), rgba(255,60,60,0.18), rgba(170,70,255,0.18), rgba(0,0,0,0))",
+              }}
+            />
+
+            <div className="relative p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-white text-sm md:text-base truncate">
+                    {play.matchup ?? "—"}{" "}
+                    {play.kind === "prop" ? (
+                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] text-white/80">
+                        PROP
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="text-[11px] text-[#b0b0b0] mt-1">
+                    {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)} ·{" "}
+                    <span className="text-white/30">{play.event_id}</span>
+                  </div>
+
+                  <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-white">{play.marketLabel}</span>
+                    <span className="text-white/20">·</span>
+                    <span className="text-white font-medium">{play.pickLabel}</span>
+                    <span className="text-white/70">
+                      · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
                     </span>
+                  </div>
+
+                  {play.kind === "prop" ? (
+                    <div className="mt-1 text-[11px] text-white/80">
+                      μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
+                    </div>
                   ) : null}
                 </div>
-                <div className="text-[11px] text-[#808080] mt-1">
-                  {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)} ·{" "}
-                  <span className="text-[#606060]">{play.event_id}</span>
-                </div>
 
-                <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-[#d4af37]">{play.marketLabel}</span>
-                  <span className="text-[#404040]">·</span>
-                  <span className="text-white">{play.pickLabel}</span>
-                  <span className="text-[#808080]">
-                    · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
-                  </span>
-                </div>
-
-                {play.kind === "prop" ? (
-                  <div className="mt-1 text-[11px] text-[#b0b0b0]">
-                    μ Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
+                <div className="shrink-0 text-right">
+                  <div className="text-[10px] text-white/60">Best EV</div>
+                  <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
+                  <div className="mt-1 text-[10px] text-white/60">Bet</div>
+                  <div className="text-white font-semibold tabular-nums">
+                    {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
                   </div>
-                ) : null}
+                </div>
               </div>
 
-              <div className="shrink-0 text-right">
-                <div className="text-[10px] text-[#606060]">Best EV</div>
-                <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
-                <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">{settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}</div>
+              {/* Legend hint */}
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#bdbdbd]">
+                <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
+                <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
+                <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
+                <LegendDot label="PIN" color={BOOK_COLOR.pinnacle} />
+                <span className="text-white/25">·</span>
+                <span>Tooltip shows date + time (CT)</span>
               </div>
-            </div>
-
-            {/* Legend hint */}
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
-              <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
-              <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
-              <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
-              <LegendDot label="PIN" color={BOOK_COLOR.pinnacle} />
-              <span className="text-[#404040]">·</span>
-              <span>Tooltip shows date + time (CT)</span>
             </div>
           </div>
 
@@ -1284,11 +1368,11 @@ function PlayDetailsModal({
           </div>
 
           {/* Footer */}
-          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a] flex items-center justify-end">
+          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-black/60 backdrop-blur flex items-center justify-end">
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
+              className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-[11px] text-white/85 hover:bg-white/10"
             >
               Done
             </button>
@@ -1335,7 +1419,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
           const { data, error } = await supabase
             .from(PROPS_HISTORY_TABLE)
-            .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
+            .select(
+              `${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`
+            )
             .eq(PLAYER_COL_PROPS, player_name)
             .eq(MARKET_COL_PROPS, marketKey)
             .eq(SIDE_COL_PROPS, sideCanon)
@@ -1354,7 +1440,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           setSeries(pts);
 
           if (!pts.length) {
-            setDebug(`no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`);
+            setDebug(
+              `no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`
+            );
           }
           return;
         }
@@ -1365,7 +1453,10 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         const side = play.gameMeta?.side ?? null;
 
         if (!sport_key || !event_id || !market || !side) {
-          if (mounted) setDebug(`game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`);
+          if (mounted)
+            setDebug(
+              `game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`
+            );
           return;
         }
 
@@ -1391,7 +1482,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
         setSeries(pts);
 
         if (!pts.length) {
-          setDebug(`no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`);
+          setDebug(
+            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`
+          );
         }
       } finally {
         if (mounted) setLoading(false);
@@ -1406,18 +1499,18 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
   if (loading && !series.length) {
     return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
-        <div className="text-xs text-[#808080]">Loading line movement…</div>
+      <div className="rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4">
+        <div className="text-xs text-[#9a9a9a]">Loading line movement…</div>
       </div>
     );
   }
 
   if (!series.length) {
     return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
-        <div className="text-[10px] text-[#606060] mb-1">Line Movement (this side)</div>
-        <div className="text-xs text-[#808080]">No odds history available for this side.</div>
-        {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+      <div className="rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4">
+        <div className="text-[10px] text-[#7a7a7a] mb-1">Line Movement (this side)</div>
+        <div className="text-xs text-[#9a9a9a]">No odds history available for this side.</div>
+        {debug ? <div className="mt-2 text-[10px] text-white/30 break-words">{debug}</div> : null}
       </div>
     );
   }
@@ -1433,7 +1526,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
     const market = play.marketLabel;
     const side = play.sideLabel;
     const line = play.lineLabel;
-    const start = play.commence_time ? `${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}` : "—";
+    const start = play.commence_time
+      ? `${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}`
+      : "—";
 
     const order: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
     const rows = order
@@ -1448,31 +1543,37 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
     return (
       <div
         style={{
-          background: "#0b0b0b",
-          border: "1px solid #2a2a2a",
+          background: "rgba(11,11,11,0.96)",
+          border: "1px solid rgba(255,255,255,0.10)",
           padding: "10px",
-          borderRadius: 10,
-          color: "#d0d0d0",
+          borderRadius: 12,
+          color: "#e6e6e6",
           minWidth: 250,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
+          boxShadow: "0 18px 46px rgba(0,0,0,0.55)",
+          backdropFilter: "blur(8px)",
         }}
       >
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{fmtDateTimeCT(ts)}</div>
+        <div style={{ fontSize: 12, fontWeight: 800, color: "#fff", marginBottom: 6 }}>
+          {fmtDateTimeCT(ts)}
+        </div>
 
-        <div style={{ fontSize: 11, color: "#b0b0b0", marginBottom: 8, lineHeight: 1.35 }}>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", marginBottom: 8, lineHeight: 1.35 }}>
           <div style={{ color: "#ffffff" }}>{matchup}</div>
           <div>
-            <span style={{ color: "#d4af37" }}>{market}</span> <span style={{ color: "#606060" }}>·</span>{" "}
-            <span style={{ color: "#d0d0d0" }}>
+            <span style={{ color: "#ffffff" }}>{market}</span>{" "}
+            <span style={{ color: "rgba(255,255,255,0.22)" }}>·</span>{" "}
+            <span style={{ color: "rgba(255,255,255,0.86)" }}>
               {side} {line !== "—" ? line : ""}
             </span>
           </div>
-          <div style={{ color: "#808080" }}>Starts: {start}</div>
+          <div style={{ color: "rgba(255,255,255,0.55)" }}>Starts: {start}</div>
 
           {play.kind === "prop" ? (
-            <div style={{ color: "#808080" }}>
+            <div style={{ color: "rgba(255,255,255,0.60)" }}>
               μ Projection:{" "}
-              <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
+              <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>
+                {fmtMu(play.propMeta?.mu ?? null)}
+              </span>
             </div>
           ) : null}
         </div>
@@ -1481,7 +1582,9 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
           {rows.map(({ k, v }) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
               <span style={{ fontSize: 11, color: BOOK_COLOR[k] }}>{bookShort(k)}</span>
-              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>{american(v)}</span>
+              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>
+                {american(v)}
+              </span>
             </div>
           ))}
         </div>
@@ -1490,8 +1593,8 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
   };
 
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
-      <div className="text-[10px] text-[#606060] mb-2">Line Movement (this side)</div>
+    <div className="rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4">
+      <div className="text-[10px] text-[#7a7a7a] mb-2">Line Movement (this side)</div>
 
       <div className="h-[280px]">
         <ResponsiveContainer width="100%" height="100%">
@@ -1500,14 +1603,14 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
             <XAxis
               dataKey="ts"
               tickFormatter={fmtHourMinCT}
-              tick={{ fontSize: 10, fill: "#808080" }}
+              tick={{ fontSize: 10, fill: "#9a9a9a" }}
               axisLine={{ stroke: "#2a2a2a" }}
               tickLine={{ stroke: "#2a2a2a" }}
               minTickGap={18}
             />
             <YAxis
               tickFormatter={(v) => american(Number(v))}
-              tick={{ fontSize: 10, fill: "#808080" }}
+              tick={{ fontSize: 10, fill: "#9a9a9a" }}
               axisLine={{ stroke: "#2a2a2a" }}
               tickLine={{ stroke: "#2a2a2a" }}
               width={58}
@@ -1516,30 +1619,66 @@ function OddsHistoryMiniChart({ play }: { play: AggregatedPlay }) {
 
             <Tooltip content={TooltipContent} />
             <Legend
-              wrapperStyle={{ fontSize: 11, color: "#808080" }}
-              formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
+              wrapperStyle={{ fontSize: 11, color: "#9a9a9a" }}
+              formatter={(value: any) => <span style={{ color: "#cfcfcf" }}>{String(value)}</span>}
             />
 
             {hasAny("draftkings") ? (
-              <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="draftkings"
+                name="DK"
+                stroke={BOOK_COLOR.draftkings}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
 
             {hasAny("fanduel") ? (
-              <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="fanduel"
+                name="FD"
+                stroke={BOOK_COLOR.fanduel}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
 
             {hasAny("betmgm") ? (
-              <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="betmgm"
+                name="MGM"
+                stroke={BOOK_COLOR.betmgm}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
 
             {hasAny("pinnacle") ? (
-              <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              <Line
+                type="monotone"
+                dataKey="pinnacle"
+                name="PIN"
+                stroke={BOOK_COLOR.pinnacle}
+                strokeWidth={2}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
             ) : null}
           </LineChart>
         </ResponsiveContainer>
       </div>
 
-      {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+      {debug ? <div className="mt-2 text-[10px] text-white/30 break-words">{debug}</div> : null}
     </div>
   );
 }
@@ -1604,7 +1743,13 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const marketKey = historyPropMarketKey(play.propMeta?.market ?? null);
 
   const statKey: "pts" | "reb" | "ast" | "threes" =
-    marketKey === "player_rebounds" ? "reb" : marketKey === "player_assists" ? "ast" : marketKey === "player_threes" ? "threes" : "pts";
+    marketKey === "player_rebounds"
+      ? "reb"
+      : marketKey === "player_assists"
+      ? "ast"
+      : marketKey === "player_threes"
+      ? "threes"
+      : "pts";
 
   const statLabel = statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
 
@@ -1638,41 +1783,45 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
     return (
       <div
         style={{
-          background: "#0b0b0b",
-          border: "1px solid #2a2a2a",
+          background: "rgba(11,11,11,0.96)",
+          border: "1px solid rgba(255,255,255,0.10)",
           padding: "10px",
-          borderRadius: 10,
-          color: "#d0d0d0",
+          borderRadius: 12,
+          color: "#e6e6e6",
           minWidth: 240,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
+          boxShadow: "0 18px 46px rgba(0,0,0,0.55)",
+          backdropFilter: "blur(8px)",
         }}
       >
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{label}</div>
+        <div style={{ fontSize: 12, fontWeight: 800, color: "#fff", marginBottom: 6 }}>{label}</div>
 
-        <div style={{ fontSize: 11, color: "#b0b0b0", lineHeight: 1.35 }}>
+        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", lineHeight: 1.35 }}>
           <div>
-            vs <span style={{ color: "#fff" }}>{d.opp}</span> · <span style={{ color: "#808080" }}>{d.score}</span>
+            vs <span style={{ color: "#fff" }}>{d.opp}</span> ·{" "}
+            <span style={{ color: "rgba(255,255,255,0.55)" }}>{d.score}</span>
           </div>
 
           <div style={{ marginTop: 8, display: "grid", gap: 2 }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "#808080" }}>MIN</span>
+              <span style={{ color: "rgba(255,255,255,0.55)" }}>MIN</span>
               <span style={{ color: "#fff" }}>{d.min}</span>
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "#808080" }}>{statLabel}</span>
+              <span style={{ color: "rgba(255,255,255,0.55)" }}>{statLabel}</span>
               <span style={{ color: "#fff" }}>{Number.isFinite(v) ? v : "—"}</span>
             </div>
 
             {line != null ? (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#808080" }}>Today Line</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)" }}>Today Line</span>
                   <span style={{ color: "#fff" }}>{line}</span>
                 </div>
                 {overUnder ? (
-                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>{overUnder}</div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>
+                    {overUnder}
+                  </div>
                 ) : null}
               </>
             ) : null}
@@ -1685,37 +1834,50 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const activeBarStyle = { stroke: "#ffffff", strokeWidth: 1, fillOpacity: 1 };
 
   return (
-    <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+    <div className="rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4">
       <div className="flex items-center justify-between gap-3 mb-2">
-        <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
-        {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
+        <div className="text-[10px] text-[#7a7a7a]">FantasyPros Game Logs</div>
+        {loading ? <div className="text-[10px] text-[#7a7a7a]">Loading…</div> : null}
       </div>
 
       {chartData.length ? (
         <div className="mb-3">
-          <div className="text-[10px] text-[#606060] mb-2">
+          <div className="text-[10px] text-[#7a7a7a] mb-2">
             Last {chartData.length} games · {statLabel} bars
-            {todayLine != null && Number.isFinite(todayLine) ? <span className="text-[#808080]"> · Today Line {todayLine}</span> : null}
+            {todayLine != null && Number.isFinite(todayLine) ? (
+              <span className="text-white/55"> · Today Line {todayLine}</span>
+            ) : null}
           </div>
 
           <div className="h-[230px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} barCategoryGap={12}>
                 <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
-                <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "#9a9a9a" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  minTickGap={12}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: "#9a9a9a" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  width={36}
+                />
 
-                {/* ✅ Tooltip cursor transparent so it doesn't shade the whole plot */}
+                {/* Tooltip cursor transparent so it doesn't shade the whole plot */}
                 <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
 
-                {/* ✅ Today's line reference */}
+                {/* Today's line reference */}
                 {todayLine != null && Number.isFinite(todayLine) ? (
                   <ReferenceLine
                     y={todayLine}
-                    stroke="#d0d0d0"
+                    stroke="rgba(255,255,255,0.65)"
                     strokeDasharray="4 4"
                     ifOverflow="extendDomain"
-                    label={{ value: "Today Line", position: "right", fill: "#808080", fontSize: 10 }}
+                    label={{ value: "Today Line", position: "right", fill: "#9a9a9a", fontSize: 10 }}
                   />
                 ) : null}
 
@@ -1737,7 +1899,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
         <div className="overflow-x-auto">
           <table className="w-full text-[11px]">
             <thead>
-              <tr className="text-[#808080] border-b border-[#1f1f1f]">
+              <tr className="text-[#9a9a9a] border-b border-[#1f1f1f]">
                 <th className="text-left py-1 pr-2">Date</th>
                 <th className="text-left py-1 pr-2">Opp</th>
                 <th className="text-left py-1 pr-2">Score</th>
@@ -1747,18 +1909,27 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
             </thead>
             <tbody className="divide-y divide-[#121212]">
               {rows.slice(0, 10).map((r, idx) => {
-                const d = { min: safeNum(r.min, 0), pts: safeNum(r.pts, 0), reb: safeNum(r.reb, 0), ast: safeNum(r.ast, 0), threes: safeNum(r.threes, 0) };
+                const d = {
+                  min: safeNum(r.min, 0),
+                  pts: safeNum(r.pts, 0),
+                  reb: safeNum(r.reb, 0),
+                  ast: safeNum(r.ast, 0),
+                  threes: safeNum(r.threes, 0),
+                };
                 const v = safeNum((d as any)[statKey], NaN);
                 const line = todayLine != null && Number.isFinite(todayLine) ? todayLine : null;
                 const isOver = line != null && Number.isFinite(v) ? v >= line : null;
 
                 return (
-                  <tr key={idx} className="text-[#d0d0d0]">
+                  <tr key={idx} className="text-white/85">
                     <td className="py-1 pr-2 whitespace-nowrap">{r.date}</td>
                     <td className="py-1 pr-2 whitespace-nowrap">{r.opp}</td>
-                    <td className="py-1 pr-2 whitespace-nowrap text-[#b0b0b0]">{r.score}</td>
+                    <td className="py-1 pr-2 whitespace-nowrap text-white/55">{r.score}</td>
                     <td className="py-1 pr-2 text-right tabular-nums">{d.min}</td>
-                    <td className="py-1 text-right tabular-nums" style={{ color: isOver == null ? "#d0d0d0" : isOver ? OVER_GREEN : UNDER_RED }}>
+                    <td
+                      className="py-1 text-right tabular-nums"
+                      style={{ color: isOver == null ? "rgba(255,255,255,0.85)" : isOver ? OVER_GREEN : UNDER_RED }}
+                    >
                       {Number.isFinite(v) ? v : "—"}
                     </td>
                   </tr>
@@ -1766,12 +1937,12 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
               })}
             </tbody>
           </table>
-          <div className="mt-2 text-[10px] text-[#606060]">Showing last {Math.min(10, rows.length)} games</div>
+          <div className="mt-2 text-[10px] text-[#7a7a7a]">Showing last {Math.min(10, rows.length)} games</div>
         </div>
       ) : (
-        <div className="text-xs text-[#808080]">
+        <div className="text-xs text-[#9a9a9a]">
           No game logs available.
-          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+          {debug ? <div className="mt-2 text-[10px] text-white/30 break-words">{debug}</div> : null}
         </div>
       )}
     </div>
@@ -1788,7 +1959,7 @@ function KindPill({ active, onClick, label }: { active: boolean; onClick: () => 
       onClick={onClick}
       className={[
         "px-3 py-2 text-xs transition-colors",
-        active ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+        active ? "bg-white/7 text-white" : "bg-transparent text-[#9a9a9a] hover:text-white hover:bg-white/5",
       ].join(" ")}
       type="button"
     >
@@ -1799,8 +1970,8 @@ function KindPill({ active, onClick, label }: { active: boolean; onClick: () => 
 
 function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1">
-      <div className="text-[11px] text-[#808080]">{label}</div>
+    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/35 px-3 py-1">
+      <div className="text-[11px] text-[#9a9a9a]">{label}</div>
       <div className={["text-[11px] font-medium tabular-nums", tone ? tone : "text-white"].join(" ")}>{value}</div>
     </div>
   );
@@ -1819,18 +1990,18 @@ function StatChip({ label, value, accent }: { label: string; value: string; acce
   return (
     <div
       className={[
-        "rounded-lg border px-2 py-2 text-center",
-        accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        "rounded-xl border px-2 py-2 text-center",
+        accent ? "bg-white/6 border-white/12" : "bg-black/35 border-[#2a2a2a]",
       ].join(" ")}
     >
-      <div className="text-[10px] text-[#606060]">{label}</div>
-      <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
+      <div className="text-[10px] text-[#7a7a7a]">{label}</div>
+      <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-white" : "text-white"].join(" ")}>{value}</div>
     </div>
   );
 }
 
 function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
-  if (!offer) return <div className="text-[#404040]">—</div>;
+  if (!offer) return <div className="text-white/25">—</div>;
 
   const logo = bookLogoSrc(offer.book);
   const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book]}]` : "shadow-none";
@@ -1838,23 +2009,26 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   return (
     <div
       className={[
-        "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border",
-        isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-xl border",
+        isBest ? "bg-white/7 border-white/12" : "bg-black/35 border-[#2a2a2a]",
         ring,
       ].join(" ")}
     >
       <div className="inline-flex items-center justify-center gap-2">
         {logo ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
         ) : (
-          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
+          <div className="h-5 w-5 rounded bg-black/40 border border-white/10 flex items-center justify-center text-[10px] text-[#9a9a9a]">
             {bookShort(offer.book)}
           </div>
         )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
-      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
+      <div className={["text-[10px] tabular-nums", isBest ? "text-white" : "text-[#9a9a9a]"].join(" ")}>
+        {pct(offer.ev_pct, 1)}
+      </div>
     </div>
   );
 }
@@ -1862,9 +2036,9 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
 function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   if (!offer) {
     return (
-      <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-lg p-2 text-center">
-        <div className="text-[10px] text-[#606060]">—</div>
-        <div className="text-[#404040]">—</div>
+      <div className="bg-black/35 border border-[#2a2a2a] rounded-xl p-2 text-center">
+        <div className="text-[10px] text-[#7a7a7a]">—</div>
+        <div className="text-white/25">—</div>
       </div>
     );
   }
@@ -1873,18 +2047,27 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book]}]` : "shadow-none";
 
   return (
-    <div className={["rounded-lg p-2 text-center border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
+    <div
+      className={[
+        "rounded-xl p-2 text-center border",
+        isBest ? "bg-white/7 border-white/12" : "bg-black/35 border-[#2a2a2a]",
+        ring,
+      ].join(" ")}
+    >
       <div className="flex items-center justify-center gap-2">
         {logo ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img src={logo} alt={bookShort(offer.book)} className="h-4 w-4 opacity-95" draggable={false} />
         ) : (
-          <div className="h-4 w-4 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[9px] text-[#808080]">
+          <div className="h-4 w-4 rounded bg-black/40 border border-white/10 flex items-center justify-center text-[9px] text-[#9a9a9a]">
             {bookShort(offer.book)}
           </div>
         )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
+      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-white" : "text-[#9a9a9a]"].join(" ")}>
+        {pct(offer.ev_pct, 1)}
+      </div>
     </div>
   );
 }
@@ -1892,10 +2075,11 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
 function PropAvatar({ url, name }: { url: string | null; name: string }) {
   if (url) {
     return (
+      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={url}
         alt={name || "Player"}
-        className="h-9 w-9 rounded-full object-cover border border-[#2a2a2a] bg-[#111] shrink-0"
+        className="h-9 w-9 rounded-full object-cover border border-white/10 bg-black/35 shrink-0"
         draggable={false}
         loading="lazy"
         referrerPolicy="no-referrer"
@@ -1914,7 +2098,7 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
     .join("");
 
   return (
-    <div className="h-9 w-9 rounded-full border border-[#2a2a2a] bg-[#111] text-[#808080] flex items-center justify-center text-[11px] shrink-0">
+    <div className="h-9 w-9 rounded-full border border-white/10 bg-black/35 text-[#9a9a9a] flex items-center justify-center text-[11px] shrink-0">
       {initials || "P"}
     </div>
   );
@@ -1939,10 +2123,10 @@ function PropPickInline({
       <div className="min-w-0">
         <div className="text-white truncate">
           {name}
-          {position ? <span className="text-[#808080]"> · {String(position).toUpperCase()}</span> : null}
+          {position ? <span className="text-[#9a9a9a]"> · {String(position).toUpperCase()}</span> : null}
         </div>
-        {sub ? <div className="text-[10px] text-[#606060] mt-0.5 truncate">{sub}</div> : null}
-        <div className="text-[10px] text-[#b0b0b0] mt-0.5">
+        {sub ? <div className="text-[10px] text-[#7a7a7a] mt-0.5 truncate">{sub}</div> : null}
+        <div className="text-[10px] text-white/80 mt-0.5">
           μ Projection: <span className="text-white tabular-nums">{fmtMu(mu ?? null)}</span>
         </div>
       </div>
@@ -1951,9 +2135,9 @@ function PropPickInline({
 }
 
 function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
-  if (!ready || !Number.isFinite(amount) || amount <= 0) return <div className="text-[#404040]">—</div>;
+  if (!ready || !Number.isFinite(amount) || amount <= 0) return <div className="text-white/25">—</div>;
   return (
-    <div className="inline-flex items-center justify-center px-2 py-1 bg-[#d4af37]/15 border border-[#d4af37]/35 rounded-lg text-[#d4af37] tabular-nums">
+    <div className="inline-flex items-center justify-center px-2 py-1 bg-white/7 border border-white/12 rounded-xl text-white tabular-nums">
       {formatMoney(amount)}
     </div>
   );
@@ -1961,4 +2145,3 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
 export default ModelScreen;
-
