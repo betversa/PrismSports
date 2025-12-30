@@ -1,12 +1,13 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Plain-language UI + Book square logos)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Beginner-friendly + centered cards + book logo-only)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Makes the screen usable for new + experienced users (less “model jargon”, clearer labels)
-// ✅ Top Play cards use book square logos from /public:
-//    - dksquare.png, fdsquare.png, mgmsquare.png, pinsquare.png, betonlinesquare.png (fallback supported)
-// ✅ Keeps your existing data plumbing + dedupe + Score>=50 behavior
-// ✅ Replaces “Processing Pipeline / Anchor / No-vig” copy with simple “How it works” steps
-// ✅ Simplifies “Model” box to “System Info” (version + last update only)
-// ✅ Keeps changelog section but renames it and trims wording
+// ✅ Less “analytical” wording (new + experienced friendly)
+// ✅ Top Play cards: centered layout (title/subtitle/stats)
+// ✅ Book tile: shows ONLY the square logo (no book name text)
+// ✅ Book logos live in: /public/books/  → use paths like "/books/dksquare.png"
+// ✅ Keeps your existing plumbing: supabase queries, realtime refresh, dedupe, score>=50 filter, fair vs book odds
+// ✅ “How it works” replaces model-jargon pipeline
+// ✅ “System Info” simplified
+// ✅ Changelog kept (renamed “Recent Updates”)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -145,14 +146,14 @@ function normalizeBook(b?: string | null) {
   return b;
 }
 
-/** map normalized book to /public square logo filenames */
+/** /public/books/ → use "/books/..." */
 function bookSquareLogoSrc(bookName: string) {
   const x = (bookName || "").toLowerCase();
-  if (x.includes("draft")) return "/dksquare.png";
-  if (x.includes("fanduel")) return "/fdsquare.png";
-  if (x.includes("mgm")) return "/mgmsquare.png";
-  if (x.includes("pinnacle") || x === "pin") return "/pinsquare.png";
-  if (x.includes("betonline")) return "/betonlinesquare.png";
+  if (x.includes("draft")) return "/books/dksquare.png";
+  if (x.includes("fanduel")) return "/books/fdsquare.png";
+  if (x.includes("mgm")) return "/books/mgmsquare.png";
+  if (x.includes("pinnacle") || x === "pin") return "/books/pinsquare.png";
+  if (x.includes("betonline")) return "/books/betonlinesquare.png";
   return null;
 }
 
@@ -466,7 +467,11 @@ export function OverviewScreen() {
       .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "ev_plays" }, () => loadAll({ soft: true }))
-      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () => loadAll({ soft: true }))
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "player_prop_ev_latest" },
+        () => loadAll({ soft: true })
+      )
       .subscribe();
 
     return () => {
@@ -572,7 +577,7 @@ export function OverviewScreen() {
     const sims = simpleMeta.sims ?? 10000;
     return [
       { icon: Database, label: "Pull odds", sub: "From books" },
-      { icon: Calculator, label: "Project game", sub: `${formatInt(sims)} sims` },
+      { icon: Calculator, label: "Project games", sub: `${formatInt(sims)} sims` },
       { icon: Target, label: "Find edges", sub: "Score + EV" },
       { icon: DollarSign, label: "Price check", sub: "Fair vs book" },
     ];
@@ -588,7 +593,6 @@ export function OverviewScreen() {
     <div className="space-y-8 sm:space-y-10">
       {/* HERO */}
       <div className="relative overflow-hidden rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4 sm:p-6">
-        {/* black-forward glass + thin spectrum hairline */}
         <div className="pointer-events-none absolute inset-0">
           <div
             className="absolute inset-0 opacity-90"
@@ -629,8 +633,7 @@ export function OverviewScreen() {
               </h2>
 
               <p className="text-sm text-[#a8a8a8] leading-relaxed max-w-3xl">
-                Simple view of the strongest plays right now. Each card shows the book price vs a fair price, plus a
-                0–100 score.
+                Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
               </p>
 
               <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
@@ -680,7 +683,6 @@ export function OverviewScreen() {
             </div>
           ) : null}
 
-          {/* Quick Actions */}
           <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
             <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
             <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
@@ -731,7 +733,6 @@ export function OverviewScreen() {
                     subtitle={gameSubtitle(r)}
                     score={getGameScore(r)}
                     ev={getEvPct(r)}
-                    bookName={bookName}
                     bookLogoSrc={bookSquareLogoSrc(bookName)}
                     odds={getGameOdds(r)}
                     fairOdds={getGameFairOdds(r)}
@@ -752,7 +753,6 @@ export function OverviewScreen() {
                   subtitle={propSubtitle(r)}
                   score={getPropScore(r)}
                   ev={getEvPct(r)}
-                  bookName={bookName}
                   bookLogoSrc={bookSquareLogoSrc(bookName)}
                   odds={getPropOdds(r)}
                   fairOdds={getPropFairOdds(r)}
@@ -796,17 +796,8 @@ export function OverviewScreen() {
 
           <div className="space-y-2 text-xs">
             <MetaLine label="Version" value={simpleMeta.version} warn={simpleMeta.version === "—"} />
-            <MetaLine
-              label="Sim runs"
-              value={simpleMeta.sims == null ? "—" : formatInt(simpleMeta.sims)}
-            />
+            <MetaLine label="Sim runs" value={simpleMeta.sims == null ? "—" : formatInt(simpleMeta.sims)} />
           </div>
-
-          {simpleMeta.version === "—" ? (
-            <div className="mt-3 text-[11px] text-[#6a6a6a]">
-              Add a row to <span className="text-white">model_versions</span> to populate this box.
-            </div>
-          ) : null}
         </div>
       </section>
 
@@ -936,9 +927,7 @@ function StatusPill({ label, value, accent }: { label: string; value: string; ac
       ].join(" ")}
     >
       <div className="text-[11px] text-[#808080]">{label}</div>
-      <div className={["text-[11px] font-medium", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>
-        {value}
-      </div>
+      <div className={["text-[11px] font-medium", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
     </div>
   );
 }
@@ -966,45 +955,46 @@ function MiniStat({
   accent,
   barValue,
   leftIconSrc,
+  showValue = true,
 }: {
   label: string;
-  value: string;
+  value?: string;
   valueClassName?: string;
   accent?: boolean;
   barValue?: number | null;
   leftIconSrc?: string | null;
+  showValue?: boolean;
 }) {
   const bar = barValue != null;
+
   return (
-    <div className="rounded-lg border border-[#2a2a2a] bg-black/35 px-2.5 py-2.5 overflow-hidden">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          {leftIconSrc ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={leftIconSrc}
-              alt=""
-              className="w-4 h-4 rounded-[4px] object-cover border border-white/10 shrink-0"
-            />
-          ) : null}
-          <div className="text-[10px] text-[#6a6a6a] truncate">{label}</div>
-        </div>
-
-        {bar ? (
-          <div className="h-[6px] w-16 rounded-full bg-white/10 overflow-hidden shrink-0">
-            <div className="h-full rounded-full" style={evBarStyle(barValue)} />
-          </div>
+    <div className="rounded-lg border border-[#2a2a2a] bg-black/35 px-2.5 py-2.5 overflow-hidden text-center">
+      <div className="flex items-center justify-center gap-2">
+        {leftIconSrc ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={leftIconSrc} alt="" className="w-6 h-6 rounded-[6px] object-cover border border-white/10" />
         ) : null}
+        <div className="text-[10px] text-[#6a6a6a] truncate">{label}</div>
       </div>
 
-      <div
-        className={[
-          "text-xs mt-0.5 whitespace-nowrap truncate",
-          valueClassName ? valueClassName : accent ? "text-[#d4af37]" : "text-white",
-        ].join(" ")}
-      >
-        {value}
-      </div>
+      {bar ? (
+        <div className="mt-2 h-[6px] w-full rounded-full bg-white/10 overflow-hidden">
+          <div className="h-full rounded-full" style={evBarStyle(barValue)} />
+        </div>
+      ) : null}
+
+      {showValue ? (
+        <div
+          className={[
+            "text-xs mt-1 whitespace-nowrap truncate",
+            valueClassName ? valueClassName : accent ? "text-[#d4af37]" : "text-white",
+          ].join(" ")}
+        >
+          {value ?? "—"}
+        </div>
+      ) : (
+        <div className="mt-1 h-[16px]" />
+      )}
     </div>
   );
 }
@@ -1022,8 +1012,8 @@ function SkeletonCard() {
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
       <div className="animate-pulse space-y-3">
-        <div className="h-4 w-2/3 bg-[#1a1a1a] rounded" />
-        <div className="h-3 w-1/2 bg-[#1a1a1a] rounded" />
+        <div className="h-4 w-2/3 bg-[#1a1a1a] rounded mx-auto" />
+        <div className="h-3 w-1/2 bg-[#1a1a1a] rounded mx-auto" />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="h-10 bg-[#1a1a1a] rounded" />
           <div className="h-10 bg-[#1a1a1a] rounded" />
@@ -1068,7 +1058,6 @@ function TopPlayCard({
   subtitle,
   score,
   ev,
-  bookName,
   bookLogoSrc,
   odds,
   fairOdds,
@@ -1082,7 +1071,6 @@ function TopPlayCard({
   subtitle: string;
   score: number | null;
   ev: number | null;
-  bookName: string;
   bookLogoSrc: string | null;
   odds: number | null;
   fairOdds: number | null;
@@ -1096,12 +1084,11 @@ function TopPlayCard({
 
   return (
     <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
-      {/* Top 3: subtle gold halo only */}
       {isTop3 ? (
         <div
           className="pointer-events-none absolute inset-0 opacity-60"
           style={{
-            background: "radial-gradient(520px 220px at 30% 0%, rgba(212,175,55,0.18), transparent 60%)",
+            background: "radial-gradient(520px 220px at 50% 0%, rgba(212,175,55,0.18), transparent 60%)",
           }}
         />
       ) : null}
@@ -1109,10 +1096,10 @@ function TopPlayCard({
       <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
 
       <div className="relative space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-start gap-3">
+          <div className="flex items-center gap-2 shrink-0">
             <div
-              className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center shrink-0"
+              className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center"
               title={`Rank #${rank}`}
             >
               {showFlame ? (
@@ -1123,7 +1110,7 @@ function TopPlayCard({
             </div>
 
             {kind === "prop" ? (
-              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 overflow-hidden shrink-0">
+              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 overflow-hidden">
                 {pictureUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={pictureUrl} alt="" className="w-full h-full object-cover" />
@@ -1132,29 +1119,29 @@ function TopPlayCard({
                 )}
               </div>
             ) : null}
-
-            <div className="min-w-0">
-              <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game line"}</div>
-              <div className="text-[15px] sm:text-sm text-white leading-snug truncate">{title}</div>
-            </div>
           </div>
 
-          <div className="text-right shrink-0">
+          <div className="flex-1 min-w-0 text-center">
+            <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game line"}</div>
+            <div className="text-[15px] sm:text-sm text-white leading-snug truncate">{title}</div>
+            <div className="text-xs text-[#a8a8a8] leading-relaxed mt-1">{subtitle}</div>
+          </div>
+
+          <div className="shrink-0 text-right">
             <div className="text-[10px] text-[#6a6a6a]">Score</div>
             <div className="text-sm text-white">{scoreText}</div>
           </div>
         </div>
 
-        <div className="text-xs text-[#a8a8a8] leading-relaxed">{subtitle}</div>
-
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
           <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
-          <MiniStat label="Book" value={bookName} leftIconSrc={bookLogoSrc} />
+          {/* ✅ Book: logo only */}
+          <MiniStat label="Book" leftIconSrc={bookLogoSrc} showValue={false} />
           <MiniStat label="Book price" value={fmtOdds(odds)} />
           <MiniStat label="Fair price" value={fmtOdds(fairOdds)} accent />
         </div>
 
-        {commence ? <div className="text-[11px] text-[#6a6a6a] pt-0.5">{commence}</div> : null}
+        {commence ? <div className="text-[11px] text-[#6a6a6a] pt-0.5 text-center">{commence}</div> : null}
       </div>
     </div>
   );
