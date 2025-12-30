@@ -1,12 +1,13 @@
-// components/Header.tsx — FULL REWRITE (Dropdown selection no longer “pre-highlighted”)
+// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Fix: first dropdown item no longer appears lighter unless hovered
-//    - Remove selected-row background
-//    - Show a subtle gold dot for selected instead
+// ✅ Theme matches provided Prism logo (black/gold/slate) — removes rainbow prism gradients
+// ✅ Fix retained: first dropdown item no longer “pre-highlighted”
+//    - No selected-row background
+//    - Subtle gold dot for selected instead
 // ✅ Desktop nav centered; logo bigger (md:h-24)
 // ✅ Clicking logo -> Overview
 // ✅ Logo path: /logos/Logo.png
-// ✅ Everything else unchanged
+// ✅ Everything else unchanged (API + behavior)
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
@@ -37,43 +38,21 @@ type HeaderProps = {
 type UiSport = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
 const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
-const GOLD = "#d4af37";
+/** =========================
+ * THEME (from logo palette)
+ * ========================= */
+const GOLD = "#d89211"; // close to logo gold
+const GOLD_SOFT = "rgba(216, 146, 17, 0.18)";
+const GOLD_GLOW = "rgba(216, 146, 17, 0.32)";
+const SLATE = "#575a62";
+const PANEL = "#0b0b0b";
+const PANEL_2 = "#101010";
+const BORDER = "#2a2a2a";
+
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
 const DROPDOWN_CLOSE_DELAY_MS = 240;
 
 const TAGLINE = "Sports Models · Projections · Analysis";
-
-const PRISM_DESKTOP = {
-  blue: "rgba(0, 146, 255, 0.08)",
-  teal: "rgba(0, 201, 255, 0.06)",
-  green: "rgba(0, 200, 120, 0.07)",
-  gold: "rgba(212, 175, 55, 0.09)",
-  orange: "rgba(255, 140, 0, 0.07)",
-  red: "rgba(255, 60, 60, 0.06)",
-  violet: "rgba(170, 70, 255, 0.06)",
-};
-
-const PRISM_MOBILE = {
-  blue: "rgba(0, 146, 255, 0.11)",
-  teal: "rgba(0, 201, 255, 0.09)",
-  green: "rgba(0, 200, 120, 0.10)",
-  gold: "rgba(212, 175, 55, 0.12)",
-  orange: "rgba(255, 140, 0, 0.10)",
-  red: "rgba(255, 60, 60, 0.09)",
-  violet: "rgba(170, 70, 255, 0.09)",
-};
-
-const BLACK_GLASS_DESKTOP = {
-  top: "rgba(0,0,0,0.38)",
-  mid: "rgba(0,0,0,0.60)",
-  bottom: "rgba(0,0,0,0.82)",
-};
-
-const BLACK_GLASS_MOBILE = {
-  top: "rgba(0,0,0,0.46)",
-  mid: "rgba(0,0,0,0.74)",
-  bottom: "rgba(0,0,0,0.90)",
-};
 
 /** =========================
  * SPORT MAPPING
@@ -132,7 +111,11 @@ function NavItem({
       {label}
       <span
         className="absolute left-0 -bottom-2 h-[2px] w-full rounded"
-        style={{ backgroundColor: GOLD, opacity: active ? 1 : 0 }}
+        style={{
+          background:
+            "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.95), rgba(216,146,17,0.0))",
+          opacity: active ? 1 : 0,
+        }}
       />
     </button>
   );
@@ -193,9 +176,6 @@ function HoverDropdown({
     setOpen(true);
   };
 
-  const P = PRISM_DESKTOP;
-  const B = BLACK_GLASS_DESKTOP;
-
   return (
     <div ref={wrapRef} className="relative" onMouseEnter={openNow} onMouseLeave={scheduleClose}>
       <button
@@ -215,31 +195,44 @@ function HoverDropdown({
         <ChevronDown className="w-4 h-4 opacity-70" />
         <span
           className="absolute left-0 -bottom-2 h-[2px] w-full rounded"
-          style={{ backgroundColor: GOLD, opacity: active ? 1 : 0 }}
+          style={{
+            background:
+              "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.95), rgba(216,146,17,0.0))",
+            opacity: active ? 1 : 0,
+          }}
         />
       </button>
 
       {open && (
         <div
-          className="absolute left-0 mt-3 w-[280px] rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl overflow-hidden z-50"
+          className="absolute left-0 mt-3 w-[280px] rounded-xl border shadow-2xl overflow-hidden z-50"
+          style={{
+            borderColor: BORDER,
+            background: PANEL,
+          }}
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          {/* Overlay behind list */}
+          {/* Gold + slate glass overlay */}
           <div
             className="pointer-events-none absolute inset-0 z-0"
             style={{
               background: [
-                `radial-gradient(520px 160px at 18% 0%, ${P.blue}, transparent 62%)`,
-                `radial-gradient(520px 160px at 34% 0%, ${P.teal}, transparent 64%)`,
-                `radial-gradient(560px 180px at 50% 0%, ${P.green}, transparent 64%)`,
-                `radial-gradient(560px 180px at 66% 0%, ${P.gold}, transparent 66%)`,
-                `radial-gradient(560px 180px at 80% 0%, ${P.orange}, transparent 66%)`,
-                `radial-gradient(560px 220px at 98% 30%, ${P.red}, transparent 68%)`,
-                `radial-gradient(720px 300px at 70% 120%, ${P.violet}, transparent 62%)`,
-                `linear-gradient(180deg, ${B.top}, ${B.mid} 55%, ${B.bottom} 100%)`,
-                `linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.00) 60%)`,
+                `radial-gradient(520px 220px at 14% 0%, ${GOLD_GLOW}, transparent 62%)`,
+                `radial-gradient(560px 260px at 72% -10%, rgba(87,90,98,0.28), transparent 64%)`,
+                `radial-gradient(720px 340px at 70% 120%, rgba(0,0,0,0.75), transparent 62%)`,
+                `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0.0) 100%)`,
+                `linear-gradient(180deg, rgba(0,0,0,0.22), rgba(0,0,0,0.64) 55%, rgba(0,0,0,0.86) 100%)`,
               ].join(", "),
+            }}
+          />
+
+          {/* Top gold hairline */}
+          <div
+            className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] opacity-80"
+            style={{
+              background:
+                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.62), rgba(216,146,17,0.0))",
             }}
           />
 
@@ -262,11 +255,11 @@ function HoverDropdown({
                   }}
                   className={[
                     "w-full text-left px-4 py-3 flex items-center justify-between",
-                    "transition-colors border-b border-[#141414] last:border-b-0",
-                    // ✅ Every row identical at rest
-                    "bg-[#0b0b0b]",
+                    "transition-colors border-b last:border-b-0",
+                    // ✅ Every row identical at rest (no “pre-highlight”)
                     enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
                   ].join(" ")}
+                  style={{ borderBottomColor: "#141414" }}
                 >
                   <span className="text-[14px] font-medium leading-tight">{title}</span>
 
@@ -280,7 +273,10 @@ function HoverDropdown({
                       <span className="text-[11px] text-[#8a8a8a] hidden sm:inline">Selected</span>
                       <span
                         className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: GOLD, boxShadow: "0 0 0 2px rgba(212,175,55,0.18)" }}
+                        style={{
+                          backgroundColor: GOLD,
+                          boxShadow: `0 0 0 2px rgba(216,146,17,0.18), 0 0 18px rgba(216,146,17,0.18)`,
+                        }}
                         aria-label="Selected"
                       />
                     </span>
@@ -327,60 +323,47 @@ export function Header({
   }, [onHeightChange]);
 
   return (
-    <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
+    <header
+      ref={headerRef}
+      className="fixed top-0 left-0 right-0 z-50 border-b"
+      style={{
+        borderColor: BORDER,
+        background: PANEL,
+      }}
+    >
+      {/* BACKDROP: black glass + gold glow + slate vignette (matches logo) */}
       <div className="pointer-events-none absolute inset-0">
         <div
-          className="absolute inset-0 md:hidden"
+          className="absolute inset-0"
           style={{
             background: [
-              `linear-gradient(90deg,
-                ${PRISM_MOBILE.blue} 0%,
-                ${PRISM_MOBILE.teal} 16%,
-                ${PRISM_MOBILE.green} 33%,
-                ${PRISM_MOBILE.gold} 50%,
-                ${PRISM_MOBILE.orange} 66%,
-                ${PRISM_MOBILE.red} 82%,
-                ${PRISM_MOBILE.violet} 100%
-              )`,
-              `radial-gradient(520px 180px at 18% 0%, ${PRISM_MOBILE.blue}, transparent 62%)`,
-              `radial-gradient(520px 180px at 52% 0%, ${PRISM_MOBILE.gold}, transparent 64%)`,
-              `radial-gradient(520px 200px at 88% 0%, ${PRISM_MOBILE.red}, transparent 66%)`,
-              `linear-gradient(180deg, ${BLACK_GLASS_MOBILE.top}, ${BLACK_GLASS_MOBILE.mid} 52%, ${BLACK_GLASS_MOBILE.bottom} 100%)`,
-              `linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0) 100%)`,
+              // gold glow (slightly left so it “backs” the logo)
+              `radial-gradient(900px 340px at 22% 0%, ${GOLD_GLOW}, transparent 62%)`,
+              // slate sheen
+              `radial-gradient(980px 360px at 70% -20%, rgba(87,90,98,0.24), transparent 66%)`,
+              // subtle top highlight
+              `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.018) 55%, rgba(0,0,0,0.0) 100%)`,
+              // black glass stack
+              `linear-gradient(180deg, rgba(0,0,0,0.28), rgba(0,0,0,0.64) 52%, rgba(0,0,0,0.86) 100%)`,
             ].join(", "),
           }}
         />
 
+        {/* Top gold hairline */}
         <div
-          className="absolute inset-0 hidden md:block"
+          className="absolute left-0 right-0 top-0 h-[1px] opacity-70"
           style={{
-            background: [
-              `radial-gradient(900px 240px at 14% 0%, ${PRISM_DESKTOP.blue}, transparent 66%)`,
-              `radial-gradient(820px 240px at 30% 0%, ${PRISM_DESKTOP.teal}, transparent 68%)`,
-              `radial-gradient(880px 260px at 48% 0%, ${PRISM_DESKTOP.green}, transparent 68%)`,
-              `radial-gradient(900px 260px at 62% 0%, ${PRISM_DESKTOP.gold}, transparent 70%)`,
-              `radial-gradient(920px 280px at 78% 0%, ${PRISM_DESKTOP.orange}, transparent 70%)`,
-              `radial-gradient(860px 260px at 92% 10%, ${PRISM_DESKTOP.red}, transparent 72%)`,
-              `radial-gradient(900px 340px at 60% 120%, ${PRISM_DESKTOP.violet}, transparent 66%)`,
-              `linear-gradient(180deg, ${BLACK_GLASS_DESKTOP.top}, ${BLACK_GLASS_DESKTOP.mid} 52%, ${BLACK_GLASS_DESKTOP.bottom} 100%)`,
-              `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0) 100%)`,
-            ].join(", "),
+            background:
+              "linear-gradient(90deg, rgba(0,0,0,0), rgba(216,146,17,0.42), rgba(0,0,0,0))",
           }}
         />
 
+        {/* Bottom gold underline (brand anchor) */}
         <div
-          className="absolute left-0 right-0 top-0 h-[1px] opacity-72 md:opacity-55"
+          className="absolute left-0 right-0 bottom-0 h-[1px] opacity-75"
           style={{
             background:
-              "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.40), rgba(0,200,120,0.40), rgba(212,175,55,0.45), rgba(255,140,0,0.40), rgba(255,60,60,0.35), rgba(170,70,255,0.35), rgba(0,0,0,0))",
-          }}
-        />
-
-        <div
-          className="absolute left-0 right-0 bottom-0 h-[1px] opacity-65"
-          style={{
-            background:
-              "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.42), rgba(212,175,55,0.0))",
+              "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.55), rgba(216,146,17,0.0))",
           }}
         />
       </div>
@@ -391,7 +374,8 @@ export function Header({
           <div className="flex items-start min-w-0">
             <button
               onClick={onOpenMenu}
-              className="md:hidden mt-1.5 p-2 rounded border border-[#2a2a2a] text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
+              className="md:hidden mt-1.5 p-2 rounded border text-[#cfcfcf] hover:border-[#3a3a3a] mr-3"
+              style={{ borderColor: BORDER, background: "rgba(255,255,255,0.02)" }}
               aria-label="Open menu"
               type="button"
             >
@@ -404,6 +388,7 @@ export function Header({
                   type="button"
                   onClick={() => onNavigate?.("overview")}
                   className="group flex items-center rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+                  style={{ outlineColor: GOLD }}
                   aria-label="Go to Overview"
                 >
                   <img
@@ -412,6 +397,8 @@ export function Header({
                     className={[
                       "h-16 sm:h-20 md:h-24 w-auto object-contain select-none flex-shrink-0",
                       "transition-transform duration-200 group-hover:scale-[1.01]",
+                      // tiny drop-shadow to feel “stamped” on glass
+                      "drop-shadow-[0_10px_26px_rgba(0,0,0,0.55)]",
                     ].join(" ")}
                     draggable={false}
                   />
@@ -421,20 +408,23 @@ export function Header({
                   <div className="inline-block w-fit max-w-full">
                     <div
                       className={[
-                        "text-[#9a9a9a] font-medium tracking-wide leading-snug",
+                        "font-medium tracking-wide leading-snug",
                         "text-[11px] sm:text-[12px] md:text-[12px]",
                         "truncate",
                       ].join(" ")}
+                      style={{ color: "rgba(242,241,243,0.62)" }}
                       title={TAGLINE}
                     >
                       {TAGLINE}
                     </div>
 
+                    {/* Gold underline (no rainbow) */}
                     <span
-                      className="block mt-1 h-[2px] w-full rounded-full opacity-60 md:opacity-45"
+                      className="block mt-1 h-[2px] w-full rounded-full opacity-70 md:opacity-55"
                       style={{
                         background:
-                          "linear-gradient(90deg, rgba(0,146,255,0.52), rgba(0,200,120,0.52), rgba(212,175,55,0.70), rgba(255,140,0,0.52), rgba(255,60,60,0.42), rgba(170,70,255,0.42))",
+                          "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.90), rgba(216,146,17,0.0))",
+                        boxShadow: `0 0 18px ${GOLD_SOFT}`,
                       }}
                     />
                   </div>
@@ -468,7 +458,7 @@ export function Header({
                 }}
               />
 
-              <div className="h-5 w-px bg-[#2a2a2a]" />
+              <div className="h-5 w-px" style={{ background: "#2a2a2a" }} />
 
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
               <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
@@ -479,13 +469,23 @@ export function Header({
           {/* RIGHT */}
           <div className="hidden md:flex items-center justify-end">
             <div
-              className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
+              className="flex items-center gap-2 rounded-full border px-3 py-1"
               style={{
-                background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+                borderColor: BORDER,
+                background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015))",
               }}
             >
-              <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
-              <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
+              <div className="text-[12px] font-medium" style={{ color: "rgba(242,241,243,0.55)" }}>
+                Live
+              </div>
+              <div
+                className="w-2 h-2 rounded-full"
+                title="Live"
+                style={{
+                  background: "rgba(34,197,94,0.95)", // emerald
+                  boxShadow: "0 0 0 2px rgba(34,197,94,0.14)",
+                }}
+              />
             </div>
           </div>
         </div>
