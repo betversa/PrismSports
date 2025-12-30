@@ -1,14 +1,13 @@
-// components/Header.tsx — FULL REWRITE (Desktop auto-hide on scroll + no mobile change)
+// components/Header.tsx — FULL REWRITE (Desktop tighter height / padding; mobile unchanged)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Desktop ONLY (md+): header slides up (hides) when scrolling down, reappears when scrolling up
-// ✅ Desktop ONLY: when hidden, onHeightChange reports 0 so content can reclaim space
-// ✅ Mobile unchanged: header always visible
-// ✅ Tagline underline hugs tagline width (your current look)
+// ✅ Desktop: reduced vertical padding + slightly smaller logo to reclaim space
+// ✅ Mobile: unchanged (same height + overlays)
+// ✅ Tagline underline hugs tagline width
 // ✅ Clicking logo -> Overview
 // ✅ Logo path: /logos/Logo.png
-// ✅ Everything else preserved
+// ✅ Everything else unchanged
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
 import type { SportKey } from "../App";
 
@@ -111,97 +110,6 @@ function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void)
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [ref, onClose]);
-}
-
-/** =========================
- * DESKTOP AUTO-HIDE HOOK
- * =========================
- * - md+ only (min-width: 768px)
- * - hide on scroll down, show on scroll up
- * - show when near top
- */
-function useDesktopAutoHideHeader() {
-  const [hidden, setHidden] = useState(false);
-
-  const hiddenRef = useRef(false);
-  const lastYRef = useRef(0);
-  const tickingRef = useRef(false);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const mq = window.matchMedia("(min-width: 768px)");
-    const applyForViewport = () => {
-      // When leaving desktop -> ensure visible
-      if (!mq.matches) {
-        hiddenRef.current = false;
-        setHidden(false);
-      }
-    };
-
-    applyForViewport();
-
-    const onScroll = () => {
-      if (!mq.matches) return;
-
-      const y = window.scrollY || 0;
-
-      if (tickingRef.current) return;
-      tickingRef.current = true;
-
-      window.requestAnimationFrame(() => {
-        const last = lastYRef.current;
-        const dy = y - last;
-
-        // Always show near top so it doesn’t feel “stuck hidden”
-        if (y < 12) {
-          if (hiddenRef.current) {
-            hiddenRef.current = false;
-            setHidden(false);
-          }
-          lastYRef.current = y;
-          tickingRef.current = false;
-          return;
-        }
-
-        // Ignore micro jitter
-        if (Math.abs(dy) < 6) {
-          lastYRef.current = y;
-          tickingRef.current = false;
-          return;
-        }
-
-        // Hide on scroll down, show on scroll up
-        if (dy > 0) {
-          if (!hiddenRef.current) {
-            hiddenRef.current = true;
-            setHidden(true);
-          }
-        } else {
-          if (hiddenRef.current) {
-            hiddenRef.current = false;
-            setHidden(false);
-          }
-        }
-
-        lastYRef.current = y;
-        tickingRef.current = false;
-      });
-    };
-
-    // Prime lastY so first scroll works
-    lastYRef.current = window.scrollY || 0;
-
-    window.addEventListener("scroll", onScroll, { passive: true });
-    mq.addEventListener?.("change", applyForViewport);
-
-    return () => {
-      window.removeEventListener("scroll", onScroll as any);
-      mq.removeEventListener?.("change", applyForViewport);
-    };
-  }, []);
-
-  return hidden;
 }
 
 function NavItem({
@@ -388,25 +296,11 @@ export function Header({
 }: HeaderProps) {
   const headerRef = useRef<HTMLElement>(null);
 
-  // ✅ NEW: desktop-only hide state
-  const desktopHidden = useDesktopAutoHideHeader();
-
-  // Track measured height so we can report 0 while hidden (desktop only) to avoid empty space.
-  const measuredHeightRef = useRef<number>(0);
-
   useLayoutEffect(() => {
     if (!headerRef.current || !onHeightChange) return;
     const el = headerRef.current;
 
-    const report = () => {
-      const h = Math.ceil(el.getBoundingClientRect().height);
-      measuredHeightRef.current = h;
-
-      // If hidden on desktop, reclaim space by reporting 0.
-      // On mobile, desktopHidden is always false, so this behaves like before.
-      onHeightChange(desktopHidden ? 0 : h);
-    };
-
+    const report = () => onHeightChange(Math.ceil(el.getBoundingClientRect().height));
     report();
 
     const ro = new ResizeObserver(() => report());
@@ -416,31 +310,13 @@ export function Header({
       ro.disconnect();
       window.removeEventListener("resize", report);
     };
-  }, [onHeightChange, desktopHidden]);
-
-  // If hide state flips, immediately update height (even if RO doesn't fire)
-  useEffect(() => {
-    if (!onHeightChange) return;
-    const h = measuredHeightRef.current || 0;
-    onHeightChange(desktopHidden ? 0 : h);
-  }, [desktopHidden, onHeightChange]);
+  }, [onHeightChange]);
 
   const oddsActive = activeScreen === "odds";
   const predsActive = activeScreen === "monte-carlo";
 
-  const headerClass = useMemo(() => {
-    // ✅ Key change: desktop transform toggles based on scroll
-    // - mobile: always translate-y-0 (no md: rules apply)
-    // - desktop: translate-y-0 when visible, -translate-y-full when hidden
-    return [
-      "fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]",
-      "transform-gpu transition-transform duration-200 ease-out",
-      desktopHidden ? "md:-translate-y-full" : "md:translate-y-0",
-    ].join(" ");
-  }, [desktopHidden]);
-
   return (
-    <header ref={headerRef} className={headerClass}>
+    <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
       <div className="pointer-events-none absolute inset-0">
         {/* MOBILE overlay (full spectrum visible + MORE black) */}
         <div
@@ -502,7 +378,8 @@ export function Header({
         />
       </div>
 
-      <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-3 pb-2">
+      {/* ✅ DESKTOP padding tightened: md:pt-2 md:pb-1 (was bigger) */}
+      <div className="relative w-full flex items-center justify-between px-3 md:px-6 pt-2.5 md:pt-2 pb-2 md:pb-1">
         <div className="flex items-start min-w-0">
           <button
             onClick={onOpenMenu}
@@ -526,7 +403,8 @@ export function Header({
                   src="/logos/Logo.png"
                   alt="PrismSports"
                   className={[
-                    "h-14 sm:h-16 md:h-20 w-auto object-contain select-none flex-shrink-0",
+                    // ✅ DESKTOP logo slightly smaller to reclaim space (mobile unchanged)
+                    "h-14 sm:h-16 md:h-16 w-auto object-contain select-none flex-shrink-0",
                     "transition-transform duration-200 group-hover:scale-[1.01]",
                   ].join(" ")}
                   draggable={false}
@@ -558,8 +436,8 @@ export function Header({
               </div>
             </div>
 
-            {/* Desktop nav */}
-            <nav className="hidden md:flex items-center gap-7 pb-2 pt-1">
+            {/* ✅ DESKTOP nav spacing tightened a bit */}
+            <nav className="hidden md:flex items-center gap-6 pb-1 pt-0.5">
               <HoverDropdown
                 label="Odds"
                 suffix="Odds"
