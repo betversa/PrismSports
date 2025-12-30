@@ -1,10 +1,9 @@
-// components/Header.tsx — FULL REWRITE (Dropdown row tint fix + keeps your current look)
+// components/Header.tsx — FULL REWRITE (Dropdown selection no longer “pre-highlighted”)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Fix: dropdown first item no longer appears “pre-highlighted”
-//    - Overlay stays behind everything
-//    - Each row gets a consistent base background
-//    - Only hover/selected change background
-// ✅ Desktop nav centered; logo bigger (keep your md:h-24 change if you want)
+// ✅ Fix: first dropdown item no longer appears lighter unless hovered
+//    - Remove selected-row background
+//    - Show a subtle gold dot for selected instead
+// ✅ Desktop nav centered; logo bigger (md:h-24)
 // ✅ Clicking logo -> Overview
 // ✅ Logo path: /logos/Logo.png
 // ✅ Everything else unchanged
@@ -226,7 +225,7 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          {/* ✅ Overlay stays BEHIND all rows (and can't tint row 1 differently) */}
+          {/* Overlay behind list */}
           <div
             className="pointer-events-none absolute inset-0 z-0"
             style={{
@@ -244,17 +243,12 @@ function HoverDropdown({
             }}
           />
 
-          {/* ✅ Rows get their own consistent base background */}
           <div className="relative z-10">
             {SPORTS.map((ui) => {
               const db = uiToDbSport(ui);
               const enabled = isEnabled(db);
               const title = `${ui} ${suffix}`;
               const selected = selectedDbSport === db;
-
-              const base = "bg-[#0b0b0b]"; // consistent for every row
-              const hover = "hover:bg-[#141414]";
-              const sel = "bg-[#141414]";
 
               return (
                 <button
@@ -269,17 +263,30 @@ function HoverDropdown({
                   className={[
                     "w-full text-left px-4 py-3 flex items-center justify-between",
                     "transition-colors border-b border-[#141414] last:border-b-0",
-                    base,
-                    enabled ? `text-white ${hover}` : "text-[#6f6f6f] cursor-not-allowed",
-                    selected ? sel : "",
+                    // ✅ Every row identical at rest
+                    "bg-[#0b0b0b]",
+                    enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
                   ].join(" ")}
                 >
                   <span className="text-[14px] font-medium leading-tight">{title}</span>
+
                   {!enabled ? (
                     <span className="font-semibold text-[11px]" style={{ color: GOLD }}>
                       COMING SOON
                     </span>
-                  ) : null}
+                  ) : selected ? (
+                    // ✅ Subtle selected indicator (NO background)
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-[11px] text-[#8a8a8a] hidden sm:inline">Selected</span>
+                      <span
+                        className="w-2 h-2 rounded-full"
+                        style={{ backgroundColor: GOLD, boxShadow: "0 0 0 2px rgba(212,175,55,0.18)" }}
+                        aria-label="Selected"
+                      />
+                    </span>
+                  ) : (
+                    <span className="w-2 h-2" />
+                  )}
                 </button>
               );
             })}
@@ -378,9 +385,9 @@ export function Header({
         />
       </div>
 
-      <div className="relative w-full px-3 md:px-6 pt-2.5 md:pt-2 pb-2 md:pb-1">
+      <div className="relative w-full px-3 md:px-6 pt-2 md:pt-2 pb-2 md:pb-1">
         <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center gap-2">
-          {/* LEFT: brand */}
+          {/* LEFT */}
           <div className="flex items-start min-w-0">
             <button
               onClick={onOpenMenu}
@@ -403,7 +410,6 @@ export function Header({
                     src="/logos/Logo.png"
                     alt="PrismSports"
                     className={[
-                      // keep your change if you already set md:h-24
                       "h-16 sm:h-20 md:h-24 w-auto object-contain select-none flex-shrink-0",
                       "transition-transform duration-200 group-hover:scale-[1.01]",
                     ].join(" ")}
@@ -437,7 +443,7 @@ export function Header({
             </div>
           </div>
 
-          {/* CENTER: desktop nav */}
+          {/* CENTER */}
           <div className="hidden md:flex justify-center">
             <nav className="flex items-center gap-7 pb-1 pt-0.5">
               <HoverDropdown
@@ -470,7 +476,7 @@ export function Header({
             </nav>
           </div>
 
-          {/* RIGHT: live pill */}
+          {/* RIGHT */}
           <div className="hidden md:flex items-center justify-end">
             <div
               className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
