@@ -1,13 +1,10 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Beginner-friendly + centered cards + book logo-only)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Centered cards + book logo-only + matchup abbreviations + wrap-safe)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Less “analytical” wording (new + experienced friendly)
-// ✅ Top Play cards: centered layout (title/subtitle/stats)
-// ✅ Book tile: shows ONLY the square logo (no book name text)
-// ✅ Book logos live in: /public/books/  → use paths like "/books/dksquare.png"
+// ✅ Game/Matchup titles shortened using team_map (canonical → Abbreviation)
+// ✅ Anything that would truncate now wraps (labels + values)
+// ✅ Book tile: label on top, logo BELOW label (no book name text)
+// ✅ Book logos in /public/books/ → use "/books/..." paths
 // ✅ Keeps your existing plumbing: supabase queries, realtime refresh, dedupe, score>=50 filter, fair vs book odds
-// ✅ “How it works” replaces model-jargon pipeline
-// ✅ “System Info” simplified
-// ✅ Changelog kept (renamed “Recent Updates”)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -38,10 +35,6 @@ type ModelVersionRow = {
   release_date: string | null;
   status: string | null;
   simulations: number | null;
-  calib_window: string | null;
-  anchor_weight_min: number | null;
-  anchor_weight_max: number | null;
-  min_ev_threshold: number | null;
   updated_at: string | null;
 };
 
@@ -49,6 +42,12 @@ type ChangeLogRow = {
   version: string;
   date: string | null;
   changes: string[];
+};
+
+type TeamMapRow = {
+  canonical: string | null;
+  abbreviation: string | null; // column name you specified: "Abbreviation" in description; DB typically lower-case
+  Abbreviation?: string | null; // fallback in case the column is capitalized
 };
 
 type EvPlayRow = {
@@ -292,6 +291,65 @@ function evBarStyle(ev: number | null): React.CSSProperties {
 }
 
 /* =========================================================
+   TEAM ABBREVIATIONS
+========================================================= */
+
+function canonKey(s: string) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,()]/g, "")
+    .trim();
+}
+
+function buildAbbrevMap(rows: TeamMapRow[]) {
+  const m = new Map<string, string>();
+  for (const r of rows || []) {
+    const canonical = r.canonical ?? "";
+    const abbr = (r.abbreviation ?? r.Abbreviation ?? "") as string;
+    const k = canonKey(canonical);
+    if (k && abbr) m.set(k, abbr.trim());
+  }
+  return m;
+}
+
+/**
+ * Tries to shorten "Los Angeles Lakers vs Golden State Warriors"
+ * or "Los Angeles Lakers @ Golden State Warriors"
+ * to "LAL vs GSW" / "LAL @ GSW" using team_map abbreviations.
+ */
+function abbreviateMatchup(matchup: string | null | undefined, abbrevMap: Map<string, string>) {
+  const raw = (matchup ?? "").trim();
+  if (!raw) return "—";
+
+  // If it's already short like "LAL vs GSW", keep it.
+  if (raw.length <= 15 && /vs|@/i.test(raw)) return raw;
+
+  const separators = [" vs ", " VS ", " @ ", " at ", " AT ", " v ", " V "];
+
+  for (const sep of separators) {
+    if (raw.includes(sep)) {
+      const parts = raw.split(sep);
+      if (parts.length >= 2) {
+        const left = parts[0].trim();
+        const right = parts.slice(1).join(sep).trim();
+
+        const leftAbbr = abbrevMap.get(canonKey(left)) ?? left;
+        const rightAbbr = abbrevMap.get(canonKey(right)) ?? right;
+
+        // normalize separator to nice compact forms
+        const niceSep = sep.toLowerCase().includes("@") || sep.toLowerCase().includes("at") ? " @ " : " vs ";
+        return `${leftAbbr}${niceSep}${rightAbbr}`;
+      }
+    }
+  }
+
+  // If we can’t parse it, attempt single-team abbreviation fallback
+  const single = abbrevMap.get(canonKey(raw));
+  return single ?? raw;
+}
+
+/* =========================================================
    DEDUPE
 ========================================================= */
 
@@ -376,6 +434,10 @@ export function OverviewScreen() {
   const [evPlays, setEvPlays] = useState<EvPlayRow[]>([]);
   const [propPlays, setPropPlays] = useState<PropEvRow[]>([]);
 
+  // ✅ team abbreviations
+  const [teamMapRows, setTeamMapRows] = useState<TeamMapRow[]>([]);
+  const abbrevMap = useMemo(() => buildAbbrevMap(teamMapRows), [teamMapRows]);
+
   const [tab, setTab] = useState<PlayTab>("all");
 
   async function loadAll({ soft }: { soft?: boolean } = {}) {
@@ -391,7 +453,7 @@ export function OverviewScreen() {
 
       const versionQ = supabase
         .from("model_versions")
-        .select("version,status,simulations,updated_at")
+        .select("version,status,simulations,updated_at,release_date")
         .order("release_date", { ascending: false })
         .limit(1);
 
@@ -409,12 +471,16 @@ export function OverviewScreen() {
         .order("created_at", { ascending: false })
         .limit(250);
 
-      const [runRes, versionRes, changelogRes, evRes, propsRes] = await Promise.all([
+      // ✅ team map for abbreviations
+      const teamMapQ = supabase.from("team_map").select("canonical,abbreviation,Abbreviation").limit(2000);
+
+      const [runRes, versionRes, changelogRes, evRes, propsRes, teamMapRes] = await Promise.all([
         runQ,
         versionQ,
         changelogQ,
         evQ,
         propsQ,
+        teamMapQ,
       ]);
 
       if (runRes.error) throw runRes.error;
@@ -447,6 +513,13 @@ export function OverviewScreen() {
       } else {
         setPropPlays((propsRes.data ?? []) as any);
       }
+
+      if (teamMapRes.error) {
+        console.warn("[Overview] team_map query failed:", teamMapRes.error.message);
+        setTeamMapRows([]);
+      } else {
+        setTeamMapRows((teamMapRes.data ?? []) as any);
+      }
     } catch (e: any) {
       setError(e?.message ?? "Unknown error");
     } finally {
@@ -472,6 +545,8 @@ export function OverviewScreen() {
         { event: "*", schema: "public", table: "player_prop_ev_latest" },
         () => loadAll({ soft: true })
       )
+      // team_map changes should also refresh abbreviations
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_map" }, () => loadAll({ soft: true }))
       .subscribe();
 
     return () => {
@@ -723,13 +798,15 @@ export function OverviewScreen() {
               if (p.kind === "game") {
                 const r = p.row as EvPlayRow;
                 const bookName = normalizeBook(r.bookmaker);
+                const titleShort = abbreviateMatchup(r.matchup ?? "—", abbrevMap);
+
                 return (
                   <TopPlayCard
                     key={`game-${r.id ?? idx}`}
                     kind="game"
                     rank={idx + 1}
                     isTop3={isTop3}
-                    title={r.matchup ?? "—"}
+                    title={titleShort}
                     subtitle={gameSubtitle(r)}
                     score={getGameScore(r)}
                     ev={getEvPct(r)}
@@ -743,6 +820,7 @@ export function OverviewScreen() {
 
               const r = p.row as PropEvRow;
               const bookName = normalizeBook(r.book ?? r.bookmaker);
+
               return (
                 <TopPlayCard
                   key={`prop-${r.id ?? idx}`}
@@ -948,13 +1026,17 @@ function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: st
   );
 }
 
+/**
+ * ✅ Wrap-safe + centered
+ * ✅ For book tile: label on top, logo below label, no value text
+ */
 function MiniStat({
   label,
   value,
   valueClassName,
   accent,
   barValue,
-  leftIconSrc,
+  iconBelowLabelSrc,
   showValue = true,
 }: {
   label: string;
@@ -962,19 +1044,26 @@ function MiniStat({
   valueClassName?: string;
   accent?: boolean;
   barValue?: number | null;
-  leftIconSrc?: string | null;
+  iconBelowLabelSrc?: string | null;
   showValue?: boolean;
 }) {
   const bar = barValue != null;
 
   return (
     <div className="rounded-lg border border-[#2a2a2a] bg-black/35 px-2.5 py-2.5 overflow-hidden text-center">
-      <div className="flex items-center justify-center gap-2">
-        {leftIconSrc ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={leftIconSrc} alt="" className="w-6 h-6 rounded-[6px] object-cover border border-white/10" />
+      <div className="space-y-1">
+        <div className="text-[10px] text-[#6a6a6a] whitespace-normal leading-snug">{label}</div>
+
+        {iconBelowLabelSrc ? (
+          <div className="flex justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={iconBelowLabelSrc}
+              alt=""
+              className="w-7 h-7 rounded-[8px] object-cover border border-white/10"
+            />
+          </div>
         ) : null}
-        <div className="text-[10px] text-[#6a6a6a] truncate">{label}</div>
       </div>
 
       {bar ? (
@@ -986,7 +1075,7 @@ function MiniStat({
       {showValue ? (
         <div
           className={[
-            "text-xs mt-1 whitespace-nowrap truncate",
+            "text-xs mt-1 whitespace-normal break-words leading-snug",
             valueClassName ? valueClassName : accent ? "text-[#d4af37]" : "text-white",
           ].join(" ")}
         >
@@ -1098,10 +1187,7 @@ function TopPlayCard({
       <div className="relative space-y-3">
         <div className="flex items-start gap-3">
           <div className="flex items-center gap-2 shrink-0">
-            <div
-              className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center"
-              title={`Rank #${rank}`}
-            >
+            <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center">
               {showFlame ? (
                 <Flame className="w-4 h-4" style={{ color: GOLD }} />
               ) : (
@@ -1122,9 +1208,14 @@ function TopPlayCard({
           </div>
 
           <div className="flex-1 min-w-0 text-center">
-            <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game line"}</div>
-            <div className="text-[15px] sm:text-sm text-white leading-snug truncate">{title}</div>
-            <div className="text-xs text-[#a8a8a8] leading-relaxed mt-1">{subtitle}</div>
+            <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game"}</div>
+            {/* ✅ wrap instead of truncate */}
+            <div className="text-[15px] sm:text-sm text-white leading-snug whitespace-normal break-words">
+              {title}
+            </div>
+            <div className="text-xs text-[#a8a8a8] leading-relaxed mt-1 whitespace-normal break-words">
+              {subtitle}
+            </div>
           </div>
 
           <div className="shrink-0 text-right">
@@ -1135,8 +1226,8 @@ function TopPlayCard({
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
           <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
-          {/* ✅ Book: logo only */}
-          <MiniStat label="Book" leftIconSrc={bookLogoSrc} showValue={false} />
+          {/* ✅ Book: label + logo below */}
+          <MiniStat label="Book" iconBelowLabelSrc={bookLogoSrc} showValue={false} />
           <MiniStat label="Book price" value={fmtOdds(odds)} />
           <MiniStat label="Fair price" value={fmtOdds(fairOdds)} accent />
         </div>
