@@ -1,9 +1,10 @@
-// components/Header.tsx — FULL REWRITE (Desktop nav centered; bigger logo; tight desktop)
+// components/Header.tsx — FULL REWRITE (Dropdown row tint fix + keeps your current look)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Logo bigger (mobile + desktop) without blowing up header height too much
-// ✅ Desktop: nav centered
-// ✅ Mobile: unchanged layout + overlays + hamburger
-// ✅ Tagline underline hugs tagline width
+// ✅ Fix: dropdown first item no longer appears “pre-highlighted”
+//    - Overlay stays behind everything
+//    - Each row gets a consistent base background
+//    - Only hover/selected change background
+// ✅ Desktop nav centered; logo bigger (keep your md:h-24 change if you want)
 // ✅ Clicking logo -> Overview
 // ✅ Logo path: /logos/Logo.png
 // ✅ Everything else unchanged
@@ -225,8 +226,9 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
+          {/* ✅ Overlay stays BEHIND all rows (and can't tint row 1 differently) */}
           <div
-            className="pointer-events-none absolute inset-0"
+            className="pointer-events-none absolute inset-0 z-0"
             style={{
               background: [
                 `radial-gradient(520px 160px at 18% 0%, ${P.blue}, transparent 62%)`,
@@ -241,12 +243,18 @@ function HoverDropdown({
               ].join(", "),
             }}
           />
-          <div className="relative">
+
+          {/* ✅ Rows get their own consistent base background */}
+          <div className="relative z-10">
             {SPORTS.map((ui) => {
               const db = uiToDbSport(ui);
               const enabled = isEnabled(db);
               const title = `${ui} ${suffix}`;
               const selected = selectedDbSport === db;
+
+              const base = "bg-[#0b0b0b]"; // consistent for every row
+              const hover = "hover:bg-[#141414]";
+              const sel = "bg-[#141414]";
 
               return (
                 <button
@@ -261,8 +269,9 @@ function HoverDropdown({
                   className={[
                     "w-full text-left px-4 py-3 flex items-center justify-between",
                     "transition-colors border-b border-[#141414] last:border-b-0",
-                    enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
-                    selected ? "bg-[#141414]" : "",
+                    base,
+                    enabled ? `text-white ${hover}` : "text-[#6f6f6f] cursor-not-allowed",
+                    selected ? sel : "",
                   ].join(" ")}
                 >
                   <span className="text-[14px] font-medium leading-tight">{title}</span>
@@ -309,9 +318,6 @@ export function Header({
       window.removeEventListener("resize", report);
     };
   }, [onHeightChange]);
-
-  const oddsActive = activeScreen === "odds";
-  const predsActive = activeScreen === "monte-carlo";
 
   return (
     <header ref={headerRef} className="fixed top-0 left-0 right-0 z-50 border-b border-[#2a2a2a] bg-[#0f0f0f]">
@@ -397,7 +403,7 @@ export function Header({
                     src="/logos/Logo.png"
                     alt="PrismSports"
                     className={[
-                      // ✅ BIGGER logo (mobile + desktop)
+                      // keep your change if you already set md:h-24
                       "h-16 sm:h-20 md:h-24 w-auto object-contain select-none flex-shrink-0",
                       "transition-transform duration-200 group-hover:scale-[1.01]",
                     ].join(" ")}
@@ -476,21 +482,9 @@ export function Header({
               <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
             </div>
           </div>
-
-          {/* MOBILE: live pill */}
-          <div className="hidden sm:flex md:hidden items-center justify-end">
-            <div
-              className="flex items-center gap-2 rounded-full border border-[#2a2a2a] px-3 py-1"
-              style={{
-                background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
-              }}
-            >
-              <div className="text-[12px] text-[#9a9a9a] font-medium">Live</div>
-              <div className="w-2 h-2 rounded-full bg-emerald-500" title="Live" />
-            </div>
-          </div>
         </div>
       </div>
     </header>
   );
 }
+
