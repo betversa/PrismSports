@@ -1,10 +1,11 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Centered cards + book logo-only + matchup abbreviations + wrap-safe)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Abbrev matchups + centered stat tiles + logo-only book)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Game/Matchup titles shortened using team_map (canonical → Abbreviation)
-// ✅ Anything that would truncate now wraps (labels + values)
-// ✅ Book tile: label on top, logo BELOW label (no book name text)
-// ✅ Book logos in /public/books/ → use "/books/..." paths
-// ✅ Keeps your existing plumbing: supabase queries, realtime refresh, dedupe, score>=50 filter, fair vs book odds
+// ✅ Team abbreviations show on BOTH game + prop cards via team_map (canonical → Abbreviation)
+//    - Exact match + substring fallback (handles "Dallas Mavericks" vs "Dallas")
+// ✅ Card titles/subtitles WRAP (no truncation); fixes “Book price” cutting off
+// ✅ Stat tiles (Edge / Book / Book price / Fair price) are vertically centered
+// ✅ Book tile shows LABEL + logo below (no book name text). Logos in /public/books/ => "/books/...png"
+// ✅ Keeps: realtime refresh, dedupe, score>=50 filter, book vs fair odds, subtle EV bar
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -46,8 +47,8 @@ type ChangeLogRow = {
 
 type TeamMapRow = {
   canonical: string | null;
-  abbreviation: string | null; // column name you specified: "Abbreviation" in description; DB typically lower-case
-  Abbreviation?: string | null; // fallback in case the column is capitalized
+  abbreviation: string | null; // preferred
+  Abbreviation?: string | null; // fallback if column is capitalized
 };
 
 type EvPlayRow = {
@@ -145,7 +146,7 @@ function normalizeBook(b?: string | null) {
   return b;
 }
 
-/** /public/books/ → use "/books/..." */
+/** /public/books/ → "/books/..." */
 function bookSquareLogoSrc(bookName: string) {
   const x = (bookName || "").toLowerCase();
   if (x.includes("draft")) return "/books/dksquare.png";
@@ -273,7 +274,6 @@ function getPropFairOdds(row: PropEvRow) {
   return Math.trunc(n);
 }
 
-/** EV color discipline (subtle) */
 function evTextClass(ev: number | null) {
   if (ev == null) return "text-white";
   if (ev >= 7) return "text-emerald-300";
@@ -291,7 +291,7 @@ function evBarStyle(ev: number | null): React.CSSProperties {
 }
 
 /* =========================================================
-   TEAM ABBREVIATIONS
+   TEAM ABBREVIATIONS (exact + substring)
 ========================================================= */
 
 function canonKey(s: string) {
@@ -305,48 +305,60 @@ function canonKey(s: string) {
 function buildAbbrevMap(rows: TeamMapRow[]) {
   const m = new Map<string, string>();
   for (const r of rows || []) {
-    const canonical = r.canonical ?? "";
-    const abbr = (r.abbreviation ?? r.Abbreviation ?? "") as string;
-    const k = canonKey(canonical);
-    if (k && abbr) m.set(k, abbr.trim());
+    const canonical = (r.canonical ?? "").trim();
+    const abbr = ((r.abbreviation ?? r.Abbreviation ?? "") as string).trim();
+    if (!canonical || !abbr) continue;
+    m.set(canonKey(canonical), abbr);
   }
   return m;
 }
 
-/**
- * Tries to shorten "Los Angeles Lakers vs Golden State Warriors"
- * or "Los Angeles Lakers @ Golden State Warriors"
- * to "LAL vs GSW" / "LAL @ GSW" using team_map abbreviations.
- */
+function abbreviateTeamName(name: string | null | undefined, abbrevMap: Map<string, string>) {
+  const raw = (name ?? "").trim();
+  if (!raw) return "";
+
+  const key = canonKey(raw);
+  const exact = abbrevMap.get(key);
+  if (exact) return exact;
+
+  for (const [canon, abbr] of abbrevMap.entries()) {
+    if (!canon) continue;
+    if (key.includes(canon) || canon.includes(key)) return abbr;
+  }
+
+  return raw;
+}
+
 function abbreviateMatchup(matchup: string | null | undefined, abbrevMap: Map<string, string>) {
   const raw = (matchup ?? "").trim();
   if (!raw) return "—";
-
-  // If it's already short like "LAL vs GSW", keep it.
   if (raw.length <= 15 && /vs|@/i.test(raw)) return raw;
 
-  const separators = [" vs ", " VS ", " @ ", " at ", " AT ", " v ", " V "];
+  const candidates = [
+    { sep: " vs ", nice: " vs " },
+    { sep: " VS ", nice: " vs " },
+    { sep: " @ ", nice: " @ " },
+    { sep: " at ", nice: " @ " },
+    { sep: " AT ", nice: " @ " },
+    { sep: " v ", nice: " vs " },
+    { sep: " V ", nice: " vs " },
+  ];
 
-  for (const sep of separators) {
-    if (raw.includes(sep)) {
-      const parts = raw.split(sep);
+  for (const c of candidates) {
+    if (raw.includes(c.sep)) {
+      const parts = raw.split(c.sep);
       if (parts.length >= 2) {
         const left = parts[0].trim();
-        const right = parts.slice(1).join(sep).trim();
-
-        const leftAbbr = abbrevMap.get(canonKey(left)) ?? left;
-        const rightAbbr = abbrevMap.get(canonKey(right)) ?? right;
-
-        // normalize separator to nice compact forms
-        const niceSep = sep.toLowerCase().includes("@") || sep.toLowerCase().includes("at") ? " @ " : " vs ";
-        return `${leftAbbr}${niceSep}${rightAbbr}`;
+        const right = parts.slice(1).join(c.sep).trim();
+        const L = abbreviateTeamName(left, abbrevMap) || left;
+        const R = abbreviateTeamName(right, abbrevMap) || right;
+        return `${L}${c.nice}${R}`;
       }
     }
   }
 
-  // If we can’t parse it, attempt single-team abbreviation fallback
-  const single = abbrevMap.get(canonKey(raw));
-  return single ?? raw;
+  const single = abbreviateTeamName(raw, abbrevMap);
+  return single || raw;
 }
 
 /* =========================================================
@@ -419,6 +431,337 @@ function pickBestProp(rows: PropEvRow[]) {
 }
 
 /* =========================================================
+   CARD STRING BUILDERS
+========================================================= */
+
+function gameSubtitle(r: EvPlayRow) {
+  const m = marketLabel(r.market ?? "");
+  const side = (r.side ?? "").toUpperCase();
+  const line = fmtLine(r.line ?? null);
+  const team = (r.team ?? "").trim();
+  const pick = team ? `${team}${line ? ` ${line}` : ""}` : `${side}${line ? ` ${line}` : ""}`;
+  return `${m} • ${pick}`;
+}
+
+function propTitle(r: PropEvRow, abbrevMap: Map<string, string>) {
+  const pn = (r.player_name ?? "Unknown Player").trim();
+  const t = abbreviateTeamName(r.team ?? "", abbrevMap);
+  const o = abbreviateTeamName(r.opponent ?? "", abbrevMap);
+  const vs = t && o ? `${t} vs ${o}` : t || o ? t || o : "";
+  return vs ? `${pn} (${vs})` : pn;
+}
+
+function propSubtitle(r: PropEvRow) {
+  const m = titleCase(marketLabel(r.market ?? "Prop"));
+  const side = (r.side ?? "").toUpperCase();
+  const line = fmtLine(r.line ?? null);
+  return `${m} • ${side}${line ? ` ${line}` : ""}`;
+}
+
+/* =========================================================
+   UI BITS
+========================================================= */
+
+function QuickAction({
+  title,
+  sub,
+  icon: Icon,
+  href,
+}: {
+  title: string;
+  sub: string;
+  icon: any;
+  href: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => (window.location.href = href)}
+      className="text-left rounded-xl border border-[#2a2a2a] bg-black/35 p-4 hover:border-[#3a3a3a] transition-colors"
+    >
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-sm text-white">{title}</div>
+          <div className="text-xs text-[#6a6a6a] mt-0.5">{sub}</div>
+        </div>
+        <div className="w-9 h-9 rounded-lg bg-[#121212] border border-[#d4af37]/20 flex items-center justify-center shrink-0">
+          <Icon className="w-4 h-4" style={{ color: GOLD }} />
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab) => void }) {
+  const btn = (v: PlayTab, label: string) => {
+    const active = value === v;
+    return (
+      <button
+        type="button"
+        onClick={() => onChange(v)}
+        className={[
+          "px-3 py-2 rounded-lg text-xs border transition-colors w-full sm:w-auto",
+          active
+            ? "bg-[#141414] border-[#d4af37]/40 text-white"
+            : "bg-black/35 border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:border-[#3a3a3a]",
+        ].join(" ")}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  return (
+    <div className="grid grid-cols-3 gap-2 sm:inline-flex sm:items-center sm:gap-2">
+      {btn("all", "All")}
+      {btn("game", "Games")}
+      {btn("props", "Props")}
+    </div>
+  );
+}
+
+function StatusPill({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div
+      className={[
+        "inline-flex items-center gap-2 rounded-full border px-3 py-1",
+        "bg-black/35",
+        accent ? "border-[#d4af37]/35" : "border-[#2a2a2a]",
+      ].join(" ")}
+    >
+      <div className="text-[11px] text-[#808080]">{label}</div>
+      <div className={["text-[11px] font-medium", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: string }) {
+  return (
+    <div className="rounded-xl border border-[#2a2a2a] bg-black/35 p-3">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-lg bg-[#121212] border border-[#d4af37]/18 flex items-center justify-center shrink-0">
+          <Icon className="w-4 h-4" style={{ color: GOLD }} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-xs text-white">{label}</div>
+          <div className="text-[11px] text-[#6a6a6a]">{sub}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ✅ Vertically centered label/value/logo
+ * ✅ Wrap-safe text
+ */
+function MiniStat({
+  label,
+  value,
+  valueClassName,
+  accent,
+  barValue,
+  iconBelowLabelSrc,
+  showValue = true,
+}: {
+  label: string;
+  value?: string;
+  valueClassName?: string;
+  accent?: boolean;
+  barValue?: number | null;
+  iconBelowLabelSrc?: string | null;
+  showValue?: boolean;
+}) {
+  const bar = barValue != null;
+
+  return (
+    <div className="rounded-lg border border-[#2a2a2a] bg-black/35 px-2.5 py-2.5 overflow-hidden text-center">
+      <div className="min-h-[66px] flex flex-col items-center justify-center gap-1">
+        <div className="text-[10px] text-[#6a6a6a] whitespace-normal leading-snug">{label}</div>
+
+        {iconBelowLabelSrc ? (
+          <div className="flex justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={iconBelowLabelSrc}
+              alt=""
+              className="w-7 h-7 rounded-[8px] object-cover border border-white/10"
+            />
+          </div>
+        ) : null}
+
+        {showValue ? (
+          <div
+            className={[
+              "text-xs whitespace-normal break-words leading-snug",
+              valueClassName ? valueClassName : accent ? "text-[#d4af37]" : "text-white",
+            ].join(" ")}
+          >
+            {value ?? "—"}
+          </div>
+        ) : null}
+      </div>
+
+      {bar ? (
+        <div className="mt-2 h-[6px] w-full rounded-full bg-white/10 overflow-hidden">
+          <div className="h-full rounded-full" style={evBarStyle(barValue)} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MetaLine({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="text-[#808080]">{label}</div>
+      <div className={["text-white text-right", warn ? "text-amber-300" : ""].join(" ")}>{value}</div>
+    </div>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+      <div className="animate-pulse space-y-3">
+        <div className="h-4 w-2/3 bg-[#1a1a1a] rounded mx-auto" />
+        <div className="h-3 w-1/2 bg-[#1a1a1a] rounded mx-auto" />
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="h-10 bg-[#1a1a1a] rounded" />
+          <div className="h-10 bg-[#1a1a1a] rounded" />
+          <div className="h-10 bg-[#1a1a1a] rounded" />
+          <div className="h-10 bg-[#1a1a1a] rounded" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChangeLogEntry({ version, date, changes }: { version: string; date: string; changes: string[] }) {
+  return (
+    <div className="p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm text-white">{version}</div>
+        <div className="text-xs text-[#6a6a6a]">{date}</div>
+      </div>
+      <ul className="space-y-1.5">
+        {changes.map((change, idx) => (
+          <li
+            key={idx}
+            className="text-xs text-[#b0b0b0] pl-4 relative before:content-['•'] before:absolute before:left-0 before:text-[#d4af37]"
+          >
+            {change}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/* =========================================================
+   TOP PLAY CARD
+========================================================= */
+
+function TopPlayCard({
+  kind,
+  rank,
+  isTop3,
+  title,
+  subtitle,
+  score,
+  ev,
+  bookLogoSrc,
+  odds,
+  fairOdds,
+  commence,
+  pictureUrl,
+}: {
+  kind: "game" | "prop";
+  rank: number;
+  isTop3: boolean;
+  title: string;
+  subtitle: string;
+  score: number | null;
+  ev: number | null;
+  bookLogoSrc: string | null;
+  odds: number | null;
+  fairOdds: number | null;
+  commence: string | null;
+  pictureUrl?: string | null;
+}) {
+  const scoreRounded = score == null ? null : Math.round(score);
+  const scoreText = scoreRounded == null ? "—" : `${scoreRounded}`;
+  const evText = ev == null ? "—" : `${ev.toFixed(1)}%`;
+  const showFlame = scoreRounded === 100;
+
+  return (
+    <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+      {isTop3 ? (
+        <div
+          className="pointer-events-none absolute inset-0 opacity-60"
+          style={{
+            background: "radial-gradient(520px 220px at 50% 0%, rgba(212,175,55,0.18), transparent 60%)",
+          }}
+        />
+      ) : null}
+
+      <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
+
+      <div className="relative space-y-3">
+        <div className="flex items-start gap-3">
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center">
+              {showFlame ? (
+                <Flame className="w-4 h-4" style={{ color: GOLD }} />
+              ) : (
+                <Trophy className={["w-4 h-4", isTop3 ? "text-[#d4af37]" : "text-[#808080]"].join(" ")} />
+              )}
+            </div>
+
+            {kind === "prop" ? (
+              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 overflow-hidden">
+                {pictureUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={pictureUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-[10px] text-[#6a6a6a]">—</div>
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="flex-1 min-w-0 text-center">
+            <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game"}</div>
+            <div className="text-[15px] sm:text-sm text-white leading-snug whitespace-normal break-words">
+              {title}
+            </div>
+            <div className="text-xs text-[#a8a8a8] leading-relaxed mt-1 whitespace-normal break-words">
+              {subtitle}
+            </div>
+          </div>
+
+          <div className="shrink-0 text-right">
+            <div className="text-[10px] text-[#6a6a6a]">Score</div>
+            <div className="text-sm text-white">{scoreText}</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
+          <MiniStat label="Book" iconBelowLabelSrc={bookLogoSrc} showValue={false} />
+          <MiniStat label="Book price" value={fmtOdds(odds)} />
+          <MiniStat label="Fair price" value={fmtOdds(fairOdds)} accent />
+        </div>
+
+        {commence ? <div className="text-[11px] text-[#6a6a6a] pt-0.5 text-center">{commence}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
    SCREEN
 ========================================================= */
 
@@ -434,7 +777,6 @@ export function OverviewScreen() {
   const [evPlays, setEvPlays] = useState<EvPlayRow[]>([]);
   const [propPlays, setPropPlays] = useState<PropEvRow[]>([]);
 
-  // ✅ team abbreviations
   const [teamMapRows, setTeamMapRows] = useState<TeamMapRow[]>([]);
   const abbrevMap = useMemo(() => buildAbbrevMap(teamMapRows), [teamMapRows]);
 
@@ -471,8 +813,7 @@ export function OverviewScreen() {
         .order("created_at", { ascending: false })
         .limit(250);
 
-      // ✅ team map for abbreviations
-      const teamMapQ = supabase.from("team_map").select("canonical,abbreviation,Abbreviation").limit(2000);
+      const teamMapQ = supabase.from("team_map").select("canonical,abbreviation,Abbreviation").limit(5000);
 
       const [runRes, versionRes, changelogRes, evRes, propsRes, teamMapRes] = await Promise.all([
         runQ,
@@ -545,7 +886,6 @@ export function OverviewScreen() {
         { event: "*", schema: "public", table: "player_prop_ev_latest" },
         () => loadAll({ soft: true })
       )
-      // team_map changes should also refresh abbreviations
       .on("postgres_changes", { event: "*", schema: "public", table: "team_map" }, () => loadAll({ soft: true }))
       .subscribe();
 
@@ -827,7 +1167,7 @@ export function OverviewScreen() {
                   kind="prop"
                   rank={idx + 1}
                   isTop3={isTop3}
-                  title={propTitle(r)}
+                  title={propTitle(r, abbrevMap)}
                   subtitle={propSubtitle(r)}
                   score={getPropScore(r)}
                   ev={getEvPct(r)}
@@ -901,339 +1241,6 @@ export function OverviewScreen() {
           )}
         </div>
       </section>
-    </div>
-  );
-}
-
-/* =========================================================
-   CARD STRING BUILDERS
-========================================================= */
-
-function gameSubtitle(r: EvPlayRow) {
-  const m = marketLabel(r.market ?? "");
-  const side = (r.side ?? "").toUpperCase();
-  const line = fmtLine(r.line ?? null);
-  const team = (r.team ?? "").trim();
-  const pick = team ? `${team}${line ? ` ${line}` : ""}` : `${side}${line ? ` ${line}` : ""}`;
-  return `${m} • ${pick}`;
-}
-
-function propTitle(r: PropEvRow) {
-  const pn = (r.player_name ?? "Unknown Player").trim();
-  const t = (r.team ?? "").trim();
-  const o = (r.opponent ?? "").trim();
-  const vs = t && o ? `${t} vs ${o}` : t || o ? t || o : "";
-  return vs ? `${pn} (${vs})` : pn;
-}
-
-function propSubtitle(r: PropEvRow) {
-  const m = titleCase(marketLabel(r.market ?? "Prop"));
-  const side = (r.side ?? "").toUpperCase();
-  const line = fmtLine(r.line ?? null);
-  return `${m} • ${side}${line ? ` ${line}` : ""}`;
-}
-
-/* =========================================================
-   UI BITS
-========================================================= */
-
-function QuickAction({
-  title,
-  sub,
-  icon: Icon,
-  href,
-}: {
-  title: string;
-  sub: string;
-  icon: any;
-  href: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => (window.location.href = href)}
-      className="text-left rounded-xl border border-[#2a2a2a] bg-black/35 p-4 hover:border-[#3a3a3a] transition-colors"
-    >
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-sm text-white">{title}</div>
-          <div className="text-xs text-[#6a6a6a] mt-0.5">{sub}</div>
-        </div>
-        <div className="w-9 h-9 rounded-lg bg-[#121212] border border-[#d4af37]/20 flex items-center justify-center shrink-0">
-          <Icon className="w-4 h-4" style={{ color: GOLD }} />
-        </div>
-      </div>
-    </button>
-  );
-}
-
-function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab) => void }) {
-  const btn = (v: PlayTab, label: string) => {
-    const active = value === v;
-    return (
-      <button
-        type="button"
-        onClick={() => onChange(v)}
-        className={[
-          "px-3 py-2 rounded-lg text-xs border transition-colors w-full sm:w-auto",
-          active
-            ? "bg-[#141414] border-[#d4af37]/40 text-white"
-            : "bg-black/35 border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:border-[#3a3a3a]",
-        ].join(" ")}
-      >
-        {label}
-      </button>
-    );
-  };
-
-  return (
-    <div className="grid grid-cols-3 gap-2 sm:inline-flex sm:items-center sm:gap-2">
-      {btn("all", "All")}
-      {btn("game", "Games")}
-      {btn("props", "Props")}
-    </div>
-  );
-}
-
-function StatusPill({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div
-      className={[
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1",
-        "bg-black/35",
-        accent ? "border-[#d4af37]/35" : "border-[#2a2a2a]",
-      ].join(" ")}
-    >
-      <div className="text-[11px] text-[#808080]">{label}</div>
-      <div className={["text-[11px] font-medium", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
-    </div>
-  );
-}
-
-function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: string }) {
-  return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-black/35 p-3">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-lg bg-[#121212] border border-[#d4af37]/18 flex items-center justify-center shrink-0">
-          <Icon className="w-4 h-4" style={{ color: GOLD }} />
-        </div>
-        <div className="min-w-0">
-          <div className="text-xs text-white">{label}</div>
-          <div className="text-[11px] text-[#6a6a6a]">{sub}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * ✅ Wrap-safe + centered
- * ✅ For book tile: label on top, logo below label, no value text
- */
-function MiniStat({
-  label,
-  value,
-  valueClassName,
-  accent,
-  barValue,
-  iconBelowLabelSrc,
-  showValue = true,
-}: {
-  label: string;
-  value?: string;
-  valueClassName?: string;
-  accent?: boolean;
-  barValue?: number | null;
-  iconBelowLabelSrc?: string | null;
-  showValue?: boolean;
-}) {
-  const bar = barValue != null;
-
-  return (
-    <div className="rounded-lg border border-[#2a2a2a] bg-black/35 px-2.5 py-2.5 overflow-hidden text-center">
-      <div className="space-y-1">
-        <div className="text-[10px] text-[#6a6a6a] whitespace-normal leading-snug">{label}</div>
-
-        {iconBelowLabelSrc ? (
-          <div className="flex justify-center">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={iconBelowLabelSrc}
-              alt=""
-              className="w-7 h-7 rounded-[8px] object-cover border border-white/10"
-            />
-          </div>
-        ) : null}
-      </div>
-
-      {bar ? (
-        <div className="mt-2 h-[6px] w-full rounded-full bg-white/10 overflow-hidden">
-          <div className="h-full rounded-full" style={evBarStyle(barValue)} />
-        </div>
-      ) : null}
-
-      {showValue ? (
-        <div
-          className={[
-            "text-xs mt-1 whitespace-normal break-words leading-snug",
-            valueClassName ? valueClassName : accent ? "text-[#d4af37]" : "text-white",
-          ].join(" ")}
-        >
-          {value ?? "—"}
-        </div>
-      ) : (
-        <div className="mt-1 h-[16px]" />
-      )}
-    </div>
-  );
-}
-
-function MetaLine({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="text-[#808080]">{label}</div>
-      <div className={["text-white text-right", warn ? "text-amber-300" : ""].join(" ")}>{value}</div>
-    </div>
-  );
-}
-
-function SkeletonCard() {
-  return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
-      <div className="animate-pulse space-y-3">
-        <div className="h-4 w-2/3 bg-[#1a1a1a] rounded mx-auto" />
-        <div className="h-3 w-1/2 bg-[#1a1a1a] rounded mx-auto" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div className="h-10 bg-[#1a1a1a] rounded" />
-          <div className="h-10 bg-[#1a1a1a] rounded" />
-          <div className="h-10 bg-[#1a1a1a] rounded" />
-          <div className="h-10 bg-[#1a1a1a] rounded" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ChangeLogEntry({ version, date, changes }: { version: string; date: string; changes: string[] }) {
-  return (
-    <div className="p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm text-white">{version}</div>
-        <div className="text-xs text-[#6a6a6a]">{date}</div>
-      </div>
-      <ul className="space-y-1.5">
-        {changes.map((change, idx) => (
-          <li
-            key={idx}
-            className="text-xs text-[#b0b0b0] pl-4 relative before:content-['•'] before:absolute before:left-0 before:text-[#d4af37]"
-          >
-            {change}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-/* =========================================================
-   TOP PLAY CARD
-========================================================= */
-
-function TopPlayCard({
-  kind,
-  rank,
-  isTop3,
-  title,
-  subtitle,
-  score,
-  ev,
-  bookLogoSrc,
-  odds,
-  fairOdds,
-  commence,
-  pictureUrl,
-}: {
-  kind: "game" | "prop";
-  rank: number;
-  isTop3: boolean;
-  title: string;
-  subtitle: string;
-  score: number | null;
-  ev: number | null;
-  bookLogoSrc: string | null;
-  odds: number | null;
-  fairOdds: number | null;
-  commence: string | null;
-  pictureUrl?: string | null;
-}) {
-  const scoreRounded = score == null ? null : Math.round(score);
-  const scoreText = scoreRounded == null ? "—" : `${scoreRounded}`;
-  const evText = ev == null ? "—" : `${ev.toFixed(1)}%`;
-  const showFlame = scoreRounded === 100;
-
-  return (
-    <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
-      {isTop3 ? (
-        <div
-          className="pointer-events-none absolute inset-0 opacity-60"
-          style={{
-            background: "radial-gradient(520px 220px at 50% 0%, rgba(212,175,55,0.18), transparent 60%)",
-          }}
-        />
-      ) : null}
-
-      <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
-
-      <div className="relative space-y-3">
-        <div className="flex items-start gap-3">
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center">
-              {showFlame ? (
-                <Flame className="w-4 h-4" style={{ color: GOLD }} />
-              ) : (
-                <Trophy className={["w-4 h-4", isTop3 ? "text-[#d4af37]" : "text-[#808080]"].join(" ")} />
-              )}
-            </div>
-
-            {kind === "prop" ? (
-              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 overflow-hidden">
-                {pictureUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={pictureUrl} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-[10px] text-[#6a6a6a]">—</div>
-                )}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="flex-1 min-w-0 text-center">
-            <div className="text-[11px] text-[#808080]">{kind === "prop" ? "Player prop" : "Game"}</div>
-            {/* ✅ wrap instead of truncate */}
-            <div className="text-[15px] sm:text-sm text-white leading-snug whitespace-normal break-words">
-              {title}
-            </div>
-            <div className="text-xs text-[#a8a8a8] leading-relaxed mt-1 whitespace-normal break-words">
-              {subtitle}
-            </div>
-          </div>
-
-          <div className="shrink-0 text-right">
-            <div className="text-[10px] text-[#6a6a6a]">Score</div>
-            <div className="text-sm text-white">{scoreText}</div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-          <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
-          {/* ✅ Book: label + logo below */}
-          <MiniStat label="Book" iconBelowLabelSrc={bookLogoSrc} showValue={false} />
-          <MiniStat label="Book price" value={fmtOdds(odds)} />
-          <MiniStat label="Fair price" value={fmtOdds(fairOdds)} accent />
-        </div>
-
-        {commence ? <div className="text-[11px] text-[#6a6a6a] pt-0.5 text-center">{commence}</div> : null}
-      </div>
     </div>
   );
 }
