@@ -1,21 +1,21 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Polish pass: clearer Fair Odds, EV color intensity, subtitle de-emphasis, naming consistency)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Black-forward “new look”, color only where it matters)
 // -----------------------------------------------------------------------------------------------------
+// ✅ New look: mostly-black glass + subtle spectrum only in HEADER + Top3 glow (no loud gradients everywhere)
+// ✅ Removed Score=100 🔥 emoji (you already have the Flame icon on the card)
 // ✅ Top Plays filter: ONLY score >= 50
-// ✅ Score === 100 shows 🔥
-// ✅ Shows BOTH: Book odds + Fair odds (formerly "Quantum")
-// ✅ Mobile layout: single-column rhythm, bigger tap targets, stats stack 2x2, less dense text
-// ✅ Desktop layout unchanged vibe
+// ✅ Shows BOTH: Book odds + Fair odds
+// ✅ EV stat uses intensity (subtle) + optional bar
+// ✅ Mobile layout: single-column rhythm, bigger tap targets, 2x2 stats
+// ✅ Desktop layout: same vibe, cleaner typography, less visual noise
 //
-// POLISH UPDATES (only):
-// 1) "Quantum" stat label -> "Fair Odds" (clearer)
-// 2) EV stat uses intensity coloring (emerald/gold/gray) based on EV magnitude
-// 3) Subtitle text slightly de-emphasized (#a8a8a8)
-// 4) Consistent naming: card header uses "Game Line" (tabs remain plural)
+// Notes on “color discipline”:
+// - GOLD only for “brand” touches (pills, icons, tiny borders).
+// - Spectrum only in hero hairline + very soft top glow (not inside every card).
+// - Top 3 gets a soft gold halo; everything else stays neutral.
 
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
-  ArrowRight,
   Anchor,
   Calculator,
   Database,
@@ -47,7 +47,7 @@ type ModelVersionRow = {
   calib_window: string | null;
   anchor_weight_min: number | null;
   anchor_weight_max: number | null;
-  min_ev_threshold: number | null; // fraction (0.025) or percent (2.5)
+  min_ev_threshold: number | null;
   updated_at: string | null;
 };
 
@@ -269,12 +269,22 @@ function getPropFairOdds(row: PropEvRow) {
   return Math.trunc(n);
 }
 
-/* ✅ POLISH: EV intensity coloring */
+/** EV color discipline (subtle) */
 function evTextClass(ev: number | null) {
   if (ev == null) return "text-white";
-  if (ev >= 7) return "text-emerald-400";
+  if (ev >= 7) return "text-emerald-300";
   if (ev >= 3) return "text-[#d4af37]";
   return "text-[#b0b0b0]";
+}
+
+function evBarStyle(ev: number | null): React.CSSProperties {
+  if (ev == null) return { width: "0%" };
+  const mag = clamp(ev, 0, 12); // cap visual
+  const w = (mag / 12) * 100;
+  // keep bar mostly neutral; only tiny tint by tier
+  const color =
+    ev >= 7 ? "rgba(52, 211, 153, 0.35)" : ev >= 3 ? "rgba(212, 175, 55, 0.40)" : "rgba(255,255,255,0.10)";
+  return { width: `${w}%`, background: color };
 }
 
 /* =========================================================
@@ -455,7 +465,11 @@ export function OverviewScreen() {
       .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () => loadAll({ soft: true }))
       .on("postgres_changes", { event: "*", schema: "public", table: "ev_plays" }, () => loadAll({ soft: true }))
-      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () => loadAll({ soft: true }))
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "player_prop_ev_latest" },
+        () => loadAll({ soft: true })
+      )
       .subscribe();
 
     return () => {
@@ -596,27 +610,52 @@ export function OverviewScreen() {
   return (
     <div className="space-y-8 sm:space-y-10">
       {/* HERO */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-6">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-95"
-          style={{
-            background:
-              "radial-gradient(900px 260px at 18% 0%, rgba(212,175,55,0.20), transparent 62%), radial-gradient(700px 240px at 85% 12%, rgba(255,255,255,0.05), transparent 60%)",
-          }}
-        />
+      <div className="relative overflow-hidden rounded-2xl border border-[#242424] bg-[#0b0b0b] p-4 sm:p-6">
+        {/* “new look” = black glass + a thin spectrum hairline only */}
+        <div className="pointer-events-none absolute inset-0">
+          {/* soft top glow (very subtle) */}
+          <div
+            className="absolute inset-0 opacity-90"
+            style={{
+              background: [
+                "radial-gradient(900px 260px at 16% 0%, rgba(212,175,55,0.14), transparent 60%)",
+                "radial-gradient(760px 240px at 88% 10%, rgba(255,255,255,0.04), transparent 62%)",
+                "linear-gradient(180deg, rgba(0,0,0,0.40), rgba(0,0,0,0.72) 55%, rgba(0,0,0,0.90) 100%)",
+              ].join(", "),
+            }}
+          />
+          {/* spectrum hairline */}
+          <div
+            className="absolute left-0 right-0 top-0 h-[2px] opacity-70"
+            style={{
+              background:
+                "linear-gradient(90deg, rgba(0,0,0,0), rgba(0,146,255,0.35), rgba(0,200,120,0.35), rgba(212,175,55,0.45), rgba(255,140,0,0.34), rgba(255,60,60,0.28), rgba(170,70,255,0.28), rgba(0,0,0,0))",
+            }}
+          />
+          {/* bottom gold anchor */}
+          <div
+            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-60"
+            style={{
+              background:
+                "linear-gradient(90deg, rgba(212,175,55,0.0), rgba(212,175,55,0.38), rgba(212,175,55,0.0))",
+            }}
+          />
+        </div>
 
         <div className="relative space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="min-w-0">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1 text-[11px] text-[#b0b0b0]">
-                <Sparkles className="w-3 h-3 text-[#d4af37]" />
+              <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
+                <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
                 Prism Command Center
               </div>
 
-              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">Today’s Best Edges — Live</h2>
+              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
+                Today’s Best Edges <span className="text-[#6f6f6f]">—</span> Live
+              </h2>
 
-              <p className="text-sm text-[#b0b0b0] leading-relaxed max-w-3xl">
-                Your top-rated +EV plays, powered by Monte Carlo simulation, sharp anchoring, and no-vig pricing.
+              <p className="text-sm text-[#a8a8a8] leading-relaxed max-w-3xl">
+                Top-rated +EV plays built from Monte Carlo projections, sharp anchoring, and no-vig pricing.
               </p>
 
               <div className="mt-3 flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
@@ -636,6 +675,7 @@ export function OverviewScreen() {
                 <StatusPill
                   label="Best score"
                   value={heroStats.bestScore == null ? "—" : `${heroStats.bestScore.toFixed(0)}/100`}
+                  accent
                 />
                 <div className="ml-1 inline-flex items-center gap-1 text-[#606060]">
                   <Activity className="w-3 h-3" />
@@ -643,16 +683,15 @@ export function OverviewScreen() {
                 </div>
               </div>
 
-              <div className="mt-2 text-[11px] text-[#606060]">
-                Top Plays only show <span className="text-white">Score ≥ {TOP_SCORE_MIN}</span>. Any play with{" "}
-                <span className="text-white">Score = 100</span> shows <span style={{ color: GOLD }}>🔥</span>.
+              <div className="mt-2 text-[11px] text-[#6a6a6a]">
+                Showing plays with <span className="text-white">Score ≥ {TOP_SCORE_MIN}</span>.
               </div>
             </div>
 
             <button
               type="button"
               onClick={() => loadAll({ soft: false })}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-white transition-colors w-full sm:w-auto"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#2a2a2a] bg-black/40 px-3 py-2 text-xs text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-white transition-colors w-full sm:w-auto"
               title="Refresh"
             >
               <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
@@ -661,12 +700,12 @@ export function OverviewScreen() {
           </div>
 
           {error ? (
-            <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3 text-xs text-red-300">
+            <div className="rounded-lg border border-[#2a2a2a] bg-black/40 p-3 text-xs text-red-300">
               Supabase error: {error}
             </div>
           ) : null}
 
-          {/* Quick Actions — stack on mobile */}
+          {/* Quick Actions */}
           <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
             <QuickAction title="Odds" sub="Market grid + history" icon={Database} href="/odds" />
             <QuickAction title="Monte Carlo" sub="Projected scores + win%" icon={Calculator} href="/monte-carlo" />
@@ -680,8 +719,8 @@ export function OverviewScreen() {
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3 sm:mb-4">
           <div>
             <h3 className="text-base text-white">Top Plays Right Now</h3>
-            <div className="text-xs text-[#606060]">
-              Ranked by Score first, then EV%. Deduped to show one card per play. (Score ≥ {TOP_SCORE_MIN})
+            <div className="text-xs text-[#6a6a6a]">
+              Ranked by Score then EV%. Deduped to one card per play.
             </div>
           </div>
 
@@ -690,7 +729,6 @@ export function OverviewScreen() {
           </div>
         </div>
 
-        {/* Mobile: 1 column. Small tablets: 2. Desktop: 4 */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {loading ? (
             <>
@@ -700,12 +738,12 @@ export function OverviewScreen() {
               <SkeletonCard />
             </>
           ) : playsToRender.length === 0 ? (
-            <div className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-5 text-sm text-[#b0b0b0]">
+            <div className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-5 text-sm text-[#b0b0b0]">
               No top plays found for the current filter.
-              <div className="text-xs text-[#606060] mt-1">
-                Check that <span className="text-white">ev_plays</span> and{" "}
-                <span className="text-white">player_prop_ev_latest</span> are populated for upcoming events, and that
-                some plays have <span className="text-white">score ≥ {TOP_SCORE_MIN}</span>.
+              <div className="text-xs text-[#6a6a6a] mt-1">
+                Ensure <span className="text-white">ev_plays</span> /{" "}
+                <span className="text-white">player_prop_ev_latest</span> have upcoming rows with{" "}
+                <span className="text-white">score ≥ {TOP_SCORE_MIN}</span>.
               </div>
             </div>
           ) : (
@@ -755,41 +793,40 @@ export function OverviewScreen() {
         </div>
       </section>
 
-      {/* PIPELINE + MODEL META — stacks on mobile */}
+      {/* PIPELINE + MODEL META */}
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
-        {/* Pipeline */}
-        <div className="lg:col-span-2 rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-5">
+        <div className="lg:col-span-2 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 sm:p-5">
           <div className="flex items-center justify-between mb-4">
             <div>
               <div className="text-base text-white">Processing Pipeline</div>
-              <div className="text-xs text-[#606060]">How an edge becomes a play.</div>
+              <div className="text-xs text-[#6a6a6a]">How an edge becomes a play.</div>
             </div>
             <div className="text-[11px] text-[#808080]">
               Model{" "}
-              <span className={meta.status === "Production" ? "text-emerald-500" : "text-[#d4af37]"}>
+              <span className={meta.status === "Production" ? "text-emerald-400" : "text-[#d4af37]"}>
                 {meta.status}
               </span>
             </div>
           </div>
 
-          {/* Mobile: vertical list. Desktop: horizontal with arrows */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
             {pipeline.map((step, i) => (
               <div key={step.label} className="flex items-center sm:flex-1 min-w-0">
                 <PipelineStep icon={step.icon} label={step.label} sublabel={step.sub} />
                 {i < pipeline.length - 1 ? (
-                  <ArrowRight className="hidden sm:block w-5 h-5 text-[#505050] flex-shrink-0 mx-2" />
+                  <div className="hidden sm:flex items-center justify-center w-10">
+                    <div className="h-[1px] w-full bg-[#2a2a2a]" />
+                  </div>
                 ) : null}
               </div>
             ))}
           </div>
         </div>
 
-        {/* Model meta */}
-        <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-5">
+        <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 sm:p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="text-base text-white">Model</div>
-            <div className="text-[11px] text-[#606060]">{meta.updatedAt ? `Updated ${meta.updatedAt}` : ""}</div>
+            <div className="text-[11px] text-[#6a6a6a]">{meta.updatedAt ? `Updated ${meta.updatedAt}` : ""}</div>
           </div>
 
           <div className="space-y-2 text-xs">
@@ -801,7 +838,7 @@ export function OverviewScreen() {
           </div>
 
           {meta.version === "—" ? (
-            <div className="mt-3 text-[11px] text-[#606060]">
+            <div className="mt-3 text-[11px] text-[#6a6a6a]">
               Add a row to <span className="text-white">model_versions</span> to populate metadata.
             </div>
           ) : null}
@@ -811,7 +848,7 @@ export function OverviewScreen() {
       {/* CHANGELOG */}
       <section>
         <h3 className="text-base text-white mb-3 sm:mb-4">What Changed</h3>
-        <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl divide-y divide-[#2a2a2a]">
+        <div className="bg-[#0b0b0b] border border-[#2a2a2a] rounded-xl divide-y divide-[#2a2a2a]">
           {loading ? (
             <div className="p-4 text-xs text-[#b0b0b0]">Loading changelog…</div>
           ) : changelog.length === 0 ? (
@@ -881,15 +918,15 @@ function QuickAction({
     <button
       type="button"
       onClick={() => (window.location.href = href)}
-      className="text-left rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 hover:border-[#3a3a3a] transition-colors"
+      className="text-left rounded-xl border border-[#2a2a2a] bg-black/35 p-4 hover:border-[#3a3a3a] transition-colors"
     >
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-sm text-white">{title}</div>
-          <div className="text-xs text-[#606060] mt-0.5">{sub}</div>
+          <div className="text-xs text-[#6a6a6a] mt-0.5">{sub}</div>
         </div>
-        <div className="w-9 h-9 rounded-lg bg-[#141414] border border-[#d4af37]/25 flex items-center justify-center shrink-0">
-          <Icon className="w-4 h-4 text-[#d4af37]" />
+        <div className="w-9 h-9 rounded-lg bg-[#121212] border border-[#d4af37]/20 flex items-center justify-center shrink-0">
+          <Icon className="w-4 h-4" style={{ color: GOLD }} />
         </div>
       </div>
     </button>
@@ -907,7 +944,7 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
           "px-3 py-2 rounded-lg text-xs border transition-colors w-full sm:w-auto",
           active
             ? "bg-[#141414] border-[#d4af37]/40 text-white"
-            : "bg-[#0b0b0b] border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:border-[#3a3a3a]",
+            : "bg-black/35 border-[#2a2a2a] text-[#b0b0b0] hover:text-white hover:border-[#3a3a3a]",
         ].join(" ")}
       >
         {label}
@@ -924,11 +961,19 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
   );
 }
 
-function StatusPill({ label, value }: { label: string; value: string }) {
+function StatusPill({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1">
+    <div
+      className={[
+        "inline-flex items-center gap-2 rounded-full border px-3 py-1",
+        "bg-black/35",
+        accent ? "border-[#d4af37]/35" : "border-[#2a2a2a]",
+      ].join(" ")}
+    >
       <div className="text-[11px] text-[#808080]">{label}</div>
-      <div className="text-[11px] font-medium text-white">{value}</div>
+      <div className={["text-[11px] font-medium", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>
+        {value}
+      </div>
     </div>
   );
 }
@@ -936,12 +981,12 @@ function StatusPill({ label, value }: { label: string; value: string }) {
 function PipelineStep({ icon: Icon, label, sublabel }: { icon: any; label: string; sublabel: string }) {
   return (
     <div className="flex items-center gap-3 sm:flex-col sm:gap-0 sm:items-center flex-1 min-w-0">
-      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-[#141414] border border-[#d4af37]/30 rounded-lg flex items-center justify-center shrink-0 sm:mb-2">
-        <Icon className="w-5 h-5 text-[#d4af37]" />
+      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-[#121212] border border-[#d4af37]/18 rounded-lg flex items-center justify-center shrink-0 sm:mb-2">
+        <Icon className="w-5 h-5" style={{ color: GOLD }} />
       </div>
       <div className="min-w-0">
         <div className="text-xs text-white sm:text-center mb-0.5">{label}</div>
-        <div className="text-[10px] text-[#606060] sm:text-center">{sublabel}</div>
+        <div className="text-[10px] text-[#6a6a6a] sm:text-center">{sublabel}</div>
       </div>
     </div>
   );
@@ -950,17 +995,28 @@ function PipelineStep({ icon: Icon, label, sublabel }: { icon: any; label: strin
 function MiniStat({
   label,
   value,
-  accent,
   valueClassName,
+  accent,
+  barValue,
 }: {
   label: string;
   value: string;
-  accent?: boolean;
   valueClassName?: string;
+  accent?: boolean;
+  barValue?: number | null;
 }) {
+  const bar = barValue != null;
   return (
-    <div className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-2.5 py-2.5">
-      <div className="text-[10px] text-[#606060]">{label}</div>
+    <div className="rounded-lg border border-[#2a2a2a] bg-black/35 px-2.5 py-2.5 overflow-hidden">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] text-[#6a6a6a]">{label}</div>
+        {bar ? (
+          <div className="h-[6px] w-16 rounded-full bg-white/10 overflow-hidden">
+            <div className="h-full rounded-full" style={evBarStyle(barValue)} />
+          </div>
+        ) : null}
+      </div>
+
       <div
         className={[
           "text-xs mt-0.5 whitespace-nowrap truncate",
@@ -984,7 +1040,7 @@ function MetaLine({ label, value, warn }: { label: string; value: string; warn?:
 
 function SkeletonCard() {
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4">
+    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
       <div className="animate-pulse space-y-3">
         <div className="h-4 w-2/3 bg-[#1a1a1a] rounded" />
         <div className="h-3 w-1/2 bg-[#1a1a1a] rounded" />
@@ -1004,7 +1060,7 @@ function ChangeLogEntry({ version, date, changes }: { version: string; date: str
     <div className="p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="text-sm text-white">{version}</div>
-        <div className="text-xs text-[#606060]">{date}</div>
+        <div className="text-xs text-[#6a6a6a]">{date}</div>
       </div>
       <ul className="space-y-1.5">
         {changes.map((change, idx) => (
@@ -1021,7 +1077,7 @@ function ChangeLogEntry({ version, date, changes }: { version: string; date: str
 }
 
 /* =========================================================
-   TOP PLAY CARD — mobile breathing room
+   TOP PLAY CARD
 ========================================================= */
 
 function TopPlayCard({
@@ -1053,41 +1109,48 @@ function TopPlayCard({
 }) {
   const scoreRounded = score == null ? null : Math.round(score);
   const scoreText = scoreRounded == null ? "—" : `${scoreRounded}`;
+
   const evText = ev == null ? "—" : `${ev.toFixed(1)}%`;
-  const showFire = scoreRounded === 100;
+
+  // ✅ Removed 🔥 emoji; flame icon is enough.
+  const showFlame = scoreRounded === 100;
 
   return (
-    <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 sm:p-4">
+    <div className="relative overflow-hidden rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+      {/* Top 3: subtle gold halo only */}
       {isTop3 ? (
         <div
-          className="pointer-events-none absolute inset-0 opacity-70"
+          className="pointer-events-none absolute inset-0 opacity-60"
           style={{
-            background: "radial-gradient(520px 200px at 30% 0%, rgba(212,175,55,0.22), transparent 60%)",
+            background: "radial-gradient(520px 220px at 30% 0%, rgba(212,175,55,0.18), transparent 60%)",
           }}
         />
       ) : null}
+
+      {/* Fine top hairline (neutral) */}
+      <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
 
       <div className="relative space-y-3">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
             <div
-              className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] flex items-center justify-center shrink-0"
+              className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 flex items-center justify-center shrink-0"
               title={`Rank #${rank}`}
             >
-              {showFire ? (
-                <Flame className="w-4 h-4 text-[#d4af37]" />
+              {showFlame ? (
+                <Flame className="w-4 h-4" style={{ color: GOLD }} />
               ) : (
                 <Trophy className={["w-4 h-4", isTop3 ? "text-[#d4af37]" : "text-[#808080]"].join(" ")} />
               )}
             </div>
 
             {kind === "prop" ? (
-              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden shrink-0">
+              <div className="w-9 h-9 rounded-lg border border-[#2a2a2a] bg-black/35 overflow-hidden shrink-0">
                 {pictureUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={pictureUrl} alt="" className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-[10px] text-[#606060]">—</div>
+                  <div className="w-full h-full flex items-center justify-center text-[10px] text-[#6a6a6a]">—</div>
                 )}
               </div>
             ) : null}
@@ -1099,31 +1162,21 @@ function TopPlayCard({
           </div>
 
           <div className="text-right shrink-0">
-            <div className="text-[10px] text-[#606060]">Score</div>
-            <div className="text-sm text-white inline-flex items-center gap-1">
-              {scoreText}
-              {showFire ? <span style={{ color: GOLD }}>🔥</span> : null}
-            </div>
+            <div className="text-[10px] text-[#6a6a6a]">Score</div>
+            <div className="text-sm text-white">{scoreText}</div>
           </div>
         </div>
 
-        {/* ✅ POLISH: subtitle slightly de-emphasized */}
         <div className="text-xs text-[#a8a8a8] leading-relaxed">{subtitle}</div>
 
-        {/* Mobile: 2x2 stats. Desktop+: 4 across */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-          {/* ✅ POLISH: EV intensity */}
-          <MiniStat label="EV" value={evText} valueClassName={evTextClass(ev)} />
-
+          <MiniStat label="EV" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
           <MiniStat label="Book" value={book} />
-
           <MiniStat label="Book Odds" value={fmtOdds(odds)} />
-
-          {/* ✅ POLISH: "Fair Odds" (clearer than Quantum) and keep branded accent */}
           <MiniStat label="Fair Odds" value={fmtOdds(fairOdds)} accent />
         </div>
 
-        {commence ? <div className="text-[11px] text-[#606060] pt-0.5">{commence}</div> : null}
+        {commence ? <div className="text-[11px] text-[#6a6a6a] pt-0.5">{commence}</div> : null}
       </div>
     </div>
   );
