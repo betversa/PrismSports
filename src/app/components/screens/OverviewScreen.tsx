@@ -1,10 +1,13 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Top Plays validation gates: odds -200..+200, EV 2..15)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Top Plays: EV/odds gates + Book filter)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Keeps: Mobile Top Plays compact + Prism black/gold/slate styling
-// ✅ NEW: Top Plays "extra validation" gates
-//    - Odds range gate: only show plays with book odds between -200 and +200
-//    - EV gate: only show plays with EV% between 2% and 15%
-//    - These gates apply to Top Plays selection (Games + Props)
+// ✅ Keeps: Top Plays validation gates (Odds -200..+200, EV 2..15, Score>=50, future-ish, dedupe best book)
+// ✅ NEW: Book filter button(s) for Top Plays (All / DraftKings / FanDuel / BetMGM / Pinnacle / BetOnline)
+//
+// Notes:
+// - Filter applies to Top Plays (after gates + dedupe) so "one card per play" remains true.
+// - Uses existing normalizeBook() + logo mapping.
+// - No other behavior changes.
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -117,11 +120,14 @@ const SLATE = "rgba(87,90,98,0.26)";
 type PlayTab = "all" | "game" | "props";
 const TOP_SCORE_MIN = 50;
 
-// ✅ NEW: Top Plays gates
+// Top Plays gates
 const TOP_MIN_EV_PCT = 2; // %
 const TOP_MAX_EV_PCT = 15; // %
 const TOP_MIN_ODDS = -200;
 const TOP_MAX_ODDS = 200;
+
+// Book filter choices
+type BookFilter = "all" | "draftkings" | "fanduel" | "betmgm" | "pinnacle" | "betonline";
 
 /* =========================================================
    HELPERS
@@ -140,7 +146,6 @@ function isFutureish(ts?: string | null) {
   if (!ts) return true;
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return true;
-  // allow slight lag (3h) so slate doesn't disappear
   return d.getTime() > Date.now() - 3 * 60 * 60 * 1000;
 }
 
@@ -153,6 +158,16 @@ function normalizeBook(b?: string | null) {
   if (x.includes("pinnacle") || x === "pin") return "Pinnacle";
   if (x.includes("betonline")) return "BetOnline";
   return b;
+}
+
+function normalizedBookKey(b?: string | null): BookFilter | "other" {
+  const x = String(b ?? "").toLowerCase();
+  if (x.includes("draft")) return "draftkings";
+  if (x.includes("fanduel")) return "fanduel";
+  if (x.includes("mgm")) return "betmgm";
+  if (x.includes("pinnacle") || x === "pin") return "pinnacle";
+  if (x.includes("betonline")) return "betonline";
+  return "other";
 }
 
 /** /public/books/ → "/books/..." */
@@ -216,8 +231,7 @@ function getEvPct(row: { ev_pct?: number | null; ev?: number | null }) {
   if (v == null) return null;
   const n = safeNum(v);
   if (n == null) return null;
-  // support both 0.0212 and 2.12
-  if (Math.abs(n) <= 1) return n * 100;
+  if (Math.abs(n) <= 1) return n * 100; // supports 0.0212
   return n;
 }
 
@@ -284,7 +298,6 @@ function evBarStyle(ev: number | null): React.CSSProperties {
   return { width: `${w}%`, background: color };
 }
 
-// ✅ NEW: gates
 function withinOddsGate(odds: number | null) {
   if (odds == null) return false;
   return odds >= TOP_MIN_ODDS && odds <= TOP_MAX_ODDS;
@@ -575,10 +588,48 @@ function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: st
   );
 }
 
+function Chip({
+  active,
+  label,
+  onClick,
+  leftIconSrc,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+  leftIconSrc?: string | null;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] transition-colors",
+        active ? "text-white" : "text-[#cfcfcf] hover:text-white",
+      ].join(" ")}
+      style={{
+        borderColor: active ? "rgba(216,146,17,0.34)" : "rgba(255,255,255,0.10)",
+        background: active
+          ? "linear-gradient(180deg, rgba(216,146,17,0.10), rgba(0,0,0,0.25))"
+          : "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
+      }}
+    >
+      {leftIconSrc ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={leftIconSrc}
+          alt=""
+          className="w-4 h-4 rounded-[6px] border"
+          style={{ borderColor: "rgba(255,255,255,0.10)" }}
+        />
+      ) : null}
+      {label}
+    </button>
+  );
+}
+
 /**
  * MiniStat (mobile-compact)
- * - Mobile: tiny true squares with tighter padding/fonts
- * - Desktop: original sizing via sm: overrides
  */
 function MiniStat({
   label,
@@ -601,11 +652,7 @@ function MiniStat({
 
   return (
     <div
-      className={[
-        "rounded-lg border overflow-hidden text-center aspect-square",
-        "p-1.5",
-        "sm:p-2.5",
-      ].join(" ")}
+      className={["rounded-lg border overflow-hidden text-center aspect-square", "p-1.5", "sm:p-2.5"].join(" ")}
       style={{
         borderColor: BORDER,
         background: [
@@ -676,7 +723,7 @@ function SkeletonCard() {
 }
 
 /* =========================================================
-   TOP PLAY CARD (MOBILE COMPACT)
+   TOP PLAY CARD
 ========================================================= */
 
 function TopPlayCard({
@@ -850,6 +897,9 @@ export function OverviewScreen() {
 
   const [tab, setTab] = useState<PlayTab>("all");
 
+  // ✅ NEW: book filter state (Top Plays only)
+  const [bookFilter, setBookFilter] = useState<BookFilter>("all");
+
   async function loadAll({ soft }: { soft?: boolean } = {}) {
     try {
       soft ? setLoadingSoft(true) : setLoading(true);
@@ -984,7 +1034,7 @@ export function OverviewScreen() {
   const topGames = useMemo(() => {
     const map = new Map<string, EvPlayRow[]>();
 
-    // ✅ apply gates BEFORE dedupe-ranking so “best book” stays eligible
+    // gates BEFORE dedupe
     for (const r of evFiltered) {
       const ev = getEvPct(r);
       const odds = getGameOdds(r);
@@ -1008,15 +1058,13 @@ export function OverviewScreen() {
       return eb - ea;
     });
 
-    return unique
-      .filter((r) => (getGameScore(r) ?? -999) >= TOP_SCORE_MIN)
-      .slice(0, 6);
+    return unique.filter((r) => (getGameScore(r) ?? -999) >= TOP_SCORE_MIN);
   }, [evFiltered]);
 
   const topProps = useMemo(() => {
     const map = new Map<string, PropEvRow[]>();
 
-    // ✅ apply gates BEFORE dedupe-ranking
+    // gates BEFORE dedupe
     for (const r of propsFiltered) {
       const ev = getEvPct(r);
       const odds = getPropOdds(r);
@@ -1040,15 +1088,24 @@ export function OverviewScreen() {
       return eb - ea;
     });
 
-    return unique
-      .filter((r) => (getPropScore(r) ?? -999) >= TOP_SCORE_MIN)
-      .slice(0, 6);
+    return unique.filter((r) => (getPropScore(r) ?? -999) >= TOP_SCORE_MIN);
   }, [propsFiltered]);
+
+  // ✅ NEW: apply book filter AFTER dedupe so "one card per play" remains correct
+  const topGamesFilteredByBook = useMemo(() => {
+    if (bookFilter === "all") return topGames;
+    return topGames.filter((r) => normalizedBookKey(r.bookmaker) === bookFilter);
+  }, [topGames, bookFilter]);
+
+  const topPropsFilteredByBook = useMemo(() => {
+    if (bookFilter === "all") return topProps;
+    return topProps.filter((r) => normalizedBookKey(r.book ?? r.bookmaker) === bookFilter);
+  }, [topProps, bookFilter]);
 
   const topAll = useMemo(() => {
     const merged: Array<{ kind: "game"; row: EvPlayRow } | { kind: "prop"; row: PropEvRow }> = [
-      ...topGames.map((r) => ({ kind: "game" as const, row: r })),
-      ...topProps.map((r) => ({ kind: "prop" as const, row: r })),
+      ...topGamesFilteredByBook.map((r) => ({ kind: "game" as const, row: r })),
+      ...topPropsFilteredByBook.map((r) => ({ kind: "prop" as const, row: r })),
     ];
 
     merged.sort((a, b) => {
@@ -1061,13 +1118,17 @@ export function OverviewScreen() {
     });
 
     return merged.slice(0, 8);
-  }, [topGames, topProps]);
+  }, [topGamesFilteredByBook, topPropsFilteredByBook]);
 
   const playsToRender = useMemo(() => {
-    if (tab === "game") return topGames.map((r) => ({ kind: "game" as const, row: r }));
-    if (tab === "props") return topProps.map((r) => ({ kind: "prop" as const, row: r }));
+    if (tab === "game") {
+      return topGamesFilteredByBook.slice(0, 6).map((r) => ({ kind: "game" as const, row: r }));
+    }
+    if (tab === "props") {
+      return topPropsFilteredByBook.slice(0, 6).map((r) => ({ kind: "prop" as const, row: r }));
+    }
     return topAll;
-  }, [tab, topAll, topGames, topProps]);
+  }, [tab, topAll, topGamesFilteredByBook, topPropsFilteredByBook]);
 
   return (
     <div className="space-y-8 sm:space-y-10">
@@ -1132,7 +1193,8 @@ export function OverviewScreen() {
               </p>
 
               <div className="text-[11px] text-[#a7a7a7] mt-2">
-                Top Plays filters: EV {TOP_MIN_EV_PCT}–{TOP_MAX_EV_PCT}% • Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS}
+                Top Plays filters: EV {TOP_MIN_EV_PCT}–{TOP_MAX_EV_PCT}% • Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} •
+                Score ≥ {TOP_SCORE_MIN}
               </div>
             </div>
 
@@ -1181,9 +1243,44 @@ export function OverviewScreen() {
             <div className="text-xs text-[#b0b0b0]">One card per play (best book shown).</div>
           </div>
 
-          <div className="w-full sm:w-auto">
+          <div className="w-full sm:w-auto space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-2">
             <Segmented value={tab} onChange={setTab} />
           </div>
+        </div>
+
+        {/* ✅ NEW: Book filter chips */}
+        <div className="flex flex-wrap gap-2 mb-3 sm:mb-4">
+          <Chip active={bookFilter === "all"} label="All books" onClick={() => setBookFilter("all")} />
+          <Chip
+            active={bookFilter === "draftkings"}
+            label="DraftKings"
+            leftIconSrc="/books/dksquare.png"
+            onClick={() => setBookFilter("draftkings")}
+          />
+          <Chip
+            active={bookFilter === "fanduel"}
+            label="FanDuel"
+            leftIconSrc="/books/fdsquare.png"
+            onClick={() => setBookFilter("fanduel")}
+          />
+          <Chip
+            active={bookFilter === "betmgm"}
+            label="BetMGM"
+            leftIconSrc="/books/mgmsquare.png"
+            onClick={() => setBookFilter("betmgm")}
+          />
+          <Chip
+            active={bookFilter === "pinnacle"}
+            label="Pinnacle"
+            leftIconSrc="/books/pinsquare.png"
+            onClick={() => setBookFilter("pinnacle")}
+          />
+          <Chip
+            active={bookFilter === "betonline"}
+            label="BetOnline"
+            leftIconSrc="/books/betonlinesquare.png"
+            onClick={() => setBookFilter("betonline")}
+          />
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
