@@ -1,27 +1,30 @@
-// App.tsx — FULL REWRITE (adds Parlay screen + fixes prop mismatch with Sidebar/Header props)
+// App.tsx — FULL REWRITE (adds Props + Parlay screens + fixes prop mismatch with Sidebar/Header props)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Adds "parlay" to Screen union + routing map
-// ✅ Imports + mounts ParlayScreen
+// ✅ Adds "props" + "parlay" to Screen union + routing map
+// ✅ Imports + mounts PropsScreen + ParlayScreen
 // ✅ Keeps separate Odds vs Predictions sport selectors
 // ✅ Keeps mobile drawer behavior + header height padding
-// ✅ Removes Sidebar/Header props that Sidebar/Header do NOT accept (selectedDate/onPickDate) to prevent TS errors
+// ✅ Keeps Sidebar/Header prop contracts (no extra props)
+// ✅ Leaves selectedDate in place for ModelScreen (as your code expects)
 
-import { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 
 import { OverviewScreen } from "./components/screens/OverviewScreen";
 import { ModelScreen } from "./components/screens/ModelScreen";
+import { PropsScreen } from "./components/screens/PropsScreen";
+import { ParlayScreen } from "./components/screens/ParlayScreen";
 import { MonteCarloScreen } from "./components/screens/MonteCarloScreen";
 import { OddsScreen } from "./components/screens/OddsScreen";
 import { ResultsScreen } from "./components/screens/ResultsScreen";
 import { CalibrationScreen } from "./components/screens/CalibrationScreen";
 import { SettingsScreen } from "./components/screens/SettingsScreen";
-import { ParlayScreen } from "./components/screens/ParlayScreen";
 
 export type Screen =
   | "overview"
   | "model"
+  | "props"
   | "parlay"
   | "monte-carlo"
   | "odds"
@@ -61,7 +64,7 @@ function isPredScreen(s: Screen) {
 
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("overview");
-  const [selectedDate, setSelectedDate] = useState<string>(() => ctYmd(new Date()));
+  const [selectedDate] = useState<string>(() => ctYmd(new Date()));
 
   // ✅ Separate sport selectors (Odds vs Predictions)
   const [oddsSportKey, setOddsSportKey] = useState<SportKey>("basketball_ncaab");
@@ -85,8 +88,7 @@ export default function App() {
   const handlePickOddsSport = (k: SportKey) => {
     setOddsSportKey(k);
 
-    // If you're on an Odds-related page already, keep you there.
-    // If you're on a prediction screen, don't hijack navigation.
+    // If you're on Odds already, stay.
     if (activeScreen === "odds") return;
 
     // If user is on Overview/Results/etc and picks Odds sport from header,
@@ -111,7 +113,10 @@ export default function App() {
       // ✅ Model uses predSportKey + selectedDate
       model: <ModelScreen selectedDate={selectedDate} sportKey={predSportKey} />,
 
-      // ✅ Parlay screen (it fetches both tables internally)
+      // ✅ Props screen (pulls its own data internally)
+      props: <PropsScreen />,
+
+      // ✅ Parlay screen (fetches both tables internally)
       parlay: <ParlayScreen />,
 
       // ✅ Predictions sport wired here
