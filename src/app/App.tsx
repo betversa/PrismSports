@@ -1,4 +1,11 @@
-// App.tsx — FULL REWRITE (fixes Predictions sport selector + consistent behavior)
+// App.tsx — FULL REWRITE (adds Parlay screen + fixes prop mismatch with Sidebar/Header props)
+// ---------------------------------------------------------------------------------------------------
+// ✅ Adds "parlay" to Screen union + routing map
+// ✅ Imports + mounts ParlayScreen
+// ✅ Keeps separate Odds vs Predictions sport selectors
+// ✅ Keeps mobile drawer behavior + header height padding
+// ✅ Removes Sidebar/Header props that Sidebar/Header do NOT accept (selectedDate/onPickDate) to prevent TS errors
+
 import { useMemo, useState, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
@@ -10,10 +17,12 @@ import { OddsScreen } from "./components/screens/OddsScreen";
 import { ResultsScreen } from "./components/screens/ResultsScreen";
 import { CalibrationScreen } from "./components/screens/CalibrationScreen";
 import { SettingsScreen } from "./components/screens/SettingsScreen";
+import { ParlayScreen } from "./components/screens/ParlayScreen";
 
 export type Screen =
   | "overview"
   | "model"
+  | "parlay"
   | "monte-carlo"
   | "odds"
   | "results"
@@ -81,7 +90,7 @@ export default function App() {
     if (activeScreen === "odds") return;
 
     // If user is on Overview/Results/etc and picks Odds sport from header,
-    // it's reasonable to take them to Odds (same behavior you had before).
+    // it's reasonable to take them to Odds.
     if (!isPredScreen(activeScreen)) setActiveScreen("odds");
   };
 
@@ -92,7 +101,6 @@ export default function App() {
     if (isPredScreen(activeScreen)) return;
 
     // If user is on Overview/Odds/etc and picks Predictions sport, take them to Monte Carlo
-    // (the main "predictions" landing page).
     setActiveScreen("monte-carlo");
   };
 
@@ -100,10 +108,13 @@ export default function App() {
     () => ({
       overview: <OverviewScreen />,
 
-      // ✅ FIX: ModelScreen MUST receive the predSportKey
+      // ✅ Model uses predSportKey + selectedDate
       model: <ModelScreen selectedDate={selectedDate} sportKey={predSportKey} />,
 
-      // ✅ Predictions sport already wired here
+      // ✅ Parlay screen (it fetches both tables internally)
+      parlay: <ParlayScreen />,
+
+      // ✅ Predictions sport wired here
       "monte-carlo": <MonteCarloScreen sportKey={predSportKey} />,
 
       // ✅ Odds sport wired here
@@ -136,8 +147,6 @@ export default function App() {
               }}
               variant="mobile"
               onClose={() => setSidebarOpen(false)}
-              selectedDate={selectedDate}
-              onPickDate={setSelectedDate}
               oddsSportKey={oddsSportKey}
               onPickOddsSport={handlePickOddsSport}
               predSportKey={predSportKey}
@@ -156,8 +165,6 @@ export default function App() {
         }}
         activeScreen={activeScreen}
         onHeightChange={(px) => setHeaderH(Math.ceil(px))}
-        selectedDate={selectedDate}
-        onPickDate={setSelectedDate}
         oddsSportKey={oddsSportKey}
         onPickOddsSport={handlePickOddsSport}
         predSportKey={predSportKey}
