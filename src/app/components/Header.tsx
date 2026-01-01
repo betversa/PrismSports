@@ -1,4 +1,4 @@
-// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate) + Parlay tab
+// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate) + Parlay + Props
 // ---------------------------------------------------------------------------------------------------
 // ✅ Theme matches provided Prism logo (black/gold/slate) — removes rainbow prism gradients
 // ✅ Fix retained: first dropdown item no longer “pre-highlighted”
@@ -6,17 +6,19 @@
 //    - Subtle gold dot for selected instead
 // ✅ Desktop nav centered; logo bigger (md:h-24)
 // ✅ Clicking logo -> Overview
-// ✅ Logo path: /logos/Logo.png (you currently use /logos/mainlogo.png — kept as-is)
-// ✅ NEW: Adds "Parlay" section to nav
+// ✅ Logo path: /logos/mainlogo.png (kept as-is)
+// ✅ Adds "Parlay" + NEW "Props" to nav
+// ✅ Mobile: hamburger remains (menu controlled by parent)
 // ✅ Everything else unchanged (API + behavior)
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Menu, ChevronDown } from "lucide-react";
 import type { SportKey } from "../App";
 
 type Screen =
   | "overview"
   | "model"
+  | "props"
   | "parlay"
   | "monte-carlo"
   | "odds"
@@ -48,7 +50,6 @@ const GOLD_SOFT = "rgba(216, 146, 17, 0.18)";
 const GOLD_GLOW = "rgba(216, 146, 17, 0.32)";
 const SLATE = "#575a62";
 const PANEL = "#0b0b0b";
-const PANEL_2 = "#101010";
 const BORDER = "#2a2a2a";
 
 const DROPDOWN_EVENT = "prism:header-dropdown-open";
@@ -450,6 +451,7 @@ export function Header({
               <div className="h-5 w-px" style={{ background: "#2a2a2a" }} />
 
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
+              <NavItem label="Props" active={activeScreen === "props"} onClick={() => onNavigate?.("props")} />
               <NavItem label="Parlay" active={activeScreen === "parlay"} onClick={() => onNavigate?.("parlay")} />
               <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
               <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
