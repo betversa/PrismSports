@@ -12,75 +12,83 @@ import {
 } from "lucide-react";
 
 /**
- * ResultsScreen.tsx — FULL REWRITE (Prism-style, anonymous copy, more functional tracking)
+ * ResultsScreen.tsx — FULL REWRITE (Prism-style)
  * --------------------------------------------------------------------------------------
  * ✅ Range toggle: 7D / 30D / YTD / All-Time
- * ✅ Uses Results-grade fields already stored per game (ML / Spread / Total)
- * ✅ Adds: ROI (if you store a "is_pick" or "picked_*" flag), Avg edge, Avg error
+ * ✅ Overall accuracy: ML / Spread / Total (graded finals)
+ * ✅ Pick tracking: picked_any + picked_ml/spread/total (if present)
+ * ✅ Edge: uses ev_pct/edge_pct/edge (or future *_edge_* fields) if present, else “—”
+ * ✅ Error:
+ *    - Total error = |actual_total - projected_total|
+ *    - Margin error = |actual_margin_home - projected_margin_home|
+ *    - If actual_* missing, falls back to computing from final scores
  * ✅ Fixes date-only (YYYY-MM-DD) timezone shift in America/Chicago
- *
- * Notes:
- * - This screen intentionally avoids exposing internal table/view names.
- * - It will gracefully degrade if optional columns are missing (shows “—”).
  */
 
 type RangeKey = "7D" | "30D" | "YTD" | "ALL";
 
-/**
- * If you already have any of these optional columns in game_model_results, we’ll use them:
- * - is_pick (boolean) OR picked_ml / picked_spread / picked_total (boolean)
- * - ev_pct (number) OR edge_pct (number) OR edge (number)
- * - projected_total / final scores for error
- * - projected_home_points / projected_away_points for margin error
- */
 type RawRow = {
   game_date: string | null; // YYYY-MM-DD
   status: string | null; // 'final' expected when graded
+
   model_ml_hit: boolean | null;
   model_spread_hit: "win" | "loss" | "push" | null;
   model_total_hit: "win" | "loss" | "push" | null;
 
-  // optional
-  is_pick?: boolean | null;
+  // picks (present in your sample)
+  picked_any?: boolean | null;
   picked_ml?: boolean | null;
   picked_spread?: boolean | null;
   picked_total?: boolean | null;
 
+  // projections (present in your sample)
+  projected_total?: number | null;
+  projected_margin_home?: number | null;
+  projected_home_points?: number | null;
+  projected_away_points?: number | null;
+
+  // finals + actuals (present in your sample)
+  final_home_score?: number | null;
+  final_away_score?: number | null;
+  actual_total?: number | null;
+  actual_margin_home?: number | null;
+
+  // optional edge fields (may exist now or later)
   ev_pct?: number | null;
   edge_pct?: number | null;
   edge?: number | null;
 
-  projected_home_points?: number | null;
-  projected_away_points?: number | null;
-  projected_total?: number | null;
-
-  final_home_score?: number | null;
-  final_away_score?: number | null;
+  // optional market-specific edges (future-proof)
+  ml_edge_pct?: number | null;
+  spread_edge_pct?: number | null;
+  total_edge_pct?: number | null;
 };
 
 type DailyRow = {
   day: string; // YYYY-MM-DD
 
-  games: number; // total rows
-  finals: number; // status=final count
+  games: number;
+  finals: number;
 
   // overall (all graded finals)
   ml_win_pct: number | null;
   spread_win_pct: number | null;
   total_win_pct: number | null;
 
-  // pick-only (if flags exist)
-  picks: number | null;
+  // picks
+  picks_any: number | null;
+  picks_ml: number | null;
+  picks_spread: number | null;
+  picks_total: number | null;
+
   pick_ml_win_pct: number | null;
   pick_spread_win_pct: number | null;
   pick_total_win_pct: number | null;
 
-  // diagnostics (if projections + finals exist)
-  avg_total_abs_error: number | null; // |actual_total - projected_total|
-  avg_margin_abs_error: number | null; // |(home-away actual) - (proj home-away)|
-
-  // edge summary (if present)
-  avg_edge_pct: number | null;
+  // pick diagnostics
+  avg_pick_edge_pct: number | null;
+  avg_pick_total_abs_error: number | null;
+  avg_pick_margin_abs_error: number | null;
 };
 
 export function ResultsScreen() {
@@ -112,10 +120,41 @@ export function ResultsScreen() {
       setLoading(true);
       setError(null);
 
-      // We “attempt” to fetch optional columns; if some don’t exist in your schema, Supabase will error.
-      // So we do a safe two-pass: minimal select first, then optional select.
-      const baseSelect =
-        "game_date,status,model_ml_hit,model_spread_hit,model_total_hit,final_home_score,final_away_score,projected_home_points,projected_away_points,projected_total,is_pick,picked_ml,picked_spread,picked_total,ev_pct,edge_pct,edge";
+      // We attempt to fetch “everything we want”. If your schema is missing some optional columns,
+      // Supabase will throw. So we fallback to a minimal select.
+      const baseSelect = [
+        "game_date",
+        "status",
+        "model_ml_hit",
+        "model_spread_hit",
+        "model_total_hit",
+
+        // picks
+        "picked_any",
+        "picked_ml",
+        "picked_spread",
+        "picked_total",
+
+        // projections
+        "projected_total",
+        "projected_margin_home",
+        "projected_home_points",
+        "projected_away_points",
+
+        // finals/actuals
+        "final_home_score",
+        "final_away_score",
+        "actual_total",
+        "actual_margin_home",
+
+        // edge (optional)
+        "ev_pct",
+        "edge_pct",
+        "edge",
+        "ml_edge_pct",
+        "spread_edge_pct",
+        "total_edge_pct",
+      ].join(",");
 
       let q = supabase.from("game_model_results").select(baseSelect).order("game_date", { ascending: true });
       if (fromStr) q = q.gte("game_date", fromStr);
@@ -125,7 +164,6 @@ export function ResultsScreen() {
       if (!alive) return;
 
       if (error) {
-        // Fallback: query only the known-required columns if optional ones caused schema errors
         const fallbackSelect = "game_date,status,model_ml_hit,model_spread_hit,model_total_hit";
         let q2 = supabase.from("game_model_results").select(fallbackSelect).order("game_date", { ascending: true });
         if (fromStr) q2 = q2.gte("game_date", fromStr);
@@ -170,23 +208,26 @@ export function ResultsScreen() {
       (acc, r) => {
         acc.games += r.games;
         acc.finals += r.finals;
-        acc.picks += r.picks ?? 0;
+        acc.picks_any += r.picks_any ?? 0;
+        acc.picks_ml += r.picks_ml ?? 0;
+        acc.picks_spread += r.picks_spread ?? 0;
+        acc.picks_total += r.picks_total ?? 0;
         return acc;
       },
-      { games: 0, finals: 0, picks: 0 }
+      { games: 0, finals: 0, picks_any: 0, picks_ml: 0, picks_spread: 0, picks_total: 0 }
     );
 
     const ml = weightedPct(rows, (r) => r.ml_win_pct, (r) => r.finals);
     const sp = weightedPct(rows, (r) => r.spread_win_pct, (r) => r.finals);
     const tot = weightedPct(rows, (r) => r.total_win_pct, (r) => r.finals);
 
-    const pml = weightedPct(rows, (r) => r.pick_ml_win_pct, (r) => r.picks ?? 0);
-    const psp = weightedPct(rows, (r) => r.pick_spread_win_pct, (r) => r.picks ?? 0);
-    const ptot = weightedPct(rows, (r) => r.pick_total_win_pct, (r) => r.picks ?? 0);
+    const pml = weightedPct(rows, (r) => r.pick_ml_win_pct, (r) => r.picks_ml ?? 0);
+    const psp = weightedPct(rows, (r) => r.pick_spread_win_pct, (r) => r.picks_spread ?? 0);
+    const ptot = weightedPct(rows, (r) => r.pick_total_win_pct, (r) => r.picks_total ?? 0);
 
-    const avgEdge = meanAcrossDays(rows, (r) => r.avg_edge_pct);
-    const avgTotErr = meanAcrossDays(rows, (r) => r.avg_total_abs_error);
-    const avgMarErr = meanAcrossDays(rows, (r) => r.avg_margin_abs_error);
+    const avgPickEdge = meanAcrossDays(rows, (r) => r.avg_pick_edge_pct);
+    const avgPickTotErr = meanAcrossDays(rows, (r) => r.avg_pick_total_abs_error);
+    const avgPickMarErr = meanAcrossDays(rows, (r) => r.avg_pick_margin_abs_error);
 
     return {
       ...totals,
@@ -196,9 +237,9 @@ export function ResultsScreen() {
       pml,
       psp,
       ptot,
-      avgEdge,
-      avgTotErr,
-      avgMarErr,
+      avgPickEdge,
+      avgPickTotErr,
+      avgPickMarErr,
     };
   }, [rows]);
 
@@ -216,7 +257,7 @@ export function ResultsScreen() {
             </div>
 
             <p className="mt-1 text-xs text-white/50">
-              Track accuracy over time — overall performance + pick-only performance.
+              Track accuracy over time — overall performance + pick tracking + diagnostics.
             </p>
 
             <div className="mt-3">
@@ -239,22 +280,38 @@ export function ResultsScreen() {
 
       {/* Summary */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        <SummaryCard label="Games" value={loading ? "…" : formatInt(summary.games)} sublabel={rangeLabel(range)} icon={<Target className="h-3.5 w-3.5" />} />
-        <SummaryCard label="Finals" value={loading ? "…" : formatInt(summary.finals)} sublabel="Graded" icon={<ShieldCheck className="h-3.5 w-3.5" />} />
+        <SummaryCard
+          label="Games"
+          value={loading ? "…" : formatInt(summary.games)}
+          sublabel={rangeLabel(range)}
+          icon={<Target className="h-3.5 w-3.5" />}
+        />
+        <SummaryCard
+          label="Finals"
+          value={loading ? "…" : formatInt(summary.finals)}
+          sublabel="Graded"
+          icon={<ShieldCheck className="h-3.5 w-3.5" />}
+        />
         <SummaryCard label="ML" value={loading ? "…" : fmtPct1(summary.ml)} sublabel="Overall" positive={summary.ml != null ? summary.ml >= 52.38 : undefined} />
         <SummaryCard label="Spread" value={loading ? "…" : fmtPct1(summary.sp)} sublabel="Overall" positive={summary.sp != null ? summary.sp >= 52.38 : undefined} />
         <SummaryCard label="Total" value={loading ? "…" : fmtPct1(summary.tot)} sublabel="Overall" positive={summary.tot != null ? summary.tot >= 52.38 : undefined} />
-        <SummaryCard label="Picks" value={loading ? "…" : fmtPct1(bestPickRate(summary.pml, summary.psp, summary.ptot))} sublabel="Pick hit%" icon={<TrendingUp className="h-3.5 w-3.5" />} />
+        <SummaryCard
+          label="Picks"
+          value={loading ? "…" : formatInt(summary.picks_any)}
+          sublabel="Picked_any"
+          icon={<TrendingUp className="h-3.5 w-3.5" />}
+        />
       </div>
 
-      {/* Diagnostics */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <SummaryCard label="Pick ML" value={loading ? "…" : fmtPct1(summary.pml)} sublabel="Pick-only" />
-        <SummaryCard label="Pick Spread" value={loading ? "…" : fmtPct1(summary.psp)} sublabel="Pick-only" />
-        <SummaryCard label="Pick Total" value={loading ? "…" : fmtPct1(summary.ptot)} sublabel="Pick-only" />
-        <SummaryCard label="Avg Edge" value={loading ? "…" : fmtPct1(summary.avgEdge)} sublabel="If available" icon={<Sigma className="h-3.5 w-3.5" />} />
-        <SummaryCard label="Avg Total Error" value={loading ? "…" : fmtNum1(summary.avgTotErr)} sublabel="Points" />
-        <SummaryCard label="Avg Margin Error" value={loading ? "…" : fmtNum1(summary.avgMarErr)} sublabel="Points" />
+      {/* Pick + Diagnostics */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        <SummaryCard label="Pick ML" value={loading ? "…" : fmtPct1(summary.pml)} sublabel="Hit%" />
+        <SummaryCard label="Pick Spread" value={loading ? "…" : fmtPct1(summary.psp)} sublabel="Hit%" />
+        <SummaryCard label="Pick Total" value={loading ? "…" : fmtPct1(summary.ptot)} sublabel="Hit%" />
+
+        <SummaryCard label="Avg Pick Edge" value={loading ? "…" : fmtPct1(summary.avgPickEdge)} sublabel="If stored" icon={<Sigma className="h-3.5 w-3.5" />} />
+        <SummaryCard label="Avg Pick Tot Err" value={loading ? "…" : fmtNum1(summary.avgPickTotErr)} sublabel="Points" />
+        <SummaryCard label="Avg Pick Mar Err" value={loading ? "…" : fmtNum1(summary.avgPickMarErr)} sublabel="Points" />
       </div>
 
       {/* Table */}
@@ -276,9 +333,9 @@ export function ResultsScreen() {
                 <th className="text-center p-3 text-white/50 font-medium">Pick Sp</th>
                 <th className="text-center p-3 text-white/50 font-medium">Pick Tot</th>
 
-                <th className="text-center p-3 text-white/50 font-medium border-l border-white/10">Edge</th>
-                <th className="text-center p-3 text-white/50 font-medium">Tot Err</th>
-                <th className="text-center p-3 text-white/50 font-medium">Mar Err</th>
+                <th className="text-center p-3 text-white/50 font-medium border-l border-white/10">Pick Edge</th>
+                <th className="text-center p-3 text-white/50 font-medium">Pick Tot Err</th>
+                <th className="text-center p-3 text-white/50 font-medium">Pick Mar Err</th>
               </tr>
             </thead>
 
@@ -319,7 +376,7 @@ export function ResultsScreen() {
                     </td>
 
                     <td className="text-center p-3 border-l border-white/10 text-white/70">
-                      {r.picks == null ? <span className="text-white/35">—</span> : r.picks}
+                      {r.picks_any == null ? <span className="text-white/35">—</span> : r.picks_any}
                     </td>
                     <td className="text-center p-3">
                       <PctCell value={r.pick_ml_win_pct} dimIfNull />
@@ -332,10 +389,10 @@ export function ResultsScreen() {
                     </td>
 
                     <td className="text-center p-3 border-l border-white/10 text-white/70">
-                      {fmtPct1(r.avg_edge_pct)}
+                      {fmtPct1(r.avg_pick_edge_pct)}
                     </td>
-                    <td className="text-center p-3 text-white/70">{fmtNum1(r.avg_total_abs_error)}</td>
-                    <td className="text-center p-3 text-white/70">{fmtNum1(r.avg_margin_abs_error)}</td>
+                    <td className="text-center p-3 text-white/70">{fmtNum1(r.avg_pick_total_abs_error)}</td>
+                    <td className="text-center p-3 text-white/70">{fmtNum1(r.avg_pick_margin_abs_error)}</td>
                   </tr>
                 ))
               )}
@@ -349,13 +406,13 @@ export function ResultsScreen() {
         <h3 className="text-sm text-white font-semibold mb-2">How to read this</h3>
         <div className="text-xs text-white/60 leading-relaxed space-y-2">
           <div>
-            <span className="text-[#d4af37] font-medium">Overall</span> rows include every graded game.
+            <span className="text-[#d4af37] font-medium">Overall</span> columns include every graded game.
           </div>
           <div>
-            <span className="text-[#d4af37] font-medium">Pick</span> rows measure only the plays you flagged as picks (if available).
+            <span className="text-[#d4af37] font-medium">Pick</span> columns only include games/markets you flagged as picks.
           </div>
-          <div className="text-[10px] text-white/35 pt-1">
-            If pick flags / edge aren’t available yet, those cells will show “—”.
+          <div>
+            <span className="text-[#d4af37] font-medium">Pick Edge</span> will show “—” until you store an edge field (ev_pct / edge_pct / etc).
           </div>
         </div>
       </div>
@@ -383,7 +440,10 @@ function aggregateDaily(d: RawRow[]): DailyRow[] {
       tot_w: number;
       tot_t: number;
 
-      picks: number | null;
+      picks_any: number | null;
+      picks_ml: number | null;
+      picks_spread: number | null;
+      picks_total: number | null;
 
       pml_w: number;
       pml_t: number;
@@ -394,14 +454,14 @@ function aggregateDaily(d: RawRow[]): DailyRow[] {
       ptot_w: number;
       ptot_t: number;
 
-      edge_sum: number;
-      edge_n: number;
+      pick_edge_sum: number;
+      pick_edge_n: number;
 
-      tot_err_sum: number;
-      tot_err_n: number;
+      pick_tot_err_sum: number;
+      pick_tot_err_n: number;
 
-      mar_err_sum: number;
-      mar_err_n: number;
+      pick_mar_err_sum: number;
+      pick_mar_err_n: number;
     }
   >();
 
@@ -419,19 +479,22 @@ function aggregateDaily(d: RawRow[]): DailyRow[] {
         sp_t: 0,
         tot_w: 0,
         tot_t: 0,
-        picks: null,
+        picks_any: null,
+        picks_ml: null,
+        picks_spread: null,
+        picks_total: null,
         pml_w: 0,
         pml_t: 0,
         psp_w: 0,
         psp_t: 0,
         ptot_w: 0,
         ptot_t: 0,
-        edge_sum: 0,
-        edge_n: 0,
-        tot_err_sum: 0,
-        tot_err_n: 0,
-        mar_err_sum: 0,
-        mar_err_n: 0,
+        pick_edge_sum: 0,
+        pick_edge_n: 0,
+        pick_tot_err_sum: 0,
+        pick_tot_err_n: 0,
+        pick_mar_err_sum: 0,
+        pick_mar_err_n: 0,
       });
     }
 
@@ -455,22 +518,23 @@ function aggregateDaily(d: RawRow[]): DailyRow[] {
       if (r.model_total_hit === "win") acc.tot_w += 1;
     }
 
-    // Pick flags (supports is_pick or picked_*; pick count is total picks across any market)
-    const isPickAny =
-      truthy(r.is_pick) ||
-      truthy(r.picked_ml) ||
-      truthy(r.picked_spread) ||
-      truthy(r.picked_total);
+    // Picks (use picked_any if present; else infer from picked_* flags)
+    const pickedAny = truthy(r.picked_any) || truthy(r.picked_ml) || truthy(r.picked_spread) || truthy(r.picked_total);
+    const pickedML = truthy(r.picked_ml);
+    const pickedSP = truthy(r.picked_spread);
+    const pickedTOT = truthy(r.picked_total);
 
-    if (acc.picks === null) acc.picks = 0;
+    if (acc.picks_any === null) acc.picks_any = 0;
+    if (acc.picks_ml === null) acc.picks_ml = 0;
+    if (acc.picks_spread === null) acc.picks_spread = 0;
+    if (acc.picks_total === null) acc.picks_total = 0;
 
-    if (isPickAny) acc.picks += 1;
+    if (pickedAny) acc.picks_any += 1;
+    if (pickedML) acc.picks_ml += 1;
+    if (pickedSP) acc.picks_spread += 1;
+    if (pickedTOT) acc.picks_total += 1;
 
-    // Pick-only grading (if final + picked that market)
-    const pickedML = truthy(r.picked_ml) || (truthy(r.is_pick) && typeof r.model_ml_hit === "boolean");
-    const pickedSP = truthy(r.picked_spread) || (truthy(r.is_pick) && !!r.model_spread_hit);
-    const pickedTOT = truthy(r.picked_total) || (truthy(r.is_pick) && !!r.model_total_hit);
-
+    // Pick-only grading (per market)
     if (isFinal && pickedML && typeof r.model_ml_hit === "boolean") {
       acc.pml_t += 1;
       if (r.model_ml_hit) acc.pml_w += 1;
@@ -484,30 +548,27 @@ function aggregateDaily(d: RawRow[]): DailyRow[] {
       if (r.model_total_hit === "win") acc.ptot_w += 1;
     }
 
-    // Edge
-    const edge = pickEdgePct(r);
-    if (typeof edge === "number" && Number.isFinite(edge)) {
-      acc.edge_sum += edge;
-      acc.edge_n += 1;
+    // Pick Edge (count only when something was picked)
+    if (pickedAny) {
+      const edge = pickEdgePct(r, pickedML, pickedSP, pickedTOT);
+      if (typeof edge === "number" && Number.isFinite(edge)) {
+        acc.pick_edge_sum += edge;
+        acc.pick_edge_n += 1;
+      }
     }
 
-    // Errors (only if finals + projections exist)
-    if (isFinal) {
-      const fh = r.final_home_score;
-      const fa = r.final_away_score;
+    // Pick Errors (only for picked markets; uses actual_* if present, else final scores)
+    if (isFinal && pickedAny) {
+      const totErr = computeTotalAbsError(r);
+      if (typeof totErr === "number" && Number.isFinite(totErr)) {
+        acc.pick_tot_err_sum += totErr;
+        acc.pick_tot_err_n += 1;
+      }
 
-      if (typeof fh === "number" && typeof fa === "number") {
-        if (typeof r.projected_total === "number") {
-          acc.tot_err_sum += Math.abs(fh + fa - r.projected_total);
-          acc.tot_err_n += 1;
-        }
-
-        if (typeof r.projected_home_points === "number" && typeof r.projected_away_points === "number") {
-          const actualMarginHome = fh - fa;
-          const projMarginHome = r.projected_home_points - r.projected_away_points;
-          acc.mar_err_sum += Math.abs(actualMarginHome - projMarginHome);
-          acc.mar_err_n += 1;
-        }
+      const marErr = computeMarginAbsError(r);
+      if (typeof marErr === "number" && Number.isFinite(marErr)) {
+        acc.pick_mar_err_sum += marErr;
+        acc.pick_mar_err_n += 1;
       }
     }
   }
@@ -518,16 +579,23 @@ function aggregateDaily(d: RawRow[]): DailyRow[] {
       day,
       games: a.games,
       finals: a.finals,
+
       ml_win_pct: a.ml_t > 0 ? (a.ml_w / a.ml_t) * 100 : null,
       spread_win_pct: a.sp_t > 0 ? (a.sp_w / a.sp_t) * 100 : null,
       total_win_pct: a.tot_t > 0 ? (a.tot_w / a.tot_t) * 100 : null,
-      picks: a.picks,
+
+      picks_any: a.picks_any,
+      picks_ml: a.picks_ml,
+      picks_spread: a.picks_spread,
+      picks_total: a.picks_total,
+
       pick_ml_win_pct: a.pml_t > 0 ? (a.pml_w / a.pml_t) * 100 : null,
       pick_spread_win_pct: a.psp_t > 0 ? (a.psp_w / a.psp_t) * 100 : null,
       pick_total_win_pct: a.ptot_t > 0 ? (a.ptot_w / a.ptot_t) * 100 : null,
-      avg_edge_pct: a.edge_n > 0 ? a.edge_sum / a.edge_n : null,
-      avg_total_abs_error: a.tot_err_n > 0 ? a.tot_err_sum / a.tot_err_n : null,
-      avg_margin_abs_error: a.mar_err_n > 0 ? a.mar_err_sum / a.mar_err_n : null,
+
+      avg_pick_edge_pct: a.pick_edge_n > 0 ? a.pick_edge_sum / a.pick_edge_n : null,
+      avg_pick_total_abs_error: a.pick_tot_err_n > 0 ? a.pick_tot_err_sum / a.pick_tot_err_n : null,
+      avg_pick_margin_abs_error: a.pick_mar_err_n > 0 ? a.pick_mar_err_sum / a.pick_mar_err_n : null,
     }));
 }
 
@@ -535,10 +603,55 @@ function truthy(v: any) {
   return v === true || v === 1 || v === "true";
 }
 
-function pickEdgePct(r: RawRow) {
+/**
+ * Edge chooser:
+ * - Prefer market-specific edge if present and that market was picked
+ * - Else fall back to generic edge fields (ev_pct/edge_pct/edge)
+ */
+function pickEdgePct(r: RawRow, pickedML: boolean, pickedSP: boolean, pickedTOT: boolean) {
+  if (pickedML && typeof r.ml_edge_pct === "number" && Number.isFinite(r.ml_edge_pct)) return r.ml_edge_pct;
+  if (pickedSP && typeof r.spread_edge_pct === "number" && Number.isFinite(r.spread_edge_pct)) return r.spread_edge_pct;
+  if (pickedTOT && typeof r.total_edge_pct === "number" && Number.isFinite(r.total_edge_pct)) return r.total_edge_pct;
+
   if (typeof r.ev_pct === "number" && Number.isFinite(r.ev_pct)) return r.ev_pct;
   if (typeof r.edge_pct === "number" && Number.isFinite(r.edge_pct)) return r.edge_pct;
   if (typeof r.edge === "number" && Number.isFinite(r.edge)) return r.edge;
+
+  return null;
+}
+
+function computeTotalAbsError(r: RawRow) {
+  // prefer actual_total if present
+  if (typeof r.actual_total === "number" && typeof r.projected_total === "number") {
+    return Math.abs(r.actual_total - r.projected_total);
+  }
+
+  // fallback to finals if present
+  if (typeof r.final_home_score === "number" && typeof r.final_away_score === "number" && typeof r.projected_total === "number") {
+    return Math.abs(r.final_home_score + r.final_away_score - r.projected_total);
+  }
+
+  return null;
+}
+
+function computeMarginAbsError(r: RawRow) {
+  // prefer actual_margin_home if present
+  if (typeof r.actual_margin_home === "number" && typeof r.projected_margin_home === "number") {
+    return Math.abs(r.actual_margin_home - r.projected_margin_home);
+  }
+
+  // fallback compute from finals and projected points if present
+  if (
+    typeof r.final_home_score === "number" &&
+    typeof r.final_away_score === "number" &&
+    typeof r.projected_home_points === "number" &&
+    typeof r.projected_away_points === "number"
+  ) {
+    const actualMarginHome = r.final_home_score - r.final_away_score;
+    const projMarginHome = r.projected_home_points - r.projected_away_points;
+    return Math.abs(actualMarginHome - projMarginHome);
+  }
+
   return null;
 }
 
@@ -724,8 +837,3 @@ function formatInt(n: number) {
   }
 }
 
-function bestPickRate(pml: number | null, psp: number | null, ptot: number | null) {
-  const vals = [pml, psp, ptot].filter((v) => typeof v === "number" && Number.isFinite(v)) as number[];
-  if (vals.length === 0) return null;
-  return Math.max(...vals);
-}
