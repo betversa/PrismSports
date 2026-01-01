@@ -1,3 +1,13 @@
+// ParlayScreen.tsx — FULL REWRITE (adds “Not allowed to parlay” rules, esp. same-player props)
+// ---------------------------------------------------------------------------------------------------
+// ✅ Hard rule: NEVER allow 2+ legs with same player_name (props) in the same parlay
+// ✅ Strong default: still blocks multiple legs from same event unless allowSameGame=true
+// ✅ Adds additional “same game” safe-guards even when allowSameGame=true:
+//    - Blocks opposite sides of SAME market/line (e.g., Over and Under 24.5)
+//    - Blocks duplicate legs (same market/side/line) across sources
+// ✅ Optional toggle: allowSamePlayer (default false; keep it false to avoid book restrictions)
+// ✅ Explains why combos are rejected via internal validator (kept simple, fast)
+
 import React, { useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
@@ -22,23 +32,23 @@ type CandidateLeg = {
   commence_time?: string | null;
 
   // Display
-  label: string; // "LAL vs BOS — ML LAL" or "LeBron James — Points Over 24.5"
-  sublabel: string; // "DK -110 | EV 6.2%" etc.
+  label: string;
+  sublabel: string;
 
   // Market details
   market: string;
   side: string;
   line: number | null;
 
-  book: string; // normalized
+  book: string;
   american_odds: number | null;
 
   // Model / fair probability
   p: number | null; // 0..1
   ev_pct: number | null; // percent
-  score: number | null; // ranking helper (confidence/score)
+  score: number | null;
 
-  // for correlation rules
+  // correlation keys
   team?: string | null;
   player_name?: string | null;
 };
@@ -50,18 +60,17 @@ type ParlayResult = {
   book: string;
   legsCount: number;
 
-  parlay_decimal: number; // total payout incl stake
+  parlay_decimal: number;
   parlay_american: number | null;
 
-  p_win: number; // assumed independent
-  ev_pct: number; // percent
+  p_win: number;
+  ev_pct: number;
 
-  commence_time_min: string | null; // earliest leg time
+  commence_time_min: string | null;
 };
 
 const GOLD = "#d89211";
 const BORDER = "#2a2a2a";
-const PANEL = "#0b0b0b";
 
 const BOOK_OPTIONS: Array<{ key: BookKey; label: string }> = [
   { key: "any", label: "Any" },
@@ -76,9 +85,10 @@ export function ParlayScreen() {
   const [book, setBook] = useState<BookKey>("draftkings");
   const [includeGameLines, setIncludeGameLines] = useState(true);
   const [includeProps, setIncludeProps] = useState(true);
-  const [minEv, setMinEv] = useState<number>(3); // EV% threshold
-  const [maxCandidates, setMaxCandidates] = useState<number>(24); // top K legs used for combos
+  const [minEv, setMinEv] = useState<number>(3);
+  const [maxCandidates, setMaxCandidates] = useState<number>(24);
   const [allowSameGame, setAllowSameGame] = useState<boolean>(false);
+  const [allowSamePlayer, setAllowSamePlayer] = useState<boolean>(false); // ✅ NEW (default false)
   const [maxParlays, setMaxParlays] = useState<number>(8);
 
   // State
@@ -96,7 +106,6 @@ export function ParlayScreen() {
 
     try {
       const nowIso = new Date().toISOString();
-
       const tasks: Promise<any>[] = [];
 
       if (includeGameLines) {
@@ -123,7 +132,6 @@ export function ParlayScreen() {
           .gte("commence_time", nowIso);
 
         if (book !== "any") q = q.eq("bookmaker", book);
-
         tasks.push(q);
       }
 
@@ -152,13 +160,11 @@ export function ParlayScreen() {
           .gte("commence_time", nowIso);
 
         if (book !== "any") q = q.eq("book", book);
-
         tasks.push(q);
       }
 
       const results = await Promise.all(tasks);
 
-      // Collect data + handle errors
       const rowsGame = includeGameLines ? results.shift() : null;
       const rowsProps = includeProps ? results.shift() : null;
 
@@ -166,9 +172,7 @@ export function ParlayScreen() {
       const gameData = rowsGame?.error ? (errs.push(rowsGame.error.message), []) : (rowsGame?.data ?? []);
       const propData = rowsProps?.error ? (errs.push(rowsProps.error.message), []) : (rowsProps?.data ?? []);
 
-      if (errs.length) {
-        setErr(errs.join(" • "));
-      }
+      if (errs.length) setErr(errs.join(" • "));
 
       const mapped: CandidateLeg[] = [
         ...mapGameCandidates(gameData as any[]),
@@ -178,7 +182,6 @@ export function ParlayScreen() {
         .filter((x) => x.american_odds != null && Number.isFinite(x.american_odds))
         .filter((x) => x.p != null && x.p > 0 && x.p < 1);
 
-      // Rank legs (simple but effective)
       mapped.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
       setCandidates(mapped);
@@ -202,8 +205,10 @@ export function ParlayScreen() {
     }
 
     const topPool = pool.slice(0, Math.max(legs + 2, maxCandidates));
+
     const built = buildParlays(topPool, legs, {
       allowSameGame,
+      allowSamePlayer,
       maxResults: maxParlays,
       enforceBook: book === "any" ? null : book,
     });
@@ -212,8 +217,7 @@ export function ParlayScreen() {
   }
 
   const headerStats = useMemo(() => {
-    const pool = candidates;
-    const usable = pool.filter((x) => x.p != null && x.american_odds != null);
+    const usable = candidates.filter((x) => x.p != null && x.american_odds != null);
     const bySource = usable.reduce(
       (acc, r) => {
         acc[r.source] += 1;
@@ -222,11 +226,7 @@ export function ParlayScreen() {
       { game: 0, prop: 0 }
     );
 
-    return {
-      total: usable.length,
-      game: bySource.game,
-      prop: bySource.prop,
-    };
+    return { total: usable.length, game: bySource.game, prop: bySource.prop };
   }, [candidates]);
 
   return (
@@ -320,11 +320,7 @@ export function ParlayScreen() {
           {/* Include */}
           <ControlBlock label="Include legs from">
             <div className="flex items-center justify-between gap-3">
-              <ToggleRow
-                label="Game lines"
-                value={includeGameLines}
-                onChange={setIncludeGameLines}
-              />
+              <ToggleRow label="Game lines" value={includeGameLines} onChange={setIncludeGameLines} />
               <ToggleRow label="Props" value={includeProps} onChange={setIncludeProps} />
             </div>
             <div className="text-[10px] text-white/40 mt-1">
@@ -347,15 +343,27 @@ export function ParlayScreen() {
             <div className="text-[10px] text-white/40 mt-1">Higher = more combos (slower)</div>
           </ControlBlock>
 
-          {/* Same game */}
-          <ControlBlock label="Correlation rule">
+          {/* Rules */}
+          <ControlBlock label="Parlay rules">
             <ToggleRow
               label="Allow multiple legs from same game"
               value={allowSameGame}
               onChange={setAllowSameGame}
             />
-            <div className="text-[10px] text-white/40 mt-1">
-              Default is safer: only 1 leg per event.
+            <div className="mt-2">
+              <ToggleRow
+                label="Allow multiple legs with same player (props)"
+                value={allowSamePlayer}
+                onChange={setAllowSamePlayer}
+              />
+            </div>
+
+            <div className="text-[10px] text-white/40 mt-2 space-y-1">
+              <div>
+                • Default is safest: <span className="text-white/60">1 leg per game</span> and{" "}
+                <span className="text-white/60">no same-player props</span>.
+              </div>
+              <div>• Even if same-game is allowed, we still block “impossible” combos.</div>
             </div>
           </ControlBlock>
         </div>
@@ -364,11 +372,8 @@ export function ParlayScreen() {
           <div className="text-[11px] text-white/45 flex items-center gap-2">
             <Layers className="h-4 w-4" />
             <span>
-              Candidates:{" "}
-              <span className="text-white/70">
-                {headerStats.total}
-              </span>{" "}
-              (Game {headerStats.game} / Props {headerStats.prop})
+              Candidates: <span className="text-white/70">{headerStats.total}</span> (Game{" "}
+              {headerStats.game} / Props {headerStats.prop})
             </span>
           </div>
 
@@ -412,14 +417,13 @@ export function ParlayScreen() {
       <div className="rounded-xl border border-white/10 bg-white/[0.03] overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-white/[0.02]">
           <div className="text-sm text-white font-semibold">Suggested Parlays</div>
-          <div className="text-[11px] text-white/45">
-            {parlays.length ? `${parlays.length} found` : "—"}
-          </div>
+          <div className="text-[11px] text-white/45">{parlays.length ? `${parlays.length} found` : "—"}</div>
         </div>
 
         {parlays.length === 0 ? (
           <div className="p-4 text-xs text-white/55">
-            No parlays yet. Set your options and click <span className="text-white/70">Generate Parlays</span>.
+            No parlays yet. Set your options and click{" "}
+            <span className="text-white/70">Generate Parlays</span>.
           </div>
         ) : (
           <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -435,13 +439,13 @@ export function ParlayScreen() {
         <div className="text-xs text-white/60 leading-relaxed space-y-2">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" style={{ color: GOLD }} />
-            <span>
-              EV assumes legs are independent (v1). We can add correlation rules next (same team/player, totals + overs, etc.).
-            </span>
+            <span>EV assumes legs are independent (v1). Correlation rules can be expanded later.</span>
           </div>
           <div className="flex items-center gap-2">
             <XCircle className="h-4 w-4 text-white/35" />
-            <span>Edge is intentionally blank for now (as requested).</span>
+            <span>
+              Current restrictions: no duplicate/contradictory legs, and (by default) no same-player props.
+            </span>
           </div>
         </div>
       </div>
@@ -548,7 +552,7 @@ function ParlayCard({ parlay }: { parlay: ParlayResult }) {
         </div>
 
         <div className="pt-1 text-[10px] text-white/35">
-          * EV assumes independence (multiply probs). Correlation rules can be added next.
+          * EV assumes independence. We also filter “not allowed” combos (same-player props, contradictions, duplicates).
         </div>
       </div>
     </div>
@@ -578,11 +582,7 @@ function mapGameCandidates(rows: any[]): CandidateLeg[] {
     const market = String(r.market ?? "").trim();
     const side = String(r.side ?? "").trim();
 
-    const label = [
-      matchup || "Game",
-      "—",
-      marketLabel(market, side, team, safeNum(r.line)),
-    ].join(" ");
+    const label = [matchup || "Game", "—", marketLabel(market, side, team, safeNum(r.line))].join(" ");
 
     const book = normalizeBook(String(r.bookmaker ?? "").trim());
     const ev = safeNum(r.ev_pct);
@@ -624,7 +624,6 @@ function mapPropCandidates(rows: any[]): CandidateLeg[] {
     const player = String(r.player_name ?? "").trim() || "Player";
     const market = String(r.market ?? "").trim();
     const side = String(r.side ?? "").trim();
-
     const line = safeNum(r.line);
 
     const team = String(r.team ?? "").trim();
@@ -661,36 +660,33 @@ function mapPropCandidates(rows: any[]): CandidateLeg[] {
 }
 
 /* =========================================
-   Parlay Builder
+   Parlay Builder (WITH NOT-ALLOWED RULES)
 ========================================= */
 
 function buildParlays(
   candidates: CandidateLeg[],
   legsCount: number,
-  opts: { allowSameGame: boolean; maxResults: number; enforceBook: string | null }
+  opts: {
+    allowSameGame: boolean;
+    allowSamePlayer: boolean;
+    maxResults: number;
+    enforceBook: string | null;
+  }
 ): ParlayResult[] {
-  // Filter book if needed (you may have "any" mixed)
   const pool = (opts.enforceBook ? candidates.filter((c) => c.book === opts.enforceBook) : candidates).slice();
-
-  // Guardrail
   if (pool.length < legsCount) return [];
 
-  // Generate combinations (N choose K) over top pool
+  // Combo generator (N choose K) with pruning via isValidCombo
   const combos: CandidateLeg[][] = [];
   const idx: number[] = Array.from({ length: legsCount }, (_, i) => i);
-
   const n = pool.length;
 
-  function pushCombo() {
+  const pushCombo = () => {
     const legs = idx.map((i) => pool[i]);
-    if (!opts.allowSameGame) {
-      const uniqEvents = new Set(legs.map((l) => l.event_id));
-      if (uniqEvents.size !== legs.length) return;
-    }
+    if (!isValidCombo(legs, opts)) return;
     combos.push(legs);
-  }
+  };
 
-  // First combo
   pushCombo();
 
   while (true) {
@@ -703,11 +699,10 @@ function buildParlays(
 
     pushCombo();
 
-    // Safety cutoff: avoid exploding in UI
+    // Safety cutoff
     if (combos.length > 4500) break;
   }
 
-  // Score combos by parlay EV%
   const scored: ParlayResult[] = combos
     .map((legs) => {
       const decimals = legs.map((l) => americanToDecimal(l.american_odds!));
@@ -715,12 +710,10 @@ function buildParlays(
 
       const parlayDecimal = decimals.reduce((a, b) => a * b, 1);
       const pWin = pLegs.reduce((a, b) => a * b, 1);
-
       const evPct = parlayEvPct(pWin, parlayDecimal);
 
       const commenceMin = earliestCommence(legs.map((l) => l.commence_time ?? null));
-
-      const book = legs[0]?.book ?? "—"; // if you allow mixed books in future, adjust this
+      const book = legs[0]?.book ?? "—";
       const parlayAmerican = decimalToAmerican(parlayDecimal);
 
       return {
@@ -737,7 +730,7 @@ function buildParlays(
     })
     .sort((a, b) => b.ev_pct - a.ev_pct);
 
-  // Return top results, but prefer variety (avoid same first leg repeated)
+  // Variety filter
   const out: ParlayResult[] = [];
   const seenFirst = new Set<string>();
   for (const p of scored) {
@@ -749,6 +742,155 @@ function buildParlays(
   }
 
   return out;
+}
+
+function isValidCombo(legs: CandidateLeg[], opts: { allowSameGame: boolean; allowSamePlayer: boolean }) {
+  // 1) Default: only 1 leg per event unless allowSameGame
+  if (!opts.allowSameGame) {
+    const uniqEvents = new Set(legs.map((l) => l.event_id));
+    if (uniqEvents.size !== legs.length) return false;
+  }
+
+  // 2) Same-player restriction (props) — many books block this outright
+  if (!opts.allowSamePlayer) {
+    const players = legs
+      .map((l) => normalizePlayerKey(l.player_name))
+      .filter(Boolean) as string[];
+    const uniq = new Set(players);
+    if (uniq.size !== players.length) return false;
+  }
+
+  // 3) No duplicates / near-duplicates (same event + market + side + line)
+  //    Helps when the same play appears from different sources or mapping differences.
+  const seenExact = new Set<string>();
+  for (const l of legs) {
+    const key = legKey(l);
+    if (seenExact.has(key)) return false;
+    seenExact.add(key);
+  }
+
+  // 4) No contradictions inside same event:
+  //    - Over vs Under same line same market
+  //    - ML both sides, Spread both sides, Total both sides, etc.
+  //    - Same player/market/line but opposite side (even if allowSamePlayer=true)
+  const byEvent = groupBy(legs, (l) => l.event_id);
+  for (const [eventId, group] of Object.entries(byEvent)) {
+    if (group.length <= 1) continue;
+
+    // Check pairwise contradictions within the event group
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        if (areContradictory(group[i], group[j])) return false;
+      }
+    }
+
+    // If allowSameGame=true, still avoid “messy stacks”:
+    // - More than 2 legs from the same event tends to be disallowed/limited on many books.
+    //   (You can remove this if you want.)
+    if (opts.allowSameGame && group.length > 2) return false;
+  }
+
+  return true;
+}
+
+function areContradictory(a: CandidateLeg, b: CandidateLeg) {
+  // Same event, same market, same line, opposite side => contradiction
+  const sameEvent = a.event_id === b.event_id;
+  if (!sameEvent) return false;
+
+  const ma = normalizeMarket(a.market);
+  const mb = normalizeMarket(b.market);
+  if (ma !== mb) return false;
+
+  const la = a.line ?? null;
+  const lb = b.line ?? null;
+  const sameLine =
+    la == null || lb == null ? false : Math.abs(la - lb) < 1e-9;
+
+  // Prop contradiction: same player + market + same line + opposite side
+  const pa = normalizePlayerKey(a.player_name);
+  const pb = normalizePlayerKey(b.player_name);
+  const samePlayer = !!pa && pa === pb;
+
+  const sa = normalizeSide(a.side);
+  const sb = normalizeSide(b.side);
+
+  // totals: over vs under same line
+  if (isTotalMarket(ma) && sameLine && sa && sb && sa !== sb) return true;
+
+  // spreads: if line exists and sides are opposites on same team can conflict;
+  // we can treat same market+line+opposite side as contradiction.
+  if (isSpreadMarket(ma) && sameLine && sa && sb && sa !== sb) return true;
+
+  // moneyline: "home"/"away" (or team names) are sides; if opposite, contradiction.
+  if (isMoneylineMarket(ma) && sa && sb && sa !== sb) return true;
+
+  // props: over/under same line same player
+  if (samePlayer && sameLine && sa && sb && sa !== sb) return true;
+
+  return false;
+}
+
+function legKey(l: CandidateLeg) {
+  const m = normalizeMarket(l.market);
+  const s = normalizeSide(l.side) ?? normalizeSideRaw(l.side);
+  const line = l.line == null ? "null" : String(roundLine(l.line));
+  const p = normalizePlayerKey(l.player_name) ?? "";
+  return `${l.event_id}|${m}|${s}|${line}|${p}`;
+}
+
+function normalizePlayerKey(name?: string | null) {
+  const t = (name ?? "").trim().toLowerCase();
+  if (!t) return null;
+  return t.replace(/\s+/g, " ");
+}
+
+function normalizeMarket(market: string) {
+  const m = (market ?? "").trim().toLowerCase();
+  if (m === "h2h" || m.includes("moneyline")) return "moneyline";
+  if (m.includes("spread")) return "spread";
+  if (m.includes("total")) return "total";
+  // player props bucket by raw market string
+  return m;
+}
+
+function normalizeSide(side: string) {
+  const s = (side ?? "").trim().toLowerCase();
+  if (s === "over") return "over";
+  if (s === "under") return "under";
+  // common moneyline sides
+  if (s === "home") return "home";
+  if (s === "away") return "away";
+  return null;
+}
+
+function normalizeSideRaw(side: string) {
+  return (side ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isTotalMarket(m: string) {
+  return m === "total" || m.includes("total") || m.includes("totals");
+}
+
+function isSpreadMarket(m: string) {
+  return m === "spread" || m.includes("spread") || m.includes("spreads");
+}
+
+function isMoneylineMarket(m: string) {
+  return m === "moneyline" || m.includes("moneyline") || m === "h2h";
+}
+
+function roundLine(x: number) {
+  // keep half/quarter lines stable
+  return Math.round(x * 1000) / 1000;
+}
+
+function groupBy<T>(arr: T[], keyFn: (t: T) => string) {
+  return arr.reduce((acc, item) => {
+    const k = keyFn(item);
+    (acc[k] ||= []).push(item);
+    return acc;
+  }, {} as Record<string, T[]>);
 }
 
 /* =========================================
@@ -764,18 +906,11 @@ function americanToDecimal(american: number) {
 function decimalToAmerican(decimal: number): number | null {
   if (!Number.isFinite(decimal) || decimal <= 1) return null;
   const profit = decimal - 1;
-  if (profit >= 1) {
-    return Math.round(profit * 100);
-  } else {
-    return -Math.round(100 / profit);
-  }
+  if (profit >= 1) return Math.round(profit * 100);
+  return -Math.round(100 / profit);
 }
 
 function parlayEvPct(pWin: number, decimal: number) {
-  // EV (per $1 stake):
-  // win: profit = decimal - 1
-  // lose: -1
-  // EV = p*(decimal-1) - (1-p)
   const ev = pWin * (decimal - 1) - (1 - pWin);
   return ev * 100;
 }
@@ -790,15 +925,13 @@ function earliestCommence(times: Array<string | null>) {
 }
 
 function rankScore(evPct: number | null, second: number | null) {
-  // Simple rank: EV-weighted + secondary score
-  // - evPct already in percent
   const ev = typeof evPct === "number" ? evPct : 0;
   const s = typeof second === "number" ? second : 0;
-  return ev * 10 + s; // EV dominates
+  return ev * 10 + s;
 }
 
 /* =========================================
-   Formatting helpers
+   Formatting + misc helpers
 ========================================= */
 
 function safeNum(v: any): number | null {
@@ -876,6 +1009,5 @@ function marketLabel(market: string, side: string, team: string, line: number | 
     const ln = line != null ? line : "";
     return `${s === "over" ? "Over" : s === "under" ? "Under" : side} ${ln}`.trim();
   }
-
   return `${market} ${side}`.trim();
 }
