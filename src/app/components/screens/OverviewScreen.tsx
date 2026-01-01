@@ -1,13 +1,10 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Matches Prism black/gold/slate theme + subtle white pop)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Mobile Top Plays compact + Prism black/gold/slate)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Stat tiles inside Top Play cards are TRUE squares (aspect-square) + tighter padding
-// ✅ Tile content (label/value/logo) stays vertically centered
-// ✅ Book tile shows LABEL + logo below (no book name text). Logos in /public/books/ => "/books/...png"
-// ✅ Team abbreviations show on BOTH game + prop cards via team_map (canonical → Abbreviation)
-//    - Exact match + substring fallback
-// ✅ Titles/subtitles WRAP (no truncation); fixes “Book price” cut off
-// ✅ Keeps: realtime refresh, dedupe, score>=50 filter, book vs fair odds, subtle EV bar
-// ✅ Visual update: black glass + gold glow + slate sheen + SMALL white highlight for pop (not too much)
+// ✅ FIX: Top Play cards are significantly SMALLER on mobile (tighter padding, smaller header, compact tiles)
+// ✅ Mobile: tiles use a 4-column row (tiny squares) instead of tall 2x2 grid
+// ✅ Mobile: title/subtitle fonts reduced + spacing tightened + commence moved into header line (less height)
+// ✅ Keeps: square tiles (aspect-square), vertical centering, book logo only, team abbreviations, wrap text,
+//          realtime refresh, dedupe, score>=50 filter, book vs fair odds, subtle EV bar
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -112,9 +109,8 @@ type PropEvRow = {
    THEME
 ========================================================= */
 
-const GOLD = "#d89211"; // logo-like gold
+const GOLD = "#d89211";
 const PANEL = "#0b0b0b";
-const PANEL_2 = "#101010";
 const BORDER = "#2a2a2a";
 const SLATE = "rgba(87,90,98,0.26)";
 
@@ -200,7 +196,12 @@ function fmtLine(line?: number | null) {
 function formatTsShort(ts: string) {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return d.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function getEvPct(row: { ev_pct?: number | null; ev?: number | null }) {
@@ -464,7 +465,8 @@ function QuickAction({
       ].join(" ")}
       style={{
         borderColor: BORDER,
-        background: "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
+        background:
+          "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
       }}
     >
       <div className="flex items-center justify-between gap-4">
@@ -548,6 +550,11 @@ function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: st
   );
 }
 
+/**
+ * MiniStat (mobile-compact)
+ * - Mobile: tiny true squares with tighter padding/fonts
+ * - Desktop: original sizing via sm: overrides
+ */
 function MiniStat({
   label,
   value,
@@ -569,7 +576,13 @@ function MiniStat({
 
   return (
     <div
-      className="rounded-lg border overflow-hidden text-center aspect-square p-2 sm:p-2.5"
+      className={[
+        "rounded-lg border overflow-hidden text-center aspect-square",
+        // tighter on mobile
+        "p-1.5",
+        // slightly roomier on larger screens
+        "sm:p-2.5",
+      ].join(" ")}
       style={{
         borderColor: BORDER,
         background: [
@@ -578,8 +591,10 @@ function MiniStat({
         ].join(", "),
       }}
     >
-      <div className="h-full flex flex-col items-center justify-center gap-1">
-        <div className="text-[10px] text-[#a9a9a9] whitespace-normal leading-snug">{label}</div>
+      <div className="h-full flex flex-col items-center justify-center gap-0.5 sm:gap-1">
+        <div className="text-[9px] sm:text-[10px] text-[#a9a9a9] whitespace-normal leading-snug">
+          {label}
+        </div>
 
         {iconBelowLabelSrc ? (
           <div className="flex justify-center">
@@ -587,7 +602,7 @@ function MiniStat({
             <img
               src={iconBelowLabelSrc}
               alt=""
-              className="w-7 h-7 rounded-[8px] object-cover border"
+              className="w-6 h-6 sm:w-7 sm:h-7 rounded-[8px] object-cover border"
               style={{ borderColor: "rgba(255,255,255,0.10)" }}
             />
           </div>
@@ -596,7 +611,7 @@ function MiniStat({
         {showValue ? (
           <div
             className={[
-              "text-xs whitespace-normal break-words leading-snug",
+              "text-[11px] sm:text-xs whitespace-normal break-words leading-snug",
               valueClassName ? valueClassName : accent ? "text-[#d89211]" : "text-white",
             ].join(" ")}
           >
@@ -606,7 +621,7 @@ function MiniStat({
       </div>
 
       {bar ? (
-        <div className="mt-2 h-[5px] w-full rounded-full bg-white/10 overflow-hidden">
+        <div className="mt-1.5 sm:mt-2 h-[4px] sm:h-[5px] w-full rounded-full bg-white/10 overflow-hidden">
           <div className="h-full rounded-full" style={evBarStyle(barValue)} />
         </div>
       ) : null}
@@ -626,7 +641,7 @@ function SkeletonCard() {
       <div className="animate-pulse space-y-3">
         <div className="h-4 w-2/3 bg-[#1a1a1a] rounded mx-auto" />
         <div className="h-3 w-1/2 bg-[#1a1a1a] rounded mx-auto" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           <div className="h-10 bg-[#1a1a1a] rounded" />
           <div className="h-10 bg-[#1a1a1a] rounded" />
           <div className="h-10 bg-[#1a1a1a] rounded" />
@@ -638,11 +653,12 @@ function SkeletonCard() {
 }
 
 /* =========================================================
-   TOP PLAY CARD
+   TOP PLAY CARD (MOBILE COMPACT)
 ========================================================= */
 
 function TopPlayCard({
   kind,
+  rank,
   isTop3,
   title,
   subtitle,
@@ -674,25 +690,18 @@ function TopPlayCard({
 
   return (
     <div
-      className="relative overflow-hidden rounded-xl border p-4"
+      className="relative overflow-hidden rounded-xl border p-3 sm:p-4"
       style={{
         borderColor: BORDER,
         background: [
-          // base glass
           "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.014) 55%, rgba(0,0,0,0.20))",
-          // subtle gold glow (top3 slightly stronger below)
           `radial-gradient(680px 240px at 50% 0%, rgba(216,146,17,${isTop3 ? "0.16" : "0.10"}), transparent 62%)`,
-          // slate sheen to break up gold
           `radial-gradient(720px 260px at 85% 20%, ${SLATE}, transparent 64%)`,
-          // deep vignette
           "linear-gradient(180deg, rgba(0,0,0,0.22), rgba(0,0,0,0.62) 55%, rgba(0,0,0,0.82) 100%)",
         ].join(", "),
       }}
     >
-      {/* tiny white top hairline for pop */}
       <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
-
-      {/* gold bottom hairline (anchor) */}
       <div
         className="pointer-events-none absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
         style={{
@@ -701,11 +710,26 @@ function TopPlayCard({
         }}
       />
 
-      <div className="relative space-y-3">
-        <div className="flex items-start gap-3">
+      {/* rank pill (tiny, mobile-friendly) */}
+      <div className="absolute top-2 left-2">
+        <div
+          className="text-[10px] px-2 py-0.5 rounded-full border"
+          style={{
+            borderColor: isTop3 ? "rgba(216,146,17,0.30)" : "rgba(255,255,255,0.10)",
+            background: "rgba(0,0,0,0.35)",
+            color: "rgba(255,255,255,0.78)",
+          }}
+        >
+          #{rank}
+        </div>
+      </div>
+
+      <div className="relative space-y-2 sm:space-y-3">
+        {/* header row: tighter on mobile */}
+        <div className="flex items-start gap-2.5 sm:gap-3">
           <div className="flex items-center gap-2 shrink-0">
             <div
-              className="w-9 h-9 rounded-lg border flex items-center justify-center"
+              className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg border flex items-center justify-center"
               style={{
                 borderColor: isTop3 ? "rgba(216,146,17,0.22)" : BORDER,
                 background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
@@ -720,7 +744,7 @@ function TopPlayCard({
 
             {kind === "prop" ? (
               <div
-                className="w-9 h-9 rounded-lg border overflow-hidden"
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg border overflow-hidden"
                 style={{
                   borderColor: BORDER,
                   background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
@@ -739,34 +763,43 @@ function TopPlayCard({
           </div>
 
           <div className="flex-1 min-w-0 text-center">
-            <div className="text-[11px] text-[#a7a7a7]">{kind === "prop" ? "Player prop" : "Game"}</div>
+            <div className="text-[10px] sm:text-[11px] text-[#a7a7a7]">
+              {kind === "prop" ? "Player prop" : "Game"}
+              {commence ? (
+                <span className="hidden sm:inline">
+                  {" "}
+                  <span className="text-[#6f6f6f]">•</span> {commence}
+                </span>
+              ) : null}
+            </div>
 
-            {/* subtle white pop via slightly brighter title */}
-            <div className="text-[15px] sm:text-sm text-white leading-snug whitespace-normal break-words">
+            <div className="text-[13px] sm:text-sm text-white leading-snug whitespace-normal break-words">
               {title}
             </div>
 
-            <div className="text-xs text-[#c7c7c7] leading-relaxed mt-1 whitespace-normal break-words">
+            <div className="text-[11px] sm:text-xs text-[#c7c7c7] leading-snug sm:leading-relaxed mt-0.5 sm:mt-1 whitespace-normal break-words">
               {subtitle}
             </div>
+
+            {/* mobile: show commence as its own tight line to avoid extra header height */}
+            {commence ? (
+              <div className="sm:hidden text-[10px] text-[#a7a7a7] mt-1">{commence}</div>
+            ) : null}
           </div>
 
           <div className="shrink-0 text-right">
-            <div className="text-[10px] text-[#a7a7a7]">Score</div>
-            <div className="text-sm text-white">{scoreText}</div>
+            <div className="text-[9px] sm:text-[10px] text-[#a7a7a7]">Score</div>
+            <div className="text-[13px] sm:text-sm text-white leading-none">{scoreText}</div>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-xs">
+        {/* MOBILE COMPACT: 4 tiny squares in one row; Desktop keeps 4 across as well */}
+        <div className="grid grid-cols-4 gap-1.5 sm:gap-2 text-xs">
           <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
           <MiniStat label="Book" iconBelowLabelSrc={bookLogoSrc} showValue={false} />
           <MiniStat label="Book price" value={fmtOdds(odds)} />
           <MiniStat label="Fair price" value={fmtOdds(fairOdds)} accent />
         </div>
-
-        {commence ? (
-          <div className="text-[11px] text-[#a7a7a7] pt-0.5 text-center">{commence}</div>
-        ) : null}
       </div>
     </div>
   );
@@ -888,11 +921,19 @@ export function OverviewScreen() {
   useEffect(() => {
     const channel = supabase
       .channel("overview-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "monte_carlo_runs" }, () => loadAll({ soft: true }))
-      .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () => loadAll({ soft: true }))
-      .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () => loadAll({ soft: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "monte_carlo_runs" }, () =>
+        loadAll({ soft: true })
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "model_versions" }, () =>
+        loadAll({ soft: true })
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "model_changelog" }, () =>
+        loadAll({ soft: true })
+      )
       .on("postgres_changes", { event: "*", schema: "public", table: "ev_plays" }, () => loadAll({ soft: true }))
-      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () => loadAll({ soft: true }))
+      .on("postgres_changes", { event: "*", schema: "public", table: "player_prop_ev_latest" }, () =>
+        loadAll({ soft: true })
+      )
       .on("postgres_changes", { event: "*", schema: "public", table: "team_map" }, () => loadAll({ soft: true }))
       .subscribe();
 
@@ -997,13 +1038,9 @@ export function OverviewScreen() {
             className="absolute inset-0"
             style={{
               background: [
-                // gold glow
                 "radial-gradient(900px 260px at 18% 0%, rgba(216,146,17,0.16), transparent 60%)",
-                // slate sheen
                 `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
-                // tiny white highlight band for "pop"
                 "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
-                // deep glass
                 "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.86) 100%)",
               ].join(", "),
             }}
@@ -1099,7 +1136,7 @@ export function OverviewScreen() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
           {loading ? (
             <>
               <SkeletonCard />
