@@ -1,11 +1,17 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Final: no rainbow edge + modal fits on desktop/mobile)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (EV/odds gates aligned w/ Overview rules)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
-// ✅ Filters: Play Type + Book
-// ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
+// ✅ Filters: Play Type + Book (BOOK FILTER OPTIONS = soft books only: Any / DK / FD / MGM)
 //
+// ✅ RULES (same as Overview):
+//    - Odds gate (book price): only include offers with odds between -200 and +200
+//    - Games: positive EV only, cap EV at 15% (NO 2% min gate)
+//    - Props: EV must be 2% to 15% (inclusive), AND odds within -200..+200
+//    - Pinnacle is history-only (used in line chart if present), NOT a filter option
+//
+// ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
 // ✅ Modal: NO scrolling required to reach Done (header/footer fixed, safe-area aware)
 // ✅ Modal: Tabs instead of scroll: "Line History" + "Hit Rate"
@@ -14,7 +20,6 @@
 //    - Reference line for TODAY’S line (prop line)
 //    - Bars colored OVER (green) / UNDER (red)
 //    - Tooltip cursor is transparent (no shaded plot)
-//
 // ✅ Adds Pinnacle odds to line history (when present)
 // ✅ Colors each book uniquely (DK/FD/MGM/PIN)
 //
@@ -39,13 +44,26 @@ import {
 } from "recharts";
 
 /* =========================================================
+   Gates (MATCH Overview rules)
+========================================================= */
+
+const ODDS_MIN = -200;
+const ODDS_MAX = 200;
+
+const MAX_EV_PCT = 15; // games + props
+const MIN_EV_PCT_PROPS = 2; // props only
+
+/* =========================================================
    Types
 ========================================================= */
 
 type GameMarketKey = "h2h" | "spreads" | "totals";
 type GameSideKey = "home" | "away" | "over" | "under";
 
-type SoftBookKey = "all" | "draftkings" | "fanduel" | "betmgm" | "pinnacle";
+// Soft book filter (UI) — ONLY these options
+type SoftBookFilter = "any" | "draftkings" | "fanduel" | "betmgm";
+type SoftOfferKey = Exclude<SoftBookFilter, "any">;
+
 type PlayKind = "all" | "game" | "prop";
 
 type AppSettingsRow = {
@@ -118,10 +136,10 @@ type PlayerPropEvLatestRow = {
   score: number;
 };
 
-type AnyBook = "draftkings" | "fanduel" | "betmgm" | "pinnacle";
+type AnyBookHistory = "draftkings" | "fanduel" | "betmgm" | "pinnacle";
 
 type BookOffer = {
-  book: AnyBook;
+  book: SoftOfferKey; // offer strip is soft books only
   odds: number;
   ev_pct: number;
   bet_fraction: number;
@@ -159,8 +177,8 @@ type AggregatedPlay = {
     line: number | null;
   };
 
-  offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>;
-  bestBook: Exclude<SoftBookKey, "all"> | null;
+  offers: Partial<Record<SoftOfferKey, BookOffer>>;
+  bestBook: SoftOfferKey | null;
   bestEvPct: number;
   bestBetFraction: number;
   bestScore: number;
@@ -211,9 +229,9 @@ const SIDE_COL_PROPS = "side";
    Books + colors
 ========================================================= */
 
-const HISTORY_BOOKS: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
+const HISTORY_BOOKS: AnyBookHistory[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
 
-const BOOK_COLOR: Record<AnyBook, string> = {
+const BOOK_COLOR: Record<AnyBookHistory, string> = {
   draftkings: "#22c55e", // green
   fanduel: "#3b82f6", // blue
   betmgm: "#d4af37", // gold
@@ -307,7 +325,17 @@ function fmtMu(mu: number | null | undefined) {
   return v.toFixed(1);
 }
 
-function normalizeBookKey(bookmaker: string): SoftBookKey | "other" {
+// Soft book normalize for OFFER rows (not history)
+function normalizeSoftBookKey(bookmaker: string): SoftOfferKey | "other" {
+  const b = (bookmaker || "").toLowerCase();
+  if (b === "draftkings" || b === "dk") return "draftkings";
+  if (b === "fanduel" || b === "fd") return "fanduel";
+  if (b === "betmgm" || b === "mgm") return "betmgm";
+  return "other";
+}
+
+// History normalize (includes pinnacle)
+function normalizeHistoryBookKey(bookmaker: string): AnyBookHistory | "other" {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings" || b === "dk") return "draftkings";
   if (b === "fanduel" || b === "fd") return "fanduel";
@@ -316,14 +344,14 @@ function normalizeBookKey(bookmaker: string): SoftBookKey | "other" {
   return "other";
 }
 
-function bookShort(book: AnyBook) {
+function bookShort(book: AnyBookHistory) {
   if (book === "draftkings") return "DK";
   if (book === "fanduel") return "FD";
   if (book === "betmgm") return "MGM";
   return "PIN";
 }
 
-function bookFull(book: AnyBook) {
+function bookFull(book: AnyBookHistory) {
   if (book === "draftkings") return "DraftKings";
   if (book === "fanduel") return "FanDuel";
   if (book === "betmgm") return "BetMGM";
@@ -423,6 +451,22 @@ function scoreTone(score: number) {
 }
 
 /* =========================================================
+   Gates helpers (same as Overview)
+========================================================= */
+
+function withinOddsGate(odds: number) {
+  return Number.isFinite(odds) && odds >= ODDS_MIN && odds <= ODDS_MAX;
+}
+
+function withinMaxEvGate(ev: number) {
+  return Number.isFinite(ev) && ev <= MAX_EV_PCT;
+}
+
+function withinPropEvRange(ev: number) {
+  return Number.isFinite(ev) && ev >= MIN_EV_PCT_PROPS && ev <= MAX_EV_PCT;
+}
+
+/* =========================================================
    Dedup keys
 ========================================================= */
 
@@ -441,14 +485,14 @@ function propPlayKey(r: PlayerPropEvLatestRow) {
 }
 
 /* =========================================================
-   Best offer
+   Best offer (soft books only)
 ========================================================= */
 
-function chooseBestOffer(offers: Partial<Record<Exclude<SoftBookKey, "all">, BookOffer>>) {
-  const order: Exclude<SoftBookKey, "all">[] = ["draftkings", "fanduel", "betmgm"];
+function chooseBestOffer(offers: Partial<Record<SoftOfferKey, BookOffer>>) {
+  const order: SoftOfferKey[] = ["draftkings", "fanduel", "betmgm"];
   const list = order
     .map((b) => (offers[b] ? ({ b, o: offers[b]! }) : null))
-    .filter(Boolean) as { b: Exclude<SoftBookKey, "all">; o: BookOffer }[];
+    .filter(Boolean) as { b: SoftOfferKey; o: BookOffer }[];
 
   if (!list.length) return { bestBook: null as const, bestEvPct: 0, bestBetFraction: 0 };
 
@@ -502,14 +546,15 @@ function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: s
     const ts = normalizeIso(r?.[tsCol]);
     if (!ts) continue;
 
-    const book = String(r?.[bookCol] ?? "").toLowerCase() as AnyBook;
-    if (!HISTORY_BOOKS.includes(book)) continue;
+    const book = String(r?.[bookCol] ?? "").toLowerCase();
+    const bk = normalizeHistoryBookKey(book);
+    if (bk === "other") continue;
 
     const odds = Number(r?.[oddsCol]);
     if (!Number.isFinite(odds)) continue;
 
     const cur = map.get(ts) ?? { ts };
-    (cur as any)[book] = odds;
+    (cur as any)[bk] = odds;
     map.set(ts, cur);
   }
 
@@ -517,19 +562,22 @@ function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: s
 }
 
 /* =========================================================
-   Screen
+   Book filter options (soft only)
 ========================================================= */
 
-const SOFT_BOOKS: { key: SoftBookKey; label: string }[] = [
-  { key: "all", label: "All Books" },
+const SOFT_BOOK_FILTERS: { key: SoftBookFilter; label: string }[] = [
+  { key: "any", label: "Any (DK/FD/MGM)" },
   { key: "draftkings", label: "DraftKings" },
   { key: "fanduel", label: "FanDuel" },
   { key: "betmgm", label: "BetMGM" },
-  { key: "pinnacle", label: "Pinnacle (history only)" },
 ];
 
+/* =========================================================
+   Screen
+========================================================= */
+
 export const ModelScreen = () => {
-  const [bookFilter, setBookFilter] = useState<SoftBookKey>("all");
+  const [bookFilter, setBookFilter] = useState<SoftBookFilter>("any");
   const [kindFilter, setKindFilter] = useState<PlayKind>("all");
 
   const [loading, setLoading] = useState(true);
@@ -574,13 +622,14 @@ export const ModelScreen = () => {
 
       const nowIso = new Date().toISOString();
 
+      // NOTE: Keep DB-side filters minimal; apply -200..+200 and EV caps client-side (per-offer).
       const evQ = supabase
         .from("ev_plays")
         .select(
           "run_id,sport_key,event_id,commence_time,matchup,team,market,side,line,bookmaker,book_odds,quantum_prob,quantum_odds,ev_pct,confidence_score,confidence_tier,kelly_fraction,bet_fraction,created_at"
         )
         .gte("commence_time", nowIso)
-        .gt("ev_pct", 0)
+        .gt("ev_pct", 0) // still positive EV plays for games
         .in("bookmaker", ["draftkings", "fanduel", "betmgm"])
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
@@ -614,7 +663,7 @@ export const ModelScreen = () => {
           ].join(",")
         )
         .gte("commence_time", nowIso)
-        .gt("ev_pct", 0)
+        .gt("ev_pct", 0) // still positive overall; we'll apply 2..15 gate client-side
         .in("book", ["draftkings", "fanduel", "betmgm"])
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
@@ -662,10 +711,17 @@ export const ModelScreen = () => {
   const aggregated = useMemo(() => {
     const map = new Map<string, AggregatedPlay>();
 
-    // ---- games
+    // ---- games (apply gates per offer)
     for (const r of games) {
-      const bk = normalizeBookKey(r.bookmaker);
-      if (bk === "other" || bk === "pinnacle") continue;
+      const bk = normalizeSoftBookKey(r.bookmaker);
+      if (bk === "other") continue;
+
+      const odds = safeNum(r.book_odds, NaN);
+      const ev = safeNum(r.ev_pct, NaN);
+
+      // ✅ Games: odds -200..+200 AND EV <= 15 (no 2% min gate)
+      if (!withinOddsGate(odds)) continue;
+      if (!withinMaxEvGate(ev)) continue;
 
       const key = gamePlayKey(r);
       const existing = map.get(key);
@@ -701,22 +757,30 @@ export const ModelScreen = () => {
         } as AggregatedPlay);
 
       base.offers[bk] = {
-        book: bk as AnyBook,
-        odds: safeNum(r.book_odds, NaN),
-        ev_pct: safeNum(r.ev_pct, 0),
+        book: bk,
+        odds,
+        ev_pct: ev,
         bet_fraction: clamp(safeNum(r.bet_fraction, 0), 0, 1),
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
-      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       map.set(key, base);
     }
 
-    // ---- props
+    // ---- props (apply gates per offer)
     for (const r of props) {
-      const bk = normalizeBookKey(r.book);
-      if (bk === "other" || bk === "pinnacle") continue;
+      const bk = normalizeSoftBookKey(r.book);
+      if (bk === "other") continue;
+
+      const odds = safeNum(r.odds, NaN);
+      const ev = safeNum(r.ev_pct, NaN);
+
+      // ✅ Props: odds -200..+200 AND EV 2..15
+      if (!withinOddsGate(odds)) continue;
+      if (!withinPropEvRange(ev)) continue;
 
       const key = propPlayKey(r);
       const existing = map.get(key);
@@ -765,48 +829,58 @@ export const ModelScreen = () => {
         } as AggregatedPlay);
 
       base.offers[bk] = {
-        book: bk as AnyBook,
-        odds: safeNum(r.odds, NaN),
-        ev_pct: safeNum(r.ev_pct, 0),
+        book: bk,
+        odds,
+        ev_pct: ev,
         bet_fraction: clamp(safeNum(r.kelly_fraction, 0), 0, 1),
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
-      base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
+      base.created_at =
+        [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
       // preserve mu/line if missing
       if (base.propMeta) {
         const nextMu = (r.mu ?? null) as number | null;
-        if (nextMu != null && Number.isFinite(nextMu) && (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu)))
+        if (
+          nextMu != null &&
+          Number.isFinite(nextMu) &&
+          (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu))
+        )
           base.propMeta.mu = nextMu;
 
         const nextLine = (r.line ?? null) as number | null;
-        if (nextLine != null && Number.isFinite(nextLine) && (base.propMeta.line == null || !Number.isFinite(base.propMeta.line)))
+        if (
+          nextLine != null &&
+          Number.isFinite(nextLine) &&
+          (base.propMeta.line == null || !Number.isFinite(base.propMeta.line))
+        )
           base.propMeta.line = nextLine;
       }
 
       map.set(key, base);
     }
 
-    const plays = Array.from(map.values()).map((p) => {
-      const { bestBook, bestEvPct, bestBetFraction } = chooseBestOffer(p.offers);
-      return { ...p, bestBook, bestEvPct, bestBetFraction };
-    });
+    // finalize: compute best book from remaining gated offers
+    const plays = Array.from(map.values())
+      .map((p) => {
+        const { bestBook, bestEvPct, bestBetFraction } = chooseBestOffer(p.offers);
+        return { ...p, bestBook, bestEvPct, bestBetFraction };
+      })
+      // drop any plays that ended up with zero offers after gating
+      .filter((p) => !!p.bestBook && (p.offers.draftkings || p.offers.fanduel || p.offers.betmgm));
 
     return plays.sort(sortPlays);
   }, [games, props]);
 
   const filtered = useMemo(() => {
     let list = aggregated;
+
     if (kindFilter !== "all") list = list.filter((p) => p.kind === kindFilter);
 
-    if (bookFilter !== "all") {
-      if (bookFilter === "pinnacle") {
-        // history-only option; don't filter rows
-        list = list;
-      } else {
-        list = list.filter((p) => !!p.offers[bookFilter]);
-      }
+    // Book filter is soft-only; "any" = no constraint (still only gated soft offers exist)
+    if (bookFilter !== "any") {
+      list = list.filter((p) => !!p.offers[bookFilter]);
     }
 
     return list;
@@ -825,9 +899,8 @@ export const ModelScreen = () => {
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      {/* HERO / HEADER (NO rainbow edge: no full-bleed gradient overlay) */}
+      {/* HERO / HEADER (NO rainbow edge) */}
       <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 md:p-5">
-        {/* subtle radials only, clipped within card; no top-edge banding */}
         <div
           className="pointer-events-none absolute inset-0 opacity-100"
           style={{
@@ -847,6 +920,10 @@ export const ModelScreen = () => {
 
             <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
               Aggregated to 1 row per play. Tap/click the <span className="text-white">Pick</span> to open details.
+            </div>
+
+            <div className="text-[11px] text-[#9a9a9a] mt-2">
+              Gates: Odds {ODDS_MIN} to +{ODDS_MAX} • Games EV &le; {MAX_EV_PCT}% • Props EV {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}%
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -869,10 +946,10 @@ export const ModelScreen = () => {
 
               <select
                 value={bookFilter}
-                onChange={(e) => setBookFilter(e.target.value as SoftBookKey)}
+                onChange={(e) => setBookFilter(e.target.value as SoftBookFilter)}
                 className="px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg text-[#d0d0d0] outline-none text-xs"
               >
-                {SOFT_BOOKS.map((b) => (
+                {SOFT_BOOK_FILTERS.map((b) => (
                   <option key={b.key} value={b.key}>
                     {b.label}
                   </option>
@@ -931,10 +1008,9 @@ export const ModelScreen = () => {
                 {!loading && !filtered.length ? (
                   <tr>
                     <td colSpan={11} className="p-10 text-center text-xs text-[#808080]">
-                      No positive EV plays found for this filter.
+                      No plays found after gates/filters.
                       <div className="text-[11px] text-[#606060] mt-1">
-                        If this seems wrong, confirm <span className="text-white">commence_time</span> is in the future and{" "}
-                        <span className="text-white">ev_pct</span> is &gt; 0 for DK/FD/MGM rows.
+                        Check odds ({ODDS_MIN}..+{ODDS_MAX}) and EV caps (Games &le; {MAX_EV_PCT}%, Props {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}%).
                       </div>
                     </td>
                   </tr>
@@ -949,7 +1025,7 @@ export const ModelScreen = () => {
       <div className="md:hidden space-y-3">
         {!loading && !filtered.length ? (
           <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
-            No positive EV plays found for this filter.
+            No plays found after gates/filters.
           </div>
         ) : null}
 
@@ -1026,10 +1102,13 @@ function PlayRow({
           {bestOffer ? (
             <div
               className="shrink-0 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1"
-              title={`Best book: ${bookFull(bestOffer.book)} (${pct(bestOffer.ev_pct, 1)})`}
+              title={`Best book: ${bestOffer.book.toUpperCase()} (${pct(bestOffer.ev_pct, 1)})`}
             >
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[bestOffer.book] }} />
-              <span className="text-[10px] text-[#b0b0b0]">{bookShort(bestOffer.book)}</span>
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: BOOK_COLOR[bestOffer.book as AnyBookHistory] }}
+              />
+              <span className="text-[10px] text-[#b0b0b0]">{bestOffer.book === "betmgm" ? "MGM" : bestOffer.book === "fanduel" ? "FD" : "DK"}</span>
             </div>
           ) : null}
         </div>
@@ -1086,7 +1165,12 @@ function PlayRow({
 
       <td className="p-3 text-center">
         <div
-          className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}
+          className={[
+            "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+            sTone.bg,
+            sTone.border,
+            sTone.text,
+          ].join(" ")}
         >
           {score}
         </div>
@@ -1141,13 +1225,20 @@ function PlayCard({
         <div className="shrink-0 text-right">
           <div className="inline-flex items-center gap-2">
             <div
-              className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}
+              className={[
+                "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+                sTone.bg,
+                sTone.border,
+                sTone.text,
+              ].join(" ")}
             >
               {score}
             </div>
             <div className="text-right">
               <div className="text-[10px] text-[#606060]">Bet</div>
-              <div className="text-[#d4af37] font-semibold tabular-nums">{settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}</div>
+              <div className="text-[#d4af37] font-semibold tabular-nums">
+                {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+              </div>
             </div>
           </div>
         </div>
@@ -1224,7 +1315,6 @@ function PlayDetailsModal({
 }) {
   const [tab, setTab] = useState<ModalTab>("line");
 
-  // reset tab when opening a different play
   useEffect(() => {
     if (open) setTab("line");
   }, [open, play?.playKey]);
@@ -1240,7 +1330,6 @@ function PlayDetailsModal({
     <div className="fixed inset-0 z-[100]">
       <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
 
-      {/* viewport-safe wrapper */}
       <div
         className="absolute inset-0 flex items-end md:items-center md:justify-center"
         style={{
@@ -1248,21 +1337,11 @@ function PlayDetailsModal({
           paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
         }}
       >
-        {/* modal frame */}
         <div
-          className="
-            relative w-full md:max-w-4xl
-            bg-[#0b0b0b] border border-[#2a2a2a]
-            md:rounded-2xl rounded-t-2xl
-            overflow-hidden
-            flex flex-col
-          "
-          style={{
-            // ensures DONE never clips (no internal scrolling required to reach footer)
-            maxHeight: "min(92vh, 920px)",
-          }}
+          className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col"
+          style={{ maxHeight: "min(92vh, 920px)" }}
         >
-          {/* Header (fixed) */}
+          {/* Header */}
           <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1303,7 +1382,7 @@ function PlayDetailsModal({
               </div>
             </div>
 
-            {/* Tabs (fixed) */}
+            {/* Tabs */}
             <div className="mt-3 flex items-center justify-between gap-3">
               <div className="inline-flex items-center rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
                 <TabButton active={tab === "line"} onClick={() => setTab("line")} label="Line History" />
@@ -1321,12 +1400,10 @@ function PlayDetailsModal({
             </div>
           </div>
 
-          {/* Body (NO scrolling; content sized to fit remaining space) */}
-          <div className="flex-1 min-h-0 p-4">
-            {tab === "line" ? <OddsHistoryPanel play={play} /> : <HitRatePanel play={play} />}
-          </div>
+          {/* Body */}
+          <div className="flex-1 min-h-0 p-4">{tab === "line" ? <OddsHistoryPanel play={play} /> : <HitRatePanel play={play} />}</div>
 
-          {/* Footer (always visible) */}
+          {/* Footer */}
           <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a]">
             <button
               type="button"
@@ -1360,7 +1437,7 @@ function TabButton({ active, onClick, label, disabled }: { active: boolean; onCl
 }
 
 /* =========================================================
-   Line History Panel (fits, no scrolling)
+   Line History Panel
 ========================================================= */
 
 function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
@@ -1462,7 +1539,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
     };
   }, [play.playKey]);
 
-  const hasAny = (k: AnyBook) => series.some((p) => Number.isFinite((p as any)[k]));
+  const hasAny = (k: AnyBookHistory) => series.some((p) => Number.isFinite((p as any)[k]));
 
   const TooltipContent = (props: any) => {
     const { active, payload, label } = props;
@@ -1475,7 +1552,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
     const line = play.lineLabel;
     const start = play.commence_time ? `${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}` : "—";
 
-    const order: AnyBook[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
+    const order: AnyBookHistory[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
     const rows = order
       .map((k) => {
         const found = payload.find((p: any) => p.dataKey === k);
@@ -1483,7 +1560,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
         if (!Number.isFinite(Number(v))) return null;
         return { k, v: Number(v) };
       })
-      .filter(Boolean) as { k: AnyBook; v: number }[];
+      .filter(Boolean) as { k: AnyBookHistory; v: number }[];
 
     return (
       <div
@@ -1528,7 +1605,6 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
     );
   };
 
-  // height that reliably fits between modal header/footer on mobile + desktop
   const chartHeightClass = "h-[min(44vh,360px)]";
 
   return (
@@ -1579,15 +1655,12 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
               {hasAny("draftkings") ? (
                 <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
               ) : null}
-
               {hasAny("fanduel") ? (
                 <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
               ) : null}
-
               {hasAny("betmgm") ? (
                 <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
               ) : null}
-
               {hasAny("pinnacle") ? (
                 <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
               ) : null}
@@ -1602,7 +1675,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
 }
 
 /* =========================================================
-   Hit Rate Panel (FantasyPros Game Logs bar chart) — props only
+   Hit Rate Panel — props only
 ========================================================= */
 
 function HitRatePanel({ play }: { play: AggregatedPlay }) {
@@ -1615,10 +1688,6 @@ function HitRatePanel({ play }: { play: AggregatedPlay }) {
   }
   return <FantasyProsGameLogs play={play} />;
 }
-
-/* =========================================================
-   FantasyPros Game Logs — BAR CHART (works: ResponsiveContainer has explicit height)
-========================================================= */
 
 function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const [rows, setRows] = useState<FantasyProsLogRow[]>([]);
@@ -1681,7 +1750,6 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   const statLabel = statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
 
   const chartData = useMemo(() => {
-    // show most recent 10 but plot oldest->newest left-to-right
     const last = (rows ?? []).slice(0, 10).slice().reverse();
     return last.map((r) => ({
       date: r.date,
@@ -1752,8 +1820,6 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
   };
 
   const activeBarStyle = { stroke: "#ffffff", strokeWidth: 1, fillOpacity: 1 };
-
-  // height that fits without scrolling (remaining modal area)
   const chartWrapClass = "h-[min(44vh,340px)]";
 
   return (
@@ -1774,13 +1840,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} barCategoryGap={12}>
                 <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 10, fill: "#808080" }}
-                  axisLine={{ stroke: "#2a2a2a" }}
-                  tickLine={{ stroke: "#2a2a2a" }}
-                  minTickGap={12}
-                />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
                 <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
 
                 <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
@@ -1856,12 +1916,7 @@ function LegendDot({ label, color }: { label: string; color: string }) {
 
 function StatChip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div
-      className={[
-        "rounded-lg border px-2 py-2 text-center",
-        accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f]",
-      ].join(" ")}
-    >
+    <div className={["rounded-lg border px-2 py-2 text-center", accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f]"].join(" ")}>
       <div className="text-[10px] text-[#606060]">{label}</div>
       <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
     </div>
@@ -1872,23 +1927,15 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   if (!offer) return <div className="text-[#404040]">—</div>;
 
   const logo = bookLogoSrc(offer.book);
-  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book]}]` : "shadow-none";
+  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book as AnyBookHistory]}]` : "shadow-none";
 
   return (
-    <div
-      className={[
-        "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border",
-        isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]",
-        ring,
-      ].join(" ")}
-    >
+    <div className={["inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
       <div className="inline-flex items-center justify-center gap-2">
         {logo ? (
-          <img src={logo} alt={bookShort(offer.book)} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
+          <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
         ) : (
-          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
-            {bookShort(offer.book)}
-          </div>
+          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>
         )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
@@ -1909,18 +1956,12 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   }
 
   const logo = bookLogoSrc(offer.book);
-  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book]}]` : "shadow-none";
+  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book as AnyBookHistory]}]` : "shadow-none";
 
   return (
     <div className={["rounded-lg p-2 text-center border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
       <div className="flex items-center justify-center gap-2">
-        {logo ? (
-          <img src={logo} alt={bookShort(offer.book)} className="h-4 w-4 opacity-95" draggable={false} />
-        ) : (
-          <div className="h-4 w-4 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[9px] text-[#808080]">
-            {bookShort(offer.book)}
-          </div>
-        )}
+        {logo ? <img src={logo} alt={offer.book} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
       <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
