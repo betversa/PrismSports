@@ -1,10 +1,10 @@
-// components/Sidebar.tsx — FULL REWRITE (adds Parlay nav item)
+// components/Sidebar.tsx — FULL REWRITE (adds Parlay + Props nav item)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Adds Parlay to sidebar nav (desktop + mobile)
+// ✅ Adds Parlay + NEW Props to sidebar nav (desktop + mobile)
 // ✅ Keeps existing Odds/Predictions sport dropdown behavior
 // ✅ Keeps styling + enabled sport logic unchanged
 
-import { useState } from "react";
+import React, { useState } from "react";
 import {
   ChartBar,
   Calculator,
@@ -15,6 +15,7 @@ import {
   X,
   ChevronDown,
   Layers,
+  User,
 } from "lucide-react";
 import type { Screen, SportKey } from "../App";
 
@@ -165,6 +166,23 @@ export function Sidebar({
               <div className="flex items-center gap-3">
                 <Target className="w-4 h-4" />
                 <span className="text-sm">Picks</span>
+              </div>
+            </button>
+          </li>
+
+          {/* Props (NEW) */}
+          <li>
+            <button
+              onClick={() => {
+                onNavigate("props");
+                if (isMobile) onClose?.();
+              }}
+              className={baseItemClasses(activeScreen === "props")}
+              type="button"
+            >
+              <div className="flex items-center gap-3">
+                <User className="w-4 h-4" />
+                <span className="text-sm">Props</span>
               </div>
             </button>
           </li>
