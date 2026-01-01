@@ -1,4 +1,4 @@
-// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate)
+// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate) + Parlay tab
 // ---------------------------------------------------------------------------------------------------
 // ✅ Theme matches provided Prism logo (black/gold/slate) — removes rainbow prism gradients
 // ✅ Fix retained: first dropdown item no longer “pre-highlighted”
@@ -6,7 +6,8 @@
 //    - Subtle gold dot for selected instead
 // ✅ Desktop nav centered; logo bigger (md:h-24)
 // ✅ Clicking logo -> Overview
-// ✅ Logo path: /logos/Logo.png
+// ✅ Logo path: /logos/Logo.png (you currently use /logos/mainlogo.png — kept as-is)
+// ✅ NEW: Adds "Parlay" section to nav
 // ✅ Everything else unchanged (API + behavior)
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -16,6 +17,7 @@ import type { SportKey } from "../App";
 type Screen =
   | "overview"
   | "model"
+  | "parlay"
   | "monte-carlo"
   | "odds"
   | "results"
@@ -41,7 +43,7 @@ const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 /** =========================
  * THEME (from logo palette)
  * ========================= */
-const GOLD = "#d89211"; // close to logo gold
+const GOLD = "#d89211";
 const GOLD_SOFT = "rgba(216, 146, 17, 0.18)";
 const GOLD_GLOW = "rgba(216, 146, 17, 0.32)";
 const SLATE = "#575a62";
@@ -213,7 +215,6 @@ function HoverDropdown({
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
         >
-          {/* Gold + slate glass overlay */}
           <div
             className="pointer-events-none absolute inset-0 z-0"
             style={{
@@ -227,7 +228,6 @@ function HoverDropdown({
             }}
           />
 
-          {/* Top gold hairline */}
           <div
             className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] opacity-80"
             style={{
@@ -256,7 +256,6 @@ function HoverDropdown({
                   className={[
                     "w-full text-left px-4 py-3 flex items-center justify-between",
                     "transition-colors border-b last:border-b-0",
-                    // ✅ Every row identical at rest (no “pre-highlight”)
                     enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
                   ].join(" ")}
                   style={{ borderBottomColor: "#141414" }}
@@ -268,7 +267,6 @@ function HoverDropdown({
                       COMING SOON
                     </span>
                   ) : selected ? (
-                    // ✅ Subtle selected indicator (NO background)
                     <span className="inline-flex items-center gap-2">
                       <span className="text-[11px] text-[#8a8a8a] hidden sm:inline">Selected</span>
                       <span
@@ -331,25 +329,19 @@ export function Header({
         background: PANEL,
       }}
     >
-      {/* BACKDROP: black glass + gold glow + slate vignette (matches logo) */}
       <div className="pointer-events-none absolute inset-0">
         <div
           className="absolute inset-0"
           style={{
             background: [
-              // gold glow (slightly left so it “backs” the logo)
               `radial-gradient(900px 340px at 22% 0%, ${GOLD_GLOW}, transparent 62%)`,
-              // slate sheen
               `radial-gradient(980px 360px at 70% -20%, rgba(87,90,98,0.24), transparent 66%)`,
-              // subtle top highlight
               `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.018) 55%, rgba(0,0,0,0.0) 100%)`,
-              // black glass stack
               `linear-gradient(180deg, rgba(0,0,0,0.28), rgba(0,0,0,0.64) 52%, rgba(0,0,0,0.86) 100%)`,
             ].join(", "),
           }}
         />
 
-        {/* Top gold hairline */}
         <div
           className="absolute left-0 right-0 top-0 h-[1px] opacity-70"
           style={{
@@ -358,7 +350,6 @@ export function Header({
           }}
         />
 
-        {/* Bottom gold underline (brand anchor) */}
         <div
           className="absolute left-0 right-0 bottom-0 h-[1px] opacity-75"
           style={{
@@ -397,7 +388,6 @@ export function Header({
                     className={[
                       "h-16 sm:h-20 md:h-24 w-auto object-contain select-none flex-shrink-0",
                       "transition-transform duration-200 group-hover:scale-[1.01]",
-                      // tiny drop-shadow to feel “stamped” on glass
                       "drop-shadow-[0_10px_26px_rgba(0,0,0,0.55)]",
                     ].join(" ")}
                     draggable={false}
@@ -418,7 +408,6 @@ export function Header({
                       {TAGLINE}
                     </div>
 
-                    {/* Gold underline (no rainbow) */}
                     <span
                       className="block mt-1 h-[2px] w-full rounded-full opacity-70 md:opacity-55"
                       style={{
@@ -461,6 +450,7 @@ export function Header({
               <div className="h-5 w-px" style={{ background: "#2a2a2a" }} />
 
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
+              <NavItem label="Parlay" active={activeScreen === "parlay"} onClick={() => onNavigate?.("parlay")} />
               <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
               <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
             </nav>
@@ -482,7 +472,7 @@ export function Header({
                 className="w-2 h-2 rounded-full"
                 title="Live"
                 style={{
-                  background: "rgba(34,197,94,0.95)", // emerald
+                  background: "rgba(34,197,94,0.95)",
                   boxShadow: "0 0 0 2px rgba(34,197,94,0.14)",
                 }}
               />
