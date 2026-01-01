@@ -1,13 +1,20 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Top Plays: EV/odds gates + Book filter)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Top Plays: soft-book filters only + EV gates by type)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Keeps: Mobile Top Plays compact + Prism black/gold/slate styling
-// ✅ Keeps: Top Plays validation gates (Odds -200..+200, EV 2..15, Score>=50, future-ish, dedupe best book)
-// ✅ NEW: Book filter button(s) for Top Plays (All / DraftKings / FanDuel / BetMGM / Pinnacle / BetOnline)
+// ✅ Gates (Top Plays):
+//    - ALL: Odds must be between -200 and +200 (book price)
+//    - Games: max EV 15% (NO min EV gate)
+//    - Props: EV must be 2% to 15%
+//    - Score >= 50
+//    - Future-ish commence_time
+//    - Dedupe: one card per play (best book shown)
+// ✅ Book filter (Top Plays):
+//    - ONLY SOFT books shown as options: DraftKings / FanDuel / BetMGM / Any
+//    - Filter applies AFTER dedupe so "one card per play" stays true
 //
 // Notes:
-// - Filter applies to Top Plays (after gates + dedupe) so "one card per play" remains true.
-// - Uses existing normalizeBook() + logo mapping.
-// - No other behavior changes.
+// - "Soft books" defined as DK/FD/MGM. Any shows all books (including sharp) that pass gates.
+// - If you want "Any" to still exclude sharps, tell me and I’ll flip that in one line.
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -109,7 +116,7 @@ type PropEvRow = {
 };
 
 /* =========================================================
-   THEME
+   THEME / FILTERS
 ========================================================= */
 
 const GOLD = "#d89211";
@@ -118,16 +125,17 @@ const BORDER = "#2a2a2a";
 const SLATE = "rgba(87,90,98,0.26)";
 
 type PlayTab = "all" | "game" | "props";
+
 const TOP_SCORE_MIN = 50;
 
 // Top Plays gates
-const TOP_MIN_EV_PCT = 2; // %
 const TOP_MAX_EV_PCT = 15; // %
+const TOP_MIN_EV_PCT_PROPS = 2; // %
 const TOP_MIN_ODDS = -200;
 const TOP_MAX_ODDS = 200;
 
-// Book filter choices
-type BookFilter = "all" | "draftkings" | "fanduel" | "betmgm" | "pinnacle" | "betonline";
+// Soft-book filter options ONLY
+type SoftBookFilter = "any" | "draftkings" | "fanduel" | "betmgm";
 
 /* =========================================================
    HELPERS
@@ -160,13 +168,11 @@ function normalizeBook(b?: string | null) {
   return b;
 }
 
-function normalizedBookKey(b?: string | null): BookFilter | "other" {
+function softBookKey(b?: string | null): SoftBookFilter | "other" {
   const x = String(b ?? "").toLowerCase();
   if (x.includes("draft")) return "draftkings";
   if (x.includes("fanduel")) return "fanduel";
   if (x.includes("mgm")) return "betmgm";
-  if (x.includes("pinnacle") || x === "pin") return "pinnacle";
-  if (x.includes("betonline")) return "betonline";
   return "other";
 }
 
@@ -303,9 +309,14 @@ function withinOddsGate(odds: number | null) {
   return odds >= TOP_MIN_ODDS && odds <= TOP_MAX_ODDS;
 }
 
-function withinEvGate(ev: number | null) {
+function withinMaxEvGate(ev: number | null) {
   if (ev == null) return false;
-  return ev >= TOP_MIN_EV_PCT && ev <= TOP_MAX_EV_PCT;
+  return ev <= TOP_MAX_EV_PCT;
+}
+
+function withinPropEvRange(ev: number | null) {
+  if (ev == null) return false;
+  return ev >= TOP_MIN_EV_PCT_PROPS && ev <= TOP_MAX_EV_PCT;
 }
 
 /* =========================================================
@@ -897,8 +908,8 @@ export function OverviewScreen() {
 
   const [tab, setTab] = useState<PlayTab>("all");
 
-  // ✅ NEW: book filter state (Top Plays only)
-  const [bookFilter, setBookFilter] = useState<BookFilter>("all");
+  // ✅ Soft-book filter ONLY
+  const [bookFilter, setBookFilter] = useState<SoftBookFilter>("any");
 
   async function loadAll({ soft }: { soft?: boolean } = {}) {
     try {
@@ -1031,16 +1042,16 @@ export function OverviewScreen() {
       .filter((r) => isFutureish(r.commence_time ?? null));
   }, [propPlays, activeSport]);
 
+  // Games: odds gate + max EV gate only (no min EV)
   const topGames = useMemo(() => {
     const map = new Map<string, EvPlayRow[]>();
 
-    // gates BEFORE dedupe
     for (const r of evFiltered) {
       const ev = getEvPct(r);
       const odds = getGameOdds(r);
 
-      if (!withinEvGate(ev)) continue;
       if (!withinOddsGate(odds)) continue;
+      if (!withinMaxEvGate(ev)) continue;
 
       const k = keyGamePlay(r);
       if (!map.has(k)) map.set(k, []);
@@ -1061,16 +1072,16 @@ export function OverviewScreen() {
     return unique.filter((r) => (getGameScore(r) ?? -999) >= TOP_SCORE_MIN);
   }, [evFiltered]);
 
+  // Props: odds gate + EV 2..15 gate
   const topProps = useMemo(() => {
     const map = new Map<string, PropEvRow[]>();
 
-    // gates BEFORE dedupe
     for (const r of propsFiltered) {
       const ev = getEvPct(r);
       const odds = getPropOdds(r);
 
-      if (!withinEvGate(ev)) continue;
       if (!withinOddsGate(odds)) continue;
+      if (!withinPropEvRange(ev)) continue;
 
       const k = keyPropPlay(r);
       if (!map.has(k)) map.set(k, []);
@@ -1091,21 +1102,21 @@ export function OverviewScreen() {
     return unique.filter((r) => (getPropScore(r) ?? -999) >= TOP_SCORE_MIN);
   }, [propsFiltered]);
 
-  // ✅ NEW: apply book filter AFTER dedupe so "one card per play" remains correct
-  const topGamesFilteredByBook = useMemo(() => {
-    if (bookFilter === "all") return topGames;
-    return topGames.filter((r) => normalizedBookKey(r.bookmaker) === bookFilter);
+  // Book filter applies after dedupe; only soft book choices are offered.
+  const topGamesByBook = useMemo(() => {
+    if (bookFilter === "any") return topGames;
+    return topGames.filter((r) => softBookKey(r.bookmaker) === bookFilter);
   }, [topGames, bookFilter]);
 
-  const topPropsFilteredByBook = useMemo(() => {
-    if (bookFilter === "all") return topProps;
-    return topProps.filter((r) => normalizedBookKey(r.book ?? r.bookmaker) === bookFilter);
+  const topPropsByBook = useMemo(() => {
+    if (bookFilter === "any") return topProps;
+    return topProps.filter((r) => softBookKey(r.book ?? r.bookmaker) === bookFilter);
   }, [topProps, bookFilter]);
 
   const topAll = useMemo(() => {
     const merged: Array<{ kind: "game"; row: EvPlayRow } | { kind: "prop"; row: PropEvRow }> = [
-      ...topGamesFilteredByBook.map((r) => ({ kind: "game" as const, row: r })),
-      ...topPropsFilteredByBook.map((r) => ({ kind: "prop" as const, row: r })),
+      ...topGamesByBook.map((r) => ({ kind: "game" as const, row: r })),
+      ...topPropsByBook.map((r) => ({ kind: "prop" as const, row: r })),
     ];
 
     merged.sort((a, b) => {
@@ -1118,17 +1129,17 @@ export function OverviewScreen() {
     });
 
     return merged.slice(0, 8);
-  }, [topGamesFilteredByBook, topPropsFilteredByBook]);
+  }, [topGamesByBook, topPropsByBook]);
 
   const playsToRender = useMemo(() => {
     if (tab === "game") {
-      return topGamesFilteredByBook.slice(0, 6).map((r) => ({ kind: "game" as const, row: r }));
+      return topGamesByBook.slice(0, 6).map((r) => ({ kind: "game" as const, row: r }));
     }
     if (tab === "props") {
-      return topPropsFilteredByBook.slice(0, 6).map((r) => ({ kind: "prop" as const, row: r }));
+      return topPropsByBook.slice(0, 6).map((r) => ({ kind: "prop" as const, row: r }));
     }
     return topAll;
-  }, [tab, topAll, topGamesFilteredByBook, topPropsFilteredByBook]);
+  }, [tab, topAll, topGamesByBook, topPropsByBook]);
 
   return (
     <div className="space-y-8 sm:space-y-10">
@@ -1193,8 +1204,8 @@ export function OverviewScreen() {
               </p>
 
               <div className="text-[11px] text-[#a7a7a7] mt-2">
-                Top Plays filters: EV {TOP_MIN_EV_PCT}–{TOP_MAX_EV_PCT}% • Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} •
-                Score ≥ {TOP_SCORE_MIN}
+                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
+                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
               </div>
             </div>
 
@@ -1248,9 +1259,9 @@ export function OverviewScreen() {
           </div>
         </div>
 
-        {/* ✅ NEW: Book filter chips */}
+        {/* Book filter: ONLY soft options */}
         <div className="flex flex-wrap gap-2 mb-3 sm:mb-4">
-          <Chip active={bookFilter === "all"} label="All books" onClick={() => setBookFilter("all")} />
+          <Chip active={bookFilter === "any"} label="Any" onClick={() => setBookFilter("any")} />
           <Chip
             active={bookFilter === "draftkings"}
             label="DraftKings"
@@ -1268,18 +1279,6 @@ export function OverviewScreen() {
             label="BetMGM"
             leftIconSrc="/books/mgmsquare.png"
             onClick={() => setBookFilter("betmgm")}
-          />
-          <Chip
-            active={bookFilter === "pinnacle"}
-            label="Pinnacle"
-            leftIconSrc="/books/pinsquare.png"
-            onClick={() => setBookFilter("pinnacle")}
-          />
-          <Chip
-            active={bookFilter === "betonline"}
-            label="BetOnline"
-            leftIconSrc="/books/betonlinesquare.png"
-            onClick={() => setBookFilter("betonline")}
           />
         </div>
 
