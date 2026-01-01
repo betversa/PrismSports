@@ -1,12 +1,14 @@
-// src/app/screens/PropsScreen.tsx — FULL REWRITE
+// src/app/screens/PropsScreen.tsx — FULL REWRITE (Fix team_abbr + CSV-accurate markets/books + Player pics)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ FIX: player_prop_ev_latest.team_abbr DOES NOT EXIST -> derive abbreviations from team_map
-// ✅ Uses player_prop_ev_latest.team + player_prop_ev_latest.opponent (canonical names)
-// ✅ team_map lookup: canonical -> Abbreviation (fallback Abbreviation2)
-// ✅ Adds player pictures via player_prop_ev_latest.picture_url (with fallback avatar)
-// ✅ Aggregates to 1 row per prop, displays DK/FD/MGM strip, highlights best book
-// ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor * kelly_fraction (capped)
-// ✅ Sticky filters + sticky table header
+// ✅ Data: public.player_prop_ev_latest (CSV-verified columns)
+// ✅ Fix: NO player_prop_ev_latest.team_abbr — derive via team_map (canonical -> Abbreviation or Abbreviation2)
+// ✅ Markets used (your request): Points, Rebounds, Assists, 3PM
+//    - DB values are lowercase: points/rebounds/assists/threes
+// ✅ Aggregated: 1 row per (event_id, player_name, market, side, line)
+// ✅ DK/FD/MGM strip (odds + EV), highlights best book (highest EV%)
+// ✅ Player pictures: picture_url with clean fallback
+// ✅ Bet $: bankroll * (kelly_factor * best_kelly_fraction) with safety cap
+// ✅ Sticky market pills + sticky header
 // ✅ ONLY Pick cell opens modal
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -14,13 +16,10 @@ import { supabase } from "../../lib/supabaseClient";
 import { X } from "lucide-react";
 
 type BookKey = "draftkings" | "fanduel" | "betmgm" | "any";
-type BookSoft = Exclude<BookKey, "any">;
+type SoftBook = Exclude<BookKey, "any">;
 
-type PropMarketKey =
-  | "Points"
-  | "Rebounds"
-  | "Assists"
-  | "3PM";
+type UiMarket = "Points" | "Rebounds" | "Assists" | "3PM";
+type DbMarket = "points" | "rebounds" | "assists" | "threes";
 
 type AppSettingsRow = {
   bankroll: number | null;
@@ -39,84 +38,76 @@ type PropQuoteDB = {
   event_id: string;
   commence_time?: string | null;
 
-  team?: string | null; // canonical team name
-  opponent?: string | null; // canonical opponent name
-  fp_id?: number | null;
+  team?: string | null; // canonical
+  opponent?: string | null; // canonical
 
+  fp_id?: number | null;
   player_name: string;
   position?: string | null;
   picture_url?: string | null;
 
-  market: string;
+  market: DbMarket;
   side: "Over" | "Under";
   line: number;
 
-  // model outputs (your table uses mu + sigma)
+  book: SoftBook; // CSV: fanduel/draftkings/betmgm
+  odds: number;
+
   mu?: number | null;
   sigma?: number | null;
 
-  // book + value
-  book: string; // draftkings / fanduel / betmgm / etc
-  odds: number; // american
-  quantum_fair_odds?: number | null; // "Prism" fair line
-  ev_pct: number; // percent (ex: 3.05)
-  kelly_fraction?: number | null; // 0..1
-  score?: number | null; // your score index
-};
+  quantum_fair_odds?: number | null;
+  ev_pct: number; // percent (e.g. 3.05)
+  kelly_fraction?: number | null;
+  score?: number | null;
 
-type BookQuote = {
-  book: BookSoft;
-  odds: number | null;
-  ev_pct: number | null;
-  isBest: boolean;
+  has_sharp?: boolean | null;
+  sharp_source?: string | null;
 };
 
 type AggRow = {
   key: string;
 
-  // identity
   sport_key?: string | null;
   event_id: string;
   commence_time?: string | null;
 
+  team_canonical?: string | null;
+  opp_canonical?: string | null;
+  team_abbr?: string | null;
+  opp_abbr?: string | null;
+
   player_name: string;
   position?: string | null;
   picture_url?: string | null;
+  fp_id?: number | null;
 
-  team_canonical?: string | null;
-  opp_canonical?: string | null;
-  team_abbr?: string;
-  opp_abbr?: string;
-
-  market: PropMarketKey;
+  market: UiMarket;
+  db_market: DbMarket;
   side: "Over" | "Under";
   line: number;
 
   mu?: number | null;
   sigma?: number | null;
 
-  // best selection among DK/FD/MGM (by highest ev_pct)
-  best_book: BookSoft;
+  // book strip
+  quotes: Record<SoftBook, { odds: number | null; ev_pct: number | null }>;
+
+  // best (highest EV among DK/FD/MGM)
+  best_book: SoftBook;
   best_odds: number;
   best_ev_pct: number;
+  best_kelly_fraction: number;
   best_score?: number | null;
-  best_kelly_fraction?: number | null;
 
   prism_odds?: number | null;
 
-  // quotes strip
-  quotes: Record<BookSoft, { odds: number | null; ev_pct: number | null }>;
+  has_sharp?: boolean | null;
+  sharp_source?: string | null;
 };
 
-const MARKETS: PropMarketKey[] = [
-  "Points",
-  "Rebounds",
-  "Assists",
-  "3PM",
-  "PRA",
-  "Blocks",
-  "Steals",
-];
+const UI_MARKETS: UiMarket[] = ["Points", "Rebounds", "Assists", "3PM"];
+const DB_MARKETS: DbMarket[] = ["points", "rebounds", "assists", "threes"];
 
 const BOOKS: { key: BookKey; label: string }[] = [
   { key: "any", label: "Any" },
@@ -125,10 +116,20 @@ const BOOKS: { key: BookKey; label: string }[] = [
   { key: "betmgm", label: "MGM" },
 ];
 
-const SOFT_BOOKS: BookSoft[] = ["draftkings", "fanduel", "betmgm"];
+const SOFT_BOOKS: SoftBook[] = ["draftkings", "fanduel", "betmgm"];
 
-function normCanon(s?: string | null) {
-  return (s ?? "").trim().toLowerCase();
+function dbMarketToUi(m: DbMarket): UiMarket {
+  if (m === "points") return "Points";
+  if (m === "rebounds") return "Rebounds";
+  if (m === "assists") return "Assists";
+  return "3PM"; // threes
+}
+
+function uiMarketToDb(m: UiMarket): DbMarket {
+  if (m === "Points") return "points";
+  if (m === "Rebounds") return "rebounds";
+  if (m === "Assists") return "assists";
+  return "threes";
 }
 
 function bookLabel(b: string) {
@@ -146,25 +147,8 @@ function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
-function toMarketKey(m: string): PropMarketKey | null {
-  // Map your DB "market" values into UI labels if needed.
-  // If your DB already uses Points/Rebounds/etc, this is a straight pass-through.
-  const v = (m ?? "").trim();
-  if (MARKETS.includes(v as PropMarketKey)) return v as PropMarketKey;
-
-  // Optional aliases (uncomment/extend if your DB uses snake_case):
-  // const map: Record<string, PropMarketKey> = {
-  //   player_points: "Points",
-  //   player_rebounds: "Rebounds",
-  //   player_assists: "Assists",
-  //   player_threes: "3PM",
-  //   player_points_rebounds_assists: "PRA",
-  //   player_blocks: "Blocks",
-  //   player_steals: "Steals",
-  // };
-  // return map[v] ?? null;
-
-  return null;
+function normCanon(s?: string | null) {
+  return (s ?? "").trim().toLowerCase();
 }
 
 function initials(name: string) {
@@ -174,12 +158,8 @@ function initials(name: string) {
   return (a + b).toUpperCase();
 }
 
-function isSoftBook(b: string): b is BookSoft {
-  return b === "draftkings" || b === "fanduel" || b === "betmgm";
-}
-
 export function PropsScreen() {
-  const [selectedMarket, setSelectedMarket] = useState<PropMarketKey>("Points");
+  const [selectedMarket, setSelectedMarket] = useState<UiMarket>("Points");
   const [selectedBook, setSelectedBook] = useState<BookKey>("any");
 
   const [settings, setSettings] = useState<AppSettingsRow | null>(null);
@@ -216,18 +196,22 @@ export function PropsScreen() {
                 "market",
                 "side",
                 "line",
-                "mu",
-                "sigma",
                 "book",
                 "odds",
+                "mu",
+                "sigma",
                 "quantum_fair_odds",
                 "ev_pct",
                 "kelly_fraction",
                 "score",
+                "has_sharp",
+                "sharp_source",
               ].join(",")
             )
+            .in("market", DB_MARKETS) // ✅ only your four markets
+            .in("book", SOFT_BOOKS) // ✅ only DK/FD/MGM (matches your table)
             .order("ev_pct", { ascending: false })
-            .limit(1500),
+            .limit(2000),
         ]);
 
         if (sErr) throw sErr;
@@ -235,7 +219,7 @@ export function PropsScreen() {
 
         const quotes = ((p as any) ?? []) as PropQuoteDB[];
 
-        // --- Build team_map lookup for abbreviations ---
+        // --- Load abbreviations from team_map by canonical (team/opponent) ---
         const canonSet = new Set<string>();
         for (const q of quotes) {
           const t = normCanon(q.team);
@@ -243,9 +227,10 @@ export function PropsScreen() {
           if (t) canonSet.add(t);
           if (o) canonSet.add(o);
         }
-        const canonList = Array.from(canonSet);
 
+        const canonList = Array.from(canonSet);
         const canonToAbbr: Record<string, string> = {};
+
         const CHUNK = 200;
         for (let i = 0; i < canonList.length; i += CHUNK) {
           const chunk = canonList.slice(i, i + CHUNK);
@@ -263,20 +248,16 @@ export function PropsScreen() {
           }
         }
 
-        // --- Aggregate to 1 row per (event, player, market, side, line) ---
+        // --- Aggregate 1 row per (event_id, player_name, market, side, line) ---
         const map = new Map<string, AggRow>();
 
         for (const q of quotes) {
-          const mKey = toMarketKey(q.market);
-          if (!mKey) continue;
-
-          // Only keep soft books in strip aggregation
-          if (!isSoftBook(q.book)) continue;
+          const uiMarket = dbMarketToUi(q.market);
 
           const key = [
             q.event_id,
             q.player_name,
-            mKey,
+            q.market,
             q.side,
             Number(q.line).toFixed(3),
           ].join("|");
@@ -284,8 +265,8 @@ export function PropsScreen() {
           const teamCanon = q.team ?? null;
           const oppCanon = q.opponent ?? null;
 
-          const team_abbr = canonToAbbr[normCanon(teamCanon)] || undefined;
-          const opp_abbr = canonToAbbr[normCanon(oppCanon)] || undefined;
+          const teamAbbr = canonToAbbr[normCanon(teamCanon)] || null;
+          const oppAbbr = canonToAbbr[normCanon(oppCanon)] || null;
 
           if (!map.has(key)) {
             map.set(key, {
@@ -294,63 +275,69 @@ export function PropsScreen() {
               event_id: q.event_id,
               commence_time: q.commence_time ?? null,
 
+              team_canonical: teamCanon,
+              opp_canonical: oppCanon,
+              team_abbr: teamAbbr,
+              opp_abbr: oppAbbr,
+
               player_name: q.player_name,
               position: q.position ?? null,
               picture_url: q.picture_url ?? null,
+              fp_id: q.fp_id ?? null,
 
-              team_canonical: teamCanon,
-              opp_canonical: oppCanon,
-              team_abbr,
-              opp_abbr,
-
-              market: mKey,
+              market: uiMarket,
+              db_market: q.market,
               side: q.side,
               line: q.line,
 
               mu: q.mu ?? null,
               sigma: q.sigma ?? null,
 
-              best_book: q.book,
-              best_odds: q.odds,
-              best_ev_pct: q.ev_pct ?? 0,
-              best_score: q.score ?? null,
-              best_kelly_fraction: q.kelly_fraction ?? null,
-
-              prism_odds: q.quantum_fair_odds ?? null,
-
               quotes: {
                 draftkings: { odds: null, ev_pct: null },
                 fanduel: { odds: null, ev_pct: null },
                 betmgm: { odds: null, ev_pct: null },
               },
+
+              best_book: q.book,
+              best_odds: q.odds,
+              best_ev_pct: q.ev_pct ?? 0,
+              best_kelly_fraction: q.kelly_fraction ?? 0,
+              best_score: q.score ?? null,
+
+              prism_odds: q.quantum_fair_odds ?? null,
+
+              has_sharp: q.has_sharp ?? null,
+              sharp_source: q.sharp_source ?? null,
             });
           }
 
           const row = map.get(key)!;
 
-          // Prefer keeping non-null picture_url if some rows missing it
+          // prefer non-null picture_url
           if (!row.picture_url && q.picture_url) row.picture_url = q.picture_url;
 
-          // Update abbreviations if found
-          if (!row.team_abbr && team_abbr) row.team_abbr = team_abbr;
-          if (!row.opp_abbr && opp_abbr) row.opp_abbr = opp_abbr;
+          // update abbreviations if we learn them
+          if (!row.team_abbr && teamAbbr) row.team_abbr = teamAbbr;
+          if (!row.opp_abbr && oppAbbr) row.opp_abbr = oppAbbr;
 
-          // Fill book quote
+          // fill quote
           row.quotes[q.book] = { odds: q.odds, ev_pct: q.ev_pct ?? null };
 
-          // Choose best among soft books by EV%
+          // best is max EV%
           if ((q.ev_pct ?? -999) > (row.best_ev_pct ?? -999)) {
             row.best_ev_pct = q.ev_pct ?? 0;
             row.best_book = q.book;
             row.best_odds = q.odds;
+            row.best_kelly_fraction = q.kelly_fraction ?? 0;
             row.best_score = q.score ?? null;
-            row.best_kelly_fraction = q.kelly_fraction ?? null;
             row.prism_odds = q.quantum_fair_odds ?? row.prism_odds ?? null;
           }
         }
 
-        // Sort by EV desc (or score if you prefer)
-        const aggregated = Array.from(map.values()).sort((a, b) => (b.best_ev_pct ?? 0) - (a.best_ev_pct ?? 0));
+        const aggregated = Array.from(map.values()).sort(
+          (a, b) => (b.best_ev_pct ?? 0) - (a.best_ev_pct ?? 0)
+        );
 
         if (!mounted) return;
         setSettings((s as any) ?? null);
@@ -371,7 +358,9 @@ export function PropsScreen() {
   }, []);
 
   const filtered = useMemo(() => {
-    const byMarket = rows.filter((r) => r.market === selectedMarket);
+    const dbMarket = uiMarketToDb(selectedMarket);
+    const byMarket = rows.filter((r) => r.db_market === dbMarket);
+
     if (selectedBook === "any") return byMarket;
     return byMarket.filter((r) => r.best_book === selectedBook);
   }, [rows, selectedMarket, selectedBook]);
@@ -380,10 +369,10 @@ export function PropsScreen() {
   const kellyFactor = settings?.kelly_factor ?? 0.25;
 
   const summary = useMemo(() => {
-    const active = filtered.filter((r) => (r.best_kelly_fraction ?? 0) > 0).length;
-    const totalEV = filtered.reduce((sum, r) => sum + (r.best_ev_pct ?? 0), 0);
-    return { active, totalEV };
-  }, [filtered]);
+    const playable = filtered.filter((r) => (r.best_kelly_fraction ?? 0) > 0).length;
+    const totalUnitsProxy = filtered.reduce((sum, r) => sum + clamp((r.best_kelly_fraction ?? 0) * kellyFactor, 0, 0.25), 0);
+    return { playable, totalUnitsProxy };
+  }, [filtered, kellyFactor]);
 
   return (
     <div className="space-y-4">
@@ -397,7 +386,7 @@ export function PropsScreen() {
                 <h2 className="text-white text-lg sm:text-xl leading-tight">Player Props</h2>
               </div>
               <p className="text-xs text-[#808080] mt-1">
-                {loading ? "Loading…" : `${filtered.length} props · ${summary.active} playable`}
+                {loading ? "Loading…" : `${filtered.length} props · ${summary.playable} playable`}
               </p>
             </div>
 
@@ -409,10 +398,7 @@ export function PropsScreen() {
                 Kelly: <span className="text-white">{(kellyFactor * 100).toFixed(0)}%</span>
               </div>
               <div className="px-2 py-1 bg-[#0b0b0b] border border-[#1f1f1f] rounded text-[#9a9a9a]">
-                Avg EV:{" "}
-                <span className="text-[#d4af37]">
-                  {filtered.length ? (summary.totalEV / filtered.length).toFixed(1) : "0.0"}%
-                </span>
+                Plays: <span className="text-[#d4af37]">{rows.length}</span>
               </div>
             </div>
           </div>
@@ -427,8 +413,9 @@ export function PropsScreen() {
         {/* STICKY FILTER BAR */}
         <div className="sticky top-0 z-30 border-t border-[#1f1f1f] bg-[#060606]/90 backdrop-blur supports-[backdrop-filter]:bg-[#060606]/70">
           <div className="p-3 sm:p-4 flex flex-col gap-3">
+            {/* Market pills */}
             <div className="flex items-center gap-2 flex-wrap">
-              {MARKETS.map((m) => (
+              {UI_MARKETS.map((m) => (
                 <button
                   key={m}
                   onClick={() => setSelectedMarket(m)}
@@ -444,6 +431,7 @@ export function PropsScreen() {
               ))}
             </div>
 
+            {/* Book pills */}
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] text-[#808080] mr-1">Book</span>
               {BOOKS.map((b) => (
@@ -471,7 +459,7 @@ export function PropsScreen() {
           <table className="w-full text-xs">
             <thead className="sticky top-[124px] sm:top-[132px] z-20">
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[320px]">
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">
                   Pick
                 </th>
                 <th className="text-left p-3 text-[#808080]">Team</th>
@@ -503,7 +491,7 @@ export function PropsScreen() {
                 </tr>
               ) : (
                 filtered.map((r) => (
-                  <Row
+                  <PropRow
                     key={r.key}
                     row={r}
                     bankroll={bankroll}
@@ -522,7 +510,7 @@ export function PropsScreen() {
   );
 }
 
-function Row({
+function PropRow({
   row,
   bankroll,
   kellyFactor,
@@ -533,33 +521,24 @@ function Row({
   kellyFactor: number;
   onOpen: () => void;
 }) {
-  const team = row.team_abbr ?? "";
-  const opp = row.opp_abbr ?? "";
+  const team = row.team_abbr || "—";
+  const opp = row.opp_abbr || "—";
 
   const mu = row.mu ?? 0;
   const edge = mu - row.line;
 
   const hasPositiveEV = (row.best_ev_pct ?? 0) > 3;
 
-  // Bet sizing: bankroll * kelly_factor * kelly_fraction (cap)
-  const kf = row.best_kelly_fraction ?? 0;
-  const betFrac = clamp(kf * kellyFactor, 0, 0.25);
+  const betFrac = clamp((row.best_kelly_fraction ?? 0) * kellyFactor, 0, 0.25);
   const betDollars = bankroll * betFrac;
-
-  const quotesArr: BookQuote[] = SOFT_BOOKS.map((b) => ({
-    book: b,
-    odds: row.quotes[b]?.odds ?? null,
-    ev_pct: row.quotes[b]?.ev_pct ?? null,
-    isBest: row.best_book === b,
-  }));
 
   return (
     <tr className={`hover:bg-[#0f0f0f]/50 transition-colors ${betDollars > 0 ? "bg-[#d4af37]/5" : ""}`}>
-      {/* Pick (ONLY clickable area) */}
+      {/* Pick (ONLY clickable) */}
       <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10">
         <button onClick={onOpen} className="w-full text-left group" title="Open details" type="button">
           <div className="flex items-start gap-3">
-            {/* Avatar */}
+            {/* Picture */}
             <div className="flex-shrink-0">
               {row.picture_url ? (
                 <img
@@ -583,7 +562,7 @@ function Row({
                     {row.player_name} — {row.market} {row.side} {row.line}
                   </div>
                   <div className="text-[10px] text-[#606060] mt-0.5 truncate">
-                    {team && opp ? `${team} ${"vs"} ${opp}` : row.team_canonical ?? "—"}
+                    {team} vs {opp}
                     {row.position ? ` · ${row.position}` : ""}
                   </div>
                 </div>
@@ -603,8 +582,8 @@ function Row({
         </button>
       </td>
 
-      <td className="p-3 text-[#b0b0b0]">{team || "—"}</td>
-      <td className="p-3 text-[#b0b0b0]">{opp || "—"}</td>
+      <td className="p-3 text-[#b0b0b0]">{team}</td>
+      <td className="p-3 text-[#b0b0b0]">{opp}</td>
 
       <td className="p-3 text-center text-white">{mu.toFixed(1)}</td>
       <td className="p-3 text-center text-[#b0b0b0]">{row.line.toFixed(1)}</td>
@@ -616,37 +595,47 @@ function Row({
 
       <td className="p-3 text-center text-[#606060]">{(row.sigma ?? 0).toFixed(1)}</td>
 
-      {/* Books strip */}
+      {/* Books strip (odds shown) */}
       <td className="p-3 text-center">
         <div className="inline-flex items-center gap-1">
-          {quotesArr.map((q) => (
-            <span
-              key={q.book}
-              className={`px-2 py-1 rounded border text-[10px] ${
-                q.isBest
-                  ? "bg-[#d4af37]/15 border-[#d4af37]/40 text-[#d4af37]"
-                  : "bg-[#101010] border-[#2a2a2a] text-[#777777]"
-              }`}
-              title={
-                q.odds != null
-                  ? `${bookLabel(q.book)} ${formatAmerican(q.odds)}${q.ev_pct != null ? ` · EV ${q.ev_pct.toFixed(1)}%` : ""}`
-                  : `${bookLabel(q.book)}`
-              }
-            >
-              {bookLabel(q.book)}
-            </span>
-          ))}
+          {SOFT_BOOKS.map((b) => {
+            const q = row.quotes[b];
+            const isBest = row.best_book === b;
+            const has = q?.odds != null;
+
+            return (
+              <span
+                key={b}
+                className={`px-2 py-1 rounded border text-[10px] ${
+                  isBest
+                    ? "bg-[#d4af37]/15 border-[#d4af37]/40 text-[#d4af37]"
+                    : "bg-[#101010] border-[#2a2a2a] text-[#777777]"
+                }`}
+                title={
+                  has
+                    ? `${bookLabel(b)} ${formatAmerican(q.odds!)}${q.ev_pct != null ? ` · EV ${q.ev_pct.toFixed(1)}%` : ""}`
+                    : `${bookLabel(b)} —`
+                }
+              >
+                {bookLabel(b)} {has ? formatAmerican(q.odds!) : "—"}
+              </span>
+            );
+          })}
         </div>
       </td>
 
-      <td className="p-3 text-center text-white">{row.prism_odds != null ? formatAmerican(row.prism_odds) : "—"}</td>
+      <td className="p-3 text-center text-white">
+        {row.prism_odds != null ? formatAmerican(row.prism_odds) : "—"}
+      </td>
 
       <td className={`p-3 text-center ${hasPositiveEV ? "text-emerald-400" : "text-[#808080]"}`}>
         {row.best_ev_pct > 0 ? "+" : ""}
         {row.best_ev_pct.toFixed(1)}%
       </td>
 
-      <td className="p-3 text-center text-[#b0b0b0]">{row.best_score != null ? row.best_score.toFixed(0) : "—"}</td>
+      <td className="p-3 text-center text-[#b0b0b0]">
+        {row.best_score != null ? row.best_score.toFixed(0) : "—"}
+      </td>
 
       <td className="p-3 text-center">
         <span
@@ -664,8 +653,8 @@ function Row({
 }
 
 function PropDetailsModal({ row, onClose }: { row: AggRow; onClose: () => void }) {
-  const team = row.team_abbr ?? "";
-  const opp = row.opp_abbr ?? "";
+  const team = row.team_abbr || row.team_canonical || "—";
+  const opp = row.opp_abbr || row.opp_canonical || "—";
 
   return (
     <div className="fixed inset-0 z-[999]">
@@ -693,7 +682,7 @@ function PropDetailsModal({ row, onClose }: { row: AggRow; onClose: () => void }
                   {row.player_name} — {row.market} {row.side} {row.line}
                 </div>
                 <div className="text-[11px] text-[#808080] mt-1">
-                  {team && opp ? `${team} vs ${opp}` : row.team_canonical ?? "—"}
+                  {team} vs {opp}
                   {row.commence_time ? ` · ${row.commence_time}` : ""}
                 </div>
               </div>
@@ -716,11 +705,25 @@ function PropDetailsModal({ row, onClose }: { row: AggRow; onClose: () => void }
               <MiniStat label="Prism" value={row.prism_odds != null ? formatAmerican(row.prism_odds) : "—"} />
               <MiniStat label="Best" value={`${bookLabel(row.best_book)} ${formatAmerican(row.best_odds)}`} />
             </div>
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <MiniStat label="EV%" value={`${row.best_ev_pct > 0 ? "+" : ""}${row.best_ev_pct.toFixed(1)}%`} highlight={row.best_ev_pct > 3} />
-              <MiniStat label="Score" value={row.best_score != null ? row.best_score.toFixed(0) : "—"} highlight={(row.best_score ?? 0) > 80} />
+              <MiniStat
+                label="EV%"
+                value={`${row.best_ev_pct > 0 ? "+" : ""}${row.best_ev_pct.toFixed(1)}%`}
+                highlight={row.best_ev_pct > 3}
+              />
+              <MiniStat
+                label="Score"
+                value={row.best_score != null ? row.best_score.toFixed(0) : "—"}
+                highlight={(row.best_score ?? 0) > 80}
+              />
               <MiniStat label="Sigma" value={(row.sigma ?? 0).toFixed(1)} />
               <MiniStat label="Edge" value={((row.mu ?? 0) - row.line).toFixed(1)} highlight={Math.abs((row.mu ?? 0) - row.line) > 2} />
+            </div>
+
+            <div className="text-[11px] text-[#808080] leading-relaxed">
+              (Optional next) We can add the same tabbed modal you use elsewhere: <span className="text-white">Line History</span> +{" "}
+              <span className="text-white">Hit Rate</span>.
             </div>
           </div>
 
@@ -741,7 +744,11 @@ function PropDetailsModal({ row, onClose }: { row: AggRow; onClose: () => void }
 
 function MiniStat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div className={`rounded-lg border p-2 ${highlight ? "border-[#d4af37]/40 bg-[#d4af37]/10" : "border-[#1f1f1f] bg-[#0b0b0b]"}`}>
+    <div
+      className={`rounded-lg border p-2 ${
+        highlight ? "border-[#d4af37]/40 bg-[#d4af37]/10" : "border-[#1f1f1f] bg-[#0b0b0b]"
+      }`}
+    >
       <div className="text-[10px] text-[#808080]">{label}</div>
       <div className={`text-xs mt-1 ${highlight ? "text-[#d4af37]" : "text-white"}`}>{value}</div>
     </div>
