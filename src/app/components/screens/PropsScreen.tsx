@@ -1,14 +1,16 @@
-// src/app/screens/PropsScreen.tsx — FULL REWRITE (Supabase + Prism UI + Sticky filters + Best-book strip + Pick-only modal)
+// src/app/screens/PropsScreen.tsx — FULL REWRITE (Fix: remove player_prop_ev_latest.team_abbr)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ Data: pulls from public.player_prop_ev_latest (swap if your table differs)
-// ✅ Settings: pulls from public.app_settings (bankroll + kelly_factor) for Bet $ sizing
-// ✅ 1 row per play, shows DK / FD / MGM strip, highlights best book
+// ✅ FIX: DOES NOT select team_abbr/opp_abbr from player_prop_ev_latest
+// ✅ Instead: select canonical fields, then map to abbreviations using team_map.Abbreviation / Abbreviation2
+// ✅ Data: public.player_prop_ev_latest
+// ✅ Settings: public.app_settings (bankroll + kelly_factor) for Bet $ sizing
 // ✅ Filters: Market + Book
 // ✅ Sticky: market pills stay visible; table header stays visible
-// ✅ ONLY the Pick cell opens the modal
-// ✅ Visual: matches Prism black/gold glass style
+// ✅ ONLY Pick cell opens modal
+// ✅ Prism black/gold style
 //
-// NOTE: Replace field names if your schema differs.
+// IMPORTANT: set TEAM_CANON_COL / OPP_CANON_COL to your actual column names in player_prop_ev_latest.
+// If your table uses "team" + "opponent" or "team_canonical" + "opp_canonical", set them below.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -29,10 +31,19 @@ type AppSettingsRow = {
   kelly_factor: number | null;
 };
 
+// 🔧 CHANGE THESE TWO if your schema uses different names
+const TEAM_CANON_COL = "team_canonical";
+const OPP_CANON_COL = "opp_canonical";
+
+type TeamMapRow = {
+  canonical: string;
+  Abbreviation?: string | null;
+  Abbreviation2?: string | null;
+};
+
 type PropRowDB = {
   id: string;
 
-  // identity
   sport_key?: string | null;
   event_id: string;
   commence_time?: string | null;
@@ -40,33 +51,36 @@ type PropRowDB = {
   player_name: string;
   position?: string | null;
 
-  team_abbr?: string | null;
-  opp_abbr?: string | null;
+  // canonical values from player_prop_ev_latest (NOT abbreviations)
+  team_canonical?: string | null;
+  opp_canonical?: string | null;
   is_home?: boolean | null;
 
-  market: string; // maps to PropMarketKey
+  market: string;
   side: "Over" | "Under";
   line: number;
 
-  projection: number | null; // model projection
+  projection: number | null;
   season_avg?: number | null;
   sigma?: number | null;
 
-  // hit rates
   hit_7d?: number | null;
   hit_14d?: number | null;
   hit_30d?: number | null;
   hit_season?: number | null;
 
-  // best book + value
   best_book: "draftkings" | "fanduel" | "betmgm";
-  best_odds: number; // american
-  prism_odds: number; // american fair line
-  ev_pct: number; // already percent (e.g. 6.2)
+  best_odds: number;
+  prism_odds: number;
+  ev_pct: number;
   prism_score?: number | null;
 
-  // optional precomputed units; we’ll compute bet $ anyway
   units?: number | null;
+};
+
+type DerivedRow = PropRowDB & {
+  team_abbr?: string;
+  opp_abbr?: string;
 };
 
 type BookQuote = {
@@ -103,23 +117,19 @@ function formatAmerican(odds: number) {
   return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
-// Convert American odds to decimal payout (profit per 1 stake) for EV sizing helpers
 function americanToProfitPer1(odds: number) {
   if (odds > 0) return odds / 100;
   return 100 / Math.abs(odds);
 }
 
-// Convert American odds to implied probability
 function americanToImpliedProb(odds: number) {
   if (odds > 0) return 100 / (odds + 100);
   return Math.abs(odds) / (Math.abs(odds) + 100);
 }
 
-// Kelly fraction using fair prob vs best book odds
 function kellyFraction(pFair: number, oddsAmerican: number) {
   const b = americanToProfitPer1(oddsAmerican);
   const q = 1 - pFair;
-  // f* = (bp - q) / b
   const f = (b * pFair - q) / b;
   return Math.max(0, f);
 }
@@ -128,16 +138,20 @@ function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+function normCanon(s?: string | null) {
+  return (s ?? "").trim().toLowerCase();
+}
+
 export function PropsScreen() {
   const [selectedMarket, setSelectedMarket] = useState<PropMarketKey>("Points");
   const [selectedBook, setSelectedBook] = useState<BookKey>("any");
 
   const [settings, setSettings] = useState<AppSettingsRow | null>(null);
-  const [rows, setRows] = useState<PropRowDB[]>([]);
+  const [rows, setRows] = useState<DerivedRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [activeModal, setActiveModal] = useState<PropRowDB | null>(null);
+  const [activeModal, setActiveModal] = useState<DerivedRow | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -147,12 +161,10 @@ export function PropsScreen() {
       setErr(null);
 
       try {
+        // 1) settings + props
+        //    IMPORTANT: do NOT select team_abbr/opp_abbr here.
         const [{ data: s, error: sErr }, { data: p, error: pErr }] = await Promise.all([
-          supabase
-            .from("app_settings")
-            .select("bankroll, kelly_factor")
-            .limit(1)
-            .maybeSingle(),
+          supabase.from("app_settings").select("bankroll, kelly_factor").limit(1).maybeSingle(),
           supabase
             .from("player_prop_ev_latest")
             .select(
@@ -163,8 +175,9 @@ export function PropsScreen() {
                 "commence_time",
                 "player_name",
                 "position",
-                "team_abbr",
-                "opp_abbr",
+                // canonical fields ONLY (use constants)
+                `${TEAM_CANON_COL}`,
+                `${OPP_CANON_COL}`,
                 "is_home",
                 "market",
                 "side",
@@ -191,10 +204,60 @@ export function PropsScreen() {
         if (sErr) throw sErr;
         if (pErr) throw pErr;
 
-        if (!mounted) return;
+        const raw = ((p as any) ?? []) as any[];
 
+        // 2) collect unique canonicals
+        const canonSet = new Set<string>();
+        for (const r of raw) {
+          const tc = normCanon(r?.[TEAM_CANON_COL]);
+          const oc = normCanon(r?.[OPP_CANON_COL]);
+          if (tc) canonSet.add(tc);
+          if (oc) canonSet.add(oc);
+        }
+        const canonList = Array.from(canonSet);
+
+        // 3) lookup in team_map via canonical
+        const teamMap: Record<string, string> = {};
+        const CHUNK = 200;
+
+        for (let i = 0; i < canonList.length; i += CHUNK) {
+          const chunk = canonList.slice(i, i + CHUNK);
+
+          const { data: tm, error: tmErr } = await supabase
+            .from("team_map")
+            .select("canonical, Abbreviation, Abbreviation2")
+            .in("canonical", chunk);
+
+          if (tmErr) throw tmErr;
+
+          for (const r of (tm ?? []) as TeamMapRow[]) {
+            const key = normCanon(r.canonical);
+            if (!key) continue;
+            const abbr = (r.Abbreviation ?? "").trim() || (r.Abbreviation2 ?? "").trim();
+            if (abbr) teamMap[key] = abbr;
+          }
+        }
+
+        // 4) hydrate abbreviations onto prop rows
+        const derived: DerivedRow[] = raw.map((r) => {
+          const teamCanon = (r?.[TEAM_CANON_COL] ?? null) as string | null;
+          const oppCanon = (r?.[OPP_CANON_COL] ?? null) as string | null;
+
+          const team_abbr = teamMap[normCanon(teamCanon)] || undefined;
+          const opp_abbr = teamMap[normCanon(oppCanon)] || undefined;
+
+          return {
+            ...(r as any),
+            team_canonical: teamCanon,
+            opp_canonical: oppCanon,
+            team_abbr,
+            opp_abbr,
+          } as DerivedRow;
+        });
+
+        if (!mounted) return;
         setSettings((s as any) ?? null);
-        setRows((p as any) ?? []);
+        setRows(derived);
       } catch (e: any) {
         if (!mounted) return;
         setErr(e?.message ?? "Failed to load props.");
@@ -356,25 +419,8 @@ export function PropsScreen() {
         </div>
       </div>
 
-      {/* LEGEND */}
-      <div className="flex items-center gap-6 text-[10px] text-[#606060] pt-2 flex-wrap">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-[#d4af37]/20 border border-[#d4af37]/40 rounded" />
-          <span>Active bet (units &gt; 0)</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 bg-emerald-500/20 border border-emerald-500/40 rounded" />
-          <span>Positive EV (&gt;3%)</span>
-        </div>
-        <div>
-          <span className="text-[#808080]">Edge:</span> Projection − Line
-        </div>
-      </div>
-
       {/* MODAL */}
-      {activeModal ? (
-        <PropDetailsModal row={activeModal} onClose={() => setActiveModal(null)} />
-      ) : null}
+      {activeModal ? <PropDetailsModal row={activeModal} onClose={() => setActiveModal(null)} /> : null}
     </div>
   );
 }
@@ -385,24 +431,21 @@ function Row({
   kellyFactor,
   onOpen,
 }: {
-  row: PropRowDB;
+  row: DerivedRow;
   bankroll: number;
   kellyFactor: number;
   onOpen: () => void;
 }) {
-  const hasPositiveEV = (row.ev_pct ?? 0) > 3;
   const hasPlay = (row.units ?? 0) > 0;
+  const hasPositiveEV = (row.ev_pct ?? 0) > 3;
 
   const edge = (row.projection ?? 0) - row.line;
 
-  // fair probability implied from prism_odds (your “fair” line)
   const pFair = americanToImpliedProb(row.prism_odds);
   const fKelly = kellyFraction(pFair, row.best_odds);
-  const betFrac = clamp(fKelly * kellyFactor, 0, 0.25); // safety cap (25% of bankroll)
+  const betFrac = clamp(fKelly * kellyFactor, 0, 0.25);
   const betDollars = bankroll * betFrac;
 
-  // We only have best book in this table; if you later add dk_odds/fd_odds/mgm_odds columns,
-  // you can populate all three. For now we show best in a 3-pill strip.
   const quotes: BookQuote[] = [
     { book: "draftkings", odds: row.best_book === "draftkings" ? row.best_odds : NaN, isBest: row.best_book === "draftkings" },
     { book: "fanduel", odds: row.best_book === "fanduel" ? row.best_odds : NaN, isBest: row.best_book === "fanduel" },
@@ -414,20 +457,15 @@ function Row({
 
   return (
     <tr className={`hover:bg-[#0f0f0f]/50 transition-colors ${hasPlay ? "bg-[#d4af37]/5" : ""}`}>
-      {/* Pick (ONLY clickable area) */}
       <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10">
-        <button
-          onClick={onOpen}
-          className="w-full text-left group"
-          title="Open details"
-        >
+        <button onClick={onOpen} className="w-full text-left group" type="button">
           <div className="flex items-start justify-between gap-2">
             <div className="flex flex-col">
               <span className="text-white group-hover:text-[#d4af37] transition-colors">
                 {row.player_name} — {row.market} {row.side} {row.line}
               </span>
               <span className="text-[10px] text-[#606060] mt-0.5">
-                {team && opp ? `${team} ${row.is_home ? "vs" : "@"} ${opp}` : ""}
+                {team && opp ? `${team} ${row.is_home ? "vs" : "@"} ${opp}` : "—"}
                 {row.position ? ` · ${row.position}` : ""}
               </span>
             </div>
@@ -450,19 +488,15 @@ function Row({
       </td>
 
       <td className="p-3 text-center text-[#b0b0b0]">
-        <span className={row.hit_7d && row.hit_7d > 60 ? "text-emerald-400" : ""}>{(row.hit_7d ?? 0).toFixed(0)}%</span>
-        <span className="text-[#606060]"> / </span>
-        <span className={row.hit_14d && row.hit_14d > 60 ? "text-emerald-400" : ""}>{(row.hit_14d ?? 0).toFixed(0)}%</span>
-        <span className="text-[#606060]"> / </span>
-        <span className={row.hit_30d && row.hit_30d > 60 ? "text-emerald-400" : ""}>{(row.hit_30d ?? 0).toFixed(0)}%</span>
-        <span className="text-[#606060]"> / </span>
-        <span className={row.hit_season && row.hit_season > 60 ? "text-emerald-400" : ""}>{(row.hit_season ?? 0).toFixed(0)}%</span>
+        {(row.hit_7d ?? 0).toFixed(0)}% <span className="text-[#606060]">/</span>{" "}
+        {(row.hit_14d ?? 0).toFixed(0)}% <span className="text-[#606060]">/</span>{" "}
+        {(row.hit_30d ?? 0).toFixed(0)}% <span className="text-[#606060]">/</span>{" "}
+        {(row.hit_season ?? 0).toFixed(0)}%
       </td>
 
       <td className="p-3 text-center text-[#808080]">{(row.season_avg ?? 0).toFixed(1)}</td>
       <td className="p-3 text-center text-[#606060]">{(row.sigma ?? 0).toFixed(1)}</td>
 
-      {/* Books strip (best highlighted) */}
       <td className="p-3 text-center">
         <div className="inline-flex items-center gap-1">
           {quotes.map((q) => (
@@ -473,7 +507,6 @@ function Row({
                   ? "bg-[#d4af37]/15 border-[#d4af37]/40 text-[#d4af37]"
                   : "bg-[#101010] border-[#2a2a2a] text-[#666666]"
               }`}
-              title={q.isBest ? `Best: ${bookLabel(q.book)} ${formatAmerican(row.best_odds)}` : `${bookLabel(q.book)}`}
             >
               {bookLabel(q.book)}
             </span>
@@ -488,16 +521,10 @@ function Row({
         {row.ev_pct.toFixed(1)}%
       </td>
 
-      <td className={`p-3 text-center ${
-        (row.prism_score ?? 0) > 75 ? "text-[#d4af37]" : (row.prism_score ?? 0) > 60 ? "text-white" : "text-[#808080]"
-      }`}>
-        {row.prism_score ?? "—"}
-      </td>
+      <td className="p-3 text-center text-[#b0b0b0]">{row.prism_score ?? "—"}</td>
 
       <td className="p-3 text-center">
-        <span className={`px-2 py-1 rounded border text-[10px] ${
-          betDollars > 0 ? "bg-[#0b0b0b] border-[#2a2a2a] text-white" : "bg-[#0b0b0b] border-[#1a1a1a] text-[#606060]"
-        }`}>
+        <span className="px-2 py-1 rounded border text-[10px] bg-[#0b0b0b] border-[#2a2a2a] text-white">
           {betDollars > 0 ? `$${betDollars.toFixed(0)}` : "—"}
         </span>
       </td>
@@ -505,20 +532,22 @@ function Row({
   );
 }
 
-function PropDetailsModal({ row, onClose }: { row: PropRowDB; onClose: () => void }) {
+function PropDetailsModal({ row, onClose }: { row: DerivedRow; onClose: () => void }) {
+  const team = row.team_abbr ?? "";
+  const opp = row.opp_abbr ?? "";
+
   return (
     <div className="fixed inset-0 z-[999]">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div className="absolute inset-x-0 bottom-0 sm:inset-0 sm:flex sm:items-center sm:justify-center p-3 sm:p-6">
-        <div className="w-full sm:max-w-2xl rounded-2xl border border-[#2a2a2a] bg-[#080808] shadow-[0_30px_120px_rgba(0,0,0,0.8)] overflow-hidden">
-          {/* Header */}
+        <div className="w-full sm:max-w-2xl rounded-2xl border border-[#2a2a2a] bg-[#080808] overflow-hidden">
           <div className="p-4 border-b border-[#1f1f1f] flex items-start justify-between gap-3">
             <div>
               <div className="text-white text-sm sm:text-base">
                 {row.player_name} — {row.market} {row.side} {row.line}
               </div>
               <div className="text-[11px] text-[#808080] mt-1">
-                {row.team_abbr ? row.team_abbr : ""} {row.is_home ? "vs" : "@"} {row.opp_abbr ? row.opp_abbr : ""}
+                {team && opp ? `${team} ${row.is_home ? "vs" : "@"} ${opp}` : "—"}
                 {row.commence_time ? ` · ${row.commence_time}` : ""}
               </div>
             </div>
@@ -526,39 +555,25 @@ function PropDetailsModal({ row, onClose }: { row: PropRowDB; onClose: () => voi
               onClick={onClose}
               className="p-2 rounded hover:bg-white/5 text-[#b0b0b0] hover:text-white"
               aria-label="Close"
+              type="button"
             >
               <X size={18} />
             </button>
           </div>
 
-          {/* Body */}
-          <div className="p-4 space-y-3">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <Stat label="Proj" value={(row.projection ?? 0).toFixed(1)} />
-              <Stat label="Line" value={row.line.toFixed(1)} />
-              <Stat label="Prism" value={formatAmerican(row.prism_odds)} />
-              <Stat label="Best" value={`${bookLabel(row.best_book)} ${formatAmerican(row.best_odds)}`} />
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <Stat label="EV%" value={`${row.ev_pct > 0 ? "+" : ""}${row.ev_pct.toFixed(1)}%`} highlight={row.ev_pct > 3} />
-              <Stat label="Score" value={`${row.prism_score ?? "—"}`} highlight={(row.prism_score ?? 0) > 75} />
-              <Stat label="Hit 30D" value={`${(row.hit_30d ?? 0).toFixed(0)}%`} />
-              <Stat label="Hit Seas" value={`${(row.hit_season ?? 0).toFixed(0)}%`} />
-            </div>
-
-            <div className="text-[11px] text-[#808080] leading-relaxed">
-              This modal is intentionally minimal right now (no scroll trap). If you want, we can add the same
-              tabbed layout you used on ModelScreen: <span className="text-white">Line History</span> +{" "}
-              <span className="text-white">Hit Rate</span>.
+          <div className="p-4">
+            <div className="text-[11px] text-[#808080]">
+              Abbreviations are resolved from <span className="text-white">team_map</span> by matching{" "}
+              <span className="text-white">canonical</span> → <span className="text-white">Abbreviation</span>{" "}
+              (fallback <span className="text-white">Abbreviation2</span>).
             </div>
           </div>
 
-          {/* Footer */}
-          <div className="p-4 border-t border-[#1f1f1f] flex items-center justify-end">
+          <div className="p-4 border-t border-[#1f1f1f] flex justify-end">
             <button
               onClick={onClose}
               className="px-4 py-2 rounded-lg bg-[#d4af37] text-black text-xs font-semibold hover:opacity-90"
+              type="button"
             >
               Done
             </button>
@@ -569,11 +584,3 @@ function PropDetailsModal({ row, onClose }: { row: PropRowDB; onClose: () => voi
   );
 }
 
-function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className={`rounded-lg border p-2 ${highlight ? "border-[#d4af37]/40 bg-[#d4af37]/10" : "border-[#1f1f1f] bg-[#0b0b0b]"}`}>
-      <div className="text-[10px] text-[#808080]">{label}</div>
-      <div className={`text-xs mt-1 ${highlight ? "text-[#d4af37]" : "text-white"}`}>{value}</div>
-    </div>
-  );
-}
