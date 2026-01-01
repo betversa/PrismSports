@@ -1,4 +1,9 @@
-// components/Sidebar.tsx
+// components/Sidebar.tsx — FULL REWRITE (adds Parlay nav item)
+// ---------------------------------------------------------------------------------------------------
+// ✅ Adds Parlay to sidebar nav (desktop + mobile)
+// ✅ Keeps existing Odds/Predictions sport dropdown behavior
+// ✅ Keeps styling + enabled sport logic unchanged
+
 import { useState } from "react";
 import {
   ChartBar,
@@ -9,6 +14,7 @@ import {
   House,
   X,
   ChevronDown,
+  Layers,
 } from "lucide-react";
 import type { Screen, SportKey } from "../App";
 
@@ -163,6 +169,23 @@ export function Sidebar({
             </button>
           </li>
 
+          {/* Parlay */}
+          <li>
+            <button
+              onClick={() => {
+                onNavigate("parlay");
+                if (isMobile) onClose?.();
+              }}
+              className={baseItemClasses(activeScreen === "parlay")}
+              type="button"
+            >
+              <div className="flex items-center gap-3">
+                <Layers className="w-4 h-4" />
+                <span className="text-sm">Parlay</span>
+              </div>
+            </button>
+          </li>
+
           <SectionDivider />
 
           {/* Predictions dropdown */}
@@ -208,7 +231,6 @@ export function Sidebar({
                     >
                       <span className="text-[13px] font-medium">{ui} Predictions</span>
 
-                      {/* ✅ Removed right-side SELECTED label entirely */}
                       {!enabled ? (
                         <span className="text-[10px] font-semibold" style={{ color: GOLD }}>
                           COMING SOON
@@ -264,7 +286,6 @@ export function Sidebar({
                     >
                       <span className="text-[13px] font-medium">{ui} Odds</span>
 
-                      {/* ✅ Removed right-side SELECTED label entirely */}
                       {!enabled ? (
                         <span className="text-[10px] font-semibold" style={{ color: GOLD }}>
                           COMING SOON
