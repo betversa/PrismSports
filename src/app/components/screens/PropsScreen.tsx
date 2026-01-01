@@ -1,34 +1,40 @@
-// src/app/screens/PropsScreen.tsx — FULL REWRITE
+// src/app/screens/PropsScreen.tsx — FULL REWRITE (Modal aligned with ModelScreen tables + FP API)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ Fix: opponent + team abbreviations now resolve correctly via team_map (canonical -> Abbreviation OR Abbreviation2)
-// ✅ Markets: Points, Rebounds, Assists, 3PM (DB: points/rebounds/assists/threes)
-// ✅ Table sticky header FIX: header sticks to TOP of table scroll container (not mid-screen)
-// ✅ Over/Under badges have distinct colors
-// ✅ Modal: Tabs ("Line History" + "Game Log")
-//    - Line History: DK/FD/MGM/PIN line chart w/ tooltip showing DATE + TIME (CT)
-//    - Game Log: FantasyPros bars (single stat) + reference line at TODAY'S prop line
-// ✅ Header column "μ" renamed to "Projection"
-// ✅ Player pictures show (picture_url) with initials fallback
+// ✅ Markets: Points, Rebounds, Assists, 3PM ONLY
+// ✅ Table header STICKS at top of table container
+// ✅ Opponent works (team_map canonical -> Abbreviation / Abbreviation2) with case-safe Supabase .in()
+// ✅ Over/Under badge colors distinct
+// ✅ Modal = SAME pattern as ModelScreen:
+//    - Tabs: Line History + Hit Rate
+//    - Line History pulls from public.player_props_history (ts/bookmaker/odds) incl PIN
+//    - Hit Rate pulls from /api/fantasypros-gamelog?player_name=...
+//    - Tooltip in CT, no shaded cursor, bars colored OVER/UNDER vs today line
+// ✅ μ header renamed to Projection
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { X } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
   Line,
-  XAxis,
-  YAxis,
-  Tooltip,
   CartesianGrid,
   BarChart,
   Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  Cell,
   ReferenceLine,
 } from "recharts";
+import { X } from "lucide-react";
 
-type BookKey = "draftkings" | "fanduel" | "betmgm" | "any";
-type SoftBook = Exclude<BookKey, "any">;
-type SharpBook = "pinnacle";
+/* =========================================================
+   Types
+========================================================= */
+
+type SoftBook = "draftkings" | "fanduel" | "betmgm";
+type BookFilter = "any" | SoftBook;
 
 type UiMarket = "Points" | "Rebounds" | "Assists" | "3PM";
 type DbMarket = "points" | "rebounds" | "assists" | "threes";
@@ -44,127 +50,197 @@ type TeamMapRow = {
   Abbreviation2?: string | null;
 };
 
-type PropQuoteDB = {
+type PlayerPropEvLatestRow = {
   id: string;
-  sport_key?: string | null;
+  sport_key: string | null;
   event_id: string;
-  commence_time?: string | null;
+  commence_time: string | null;
 
-  team?: string | null; // canonical
-  opponent?: string | null; // canonical (this is the field you said exists)
-  fp_id?: number | null;
+  team: string | null; // canonical
+  opponent: string | null; // canonical
 
-  player_name: string;
-  position?: string | null;
-  picture_url?: string | null;
+  player_name: string | null;
+  position: string | null;
+  picture_url: string | null;
 
-  market: DbMarket;
-  side: "Over" | "Under";
-  line: number;
+  market: string | null; // may be "points"/"player_points"/etc
+  side: string | null; // "over"/"under"
+  line: number | null;
 
-  book: SoftBook;
+  book: string; // "draftkings" | "fanduel" | "betmgm"
   odds: number;
 
-  mu?: number | null; // projection
-  sigma?: number | null;
-
-  quantum_fair_odds?: number | null;
+  mu?: number | null;
+  quantum_fair_odds: number;
   ev_pct: number;
-  kelly_fraction?: number | null;
-  score?: number | null;
-
-  has_sharp?: boolean | null;
-  sharp_source?: string | null;
+  kelly_fraction: number;
+  score: number;
 };
 
-type AggRow = {
+type AggregatedProp = {
   key: string;
 
-  sport_key?: string | null;
+  sport_key: string | null;
   event_id: string;
-  commence_time?: string | null;
+  commence_time: string | null;
 
-  team_canonical?: string | null;
-  opp_canonical?: string | null;
-  team_abbr?: string | null;
-  opp_abbr?: string | null;
+  team_canonical: string | null;
+  opp_canonical: string | null;
+  team_abbr: string | null;
+  opp_abbr: string | null;
 
   player_name: string;
-  position?: string | null;
-  picture_url?: string | null;
-  fp_id?: number | null;
+  position: string | null;
+  picture_url: string | null;
 
-  market: UiMarket;
-  db_market: DbMarket;
-  side: "Over" | "Under";
+  ui_market: UiMarket;
+  raw_market: string | null; // store raw for history key mapping
+  side: "over" | "under";
   line: number;
 
-  projection?: number | null;
+  projection: number | null; // mu
   sigma?: number | null;
 
-  quotes: Record<SoftBook, { odds: number | null; ev_pct: number | null }>;
+  offers: Partial<Record<SoftBook, { odds: number; ev_pct: number; kelly_fraction: number }>>;
+  bestBook: SoftBook;
+  bestOdds: number;
+  bestEvPct: number;
+  bestKelly: number;
+  bestScore: number;
 
-  best_book: SoftBook;
-  best_odds: number;
-  best_ev_pct: number;
-  best_kelly_fraction: number;
-  best_score?: number | null;
-
-  prism_odds?: number | null;
-
-  has_sharp?: boolean | null;
-  sharp_source?: string | null;
+  fairOdds: number;
 };
 
-const UI_MARKETS: UiMarket[] = ["Points", "Rebounds", "Assists", "3PM"];
-const DB_MARKETS: DbMarket[] = ["points", "rebounds", "assists", "threes"];
+/* =========================================================
+   Constants
+========================================================= */
 
+const UI_MARKETS: UiMarket[] = ["Points", "Rebounds", "Assists", "3PM"];
 const SOFT_BOOKS: SoftBook[] = ["draftkings", "fanduel", "betmgm"];
-const BOOKS: { key: BookKey; label: string }[] = [
+
+const BOOK_FILTERS: { key: BookFilter; label: string }[] = [
   { key: "any", label: "Any" },
   { key: "draftkings", label: "DK" },
   { key: "fanduel", label: "FD" },
   { key: "betmgm", label: "MGM" },
 ];
 
-// ✅ You can change these if your schema uses different names
-const LINE_HISTORY_TABLE = "player_props_snapshot";
-const FP_GAMELOGS_TABLE = "fantasypros_player_gamelogs_nba"; // adjust if needed
+// ✅ Match ModelScreen history tables/cols
+const PROPS_HISTORY_TABLE = "player_props_history";
+const TS_COL_PROPS = "ts";
+const BOOK_COL_PROPS = "bookmaker";
+const ODDS_COL_PROPS = "odds";
+const PLAYER_COL_PROPS = "player_name";
+const MARKET_COL_PROPS = "market";
+const SIDE_COL_PROPS = "side";
 
-const CT_TZ = "America/Chicago";
+// History includes Pinnacle
+type AnyBookHistory = "draftkings" | "fanduel" | "betmgm" | "pinnacle";
+const HISTORY_BOOKS: AnyBookHistory[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
 
-function dbMarketToUi(m: DbMarket): UiMarket {
-  if (m === "points") return "Points";
-  if (m === "rebounds") return "Rebounds";
-  if (m === "assists") return "Assists";
-  return "3PM";
-}
+const BOOK_COLOR: Record<AnyBookHistory, string> = {
+  draftkings: "#22c55e",
+  fanduel: "#3b82f6",
+  betmgm: "#d4af37",
+  pinnacle: "#a855f7",
+};
 
-function uiMarketToDb(m: UiMarket): DbMarket {
-  if (m === "Points") return "points";
-  if (m === "Rebounds") return "rebounds";
-  if (m === "Assists") return "assists";
-  return "threes";
-}
+const OVER_GREEN = "#22c55e";
+const UNDER_RED = "#ef4444";
 
-function bookLabel(b: string) {
-  if (b === "draftkings") return "DK";
-  if (b === "fanduel") return "FD";
-  if (b === "betmgm") return "MGM";
-  if (b === "pinnacle") return "PIN";
-  return b.toUpperCase();
-}
+/* =========================================================
+   Helpers
+========================================================= */
 
-function formatAmerican(odds: number) {
-  return odds > 0 ? `+${odds}` : `${odds}`;
+function safeNum(n: any, fallback = 0) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : fallback;
 }
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+function american(odds: number) {
+  if (!Number.isFinite(odds)) return "—";
+  return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
+}
+
+function pct(n: number, digits = 1) {
+  const x = safeNum(n, 0);
+  return `${x > 0 ? "+" : ""}${x.toFixed(digits)}%`;
+}
+
+function formatMoney(n: number) {
+  if (!Number.isFinite(n)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(n);
+}
+
 function normCanon(s?: string | null) {
   return (s ?? "").trim().toLowerCase();
+}
+
+function fmtTimeCentral(iso: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleTimeString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function fmtDateCentral(iso: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", {
+    timeZone: "America/Chicago",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function fmtHourMinCT(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function fmtDateTimeCT(iso: string) {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString("en-US", {
+    timeZone: "America/Chicago",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  const time = d.toLocaleTimeString("en-US", {
+    timeZone: "America/Chicago",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${date} · ${time}`;
+}
+
+function fmtMu(mu: number | null | undefined) {
+  if (mu == null || !Number.isFinite(mu)) return "—";
+  const v = Math.round(mu * 10) / 10;
+  return v.toFixed(1);
+}
+
+function bookShort(book: AnyBookHistory) {
+  if (book === "draftkings") return "DK";
+  if (book === "fanduel") return "FD";
+  if (book === "betmgm") return "MGM";
+  return "PIN";
 }
 
 function initials(name: string) {
@@ -174,35 +250,163 @@ function initials(name: string) {
   return (a + b).toUpperCase();
 }
 
-function fmtCt(dateIso: string) {
-  const d = new Date(dateIso);
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: CT_TZ,
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  }).formatToParts(d);
-
-  const mm = parts.find((p) => p.type === "month")?.value ?? "01";
-  const dd = parts.find((p) => p.type === "day")?.value ?? "01";
-  const hh = parts.find((p) => p.type === "hour")?.value ?? "12";
-  const mi = parts.find((p) => p.type === "minute")?.value ?? "00";
-  const ap = parts.find((p) => p.type === "dayPeriod")?.value ?? "AM";
-  return `${mm}/${dd} ${hh}:${mi} ${ap} CT`;
+// Soft offer normalize
+function normalizeSoftBookKey(bookmaker: string): SoftBook | "other" {
+  const b = (bookmaker || "").toLowerCase();
+  if (b === "draftkings" || b === "dk") return "draftkings";
+  if (b === "fanduel" || b === "fd") return "fanduel";
+  if (b === "betmgm" || b === "mgm") return "betmgm";
+  return "other";
 }
+
+// History normalize (includes pinnacle)
+function normalizeHistoryBookKey(bookmaker: string): AnyBookHistory | "other" {
+  const b = (bookmaker || "").toLowerCase();
+  if (b === "draftkings" || b === "dk") return "draftkings";
+  if (b === "fanduel" || b === "fd") return "fanduel";
+  if (b === "betmgm" || b === "mgm") return "betmgm";
+  if (b === "pinnacle" || b === "pin") return "pinnacle";
+  return "other";
+}
+
+// Match ModelScreen market mapping for history table keys
+type PropHistoryMarketKey = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
+
+function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | null {
+  const m = (marketRaw || "").trim().toLowerCase();
+  if (!m) return null;
+
+  if (m === "player_points") return "player_points";
+  if (m === "player_rebounds") return "player_rebounds";
+  if (m === "player_assists") return "player_assists";
+  if (m === "player_threes") return "player_threes";
+
+  if (m === "points" || m === "pts") return "player_points";
+  if (m === "rebounds" || m === "reb") return "player_rebounds";
+  if (m === "assists" || m === "ast") return "player_assists";
+  if (m === "3pt" || m === "3pm" || m === "threes" || m === "3") return "player_threes";
+  if (m === "threes" || m === "three_pointers") return "player_threes";
+
+  if (m.includes("player_points")) return "player_points";
+  if (m.includes("player_rebounds")) return "player_rebounds";
+  if (m.includes("player_assists")) return "player_assists";
+  if (m.includes("player_threes")) return "player_threes";
+
+  return null;
+}
+
+function uiMarketFromRaw(raw: string | null): UiMarket {
+  const k = historyPropMarketKey(raw);
+  if (k === "player_points") return "Points";
+  if (k === "player_rebounds") return "Rebounds";
+  if (k === "player_assists") return "Assists";
+  return "3PM";
+}
+
+function calcBetAmount(bankroll: number, kellyFraction: number, kellyFactor: number) {
+  const b = Math.max(0, safeNum(bankroll, 0));
+  const f = clamp(safeNum(kellyFraction, 0), 0, 1);
+  const k = clamp(safeNum(kellyFactor, 0), 0, 1);
+  return b * f * k;
+}
+
+/* =========================================================
+   History series builder (odds history)
+========================================================= */
+
+type HistoryPoint = {
+  ts: string;
+  draftkings?: number | null;
+  fanduel?: number | null;
+  betmgm?: number | null;
+  pinnacle?: number | null;
+};
+
+function normalizeIso(raw: any): string | null {
+  if (!raw) return null;
+  const d = new Date(raw);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+}
+
+function collapseHistory(rows: any[]): HistoryPoint[] {
+  const map = new Map<string, HistoryPoint>();
+
+  for (const r of rows) {
+    const ts = normalizeIso(r?.[TS_COL_PROPS]);
+    if (!ts) continue;
+
+    const bk = normalizeHistoryBookKey(String(r?.[BOOK_COL_PROPS] ?? ""));
+    if (bk === "other") continue;
+
+    const odds = Number(r?.[ODDS_COL_PROPS]);
+    if (!Number.isFinite(odds)) continue;
+
+    const cur = map.get(ts) ?? { ts };
+    (cur as any)[bk] = odds;
+    map.set(ts, cur);
+  }
+
+  return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+}
+
+/* =========================================================
+   FantasyPros (API response type) — same as ModelScreen
+========================================================= */
+
+type FantasyProsLogRow = {
+  date: string;
+  opp: string;
+  score: string;
+  min: string;
+  pts: string;
+  reb: string;
+  ast: string;
+  threes: string;
+};
+
+type FantasyProsApiResponse =
+  | { ok: true; player_name: string; slug: string; url: string; rows: FantasyProsLogRow[] }
+  | { ok: false; error: string; slug?: string; url?: string };
+
+/* =========================================================
+   Screen
+========================================================= */
 
 export function PropsScreen() {
   const [selectedMarket, setSelectedMarket] = useState<UiMarket>("Points");
-  const [selectedBook, setSelectedBook] = useState<BookKey>("any");
+  const [selectedBook, setSelectedBook] = useState<BookFilter>("any");
 
   const [settings, setSettings] = useState<AppSettingsRow | null>(null);
-  const [rows, setRows] = useState<AggRow[]>([]);
+  const [rows, setRows] = useState<AggregatedProp[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [activeModal, setActiveModal] = useState<AggRow | null>(null);
+  const [selected, setSelected] = useState<AggregatedProp | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const openModal = (p: AggregatedProp) => {
+    setSelected(p);
+    setModalOpen(true);
+  };
+  const closeModal = () => setModalOpen(false);
+
+  // ESC to close modal + lock body scroll (same behavior as ModelScreen)
+  useEffect(() => {
+    if (!modalOpen) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setModalOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [modalOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -213,7 +417,7 @@ export function PropsScreen() {
 
       try {
         const [{ data: s, error: sErr }, { data: p, error: pErr }] = await Promise.all([
-          supabase.from("app_settings").select("bankroll, kelly_factor").limit(1).maybeSingle(),
+          supabase.from("app_settings").select("bankroll, kelly_factor").eq("id", 1).limit(1),
           supabase
             .from("player_prop_ev_latest")
             .select(
@@ -224,7 +428,6 @@ export function PropsScreen() {
                 "commence_time",
                 "team",
                 "opponent",
-                "fp_id",
                 "player_name",
                 "position",
                 "picture_url",
@@ -234,16 +437,12 @@ export function PropsScreen() {
                 "book",
                 "odds",
                 "mu",
-                "sigma",
                 "quantum_fair_odds",
                 "ev_pct",
                 "kelly_fraction",
                 "score",
-                "has_sharp",
-                "sharp_source",
               ].join(",")
             )
-            .in("market", DB_MARKETS)
             .in("book", SOFT_BOOKS)
             .order("ev_pct", { ascending: false })
             .limit(2500),
@@ -252,15 +451,14 @@ export function PropsScreen() {
         if (sErr) throw sErr;
         if (pErr) throw pErr;
 
-        const quotes = ((p as any) ?? []) as PropQuoteDB[];
+        const settingsRow = (s?.[0] ?? null) as any as AppSettingsRow | null;
+        const props = ((p as any) ?? []) as PlayerPropEvLatestRow[];
 
-        // ✅ IMPORTANT FIX:
-        // We query team_map with *original canonical strings* (case-sensitive exact match),
-        // but we store the mapping with normalized keys for reliable lookup.
+        // build team_map lookup (case-safe)
         const canonOriginalSet = new Set<string>();
-        for (const q of quotes) {
-          const t = (q.team ?? "").trim();
-          const o = (q.opponent ?? "").trim();
+        for (const r of props) {
+          const t = (r.team ?? "").trim();
+          const o = (r.opponent ?? "").trim();
           if (t) canonOriginalSet.add(t);
           if (o) canonOriginalSet.add(o);
         }
@@ -286,89 +484,89 @@ export function PropsScreen() {
           }
         }
 
-        // ---- Aggregate 1 row per play ----
-        const map = new Map<string, AggRow>();
+        // aggregate to 1 row per (event, player, market, side, line)
+        const map = new Map<string, AggregatedProp>();
 
-        for (const q of quotes) {
-          const key = [q.event_id, q.player_name, q.market, q.side, Number(q.line).toFixed(3)].join("|");
+        for (const r of props) {
+          const player = (r.player_name ?? "").trim();
+          const sideRaw = (r.side ?? "").trim().toLowerCase();
+          const side = sideRaw === "o" ? "over" : sideRaw === "u" ? "under" : sideRaw;
 
-          const teamCanon = q.team ?? null;
-          const oppCanon = q.opponent ?? null;
+          const line = r.line ?? null;
+          if (!player || !line || !Number.isFinite(line)) continue;
+          if (side !== "over" && side !== "under") continue;
+
+          const key = `p|${r.event_id}|${player.toLowerCase()}|${(r.market ?? "").toLowerCase()}|${side}|${String(line)}`;
+
+          const softBook = normalizeSoftBookKey(r.book);
+          if (softBook === "other") continue;
+
+          const teamCanon = r.team ?? null;
+          const oppCanon = r.opponent ?? null;
 
           const teamAbbr = canonToAbbr[normCanon(teamCanon)] || null;
           const oppAbbr = canonToAbbr[normCanon(oppCanon)] || null;
 
+          const uiMarket = uiMarketFromRaw(r.market ?? null);
+
           if (!map.has(key)) {
             map.set(key, {
               key,
-              sport_key: q.sport_key ?? null,
-              event_id: q.event_id,
-              commence_time: q.commence_time ?? null,
+              sport_key: r.sport_key ?? null,
+              event_id: r.event_id,
+              commence_time: r.commence_time ?? null,
 
               team_canonical: teamCanon,
               opp_canonical: oppCanon,
               team_abbr: teamAbbr,
               opp_abbr: oppAbbr,
 
-              player_name: q.player_name,
-              position: q.position ?? null,
-              picture_url: q.picture_url ?? null,
-              fp_id: q.fp_id ?? null,
+              player_name: player,
+              position: r.position ?? null,
+              picture_url: r.picture_url ?? null,
 
-              market: dbMarketToUi(q.market),
-              db_market: q.market,
-              side: q.side,
-              line: q.line,
+              ui_market: uiMarket,
+              raw_market: r.market ?? null,
+              side,
+              line,
 
-              projection: q.mu ?? null,
-              sigma: q.sigma ?? null,
+              projection: r.mu ?? null,
 
-              quotes: {
-                draftkings: { odds: null, ev_pct: null },
-                fanduel: { odds: null, ev_pct: null },
-                betmgm: { odds: null, ev_pct: null },
-              },
+              offers: {},
+              bestBook: softBook,
+              bestOdds: r.odds,
+              bestEvPct: r.ev_pct ?? 0,
+              bestKelly: r.kelly_fraction ?? 0,
+              bestScore: clamp(safeNum(r.score, 0), 0, 100),
 
-              best_book: q.book,
-              best_odds: q.odds,
-              best_ev_pct: q.ev_pct ?? 0,
-              best_kelly_fraction: q.kelly_fraction ?? 0,
-              best_score: q.score ?? null,
-
-              prism_odds: q.quantum_fair_odds ?? null,
-
-              has_sharp: q.has_sharp ?? null,
-              sharp_source: q.sharp_source ?? null,
+              fairOdds: r.quantum_fair_odds,
             });
           }
 
-          const row = map.get(key)!;
+          const agg = map.get(key)!;
 
-          // keep the first non-null picture
-          if (!row.picture_url && q.picture_url) row.picture_url = q.picture_url;
+          agg.offers[softBook] = {
+            odds: r.odds,
+            ev_pct: r.ev_pct ?? 0,
+            kelly_fraction: r.kelly_fraction ?? 0,
+          };
 
-          // ensure abbreviations populate if mapping available later
-          if (!row.team_abbr && teamAbbr) row.team_abbr = teamAbbr;
-          if (!row.opp_abbr && oppAbbr) row.opp_abbr = oppAbbr;
-
-          // store per-book quote
-          row.quotes[q.book] = { odds: q.odds, ev_pct: q.ev_pct ?? null };
-
-          // best book = highest ev_pct
-          if ((q.ev_pct ?? -999) > (row.best_ev_pct ?? -999)) {
-            row.best_ev_pct = q.ev_pct ?? 0;
-            row.best_book = q.book;
-            row.best_odds = q.odds;
-            row.best_kelly_fraction = q.kelly_fraction ?? 0;
-            row.best_score = q.score ?? null;
-            row.prism_odds = q.quantum_fair_odds ?? row.prism_odds ?? null;
+          // best offer = highest EV
+          if ((r.ev_pct ?? -999) > agg.bestEvPct) {
+            agg.bestEvPct = r.ev_pct ?? 0;
+            agg.bestBook = softBook;
+            agg.bestOdds = r.odds;
+            agg.bestKelly = r.kelly_fraction ?? 0;
+            agg.bestScore = clamp(safeNum(r.score, 0), 0, 100);
+            agg.fairOdds = r.quantum_fair_odds;
+            agg.projection = r.mu ?? agg.projection ?? null;
           }
         }
 
-        const aggregated = Array.from(map.values()).sort((a, b) => (b.best_ev_pct ?? 0) - (a.best_ev_pct ?? 0));
+        const aggregated = Array.from(map.values()).sort((a, b) => b.bestEvPct - a.bestEvPct);
 
         if (!mounted) return;
-        setSettings((s as any) ?? null);
+        setSettings(settingsRow);
         setRows(aggregated);
       } catch (e: any) {
         if (!mounted) return;
@@ -386,93 +584,96 @@ export function PropsScreen() {
   }, []);
 
   const filtered = useMemo(() => {
-    const dbMarket = uiMarketToDb(selectedMarket);
-    const byMarket = rows.filter((r) => r.db_market === dbMarket);
+    const byMarket = rows.filter((r) => r.ui_market === selectedMarket);
     if (selectedBook === "any") return byMarket;
-    return byMarket.filter((r) => r.best_book === selectedBook);
+    return byMarket.filter((r) => r.bestBook === selectedBook);
   }, [rows, selectedMarket, selectedBook]);
 
-  const bankroll = settings?.bankroll ?? 300;
-  const kellyFactor = settings?.kelly_factor ?? 0.25;
+  const bankroll = safeNum(settings?.bankroll, 0);
+  const kellyFactor = clamp(safeNum(settings?.kelly_factor, 0), 0, 1);
+  const settingsReady = !!(bankroll && kellyFactor);
 
-  const playable = useMemo(() => filtered.filter((r) => (r.best_kelly_fraction ?? 0) > 0).length, [filtered]);
+  const playable = useMemo(() => filtered.filter((r) => r.bestKelly > 0).length, [filtered]);
 
   return (
     <div className="space-y-4">
       {/* HERO */}
-      <div className="rounded-2xl border border-[#2a2a2a] bg-gradient-to-b from-[#101010] to-[#070707] shadow-[0_0_0_1px_rgba(255,255,255,0.03),0_20px_60px_rgba(0,0,0,0.55)] overflow-hidden">
-        <div className="p-4 sm:p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <div className="h-2.5 w-2.5 rounded-full bg-[#d4af37] shadow-[0_0_18px_rgba(212,175,55,0.35)]" />
-                <h2 className="text-white text-lg sm:text-xl leading-tight">Player Props</h2>
-              </div>
-              <p className="text-xs text-[#808080] mt-1">
-                {loading ? "Loading…" : `${filtered.length} props · ${playable} playable`}
-              </p>
+      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 md:p-5">
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
+          }}
+        />
+        <div className="relative flex items-start justify-between gap-3">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
+              Player Props
             </div>
-
-            <div className="flex items-center gap-2 text-[11px]">
-              <div className="px-2 py-1 bg-[#0b0b0b] border border-[#1f1f1f] rounded text-[#9a9a9a]">
-                Bankroll: <span className="text-white">${bankroll.toFixed(0)}</span>
-              </div>
-              <div className="px-2 py-1 bg-[#0b0b0b] border border-[#1f1f1f] rounded text-[#9a9a9a]">
-                Kelly: <span className="text-white">{(kellyFactor * 100).toFixed(0)}%</span>
-              </div>
-              <div className="px-2 py-1 bg-[#0b0b0b] border border-[#1f1f1f] rounded text-[#9a9a9a]">
-                Plays: <span className="text-[#d4af37]">{rows.length}</span>
-              </div>
-            </div>
+            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Top +EV Props</h2>
+            <p className="text-xs text-[#a8a8a8] mt-1">
+              {loading ? "Loading…" : `${filtered.length} props · ${playable} playable`}
+            </p>
           </div>
 
-          {err ? (
-            <div className="mt-3 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded p-2">{err}</div>
-          ) : null}
+          <div className="flex items-center gap-2 text-[11px]">
+            <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
+              Bankroll: <span className="text-white">{bankroll ? formatMoney(bankroll) : "—"}</span>
+            </div>
+            <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
+              Kelly: <span className="text-white">{settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"}</span>
+            </div>
+          </div>
         </div>
 
-        {/* FILTER BAR */}
-        <div className="border-t border-[#1f1f1f] bg-[#060606]/90 backdrop-blur supports-[backdrop-filter]:bg-[#060606]/70">
-          <div className="p-3 sm:p-4 flex flex-col gap-3">
-            <div className="flex items-center gap-2 flex-wrap">
-              {UI_MARKETS.map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setSelectedMarket(m)}
-                  className={`px-3 py-1.5 text-xs rounded-full transition-colors border ${
-                    selectedMarket === m
-                      ? "bg-[#d4af37] text-black border-[#d4af37]"
-                      : "bg-[#101010] text-[#b0b0b0] border-[#2a2a2a] hover:bg-[#1a1a1a] hover:text-white"
-                  }`}
-                  type="button"
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
+        {err ? (
+          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/40 border border-red-900/50 rounded-lg">
+            {err}
+          </div>
+        ) : null}
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] text-[#808080] mr-1">Book</span>
-              {BOOKS.map((b) => (
-                <button
-                  key={b.key}
-                  onClick={() => setSelectedBook(b.key)}
-                  className={`px-3 py-1.5 text-xs rounded-full transition-colors border ${
-                    selectedBook === b.key
-                      ? "bg-[#ffffff] text-black border-[#ffffff]"
-                      : "bg-[#101010] text-[#b0b0b0] border-[#2a2a2a] hover:bg-[#1a1a1a] hover:text-white"
-                  }`}
-                  type="button"
-                >
-                  {b.label}
-                </button>
-              ))}
-            </div>
+        {/* Filters */}
+        <div className="relative mt-4 flex flex-col gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            {UI_MARKETS.map((m) => (
+              <button
+                key={m}
+                onClick={() => setSelectedMarket(m)}
+                className={`px-3 py-1.5 text-xs rounded-full transition-colors border ${
+                  selectedMarket === m
+                    ? "bg-[#d4af37] text-black border-[#d4af37]"
+                    : "bg-black/40 text-[#b0b0b0] border-[#2a2a2a] hover:bg-[#111] hover:text-white"
+                }`}
+                type="button"
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-[#808080] mr-1">Book</span>
+            {BOOK_FILTERS.map((b) => (
+              <button
+                key={b.key}
+                onClick={() => setSelectedBook(b.key)}
+                className={`px-3 py-1.5 text-xs rounded-full transition-colors border ${
+                  selectedBook === b.key
+                    ? "bg-[#ffffff] text-black border-[#ffffff]"
+                    : "bg-black/40 text-[#b0b0b0] border-[#2a2a2a] hover:bg-[#111] hover:text-white"
+                }`}
+                type="button"
+              >
+                {b.label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* TABLE PANEL */}
+      {/* TABLE */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
         <div className="relative overflow-auto" style={{ maxHeight: "calc(100vh - 360px)" }}>
           <table className="w-full text-xs min-w-[1100px]">
@@ -485,10 +686,8 @@ export function PropsScreen() {
                 <th className="text-left p-3 text-[#808080]">Opp</th>
                 <th className="text-center p-3 text-[#808080]">Projection</th>
                 <th className="text-center p-3 text-[#808080]">Line</th>
-                <th className="text-center p-3 text-[#808080]">Edge</th>
-                <th className="text-center p-3 text-[#808080]">Sigma</th>
                 <th className="text-center p-3 text-[#808080]">Books</th>
-                <th className="text-center p-3 text-[#808080]">Prism</th>
+                <th className="text-center p-3 text-[#808080]">Fair</th>
                 <th className="text-center p-3 text-[#808080]">EV%</th>
                 <th className="text-center p-3 text-[#808080]">Score</th>
                 <th className="text-center p-3 text-[#808080]">Bet $</th>
@@ -498,13 +697,13 @@ export function PropsScreen() {
             <tbody className="divide-y divide-[#1a1a1a]">
               {loading ? (
                 <tr>
-                  <td className="p-4 text-[#808080]" colSpan={12}>
+                  <td className="p-4 text-[#808080]" colSpan={10}>
                     Loading props…
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td className="p-4 text-[#808080]" colSpan={12}>
+                  <td className="p-4 text-[#808080]" colSpan={10}>
                     No props for this filter.
                   </td>
                 </tr>
@@ -515,7 +714,8 @@ export function PropsScreen() {
                     row={r}
                     bankroll={bankroll}
                     kellyFactor={kellyFactor}
-                    onOpen={() => setActiveModal(r)}
+                    settingsReady={settingsReady}
+                    onOpen={() => openModal(r)}
                   />
                 ))
               )}
@@ -524,7 +724,7 @@ export function PropsScreen() {
         </div>
       </div>
 
-      {activeModal ? <PropDetailsModal row={activeModal} onClose={() => setActiveModal(null)} /> : null}
+      <PropDetailsModal open={modalOpen} prop={selected} onClose={closeModal} bankroll={bankroll} kellyFactor={kellyFactor} settingsReady={settingsReady} />
     </div>
   );
 }
@@ -533,31 +733,26 @@ function PropRow({
   row,
   bankroll,
   kellyFactor,
+  settingsReady,
   onOpen,
 }: {
-  row: AggRow;
+  row: AggregatedProp;
   bankroll: number;
   kellyFactor: number;
+  settingsReady: boolean;
   onOpen: () => void;
 }) {
-  // Prefer abbreviations, fallback to canonicals, fallback to —
   const team = row.team_abbr || row.team_canonical || "—";
   const opp = row.opp_abbr || row.opp_canonical || "—";
+  const betAmount = settingsReady ? calcBetAmount(bankroll, row.bestKelly, kellyFactor) : NaN;
 
-  const projection = row.projection ?? 0;
-  const edge = projection - row.line;
-
-  const hasPositiveEV = (row.best_ev_pct ?? 0) > 3;
-
-  const betFrac = clamp((row.best_kelly_fraction ?? 0) * kellyFactor, 0, 0.25);
-  const betDollars = bankroll * betFrac;
-
-  const over = row.side === "Over";
+  const over = row.side === "over";
 
   return (
-    <tr className={`hover:bg-[#0f0f0f]/50 transition-colors ${betDollars > 0 ? "bg-[#d4af37]/5" : ""}`}>
+    <tr className="transition-colors hover:bg-white/[0.02]">
+      {/* Pick (ONLY clickable cell) */}
       <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10">
-        <button onClick={onOpen} className="w-full text-left group" title="Open details" type="button">
+        <button onClick={onOpen} className="w-full text-left group" type="button" title="Open details">
           <div className="flex items-start gap-3">
             <div className="flex-shrink-0">
               {row.picture_url ? (
@@ -579,7 +774,7 @@ function PropRow({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-white group-hover:text-[#d4af37] transition-colors truncate">
-                    {row.player_name} — {row.market} {row.side.toLowerCase()} {row.line}
+                    {row.player_name} — {row.ui_market} {row.side} {row.line}
                   </div>
                   <div className="text-[10px] text-[#606060] mt-0.5 truncate">
                     {team} vs {opp}
@@ -587,7 +782,7 @@ function PropRow({
                   </div>
                 </div>
 
-                {/* ✅ Stronger Over/Under color contrast */}
+                {/* ✅ distinct colors */}
                 <span
                   className={[
                     "text-[10px] px-2 py-0.5 rounded border font-medium",
@@ -596,7 +791,7 @@ function PropRow({
                       : "bg-red-500/15 border-red-400/30 text-red-200",
                   ].join(" ")}
                 >
-                  {row.side.toLowerCase()}
+                  {row.side}
                 </span>
               </div>
             </div>
@@ -607,23 +802,14 @@ function PropRow({
       <td className="p-3 text-[#b0b0b0]">{team}</td>
       <td className="p-3 text-[#b0b0b0]">{opp}</td>
 
-      <td className="p-3 text-center text-white">{projection.toFixed(1)}</td>
-      <td className="p-3 text-center text-[#b0b0b0]">{row.line.toFixed(1)}</td>
-
-      <td className={`p-3 text-center ${Math.abs(edge) > 2 ? "text-[#d4af37]" : "text-[#808080]"}`}>
-        {edge > 0 ? "+" : ""}
-        {edge.toFixed(1)}
-      </td>
-
-      <td className="p-3 text-center text-[#606060]">{(row.sigma ?? 0).toFixed(1)}</td>
+      <td className="p-3 text-center text-white tabular-nums">{fmtMu(row.projection)}</td>
+      <td className="p-3 text-center text-[#b0b0b0] tabular-nums">{row.line.toFixed(1)}</td>
 
       <td className="p-3 text-center">
         <div className="inline-flex items-center gap-1">
           {SOFT_BOOKS.map((b) => {
-            const q = row.quotes[b];
-            const isBest = row.best_book === b;
-            const has = q?.odds != null;
-
+            const offer = row.offers[b];
+            const isBest = row.bestBook === b;
             return (
               <span
                 key={b}
@@ -632,168 +818,249 @@ function PropRow({
                     ? "bg-[#d4af37]/15 border-[#d4af37]/40 text-[#d4af37]"
                     : "bg-[#101010] border-[#2a2a2a] text-[#777777]"
                 }`}
-                title={
-                  has
-                    ? `${bookLabel(b)} ${formatAmerican(q.odds!)}${q.ev_pct != null ? ` · EV ${q.ev_pct.toFixed(1)}%` : ""}`
-                    : `${bookLabel(b)} —`
-                }
               >
-                {bookLabel(b)} {has ? formatAmerican(q.odds!) : "—"}
+                {b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM"}{" "}
+                {offer ? american(offer.odds) : "—"}
               </span>
             );
           })}
         </div>
       </td>
 
-      <td className="p-3 text-center text-white">{row.prism_odds != null ? formatAmerican(row.prism_odds) : "—"}</td>
+      <td className="p-3 text-center text-white tabular-nums">{american(row.fairOdds)}</td>
 
-      <td className={`p-3 text-center ${hasPositiveEV ? "text-emerald-400" : "text-[#808080]"}`}>
-        {row.best_ev_pct > 0 ? "+" : ""}
-        {row.best_ev_pct.toFixed(1)}%
-      </td>
+      <td className="p-3 text-center text-emerald-400 tabular-nums">{pct(row.bestEvPct, 1)}</td>
 
-      <td className="p-3 text-center text-[#b0b0b0]">{row.best_score != null ? row.best_score.toFixed(0) : "—"}</td>
+      <td className="p-3 text-center text-[#b0b0b0] tabular-nums">{Math.round(row.bestScore)}</td>
 
       <td className="p-3 text-center">
-        <span
-          className={`px-2 py-1 rounded border text-[10px] ${
-            betDollars > 0 ? "bg-[#0b0b0b] border-[#2a2a2a] text-white" : "bg-[#0b0b0b] border-[#1a1a1a] text-[#606060]"
-          }`}
-        >
-          {betDollars > 0 ? `$${betDollars.toFixed(0)}` : "—"}
+        <span className="px-2 py-1 rounded border text-[10px] bg-[#0b0b0b] border-[#2a2a2a] text-white tabular-nums">
+          {settingsReady && Number.isFinite(betAmount) && betAmount > 0 ? formatMoney(betAmount) : "—"}
         </span>
       </td>
     </tr>
   );
 }
 
-/* =========================
-   MODAL (Tabs + Charts)
-   ========================= */
+/* =========================================================
+   Modal — same structure as ModelScreen
+========================================================= */
 
-type LinePoint = {
-  ts: string; // ISO
-  label: string; // formatted CT
-  dk?: number | null;
-  fd?: number | null;
-  mgm?: number | null;
-  pin?: number | null;
-};
+type ModalTab = "line" | "hit";
 
-type GameLogRow = {
-  game_date: string; // ISO or YYYY-MM-DD
-  value: number;
-};
+function PropDetailsModal({
+  open,
+  prop,
+  onClose,
+  bankroll,
+  kellyFactor,
+  settingsReady,
+}: {
+  open: boolean;
+  prop: AggregatedProp | null;
+  onClose: () => void;
+  bankroll: number;
+  kellyFactor: number;
+  settingsReady: boolean;
+}) {
+  const [tab, setTab] = useState<ModalTab>("line");
 
-function dbStatKey(market: UiMarket): "points" | "rebounds" | "assists" | "threes" {
-  if (market === "Points") return "points";
-  if (market === "Rebounds") return "rebounds";
-  if (market === "Assists") return "assists";
-  return "threes";
+  useEffect(() => {
+    if (open) setTab("line");
+  }, [open, prop?.key]);
+
+  if (!open || !prop) return null;
+
+  const team = prop.team_abbr || prop.team_canonical || "—";
+  const opp = prop.opp_abbr || prop.opp_canonical || "—";
+  const betAmount = settingsReady ? calcBetAmount(bankroll, prop.bestKelly, kellyFactor) : 0;
+
+  return (
+    <div className="fixed inset-0 z-[100]">
+      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
+
+      <div
+        className="absolute inset-0 flex items-end md:items-center md:justify-center"
+        style={{
+          paddingTop: "max(env(safe-area-inset-top), 12px)",
+          paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
+        }}
+      >
+        <div
+          className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col"
+          style={{ maxHeight: "min(92vh, 920px)" }}
+        >
+          {/* Header */}
+          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-white text-sm md:text-base truncate">
+                  {team} vs {opp}{" "}
+                  <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                    PROP
+                  </span>
+                </div>
+
+                <div className="text-[11px] text-[#808080] mt-1">
+                  {fmtDateCentral(prop.commence_time)} · {fmtTimeCentral(prop.commence_time)} ·{" "}
+                  <span className="text-[#606060]">{prop.event_id}</span>
+                </div>
+
+                <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-[#d4af37]">{prop.ui_market}</span>
+                  <span className="text-[#404040]">·</span>
+                  <span className="text-white">{prop.player_name}</span>
+                  <span className="text-[#808080]">
+                    · {prop.side} {prop.line}
+                  </span>
+                </div>
+
+                <div className="mt-1 text-[11px] text-[#b0b0b0]">
+                  Projection: <span className="text-white tabular-nums">{fmtMu(prop.projection)}</span>
+                </div>
+              </div>
+
+              <div className="shrink-0 text-right">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="p-2 rounded hover:bg-white/5 text-[#b0b0b0] hover:text-white ml-auto"
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+
+                <div className="mt-2 text-[10px] text-[#606060]">Best EV</div>
+                <div className="text-emerald-400 font-semibold tabular-nums">{pct(prop.bestEvPct, 1)}</div>
+
+                <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
+                <div className="text-[#d4af37] font-semibold tabular-nums">
+                  {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+                </div>
+              </div>
+            </div>
+
+            {/* Tabs */}
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <div className="inline-flex items-center rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+                <TabButton active={tab === "line"} onClick={() => setTab("line")} label="Line History" />
+                <TabButton active={tab === "hit"} onClick={() => setTab("hit")} label="Hit Rate" />
+              </div>
+
+              <div className="hidden sm:flex flex-wrap items-center gap-2 text-[11px] text-[#808080]">
+                <LegendDot label="DK" color={BOOK_COLOR.draftkings} />
+                <LegendDot label="FD" color={BOOK_COLOR.fanduel} />
+                <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
+                <LegendDot label="PIN" color={BOOK_COLOR.pinnacle} />
+                <span className="text-[#404040]">·</span>
+                <span>Tooltip shows date + time (CT)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 min-h-0 p-4">
+            {tab === "line" ? <PropOddsHistoryPanel prop={prop} /> : <PropHitRatePanel prop={prop} />}
+          </div>
+
+          {/* Footer */}
+          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a]">
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full md:w-auto md:ml-auto md:flex md:justify-end px-4 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[12px] text-[#d0d0d0] hover:bg-[#141414]"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function PropDetailsModal({ row, onClose }: { row: AggRow; onClose: () => void }) {
-  const [tab, setTab] = useState<"history" | "gamelog">("history");
-  const [history, setHistory] = useState<LinePoint[]>([]);
-  const [gamelog, setGamelog] = useState<GameLogRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-2 text-xs transition-colors",
+        active ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
 
-  const team = row.team_abbr || row.team_canonical || "—";
-  const opp = row.opp_abbr || row.opp_canonical || "—";
+function LegendDot({ label, color }: { label: string; color: string }) {
+  return (
+    <div className="inline-flex items-center gap-1">
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/* =========================================================
+   Modal Tab: Line History (uses player_props_history)
+========================================================= */
+
+function PropOddsHistoryPanel({ prop }: { prop: AggregatedProp }) {
+  const [series, setSeries] = useState<HistoryPoint[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [debug, setDebug] = useState("");
 
   useEffect(() => {
     let mounted = true;
 
     async function load() {
       setLoading(true);
-      setErr(null);
+      setSeries([]);
+      setDebug("");
 
       try {
-        // --- Line history (player_props_snapshot) ---
-        // Expected columns in snapshot:
-        // event_id, player_name, market, side, line, book, odds, ts (or inserted_at), created_at
-        const { data: snap, error: snapErr } = await supabase
-          .from(LINE_HISTORY_TABLE)
-          .select("event_id, player_name, market, side, line, book, odds, ts, inserted_at, created_at")
-          .eq("event_id", row.event_id)
-          .eq("player_name", row.player_name)
-          .eq("market", row.db_market)
-          .eq("side", row.side)
-          // optional: constrain to same line (keeps chart clean)
-          .eq("line", row.line)
-          .order("ts", { ascending: true })
-          .limit(500);
+        const playerName = (prop.player_name ?? "").trim();
+        const marketKey = historyPropMarketKey(prop.raw_market);
+        const sideCanon = (prop.side ?? "").trim().toLowerCase();
 
-        if (snapErr) throw snapErr;
-
-        const pointsMap = new Map<string, LinePoint>();
-
-        for (const r of (snap ?? []) as any[]) {
-          const ts: string =
-            r.ts ??
-            r.inserted_at ??
-            r.created_at ??
-            new Date().toISOString();
-
-          const key = ts;
-          if (!pointsMap.has(key)) {
-            pointsMap.set(key, { ts, label: fmtCt(ts), dk: null, fd: null, mgm: null, pin: null });
+        if (!playerName || !marketKey || !["over", "under"].includes(sideCanon)) {
+          if (mounted) {
+            setDebug(
+              `keys missing: player="${playerName || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`
+            );
           }
-
-          const p = pointsMap.get(key)!;
-          const b = (r.book ?? "").toLowerCase();
-
-          // chart uses the LINE (not odds) — if your snapshot stores "line" movement separately, swap here.
-          // If you want ODDS movement instead, replace `r.line` below with `r.odds`.
-          const val = typeof r.line === "number" ? r.line : null;
-
-          if (b === "draftkings") p.dk = val;
-          if (b === "fanduel") p.fd = val;
-          if (b === "betmgm") p.mgm = val;
-          if (b === "pinnacle") p.pin = val;
+          return;
         }
 
-        const series = Array.from(pointsMap.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+        const { data, error } = await supabase
+          .from(PROPS_HISTORY_TABLE)
+          .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
+          .eq(PLAYER_COL_PROPS, playerName)
+          .eq(MARKET_COL_PROPS, marketKey)
+          .eq(SIDE_COL_PROPS, sideCanon)
+          .in(BOOK_COL_PROPS, HISTORY_BOOKS)
+          .order(TS_COL_PROPS, { ascending: true });
 
-        // --- FantasyPros game logs ---
-        // Expected columns:
-        // fp_id, game_date, points, rebounds, assists, threes
-        const statCol = dbStatKey(row.market);
-        let gl: any[] = [];
+        if (!mounted) return;
 
-        if (row.fp_id != null) {
-          const { data: glData, error: glErr } = await supabase
-            .from(FP_GAMELOGS_TABLE)
-            .select(`fp_id, game_date, ${statCol}`)
-            .eq("fp_id", row.fp_id)
-            .order("game_date", { ascending: true })
-            .limit(82);
-
-          if (glErr) {
-            // don't fail the whole modal for gamelog
-            gl = [];
-          } else {
-            gl = glData as any[];
-          }
+        if (error) {
+          setDebug(`history error: ${error.message}`);
+          setSeries([]);
+          return;
         }
 
-        const bars: GameLogRow[] = (gl ?? [])
-          .filter((x) => x?.game_date)
-          .map((x) => ({
-            game_date: x.game_date,
-            value: typeof x[statCol] === "number" ? x[statCol] : Number(x[statCol] ?? 0),
-          }));
+        const pts = collapseHistory(data ?? []);
+        setSeries(pts);
 
-        if (!mounted) return;
-        setHistory(series);
-        setGamelog(bars);
-      } catch (e: any) {
-        if (!mounted) return;
-        setErr(e?.message ?? "Failed to load modal data.");
+        if (!pts.length) {
+          setDebug(
+            `no rows: player="${playerName}" market="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`
+          );
+        }
       } finally {
-        if (!mounted) return;
-        setLoading(false);
+        if (mounted) setLoading(false);
       }
     }
 
@@ -801,167 +1068,321 @@ function PropDetailsModal({ row, onClose }: { row: AggRow; onClose: () => void }
     return () => {
       mounted = false;
     };
-  }, [row.event_id, row.player_name, row.db_market, row.side, row.line, row.fp_id, row.market]);
+  }, [prop.key]);
 
-  const title = `${row.player_name} — ${row.market} ${row.side.toLowerCase()} ${row.line}`;
-  const subtitle = `${team} vs ${opp}${row.commence_time ? ` · ${row.commence_time}` : ""}`;
+  const hasAny = (k: AnyBookHistory) => series.some((p) => Number.isFinite((p as any)[k]));
+
+  const TooltipContent = (props_: any) => {
+    const { active, payload, label } = props_;
+    if (!active || !payload?.length) return null;
+
+    const order: AnyBookHistory[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
+    const rows = order
+      .map((k) => {
+        const found = payload.find((p: any) => p.dataKey === k);
+        const v = found?.value;
+        if (!Number.isFinite(Number(v))) return null;
+        return { k, v: Number(v) };
+      })
+      .filter(Boolean) as { k: AnyBookHistory; v: number }[];
+
+    return (
+      <div
+        style={{
+          background: "#0b0b0b",
+          border: "1px solid #2a2a2a",
+          padding: "10px",
+          borderRadius: 10,
+          color: "#d0d0d0",
+          minWidth: 250,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
+        }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>
+          {fmtDateTimeCT(String(label))}
+        </div>
+
+        <div style={{ fontSize: 11, color: "#b0b0b0", marginBottom: 8, lineHeight: 1.35 }}>
+          <div style={{ color: "#ffffff" }}>{prop.player_name}</div>
+          <div>
+            <span style={{ color: "#d4af37" }}>{prop.ui_market}</span>{" "}
+            <span style={{ color: "#606060" }}>·</span>{" "}
+            <span style={{ color: "#d0d0d0" }}>
+              {prop.side} {prop.line}
+            </span>
+          </div>
+          <div style={{ color: "#808080" }}>
+            Projection: <span style={{ color: "#fff" }}>{fmtMu(prop.projection)}</span>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 4 }}>
+          {rows.map(({ k, v }) => (
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <span style={{ fontSize: 11, color: BOOK_COLOR[k] }}>{bookShort(k)}</span>
+              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>{american(v)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="fixed inset-0 z-[999]">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+    <div className="h-full flex flex-col min-h-0">
+      <div className="text-[10px] text-[#606060] mb-2">Odds History (this side)</div>
 
-      <div className="absolute inset-x-0 bottom-0 sm:inset-0 sm:flex sm:items-center sm:justify-center p-3 sm:p-6">
-        <div className="w-full sm:max-w-4xl rounded-2xl border border-[#2a2a2a] bg-[#080808] shadow-[0_30px_120px_rgba(0,0,0,0.8)] overflow-hidden">
-          {/* Header */}
-          <div className="p-4 border-b border-[#1f1f1f] flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              {row.picture_url ? (
-                <img
-                  src={row.picture_url}
-                  alt={row.player_name}
-                  className="h-10 w-10 rounded-full object-cover border border-[#2a2a2a]"
-                  loading="lazy"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="h-10 w-10 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] flex items-center justify-center">
-                  <span className="text-[12px] text-[#cfcfcf]">{initials(row.player_name)}</span>
+      {loading && !series.length ? (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+          <div className="text-xs text-[#808080]">Loading line movement…</div>
+        </div>
+      ) : null}
+
+      {!loading && !series.length ? (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+          <div className="text-xs text-[#808080]">No odds history available for this prop/side.</div>
+          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+        </div>
+      ) : null}
+
+      {!!series.length ? (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-3 h-[min(44vh,360px)]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={series}>
+              <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
+              <XAxis
+                dataKey="ts"
+                tickFormatter={fmtHourMinCT}
+                tick={{ fontSize: 10, fill: "#808080" }}
+                axisLine={{ stroke: "#2a2a2a" }}
+                tickLine={{ stroke: "#2a2a2a" }}
+                minTickGap={18}
+              />
+              <YAxis
+                tickFormatter={(v) => american(Number(v))}
+                tick={{ fontSize: 10, fill: "#808080" }}
+                axisLine={{ stroke: "#2a2a2a" }}
+                tickLine={{ stroke: "#2a2a2a" }}
+                width={58}
+                domain={["auto", "auto"]}
+              />
+
+              <Tooltip content={TooltipContent} />
+              <Legend
+                wrapperStyle={{ fontSize: 11, color: "#808080" }}
+                formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
+              />
+
+              {hasAny("draftkings") ? (
+                <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+              {hasAny("fanduel") ? (
+                <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+              {hasAny("betmgm") ? (
+                <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+              {hasAny("pinnacle") ? (
+                <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* =========================================================
+   Modal Tab: Hit Rate (FantasyPros API)
+========================================================= */
+
+function PropHitRatePanel({ prop }: { prop: AggregatedProp }) {
+  const [rows, setRows] = useState<FantasyProsLogRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [debug, setDebug] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      const playerName = (prop.player_name ?? "").trim();
+      if (!playerName) {
+        setRows([]);
+        setDebug("No player name available for FantasyPros lookup.");
+        return;
+      }
+
+      setLoading(true);
+      setDebug("");
+      setRows([]);
+
+      try {
+        const url = `/api/fantasypros-gamelog?player_name=${encodeURIComponent(playerName)}`;
+        const res = await fetch(url);
+        const json = (await res.json()) as FantasyProsApiResponse;
+
+        if (!mounted) return;
+
+        if (!json.ok) {
+          setRows([]);
+          setDebug(`FantasyPros logs error: ${json.error}${json.url ? ` (${json.url})` : ""}`);
+          return;
+        }
+
+        setRows(json.rows ?? []);
+        if (!(json.rows ?? []).length) {
+          setDebug(`FantasyPros logs: parsed 0 rows (${json.url})`);
+        }
+      } catch (e: any) {
+        if (!mounted) return;
+        setDebug(`FantasyPros logs error: ${e?.message ?? String(e)}`);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, [prop.key]);
+
+  const marketKey = historyPropMarketKey(prop.raw_market);
+  const statKey: "pts" | "reb" | "ast" | "threes" =
+    marketKey === "player_rebounds" ? "reb" : marketKey === "player_assists" ? "ast" : marketKey === "player_threes" ? "threes" : "pts";
+  const statLabel = statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
+
+  const chartData = useMemo(() => {
+    const last = (rows ?? []).slice(0, 10).slice().reverse();
+    return last.map((r) => ({
+      date: r.date,
+      opp: r.opp,
+      score: r.score,
+      min: safeNum(r.min, 0),
+      pts: safeNum(r.pts, 0),
+      reb: safeNum(r.reb, 0),
+      ast: safeNum(r.ast, 0),
+      threes: safeNum(r.threes, 0),
+    }));
+  }, [rows]);
+
+  const todayLine = prop.line;
+
+  const LogsTooltip = (props_: any) => {
+    const { active, payload, label } = props_;
+    if (!active || !payload?.length) return null;
+
+    const d = payload[0]?.payload;
+    if (!d) return null;
+
+    const v = safeNum(d[statKey], NaN);
+    const line = Number.isFinite(todayLine) ? todayLine : null;
+    const overUnder = line != null && Number.isFinite(v) ? (v >= line ? "OVER" : "UNDER") : undefined;
+
+    return (
+      <div
+        style={{
+          background: "#0b0b0b",
+          border: "1px solid #2a2a2a",
+          padding: "10px",
+          borderRadius: 10,
+          color: "#d0d0d0",
+          minWidth: 240,
+          boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
+        }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{label}</div>
+
+        <div style={{ fontSize: 11, color: "#b0b0b0", lineHeight: 1.35 }}>
+          <div>
+            vs <span style={{ color: "#fff" }}>{d.opp}</span> · <span style={{ color: "#808080" }}>{d.score}</span>
+          </div>
+
+          <div style={{ marginTop: 8, display: "grid", gap: 2 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#808080" }}>MIN</span>
+              <span style={{ color: "#fff" }}>{d.min}</span>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: "#808080" }}>{statLabel}</span>
+              <span style={{ color: "#fff" }}>{Number.isFinite(v) ? v : "—"}</span>
+            </div>
+
+            {line != null ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#808080" }}>Today Line</span>
+                  <span style={{ color: "#fff" }}>{line}</span>
                 </div>
-              )}
-
-              <div>
-                <div className="text-white text-sm sm:text-base">{title}</div>
-                <div className="text-[11px] text-[#808080] mt-1">{subtitle}</div>
-              </div>
-            </div>
-
-            <button
-              onClick={onClose}
-              className="p-2 rounded hover:bg-white/5 text-[#b0b0b0] hover:text-white"
-              aria-label="Close"
-              type="button"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          {/* Tabs */}
-          <div className="px-4 pt-3">
-            <div className="inline-flex items-center gap-2 rounded-xl border border-[#1f1f1f] bg-[#0b0b0b] p-1">
-              <button
-                type="button"
-                onClick={() => setTab("history")}
-                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                  tab === "history" ? "bg-[#d4af37] text-black" : "text-[#b0b0b0] hover:text-white hover:bg-white/5"
-                }`}
-              >
-                Line History
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab("gamelog")}
-                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                  tab === "gamelog" ? "bg-[#d4af37] text-black" : "text-[#b0b0b0] hover:text-white hover:bg-white/5"
-                }`}
-              >
-                FantasyPros Game Log
-              </button>
-            </div>
-          </div>
-
-          {/* Body */}
-          <div className="p-4">
-            {err ? (
-              <div className="mb-3 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded p-2">{err}</div>
+                {overUnder ? (
+                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>
+                    {overUnder}
+                  </div>
+                ) : null}
+              </>
             ) : null}
-
-            {loading ? (
-              <div className="text-xs text-[#808080]">Loading…</div>
-            ) : tab === "history" ? (
-              <div className="rounded-xl border border-[#1f1f1f] bg-[#0b0b0b] p-3">
-                <div className="text-[11px] text-[#808080] mb-2">Line movement (by book)</div>
-
-                {history.length === 0 ? (
-                  <div className="text-xs text-[#606060]">No line history available for this prop yet.</div>
-                ) : (
-                  <div className="h-[260px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={history} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                        <XAxis dataKey="label" tick={{ fill: "rgba(242,241,243,0.55)", fontSize: 10 }} interval="preserveStartEnd" />
-                        <YAxis tick={{ fill: "rgba(242,241,243,0.55)", fontSize: 10 }} domain={["auto", "auto"]} />
-                        <Tooltip
-                          contentStyle={{ background: "#0b0b0b", border: "1px solid #1f1f1f", borderRadius: 10 }}
-                          labelStyle={{ color: "rgba(242,241,243,0.75)" }}
-                          formatter={(v: any, name: any) => [v != null ? String(v) : "—", name]}
-                        />
-                        {/* No custom colors requested; default recharts colors are fine */}
-                        <Line type="monotone" dataKey="dk" name="DK" dot={false} strokeWidth={2} connectNulls />
-                        <Line type="monotone" dataKey="fd" name="FD" dot={false} strokeWidth={2} connectNulls />
-                        <Line type="monotone" dataKey="mgm" name="MGM" dot={false} strokeWidth={2} connectNulls />
-                        <Line type="monotone" dataKey="pin" name="PIN" dot={false} strokeWidth={2} connectNulls />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-
-                <div className="mt-2 text-[10px] text-[#606060]">
-                  Tooltip shows Central Time. (If you want odds movement instead of line movement, tell me and we’ll swap the plotted value.)
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-[#1f1f1f] bg-[#0b0b0b] p-3">
-                <div className="text-[11px] text-[#808080] mb-2">
-                  Last games (bars) — reference line at today’s prop line ({row.line})
-                </div>
-
-                {gamelog.length === 0 ? (
-                  <div className="text-xs text-[#606060]">
-                    No FantasyPros game logs found (check table name/columns or fp_id availability).
-                  </div>
-                ) : (
-                  <div className="h-[260px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={gamelog} margin={{ top: 10, right: 10, left: 0, bottom: 10 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                        <XAxis
-                          dataKey="game_date"
-                          tick={{ fill: "rgba(242,241,243,0.55)", fontSize: 10 }}
-                          tickFormatter={(v) => String(v).slice(5)} // MM-DD
-                          interval="preserveStartEnd"
-                        />
-                        <YAxis tick={{ fill: "rgba(242,241,243,0.55)", fontSize: 10 }} />
-                        <Tooltip
-                          contentStyle={{ background: "#0b0b0b", border: "1px solid #1f1f1f", borderRadius: 10 }}
-                          labelStyle={{ color: "rgba(242,241,243,0.75)" }}
-                        />
-                        <ReferenceLine y={row.line} stroke="rgba(212,175,55,0.9)" strokeWidth={2} />
-                        {/* Color is determined per-bar via Cell is possible, but you didn’t ask — keeping clean & readable. */}
-                        <Bar dataKey="value" name="Stat" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-
-                <div className="mt-2 text-[10px] text-[#606060]">
-                  If you want bars colored green/red for over/under vs today’s line (like ModelScreen), say the word and I’ll add the per-bar coloring + no shaded cursor.
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Footer */}
-          <div className="p-4 border-t border-[#1f1f1f] flex items-center justify-end">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-[#d4af37] text-black text-xs font-semibold hover:opacity-90"
-              type="button"
-            >
-              Done
-            </button>
           </div>
         </div>
       </div>
+    );
+  };
+
+  const activeBarStyle = { stroke: "#ffffff", strokeWidth: 1, fillOpacity: 1 };
+
+  return (
+    <div className="h-full flex flex-col min-h-0">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="text-[10px] text-[#606060]">FantasyPros Game Logs</div>
+        {loading ? <div className="text-[10px] text-[#606060]">Loading…</div> : null}
+      </div>
+
+      {chartData.length ? (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-3">
+          <div className="text-[10px] text-[#606060] mb-2">
+            Last {chartData.length} games · {statLabel} bars
+            {Number.isFinite(todayLine) ? <span className="text-[#808080]"> · Today Line {todayLine}</span> : null}
+          </div>
+
+          <div className="h-[min(44vh,340px)]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} barCategoryGap={12}>
+                <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
+                <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
+
+                {/* ✅ no shaded cursor */}
+                <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
+
+                {Number.isFinite(todayLine) ? (
+                  <ReferenceLine
+                    y={todayLine}
+                    stroke="#d0d0d0"
+                    strokeDasharray="4 4"
+                    ifOverflow="extendDomain"
+                    label={{ value: "Today Line", position: "right", fill: "#808080", fontSize: 10 }}
+                  />
+                ) : null}
+
+                <Bar dataKey={statKey} name={statLabel} isAnimationActive={false} activeBar={activeBarStyle}>
+                  {chartData.map((d, idx) => {
+                    const v = safeNum((d as any)[statKey], NaN);
+                    const line = Number.isFinite(todayLine) ? todayLine : null;
+                    const isOver = line != null && Number.isFinite(v) ? v >= line : true;
+                    return <Cell key={idx} fill={isOver ? OVER_GREEN : UNDER_RED} />;
+                  })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
+          <div className="text-xs text-[#808080]">No game logs available.</div>
+          {debug ? <div className="mt-2 text-[10px] text-[#404040] break-words">{debug}</div> : null}
+        </div>
+      )}
     </div>
   );
 }
