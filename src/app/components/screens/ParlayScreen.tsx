@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
+  Shuffle,
 } from "lucide-react";
 
 type BookKey = "draftkings" | "fanduel" | "betmgm" | "any";
@@ -40,17 +41,18 @@ type CandidateLeg = {
   side: string;
   line: number | null;
 
-  book: string;
+  book: string; // normalized
   american_odds: number | null;
 
   // Model / fair probability
   p: number | null; // 0..1
   ev_pct: number | null; // percent
-  score: number | null;
+  score: number | null; // ranking helper (confidence/score)
 
-  // correlation keys
+  // Correlation helpers
   team?: string | null;
-  player_name?: string | null;
+  opponent?: string | null; // (props)
+  player_name?: string | null; // (props)
 };
 
 type ParlayResult = {
@@ -60,13 +62,17 @@ type ParlayResult = {
   book: string;
   legsCount: number;
 
-  parlay_decimal: number;
+  parlay_decimal: number; // total payout incl stake
   parlay_american: number | null;
 
-  p_win: number;
-  ev_pct: number;
+  p_win: number; // assumed independent
+  ev_pct: number; // percent
 
-  commence_time_min: string | null;
+  commence_time_min: string | null; // earliest leg time
+
+  // ✅ NEW
+  corr_penalty: number; // 0..1.25 (higher = more correlated)
+  rank_score: number; // EV minus penalty weighting
 };
 
 const GOLD = "#d89211";
@@ -86,10 +92,14 @@ export function ParlayScreen() {
   const [includeGameLines, setIncludeGameLines] = useState(true);
   const [includeProps, setIncludeProps] = useState(true);
   const [minEv, setMinEv] = useState<number>(3);
-  const [maxCandidates, setMaxCandidates] = useState<number>(24);
+  const [maxCandidates, setMaxCandidates] = useState<number>(26);
   const [allowSameGame, setAllowSameGame] = useState<boolean>(false);
-  const [allowSamePlayer, setAllowSamePlayer] = useState<boolean>(false); // ✅ NEW (default false)
+  const [allowSamePlayer, setAllowSamePlayer] = useState<boolean>(false);
   const [maxParlays, setMaxParlays] = useState<number>(8);
+
+  // New knobs (optional but helpful)
+  const [penaltyWeight, setPenaltyWeight] = useState<number>(35); // 20–60 typical
+  const [diversityMode, setDiversityMode] = useState<boolean>(true); // diversify output set
 
   // State
   const [loading, setLoading] = useState(false);
@@ -182,10 +192,14 @@ export function ParlayScreen() {
         .filter((x) => x.american_odds != null && Number.isFinite(x.american_odds))
         .filter((x) => x.p != null && x.p > 0 && x.p < 1);
 
-      mapped.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      // Deduplicate “same semantic leg” across multiple rows (often happens)
+      const uniq = dedupeBySemanticKey(mapped);
 
-      setCandidates(mapped);
-      return mapped;
+      // Rank legs
+      uniq.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+      setCandidates(uniq);
+      return uniq;
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load candidates.");
       setCandidates([]);
@@ -204,13 +218,15 @@ export function ParlayScreen() {
       return;
     }
 
-    const topPool = pool.slice(0, Math.max(legs + 2, maxCandidates));
+    const topPool = pool.slice(0, Math.max(legs + 3, maxCandidates));
 
     const built = buildParlays(topPool, legs, {
       allowSameGame,
       allowSamePlayer,
       maxResults: maxParlays,
       enforceBook: book === "any" ? null : book,
+      penaltyWeight,
+      diversityMode,
     });
 
     setParlays(built);
@@ -243,13 +259,13 @@ export function ParlayScreen() {
             </div>
 
             <p className="mt-1 text-xs text-white/50">
-              Pick your legs + book — we’ll suggest parlays built from your top +EV plays.
+              Pick your legs + book — we’ll suggest parlays built from your top +EV plays (with correlation rules).
             </p>
           </div>
 
           <div className="hidden md:flex items-center gap-2 text-[10px] text-white/45 whitespace-nowrap">
             <Shield className="h-3.5 w-3.5" />
-            <span>Independence EV (v1)</span>
+            <span>Independence EV + Correlation Penalty</span>
           </div>
         </div>
       </div>
@@ -343,27 +359,42 @@ export function ParlayScreen() {
             <div className="text-[10px] text-white/40 mt-1">Higher = more combos (slower)</div>
           </ControlBlock>
 
-          {/* Rules */}
-          <ControlBlock label="Parlay rules">
-            <ToggleRow
-              label="Allow multiple legs from same game"
-              value={allowSameGame}
-              onChange={setAllowSameGame}
-            />
-            <div className="mt-2">
+          {/* Correlation toggles */}
+          <ControlBlock label="Correlation rules">
+            <div className="space-y-2">
               <ToggleRow
-                label="Allow multiple legs with same player (props)"
+                label="Allow multiple legs from same game"
+                value={allowSameGame}
+                onChange={setAllowSameGame}
+              />
+              <ToggleRow
+                label="Allow multiple props for same player"
                 value={allowSamePlayer}
                 onChange={setAllowSamePlayer}
               />
+              <ToggleRow label="Diversity mode (less repetition)" value={diversityMode} onChange={setDiversityMode} />
             </div>
 
-            <div className="text-[10px] text-white/40 mt-2 space-y-1">
-              <div>
-                • Default is safest: <span className="text-white/60">1 leg per game</span> and{" "}
-                <span className="text-white/60">no same-player props</span>.
-              </div>
-              <div>• Even if same-game is allowed, we still block “impossible” combos.</div>
+            <div className="text-[10px] text-white/40 mt-2">
+              Default is safer: <span className="text-white/60">1 leg per event</span> and{" "}
+              <span className="text-white/60">no duplicate player props</span>.
+            </div>
+          </ControlBlock>
+
+          {/* Penalty weight */}
+          <ControlBlock label="Correlation penalty strength">
+            <input
+              type="number"
+              min={0}
+              max={80}
+              step={5}
+              value={penaltyWeight}
+              onChange={(e) => setPenaltyWeight(Number(e.target.value))}
+              className="w-full rounded-lg border bg-black/40 px-3 py-2 text-sm text-white outline-none"
+              style={{ borderColor: BORDER }}
+            />
+            <div className="text-[10px] text-white/40 mt-1">
+              Higher = more diversification (typical: 25–45)
             </div>
           </ControlBlock>
         </div>
@@ -372,8 +403,8 @@ export function ParlayScreen() {
           <div className="text-[11px] text-white/45 flex items-center gap-2">
             <Layers className="h-4 w-4" />
             <span>
-              Candidates: <span className="text-white/70">{headerStats.total}</span> (Game{" "}
-              {headerStats.game} / Props {headerStats.prop})
+              Candidates: <span className="text-white/70">{headerStats.total}</span> (Game {headerStats.game} / Props{" "}
+              {headerStats.prop})
             </span>
           </div>
 
@@ -422,8 +453,7 @@ export function ParlayScreen() {
 
         {parlays.length === 0 ? (
           <div className="p-4 text-xs text-white/55">
-            No parlays yet. Set your options and click{" "}
-            <span className="text-white/70">Generate Parlays</span>.
+            No parlays yet. Set your options and click <span className="text-white/70">Generate Parlays</span>.
           </div>
         ) : (
           <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -439,13 +469,14 @@ export function ParlayScreen() {
         <div className="text-xs text-white/60 leading-relaxed space-y-2">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4" style={{ color: GOLD }} />
-            <span>EV assumes legs are independent (v1). Correlation rules can be expanded later.</span>
+            <span>
+              EV assumes independence (multiply probs) but we now apply a correlation penalty so results aren’t just the
+              same legs recombined.
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <XCircle className="h-4 w-4 text-white/35" />
-            <span>
-              Current restrictions: no duplicate/contradictory legs, and (by default) no same-player props.
-            </span>
+            <span>Edge is intentionally blank for now (as requested).</span>
           </div>
         </div>
       </div>
@@ -506,6 +537,9 @@ function ToggleRow({
 }
 
 function ParlayCard({ parlay }: { parlay: ParlayResult }) {
+  const corrLabel = parlay.corr_penalty >= 0.8 ? "High" : parlay.corr_penalty >= 0.45 ? "Medium" : "Low";
+  const corrColor = parlay.corr_penalty >= 0.8 ? "#fca5a5" : parlay.corr_penalty >= 0.45 ? "#fde68a" : "#bbf7d0";
+
   return (
     <div className="rounded-xl border border-white/10 bg-black/25 overflow-hidden">
       <div className="p-3 border-b border-white/10 bg-white/[0.02] flex items-start justify-between gap-3">
@@ -528,10 +562,16 @@ function ParlayCard({ parlay }: { parlay: ParlayResult }) {
       </div>
 
       <div className="p-3 space-y-2">
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           <MiniStat label="Parlay Odds" value={fmtOdds(parlay.parlay_american)} />
           <MiniStat label="Win Prob" value={`${(parlay.p_win * 100).toFixed(1)}%`} />
           <MiniStat label="Payout" value={`${parlay.parlay_decimal.toFixed(2)}x`} />
+          <MiniStat
+            label="Correlation"
+            value={`${corrLabel}`}
+            valueStyle={{ color: corrColor }}
+            subValue={`${parlay.corr_penalty.toFixed(2)} pen`}
+          />
         </div>
 
         <div className="mt-2 space-y-2">
@@ -551,19 +591,36 @@ function ParlayCard({ parlay }: { parlay: ParlayResult }) {
           ))}
         </div>
 
-        <div className="pt-1 text-[10px] text-white/35">
-          * EV assumes independence. We also filter “not allowed” combos (same-player props, contradictions, duplicates).
+        <div className="pt-1 text-[10px] text-white/35 flex items-center gap-2">
+          <Shuffle className="h-3.5 w-3.5" />
+          <span>
+            Ranking = EV% − (CorrelationPenalty × {Math.round((parlay.rank_score - parlay.ev_pct) / (parlay.corr_penalty || 1)) || "w"})
+            (diversity + correlation-aware)
+          </span>
         </div>
       </div>
     </div>
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({
+  label,
+  value,
+  subValue,
+  valueStyle,
+}: {
+  label: string;
+  value: string;
+  subValue?: string;
+  valueStyle?: React.CSSProperties;
+}) {
   return (
     <div className="rounded-lg border border-white/10 bg-black/20 p-2">
       <div className="text-[10px] text-white/40">{label}</div>
-      <div className="text-sm text-white font-semibold">{value}</div>
+      <div className="text-sm text-white font-semibold" style={valueStyle}>
+        {value}
+      </div>
+      {subValue ? <div className="text-[10px] text-white/35 mt-0.5">{subValue}</div> : null}
     </div>
   );
 }
@@ -607,6 +664,7 @@ function mapGameCandidates(rows: any[]): CandidateLeg[] {
       ev_pct: ev,
       score,
       team: team || null,
+      opponent: null,
       player_name: null,
     } satisfies CandidateLeg;
   });
@@ -654,13 +712,14 @@ function mapPropCandidates(rows: any[]): CandidateLeg[] {
       ev_pct: ev,
       score,
       team: team || null,
+      opponent: opp || null,
       player_name: player,
     } satisfies CandidateLeg;
   });
 }
 
 /* =========================================
-   Parlay Builder (WITH NOT-ALLOWED RULES)
+   Parlay Builder (Correlation-aware + diversity)
 ========================================= */
 
 function buildParlays(
@@ -671,19 +730,21 @@ function buildParlays(
     allowSamePlayer: boolean;
     maxResults: number;
     enforceBook: string | null;
+    penaltyWeight: number;
+    diversityMode: boolean;
   }
 ): ParlayResult[] {
   const pool = (opts.enforceBook ? candidates.filter((c) => c.book === opts.enforceBook) : candidates).slice();
   if (pool.length < legsCount) return [];
 
-  // Combo generator (N choose K) with pruning via isValidCombo
+  // Generate combinations (N choose K) on top pool
   const combos: CandidateLeg[][] = [];
   const idx: number[] = Array.from({ length: legsCount }, (_, i) => i);
   const n = pool.length;
 
   const pushCombo = () => {
     const legs = idx.map((i) => pool[i]);
-    if (!isValidCombo(legs, opts)) return;
+    if (!isValidComboStrong(legs, opts)) return;
     combos.push(legs);
   };
 
@@ -699,18 +760,22 @@ function buildParlays(
 
     pushCombo();
 
-    // Safety cutoff
-    if (combos.length > 4500) break;
+    // keep UI safe
+    if (combos.length > 7000) break;
   }
 
-  const scored: ParlayResult[] = combos
+  const scored = combos
     .map((legs) => {
       const decimals = legs.map((l) => americanToDecimal(l.american_odds!));
       const pLegs = legs.map((l) => l.p!);
 
       const parlayDecimal = decimals.reduce((a, b) => a * b, 1);
-      const pWin = pLegs.reduce((a, b) => a * b, 1);
-      const evPct = parlayEvPct(pWin, parlayDecimal);
+      const pWinInd = pLegs.reduce((a, b) => a * b, 1);
+
+      const evPctInd = parlayEvPct(pWinInd, parlayDecimal);
+
+      const corrPenalty = correlationPenalty(legs);
+      const rank = evPctInd - corrPenalty * (Number.isFinite(opts.penaltyWeight) ? opts.penaltyWeight : 0);
 
       const commenceMin = earliestCommence(legs.map((l) => l.commence_time ?? null));
       const book = legs[0]?.book ?? "—";
@@ -723,174 +788,275 @@ function buildParlays(
         legsCount: legs.length,
         parlay_decimal: parlayDecimal,
         parlay_american: parlayAmerican,
-        p_win: pWin,
-        ev_pct: evPct,
+        p_win: pWinInd,
+        ev_pct: evPctInd,
         commence_time_min: commenceMin,
+        corr_penalty: corrPenalty,
+        rank_score: rank,
       } satisfies ParlayResult;
     })
-    .sort((a, b) => b.ev_pct - a.ev_pct);
+    .sort((a, b) => b.rank_score - a.rank_score);
 
-  // Variety filter
-  const out: ParlayResult[] = [];
-  const seenFirst = new Set<string>();
-  for (const p of scored) {
-    const key = p.legs[0]?.id ?? p.id;
-    if (seenFirst.has(key)) continue;
-    out.push(p);
-    seenFirst.add(key);
-    if (out.length >= opts.maxResults) break;
-  }
+  // Output selection
+  if (!opts.diversityMode) return scored.slice(0, opts.maxResults);
 
-  return out;
+  return selectDiverse(scored, opts.maxResults);
 }
 
-function isValidCombo(legs: CandidateLeg[], opts: { allowSameGame: boolean; allowSamePlayer: boolean }) {
-  // 1) Default: only 1 leg per event unless allowSameGame
+function selectDiverse(scored: ParlayResult[], maxResults: number) {
+  // Greedy “variety” picker:
+  // - prefer unique anchor leg
+  // - avoid identical event sets
+  // - avoid repeating same player too much
+  const out: ParlayResult[] = [];
+  const seenAnchors = new Set<string>();
+  const seenEventSets = new Set<string>();
+  const playerCounts: Record<string, number> = {};
+
+  for (const p of scored) {
+    const anchor = p.legs[0]?.id ?? p.id;
+    const eventKey = p.legs
+      .map((l) => l.event_id)
+      .sort()
+      .join("|");
+
+    if (seenAnchors.has(anchor)) continue;
+    if (seenEventSets.has(eventKey)) continue;
+
+    // soft player repetition limiter (doesn’t block, but avoids spam)
+    const players = p.legs.map((l) => normalizePlayerKey(l.player_name)).filter(Boolean) as string[];
+    const tooMany = players.some((pl) => (playerCounts[pl] ?? 0) >= 2);
+    if (tooMany) continue;
+
+    out.push(p);
+    seenAnchors.add(anchor);
+    seenEventSets.add(eventKey);
+    for (const pl of players) playerCounts[pl] = (playerCounts[pl] ?? 0) + 1;
+
+    if (out.length >= maxResults) break;
+  }
+
+  // fallback if the diversity filter was too strict
+  if (out.length < maxResults) {
+    for (const p of scored) {
+      if (out.length >= maxResults) break;
+      if (out.some((x) => x.id === p.id)) continue;
+      out.push(p);
+    }
+  }
+
+  return out.slice(0, maxResults);
+}
+
+/* =========================================
+   Validity + Correlation
+========================================= */
+
+function isValidComboStrong(
+  legs: CandidateLeg[],
+  opts: { allowSameGame: boolean; allowSamePlayer: boolean }
+) {
+  // Basic sanity
+  if (legs.some((l) => l.p == null || l.american_odds == null)) return false;
+
+  // 1) Event stacking rule
   if (!opts.allowSameGame) {
     const uniqEvents = new Set(legs.map((l) => l.event_id));
     if (uniqEvents.size !== legs.length) return false;
   }
 
-  // 2) Same-player restriction (props) — many books block this outright
+  // 2) Same-player props rule
   if (!opts.allowSamePlayer) {
     const players = legs
       .map((l) => normalizePlayerKey(l.player_name))
       .filter(Boolean) as string[];
-    const uniq = new Set(players);
-    if (uniq.size !== players.length) return false;
+    if (new Set(players).size !== players.length) return false;
   }
 
-  // 3) No duplicates / near-duplicates (same event + market + side + line)
-  //    Helps when the same play appears from different sources or mapping differences.
-  const seenExact = new Set<string>();
+  // 3) No “same semantic play” duplicates (prevents near-identical legs)
+  const seen = new Set<string>();
   for (const l of legs) {
-    const key = legKey(l);
-    if (seenExact.has(key)) return false;
-    seenExact.add(key);
+    const k = semanticLegKey(l);
+    if (seen.has(k)) return false;
+    seen.add(k);
   }
 
-  // 4) No contradictions inside same event:
-  //    - Over vs Under same line same market
-  //    - ML both sides, Spread both sides, Total both sides, etc.
-  //    - Same player/market/line but opposite side (even if allowSamePlayer=true)
+  // 4) Market bucket uniqueness (prevents “same type” parlays)
+  // This is the single biggest fix for “just combining the same plays”.
+  const buckets = legs.map((l) => marketBucket(l));
+  if (new Set(buckets).size !== buckets.length) return false;
+
+  // 5) Contradiction checks (only relevant when allowSameGame=true)
   const byEvent = groupBy(legs, (l) => l.event_id);
-  for (const [eventId, group] of Object.entries(byEvent)) {
+  for (const group of Object.values(byEvent)) {
     if (group.length <= 1) continue;
 
-    // Check pairwise contradictions within the event group
+    // cap same-event stacking to 2 for safety
+    if (group.length > 2) return false;
+
     for (let i = 0; i < group.length; i++) {
       for (let j = i + 1; j < group.length; j++) {
         if (areContradictory(group[i], group[j])) return false;
       }
     }
-
-    // If allowSameGame=true, still avoid “messy stacks”:
-    // - More than 2 legs from the same event tends to be disallowed/limited on many books.
-    //   (You can remove this if you want.)
-    if (opts.allowSameGame && group.length > 2) return false;
   }
 
   return true;
 }
 
+function correlationPenalty(legs: CandidateLeg[]) {
+  // 0..1.25 (higher = more correlated)
+  let pen = 0;
+
+  // A) event overlap (still penalize even if allowed)
+  const eventCounts = countBy(legs, (l) => l.event_id);
+  for (const c of Object.values(eventCounts)) {
+    if (c > 1) pen += 0.35 * (c - 1);
+  }
+
+  // B) team overlap (team appears multiple times)
+  const teams = legs.map((l) => normalizeTeamKey(l.team)).filter(Boolean) as string[];
+  const teamCounts = countBy(teams, (t) => t);
+  for (const c of Object.values(teamCounts)) {
+    if (c > 1) pen += 0.12 * (c - 1);
+  }
+
+  // C) market bucket repetition (should be blocked, but keep as safety)
+  const buckets = legs.map((l) => marketBucket(l));
+  const bucketCounts = countBy(buckets, (b) => b);
+  for (const c of Object.values(bucketCounts)) {
+    if (c > 1) pen += 0.18 * (c - 1);
+  }
+
+  // D) same-event “high correlation pair” penalties
+  for (let i = 0; i < legs.length; i++) {
+    for (let j = i + 1; j < legs.length; j++) {
+      const a = legs[i];
+      const b = legs[j];
+      if (a.event_id !== b.event_id) continue;
+
+      const ba = marketBucket(a);
+      const bb = marketBucket(b);
+
+      // total + prop over (points/3s/etc) is high correlation
+      if ((ba === "game_total" && bb.startsWith("prop_")) || (bb === "game_total" && ba.startsWith("prop_"))) {
+        const propLeg = ba.startsWith("prop_") ? a : b;
+        const side = normalizeSide(propLeg.side);
+        if (side === "over") pen += 0.22;
+      }
+
+      // spread/ML + player points over (often correlated)
+      const spreadOrMlA = ba === "game_spread" || ba === "game_ml";
+      const spreadOrMlB = bb === "game_spread" || bb === "game_ml";
+      const pointsA = ba === "prop_points";
+      const pointsB = bb === "prop_points";
+
+      if ((spreadOrMlA && pointsB) || (spreadOrMlB && pointsA)) {
+        const pointsLeg = pointsA ? a : b;
+        if (normalizeSide(pointsLeg.side) === "over") pen += 0.15;
+      }
+
+      // same team + overs (milder penalty)
+      const ta = normalizeTeamKey(a.team);
+      const tb = normalizeTeamKey(b.team);
+      if (ta && tb && ta === tb && normalizeSide(a.side) === "over" && normalizeSide(b.side) === "over") {
+        pen += 0.08;
+      }
+    }
+  }
+
+  return Math.min(1.25, pen);
+}
+
+function marketBucket(l: CandidateLeg) {
+  const m = normalizeMarket(l.market);
+
+  // game lines buckets
+  if (m === "moneyline") return "game_ml";
+  if (m === "spread") return "game_spread";
+  if (m === "total") return "game_total";
+
+  // props buckets by stat (keeps variety)
+  const raw = (l.market ?? "").toLowerCase();
+  if (raw.includes("points")) return "prop_points";
+  if (raw.includes("rebounds")) return "prop_rebounds";
+  if (raw.includes("assists")) return "prop_assists";
+  if (raw.includes("threes") || raw.includes("3")) return "prop_threes";
+  return `prop_${m || "other"}`;
+}
+
+function semanticLegKey(l: CandidateLeg) {
+  const bucket = marketBucket(l);
+  const side = normalizeSide(l.side) ?? normalizeSideRaw(l.side);
+  const line = l.line == null ? "null" : String(roundLine(l.line));
+  const player = normalizePlayerKey(l.player_name) ?? "";
+  const team = normalizeTeamKey(l.team) ?? "";
+  return `${l.event_id}|${bucket}|${side}|${line}|${player}|${team}`;
+}
+
 function areContradictory(a: CandidateLeg, b: CandidateLeg) {
-  // Same event, same market, same line, opposite side => contradiction
-  const sameEvent = a.event_id === b.event_id;
-  if (!sameEvent) return false;
+  // Only meaningful within same event
+  if (a.event_id !== b.event_id) return false;
 
-  const ma = normalizeMarket(a.market);
-  const mb = normalizeMarket(b.market);
-  if (ma !== mb) return false;
+  const ba = marketBucket(a);
+  const bb = marketBucket(b);
 
-  const la = a.line ?? null;
-  const lb = b.line ?? null;
-  const sameLine =
-    la == null || lb == null ? false : Math.abs(la - lb) < 1e-9;
+  // Total over + under at same line is contradictory
+  if (ba === "game_total" && bb === "game_total") {
+    const sa = normalizeSide(a.side);
+    const sb = normalizeSide(b.side);
+    if (sa && sb && sa !== sb && sameLine(a.line, b.line)) return true;
+  }
 
-  // Prop contradiction: same player + market + same line + opposite side
-  const pa = normalizePlayerKey(a.player_name);
-  const pb = normalizePlayerKey(b.player_name);
-  const samePlayer = !!pa && pa === pb;
+  // Prop over + under at same line is contradictory (same player/market)
+  if (ba.startsWith("prop_") && bb.startsWith("prop_")) {
+    const pa = normalizePlayerKey(a.player_name);
+    const pb = normalizePlayerKey(b.player_name);
+    if (pa && pb && pa === pb && marketBucket(a) === marketBucket(b)) {
+      const sa = normalizeSide(a.side);
+      const sb = normalizeSide(b.side);
+      if (sa && sb && sa !== sb && sameLine(a.line, b.line)) return true;
+    }
+  }
 
-  const sa = normalizeSide(a.side);
-  const sb = normalizeSide(b.side);
-
-  // totals: over vs under same line
-  if (isTotalMarket(ma) && sameLine && sa && sb && sa !== sb) return true;
-
-  // spreads: if line exists and sides are opposites on same team can conflict;
-  // we can treat same market+line+opposite side as contradiction.
-  if (isSpreadMarket(ma) && sameLine && sa && sb && sa !== sb) return true;
-
-  // moneyline: "home"/"away" (or team names) are sides; if opposite, contradiction.
-  if (isMoneylineMarket(ma) && sa && sb && sa !== sb) return true;
-
-  // props: over/under same line same player
-  if (samePlayer && sameLine && sa && sb && sa !== sb) return true;
+  // Spread: taking both sides of same spread line is contradictory
+  if (ba === "game_spread" && bb === "game_spread") {
+    const ta = normalizeTeamKey(a.team);
+    const tb = normalizeTeamKey(b.team);
+    if (ta && tb && ta !== tb && sameLine(a.line, b.line)) {
+      // team A +3.5 vs team B -3.5 could show up; we treat as contradictory
+      const la = a.line;
+      const lb = b.line;
+      if (la != null && lb != null && Math.abs(la + lb) < 0.0001) return true;
+    }
+  }
 
   return false;
 }
 
-function legKey(l: CandidateLeg) {
-  const m = normalizeMarket(l.market);
-  const s = normalizeSide(l.side) ?? normalizeSideRaw(l.side);
-  const line = l.line == null ? "null" : String(roundLine(l.line));
-  const p = normalizePlayerKey(l.player_name) ?? "";
-  return `${l.event_id}|${m}|${s}|${line}|${p}`;
-}
+/* =========================================
+   Dedupe candidates
+========================================= */
 
-function normalizePlayerKey(name?: string | null) {
-  const t = (name ?? "").trim().toLowerCase();
-  if (!t) return null;
-  return t.replace(/\s+/g, " ");
-}
+function dedupeBySemanticKey(legs: CandidateLeg[]) {
+  const bestByKey = new Map<string, CandidateLeg>();
 
-function normalizeMarket(market: string) {
-  const m = (market ?? "").trim().toLowerCase();
-  if (m === "h2h" || m.includes("moneyline")) return "moneyline";
-  if (m.includes("spread")) return "spread";
-  if (m.includes("total")) return "total";
-  // player props bucket by raw market string
-  return m;
-}
+  for (const l of legs) {
+    const key = semanticLegKey(l);
 
-function normalizeSide(side: string) {
-  const s = (side ?? "").trim().toLowerCase();
-  if (s === "over") return "over";
-  if (s === "under") return "under";
-  // common moneyline sides
-  if (s === "home") return "home";
-  if (s === "away") return "away";
-  return null;
-}
+    const prev = bestByKey.get(key);
+    if (!prev) {
+      bestByKey.set(key, l);
+      continue;
+    }
 
-function normalizeSideRaw(side: string) {
-  return (side ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-}
+    // keep higher score (or EV if score missing)
+    const a = l.score ?? l.ev_pct ?? 0;
+    const b = prev.score ?? prev.ev_pct ?? 0;
+    if (a > b) bestByKey.set(key, l);
+  }
 
-function isTotalMarket(m: string) {
-  return m === "total" || m.includes("total") || m.includes("totals");
-}
-
-function isSpreadMarket(m: string) {
-  return m === "spread" || m.includes("spread") || m.includes("spreads");
-}
-
-function isMoneylineMarket(m: string) {
-  return m === "moneyline" || m.includes("moneyline") || m === "h2h";
-}
-
-function roundLine(x: number) {
-  // keep half/quarter lines stable
-  return Math.round(x * 1000) / 1000;
-}
-
-function groupBy<T>(arr: T[], keyFn: (t: T) => string) {
-  return arr.reduce((acc, item) => {
-    const k = keyFn(item);
-    (acc[k] ||= []).push(item);
-    return acc;
-  }, {} as Record<string, T[]>);
+  return Array.from(bestByKey.values());
 }
 
 /* =========================================
@@ -911,6 +1077,7 @@ function decimalToAmerican(decimal: number): number | null {
 }
 
 function parlayEvPct(pWin: number, decimal: number) {
+  // EV (per $1 stake): p*(decimal-1) - (1-p)
   const ev = pWin * (decimal - 1) - (1 - pWin);
   return ev * 100;
 }
@@ -930,8 +1097,24 @@ function rankScore(evPct: number | null, second: number | null) {
   return ev * 10 + s;
 }
 
+function countBy<T>(arr: T[], keyFn: (t: T) => string) {
+  return arr.reduce((acc, x) => {
+    const k = keyFn(x);
+    acc[k] = (acc[k] ?? 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+}
+
+function groupBy<T>(arr: T[], keyFn: (t: T) => string) {
+  return arr.reduce((acc, x) => {
+    const k = keyFn(x);
+    (acc[k] ||= []).push(x);
+    return acc;
+  }, {} as Record<string, T[]>);
+}
+
 /* =========================================
-   Formatting + misc helpers
+   Formatting helpers
 ========================================= */
 
 function safeNum(v: any): number | null {
@@ -987,6 +1170,53 @@ function sideLabel(side: string) {
   return side;
 }
 
+function normalizeSide(side?: string | null) {
+  const s = (side ?? "").toLowerCase().trim();
+  if (!s) return null;
+  if (s === "over") return "over";
+  if (s === "under") return "under";
+  if (s === "home") return "home";
+  if (s === "away") return "away";
+  if (s === "yes") return "yes";
+  if (s === "no") return "no";
+  return null;
+}
+
+function normalizeSideRaw(side?: string | null) {
+  return (side ?? "").trim().toLowerCase();
+}
+
+function normalizeMarket(market?: string | null) {
+  const m = (market ?? "").toLowerCase().trim();
+  if (!m) return "";
+  if (m === "h2h" || m.includes("moneyline")) return "moneyline";
+  if (m.includes("spreads") || m.includes("spread")) return "spread";
+  if (m.includes("totals") || m.includes("total")) return "total";
+  return m;
+}
+
+function normalizePlayerKey(name?: string | null) {
+  const n = (name ?? "").trim().toLowerCase();
+  if (!n) return null;
+  return n.replace(/\s+/g, " ");
+}
+
+function normalizeTeamKey(team?: string | null) {
+  const t = (team ?? "").trim().toLowerCase();
+  if (!t) return null;
+  return t.replace(/\s+/g, " ");
+}
+
+function roundLine(x: number) {
+  // reduce float noise (e.g., 24.499999)
+  return Math.round(x * 4) / 4;
+}
+
+function sameLine(a: number | null, b: number | null) {
+  if (a == null || b == null) return false;
+  return Math.abs(roundLine(a) - roundLine(b)) < 0.0001;
+}
+
 function propMarketLabel(market: string) {
   const m = (market ?? "").toLowerCase();
   if (m.includes("points")) return "Points";
@@ -1009,5 +1239,6 @@ function marketLabel(market: string, side: string, team: string, line: number | 
     const ln = line != null ? line : "";
     return `${s === "over" ? "Over" : s === "under" ? "Under" : side} ${ln}`.trim();
   }
+
   return `${market} ${side}`.trim();
 }
