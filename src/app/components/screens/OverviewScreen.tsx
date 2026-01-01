@@ -1,10 +1,11 @@
-// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Mobile Top Plays compact + Prism black/gold/slate)
+// screens/Overview/OverviewScreen.tsx — FULL REWRITE (Mobile Top Plays compact + Prism black/gold/slate + Top Plays extra validation)
 // -----------------------------------------------------------------------------------------------------
 // ✅ FIX: Top Play cards are significantly SMALLER on mobile (tighter padding, smaller header, compact tiles)
 // ✅ Mobile: tiles use a 4-column row (tiny squares) instead of tall 2x2 grid
 // ✅ Mobile: title/subtitle fonts reduced + spacing tightened + commence moved into header line (less height)
 // ✅ Keeps: square tiles (aspect-square), vertical centering, book logo only, team abbreviations, wrap text,
 //          realtime refresh, dedupe, score>=50 filter, book vs fair odds, subtle EV bar
+// ✅ NEW: Top Plays require extra validation (guards against unrealistic EV / stale / missing confirmation)
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -72,8 +73,13 @@ type EvPlayRow = {
 
   ev_pct?: number | null;
   ev?: number | null;
+
   confidence_score?: number | null;
   score?: number | null;
+
+  // optional (if your ev_plays table includes these in some sports)
+  has_sharp?: boolean | null;
+  sharp_source?: string | null;
 };
 
 type PropEvRow = {
@@ -103,6 +109,12 @@ type PropEvRow = {
   ev_pct?: number | null;
   ev?: number | null;
   score?: number | null;
+
+  // from nbaPlayerPropEvBuilder output
+  has_sharp?: boolean | null;
+  sharp_source?: "pinnacle" | "betonlineag" | "market_avg" | "model_only" | string | null;
+  p_sharp?: number | null;
+  p_market_avg?: number | null;
 };
 
 /* =========================================================
@@ -116,6 +128,17 @@ const SLATE = "rgba(87,90,98,0.26)";
 
 type PlayTab = "all" | "game" | "props";
 const TOP_SCORE_MIN = 50;
+
+/**
+ * Top Plays validation (guards)
+ * - prevents “too good to be true” items from auto-surfacing
+ * - still allows normal list/table pages to show everything elsewhere
+ */
+const TOP_EV_SOFT_CAP = 12; // allowed without strict confirmation
+const TOP_EV_HARD_CAP = 20; // anything above is rejected for Top Plays
+const TOP_ODDS_ABS_MAX = 200; // reject very extreme prices in Top Plays
+const TOP_MIN_SCORE_GAME = 60; // extra gating for games shown in Top Plays
+const TOP_MIN_SCORE_PROP = 60; // extra gating for props shown in Top Plays
 
 /* =========================================================
    HELPERS
@@ -274,6 +297,72 @@ function evBarStyle(ev: number | null): React.CSSProperties {
       : "rgba(255,255,255,0.10)";
 
   return { width: `${w}%`, background: color };
+}
+
+function oddsInTopRange(odds: number | null) {
+  if (odds == null) return false;
+  if (!Number.isFinite(odds) || odds === 0) return false;
+  return Math.abs(odds) <= TOP_ODDS_ABS_MAX;
+}
+
+function isSharpConfirmedProp(r: PropEvRow) {
+  const src = (r.sharp_source ?? "").toLowerCase();
+  if (r.has_sharp === true) return true;
+  // accept explicit sharp sources even if has_sharp isn't present (schema drift)
+  if (src === "pinnacle" || src === "betonlineag") return true;
+  return false;
+}
+
+/**
+ * Extra validation for TOP PLAYS:
+ * - Require score floor (stricter than general TOP_SCORE_MIN)
+ * - Require EV within reasonable caps
+ * - Require reasonable odds range
+ * - Require fair odds present
+ * - Require sharp confirmation when EV is “too good”
+ */
+function passesTopPlayValidation_Game(r: EvPlayRow) {
+  const score = getGameScore(r);
+  const ev = getEvPct(r);
+  const odds = getGameOdds(r);
+  const fair = getGameFairOdds(r);
+
+  if (score == null || score < TOP_MIN_SCORE_GAME) return false;
+  if (ev == null || ev <= 0) return false;
+  if (ev > TOP_EV_HARD_CAP) return false;
+  if (!oddsInTopRange(odds)) return false;
+  if (fair == null || !Number.isFinite(fair) || fair === 0) return false;
+
+  // If EV is “high”, demand either (a) sharp flag, or (b) very high score as a proxy
+  const hasSharp = r.has_sharp === true || ["pinnacle", "betonlineag"].includes((r.sharp_source ?? "").toLowerCase());
+  if (ev > TOP_EV_SOFT_CAP && !hasSharp) {
+    // allow only if model is screaming (rare)
+    if (score < 85) return false;
+  }
+
+  return true;
+}
+
+function passesTopPlayValidation_Prop(r: PropEvRow) {
+  const score = getPropScore(r);
+  const ev = getEvPct(r);
+  const odds = getPropOdds(r);
+  const fair = getPropFairOdds(r);
+
+  if (score == null || score < TOP_MIN_SCORE_PROP) return false;
+  if (ev == null || ev <= 0) return false;
+  if (ev > TOP_EV_HARD_CAP) return false;
+  if (!oddsInTopRange(odds)) return false;
+  if (fair == null || !Number.isFinite(fair) || fair === 0) return false;
+
+  // Props: require sharp confirmation once EV is beyond soft cap
+  if (ev > TOP_EV_SOFT_CAP && !isSharpConfirmedProp(r)) return false;
+
+  // Also block any explicit model-only refs from surfacing in Top Plays (even if score is high)
+  const src = (r.sharp_source ?? "").toLowerCase();
+  if (src === "model_only") return false;
+
+  return true;
 }
 
 /* =========================================================
@@ -578,9 +667,7 @@ function MiniStat({
     <div
       className={[
         "rounded-lg border overflow-hidden text-center aspect-square",
-        // tighter on mobile
         "p-1.5",
-        // slightly roomier on larger screens
         "sm:p-2.5",
       ].join(" ")}
       style={{
@@ -849,13 +936,13 @@ export function OverviewScreen() {
         .order("date", { ascending: false })
         .limit(5);
 
-      const evQ = supabase.from("ev_plays").select("*").order("created_at", { ascending: false }).limit(250);
+      const evQ = supabase.from("ev_plays").select("*").order("created_at", { ascending: false }).limit(350);
 
       const propsQ = supabase
         .from("player_prop_ev_latest")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(250);
+        .limit(350);
 
       const teamMapQ = supabase.from("team_map").select("canonical,abbreviation,Abbreviation").limit(5000);
 
@@ -964,6 +1051,7 @@ export function OverviewScreen() {
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(r);
     }
+
     const unique = Array.from(map.values()).map(pickBestGame);
 
     unique.sort((a, b) => {
@@ -975,7 +1063,11 @@ export function OverviewScreen() {
       return eb - ea;
     });
 
-    return unique.filter((r) => (getGameScore(r) ?? -999) >= TOP_SCORE_MIN).slice(0, 6);
+    // baseline filter + extra validation only for Top Plays
+    return unique
+      .filter((r) => (getGameScore(r) ?? -999) >= TOP_SCORE_MIN)
+      .filter(passesTopPlayValidation_Game)
+      .slice(0, 6);
   }, [evFiltered]);
 
   const topProps = useMemo(() => {
@@ -985,6 +1077,7 @@ export function OverviewScreen() {
       if (!map.has(k)) map.set(k, []);
       map.get(k)!.push(r);
     }
+
     const unique = Array.from(map.values()).map(pickBestProp);
 
     unique.sort((a, b) => {
@@ -996,7 +1089,11 @@ export function OverviewScreen() {
       return eb - ea;
     });
 
-    return unique.filter((r) => (getPropScore(r) ?? -999) >= TOP_SCORE_MIN).slice(0, 6);
+    // baseline filter + extra validation only for Top Plays
+    return unique
+      .filter((r) => (getPropScore(r) ?? -999) >= TOP_SCORE_MIN)
+      .filter(passesTopPlayValidation_Prop)
+      .slice(0, 6);
   }, [propsFiltered]);
 
   const topAll = useMemo(() => {
@@ -1006,7 +1103,7 @@ export function OverviewScreen() {
     ];
 
     merged.sort((a, b) => {
-      const A = a.kind === "game" ? getGameScore(a.row) : getPropScore(a.row as any);
+      const A = a.kind === "game" ? getGameScore(a.row as any) : getPropScore(a.row as any);
       const B = b.kind === "game" ? getGameScore(b.row as any) : getPropScore(b.row as any);
       if ((B ?? -999) !== (A ?? -999)) return (B ?? -999) - (A ?? -999);
       const ea = getEvPct(a.row as any) ?? -999;
@@ -1083,6 +1180,10 @@ export function OverviewScreen() {
 
               <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl">
                 Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
+                <span className="text-[#7b7b7b]"> • </span>
+                <span className="text-[#d0d0d0]">
+                  Top Plays are extra-validated (caps extreme EV + requires confirmation).
+                </span>
               </p>
             </div>
 
@@ -1128,7 +1229,9 @@ export function OverviewScreen() {
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3 sm:mb-4">
           <div>
             <h3 className="text-base text-white">Top Plays</h3>
-            <div className="text-xs text-[#b0b0b0]">One card per play (best book shown).</div>
+            <div className="text-xs text-[#b0b0b0]">
+              One card per play (best book shown). Extra validation applied.
+            </div>
           </div>
 
           <div className="w-full sm:w-auto">
@@ -1153,7 +1256,7 @@ export function OverviewScreen() {
                 color: "rgba(255,255,255,0.78)",
               }}
             >
-              No plays found for this filter.
+              No plays found for this filter (or they failed Top Plays validation).
             </div>
           ) : (
             playsToRender.map((p, idx) => {
@@ -1215,4 +1318,3 @@ export function OverviewScreen() {
     </div>
   );
 }
-
