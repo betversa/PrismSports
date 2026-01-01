@@ -1,14 +1,15 @@
-// src/app/screens/PropsScreen.tsx — FULL REWRITE (Fix team_abbr + CSV-accurate markets/books + Player pics)
+// src/app/screens/PropsScreen.tsx — FULL REWRITE (Sticky header fixed: sticks to TOP of table container)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Data: public.player_prop_ev_latest (CSV-verified columns)
-// ✅ Fix: NO player_prop_ev_latest.team_abbr — derive via team_map (canonical -> Abbreviation or Abbreviation2)
-// ✅ Markets used (your request): Points, Rebounds, Assists, 3PM
-//    - DB values are lowercase: points/rebounds/assists/threes
+// ✅ Fix: NO player_prop_ev_latest.team_abbr — derive via team_map (canonical -> Abbreviation OR Abbreviation2)
+// ✅ Markets (your request): Points, Rebounds, Assists, 3PM
+//    - DB values: points/rebounds/assists/threes
 // ✅ Aggregated: 1 row per (event_id, player_name, market, side, line)
 // ✅ DK/FD/MGM strip (odds + EV), highlights best book (highest EV%)
-// ✅ Player pictures: picture_url with clean fallback
-// ✅ Bet $: bankroll * (kelly_factor * best_kelly_fraction) with safety cap
-// ✅ Sticky market pills + sticky header
+// ✅ Player pictures via picture_url (+ initials fallback)
+// ✅ Bet $: bankroll * clamp(kelly_factor * best_kelly_fraction, 0..0.25)
+// ✅ Sticky pills stay visible (within hero)
+// ✅ ✅ Sticky table header is at TOP OF TABLE (not mid screen)
 // ✅ ONLY Pick cell opens modal
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -50,14 +51,14 @@ type PropQuoteDB = {
   side: "Over" | "Under";
   line: number;
 
-  book: SoftBook; // CSV: fanduel/draftkings/betmgm
+  book: SoftBook;
   odds: number;
 
   mu?: number | null;
   sigma?: number | null;
 
   quantum_fair_odds?: number | null;
-  ev_pct: number; // percent (e.g. 3.05)
+  ev_pct: number;
   kelly_fraction?: number | null;
   score?: number | null;
 
@@ -90,10 +91,8 @@ type AggRow = {
   mu?: number | null;
   sigma?: number | null;
 
-  // book strip
   quotes: Record<SoftBook, { odds: number | null; ev_pct: number | null }>;
 
-  // best (highest EV among DK/FD/MGM)
   best_book: SoftBook;
   best_odds: number;
   best_ev_pct: number;
@@ -109,6 +108,8 @@ type AggRow = {
 const UI_MARKETS: UiMarket[] = ["Points", "Rebounds", "Assists", "3PM"];
 const DB_MARKETS: DbMarket[] = ["points", "rebounds", "assists", "threes"];
 
+const SOFT_BOOKS: SoftBook[] = ["draftkings", "fanduel", "betmgm"];
+
 const BOOKS: { key: BookKey; label: string }[] = [
   { key: "any", label: "Any" },
   { key: "draftkings", label: "DK" },
@@ -116,13 +117,11 @@ const BOOKS: { key: BookKey; label: string }[] = [
   { key: "betmgm", label: "MGM" },
 ];
 
-const SOFT_BOOKS: SoftBook[] = ["draftkings", "fanduel", "betmgm"];
-
 function dbMarketToUi(m: DbMarket): UiMarket {
   if (m === "points") return "Points";
   if (m === "rebounds") return "Rebounds";
   if (m === "assists") return "Assists";
-  return "3PM"; // threes
+  return "3PM";
 }
 
 function uiMarketToDb(m: UiMarket): DbMarket {
@@ -208,10 +207,10 @@ export function PropsScreen() {
                 "sharp_source",
               ].join(",")
             )
-            .in("market", DB_MARKETS) // ✅ only your four markets
-            .in("book", SOFT_BOOKS) // ✅ only DK/FD/MGM (matches your table)
+            .in("market", DB_MARKETS)
+            .in("book", SOFT_BOOKS)
             .order("ev_pct", { ascending: false })
-            .limit(2000),
+            .limit(2500),
         ]);
 
         if (sErr) throw sErr;
@@ -219,7 +218,7 @@ export function PropsScreen() {
 
         const quotes = ((p as any) ?? []) as PropQuoteDB[];
 
-        // --- Load abbreviations from team_map by canonical (team/opponent) ---
+        // ---- Build canonical set (team/opponent) then pull abbreviations from team_map ----
         const canonSet = new Set<string>();
         for (const q of quotes) {
           const t = normCanon(q.team);
@@ -234,6 +233,7 @@ export function PropsScreen() {
         const CHUNK = 200;
         for (let i = 0; i < canonList.length; i += CHUNK) {
           const chunk = canonList.slice(i, i + CHUNK);
+
           const { data: tm, error: tmErr } = await supabase
             .from("team_map")
             .select("canonical, Abbreviation, Abbreviation2")
@@ -248,12 +248,10 @@ export function PropsScreen() {
           }
         }
 
-        // --- Aggregate 1 row per (event_id, player_name, market, side, line) ---
+        // ---- Aggregate 1 row per play ----
         const map = new Map<string, AggRow>();
 
         for (const q of quotes) {
-          const uiMarket = dbMarketToUi(q.market);
-
           const key = [
             q.event_id,
             q.player_name,
@@ -271,6 +269,7 @@ export function PropsScreen() {
           if (!map.has(key)) {
             map.set(key, {
               key,
+
               sport_key: q.sport_key ?? null,
               event_id: q.event_id,
               commence_time: q.commence_time ?? null,
@@ -285,7 +284,7 @@ export function PropsScreen() {
               picture_url: q.picture_url ?? null,
               fp_id: q.fp_id ?? null,
 
-              market: uiMarket,
+              market: dbMarketToUi(q.market),
               db_market: q.market,
               side: q.side,
               line: q.line,
@@ -314,17 +313,12 @@ export function PropsScreen() {
 
           const row = map.get(key)!;
 
-          // prefer non-null picture_url
           if (!row.picture_url && q.picture_url) row.picture_url = q.picture_url;
-
-          // update abbreviations if we learn them
           if (!row.team_abbr && teamAbbr) row.team_abbr = teamAbbr;
           if (!row.opp_abbr && oppAbbr) row.opp_abbr = oppAbbr;
 
-          // fill quote
           row.quotes[q.book] = { odds: q.odds, ev_pct: q.ev_pct ?? null };
 
-          // best is max EV%
           if ((q.ev_pct ?? -999) > (row.best_ev_pct ?? -999)) {
             row.best_ev_pct = q.ev_pct ?? 0;
             row.best_book = q.book;
@@ -340,6 +334,7 @@ export function PropsScreen() {
         );
 
         if (!mounted) return;
+
         setSettings((s as any) ?? null);
         setRows(aggregated);
       } catch (e: any) {
@@ -360,7 +355,6 @@ export function PropsScreen() {
   const filtered = useMemo(() => {
     const dbMarket = uiMarketToDb(selectedMarket);
     const byMarket = rows.filter((r) => r.db_market === dbMarket);
-
     if (selectedBook === "any") return byMarket;
     return byMarket.filter((r) => r.best_book === selectedBook);
   }, [rows, selectedMarket, selectedBook]);
@@ -368,11 +362,10 @@ export function PropsScreen() {
   const bankroll = settings?.bankroll ?? 300;
   const kellyFactor = settings?.kelly_factor ?? 0.25;
 
-  const summary = useMemo(() => {
-    const playable = filtered.filter((r) => (r.best_kelly_fraction ?? 0) > 0).length;
-    const totalUnitsProxy = filtered.reduce((sum, r) => sum + clamp((r.best_kelly_fraction ?? 0) * kellyFactor, 0, 0.25), 0);
-    return { playable, totalUnitsProxy };
-  }, [filtered, kellyFactor]);
+  const playable = useMemo(
+    () => filtered.filter((r) => (r.best_kelly_fraction ?? 0) > 0).length,
+    [filtered]
+  );
 
   return (
     <div className="space-y-4">
@@ -386,7 +379,7 @@ export function PropsScreen() {
                 <h2 className="text-white text-lg sm:text-xl leading-tight">Player Props</h2>
               </div>
               <p className="text-xs text-[#808080] mt-1">
-                {loading ? "Loading…" : `${filtered.length} props · ${summary.playable} playable`}
+                {loading ? "Loading…" : `${filtered.length} props · ${playable} playable`}
               </p>
             </div>
 
@@ -410,10 +403,9 @@ export function PropsScreen() {
           ) : null}
         </div>
 
-        {/* STICKY FILTER BAR */}
-        <div className="sticky top-0 z-30 border-t border-[#1f1f1f] bg-[#060606]/90 backdrop-blur supports-[backdrop-filter]:bg-[#060606]/70">
+        {/* FILTER BAR (sticky inside hero only) */}
+        <div className="border-t border-[#1f1f1f] bg-[#060606]/90 backdrop-blur supports-[backdrop-filter]:bg-[#060606]/70">
           <div className="p-3 sm:p-4 flex flex-col gap-3">
-            {/* Market pills */}
             <div className="flex items-center gap-2 flex-wrap">
               {UI_MARKETS.map((m) => (
                 <button
@@ -431,7 +423,6 @@ export function PropsScreen() {
               ))}
             </div>
 
-            {/* Book pills */}
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] text-[#808080] mr-1">Book</span>
               {BOOKS.map((b) => (
@@ -453,13 +444,21 @@ export function PropsScreen() {
         </div>
       </div>
 
-      {/* TABLE */}
+      {/* TABLE PANEL */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead className="sticky top-[124px] sm:top-[132px] z-20">
+        {/* ✅ THIS is the key: table gets its own scroll container */}
+        <div
+          className="relative overflow-auto"
+          style={{
+            // desktop: table feels “full page” without pushing header into the middle
+            maxHeight: "calc(100vh - 360px)",
+          }}
+        >
+          <table className="w-full text-xs min-w-[1100px]">
+            {/* ✅ Sticky header sticks to TOP OF THIS scroll container */}
+            <thead className="sticky top-0 z-30">
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">
+                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-40 min-w-[360px]">
                   Pick
                 </th>
                 <th className="text-left p-3 text-[#808080]">Team</th>
@@ -538,7 +537,6 @@ function PropRow({
       <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10">
         <button onClick={onOpen} className="w-full text-left group" title="Open details" type="button">
           <div className="flex items-start gap-3">
-            {/* Picture */}
             <div className="flex-shrink-0">
               {row.picture_url ? (
                 <img
@@ -559,7 +557,7 @@ function PropRow({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-white group-hover:text-[#d4af37] transition-colors truncate">
-                    {row.player_name} — {row.market} {row.side} {row.line}
+                    {row.player_name} — {row.market} {row.side.toLowerCase()} {row.line}
                   </div>
                   <div className="text-[10px] text-[#606060] mt-0.5 truncate">
                     {team} vs {opp}
@@ -574,7 +572,7 @@ function PropRow({
                       : "bg-red-500/10 border-red-500/20 text-red-300"
                   }`}
                 >
-                  {row.side}
+                  {row.side.toLowerCase()}
                 </span>
               </div>
             </div>
@@ -595,7 +593,7 @@ function PropRow({
 
       <td className="p-3 text-center text-[#606060]">{(row.sigma ?? 0).toFixed(1)}</td>
 
-      {/* Books strip (odds shown) */}
+      {/* Books strip */}
       <td className="p-3 text-center">
         <div className="inline-flex items-center gap-1">
           {SOFT_BOOKS.map((b) => {
@@ -719,11 +717,6 @@ function PropDetailsModal({ row, onClose }: { row: AggRow; onClose: () => void }
               />
               <MiniStat label="Sigma" value={(row.sigma ?? 0).toFixed(1)} />
               <MiniStat label="Edge" value={((row.mu ?? 0) - row.line).toFixed(1)} highlight={Math.abs((row.mu ?? 0) - row.line) > 2} />
-            </div>
-
-            <div className="text-[11px] text-[#808080] leading-relaxed">
-              (Optional next) We can add the same tabbed modal you use elsewhere: <span className="text-white">Line History</span> +{" "}
-              <span className="text-white">Hit Rate</span>.
             </div>
           </div>
 
