@@ -1,37 +1,39 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Steam filter: PIN moved, soft lagging — FIXED LINE-AWARE)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
+//
 // ✅ Filters: Play Type + Book (BOOK FILTER OPTIONS = soft books only: Any / DK / FD / MGM)
-// ✅ NEW: "Steam Only" mode (GAMES ONLY; props hidden):
-//    - Uses public.odds_snapshot_history (PIN + soft books) to find games where:
-//        1) Pinnacle moved WORSE for bettor on the bet side (steam), ON THE SAME LINE (critical fix),
-//        2) At least one soft book has NOT moved worse yet (same line), AND
-//        3) That soft book is still BETTER than Pinnacle right now (same line)
-//    - FIX: Steam keys include line; we DO NOT compare PIN odds across different lines.
-//    - FIX: Steam uses last-2 per (event, market, side, line, book).
+//
+// ✅ STEAM MODE (your corrected definition — LINE + PRICE aware; no longer crippled):
+//    Shows plays where Pinnacle is moving AGAINST the bettor (steam) in either of these ways:
+//      A) PRICE steam: Pinnacle odds moved worse on SAME LINE (e.g., -110 → -125 or +120 → +105)
+//      B) LINE steam: Pinnacle moved the LINE worse for bettor (e.g. favorite -3.5 → -4.5, Over 228.5 → 229.5)
+//
+//    AND at least one soft book is still "stale/value":
+//      - Soft is currently BETTER than Pinnacle RIGHT NOW either by:
+//          • a better LINE (spread/total) OR
+//          • same line with better PRICE (moneyline/spread/total)
+//      - Soft can be on a different line than Pinnacle (THIS IS THE FIX).
+//
+// ✅ Steam calculations use odds_snapshot_history last-2 per (event,market,side,book) — line changes included.
+// ✅ Steam key does NOT include line anymore (event+market+side), so line moves are captured correctly.
 //
 // ✅ RULES (same as Overview):
 //    - Odds gate (book price): only include offers with odds between -200 and +200
 //    - Games: positive EV only, cap EV at 15% (NO 2% min gate)
 //    - Props: EV must be 2% to 15% (inclusive), AND odds within -200..+200
-//    - Pinnacle is history-only (used in line chart if present), NOT a filter option
+//    - Pinnacle is history-only (used for steam + line chart), NOT a filter option
 //
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
 // ✅ Modal: NO scrolling required to reach Done (header/footer fixed, safe-area aware)
-// ✅ Modal: Tabs instead of scroll: "Line History" + "Hit Rate"
-// ✅ Line History: LINE CHART (DK/FD/MGM/PIN) with tooltip showing DATE + TIME (CT)
-// ✅ Hit Rate tab: FantasyPros GAME LOGS = BAR CHART (single stat bars)
-//    - Reference line for TODAY’S line (prop line)
-//    - Bars colored OVER (green) / UNDER (red)
-//    - Tooltip cursor is transparent (no shaded plot)
-// ✅ Adds Pinnacle odds to line history (when present)
-// ✅ Colors each book uniquely (DK/FD/MGM/PIN)
+// ✅ Modal: Tabs: "Line History" + "Hit Rate"
+// ✅ Line History: LINE CHART (DK/FD/MGM/PIN) — tooltip shows DATE+TIME (CT) + LINE + ODDS per book
+// ✅ Hit Rate tab: FantasyPros GAME LOGS = BAR CHART (OVER green / UNDER red), cursor transparent
 //
-// IMPORTANT: App.tsx imports as: `import { ModelScreen } from "./components/screens/ModelScreen";`
-// This file exports BOTH a named export and a default export to avoid import/export mismatch.
+// NOTE: Exports both named + default to avoid import mismatch.
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -150,6 +152,7 @@ type BookOffer = {
   odds: number;
   ev_pct: number;
   bet_fraction: number;
+  line?: number | null; // optional for display (ev_plays already has line globally; keep for steam display)
 };
 
 type AggregatedPlay = {
@@ -173,7 +176,7 @@ type AggregatedPlay = {
   quantum_prob?: number | null;
 
   // meta for history keys
-  gameMeta?: { market: GameMarketKey; side: GameSideKey; line: number | null };
+  gameMeta?: { market: GameMarketKey; side: GameSideKey };
   propMeta?: {
     player_name: string | null;
     market: string | null;
@@ -227,6 +230,8 @@ const BOOK_COL_GAME = "bookmaker";
 
 const ODDS_COL_PROPS = "odds";
 const ODDS_COL_GAME = "odds";
+
+const LINE_COL_GAME = "line";
 
 const PLAYER_COL_PROPS = "player_name";
 const MARKET_COL_PROPS = "market";
@@ -467,18 +472,113 @@ function withinPropEvRange(ev: number) {
 }
 
 /* =========================================================
-   Steam helpers (PIN moved worse, soft lagging)
+   Steam: LINE + PRICE aware helpers
 ========================================================= */
 
-// For the side you are betting, "moved worse for bettor" when American odds number decreases.
-// Examples: -110 -> -125 (decrease), +120 -> +105 (decrease)
-function movedWorse(prev: number, cur: number) {
-  return Number.isFinite(prev) && Number.isFinite(cur) && cur < prev;
+// Odds moved worse for bettor on the SAME line when American number decreases.
+// -110 -> -125 (decrease), +120 -> +105 (decrease)
+function movedWorsePrice(prevOdds: number, curOdds: number) {
+  return Number.isFinite(prevOdds) && Number.isFinite(curOdds) && curOdds < prevOdds;
 }
 
-// "a is better for bettor than b" in American odds => higher numeric value is better.
-function betterThan(a: number, b: number) {
-  return Number.isFinite(a) && Number.isFinite(b) && a > b;
+// Spread line "worse for bettor" when numeric value decreases (because higher is always better for bettor on that side):
+// +4 > +3, -3 > -4, so decreasing is worse.
+function movedWorseSpreadLine(prevLine: number, curLine: number) {
+  return Number.isFinite(prevLine) && Number.isFinite(curLine) && curLine < prevLine;
+}
+
+// Total line "worse for bettor" depends on side:
+// Over: higher total is worse; Under: lower total is worse.
+function movedWorseTotalLine(side: GameSideKey, prevLine: number, curLine: number) {
+  if (!Number.isFinite(prevLine) || !Number.isFinite(curLine)) return false;
+  if (side === "over") return curLine > prevLine;
+  if (side === "under") return curLine < prevLine;
+  return false;
+}
+
+// Is "soft" better for bettor than "pin" RIGHT NOW? (line first, then price if line equal)
+function softBetterThanPin(args: {
+  market: GameMarketKey;
+  side: GameSideKey;
+  softLine: number | null;
+  softOdds: number;
+  pinLine: number | null;
+  pinOdds: number;
+}) {
+  const { market, side, softLine, softOdds, pinLine, pinOdds } = args;
+
+  if (!Number.isFinite(softOdds) || !Number.isFinite(pinOdds)) return false;
+
+  if (market === "h2h") {
+    // moneyline: price only (higher is better)
+    return softOdds > pinOdds;
+  }
+
+  if (market === "spreads") {
+    const sL = softLine;
+    const pL = pinLine;
+    if (Number.isFinite(sL) && Number.isFinite(pL)) {
+      if ((sL as number) > (pL as number)) return true; // better spread line
+      if ((sL as number) < (pL as number)) return false;
+      // same line -> price
+      return softOdds > pinOdds;
+    }
+    // missing lines -> fallback to price
+    return softOdds > pinOdds;
+  }
+
+  // totals
+  const sL = softLine;
+  const pL = pinLine;
+  if (Number.isFinite(sL) && Number.isFinite(pL)) {
+    if (side === "over") {
+      if ((sL as number) < (pL as number)) return true; // lower total for over is better
+      if ((sL as number) > (pL as number)) return false;
+      return softOdds > pinOdds;
+    }
+    if (side === "under") {
+      if ((sL as number) > (pL as number)) return true; // higher total for under is better
+      if ((sL as number) < (pL as number)) return false;
+      return softOdds > pinOdds;
+    }
+  }
+  return softOdds > pinOdds;
+}
+
+// Did Pinnacle "steam" this side recently? line OR price
+function pinSteamMoved(args: {
+  market: GameMarketKey;
+  side: GameSideKey;
+  prevLine: number | null;
+  curLine: number | null;
+  prevOdds: number | null;
+  curOdds: number | null;
+}) {
+  const { market, side, prevLine, curLine, prevOdds, curOdds } = args;
+
+  // Price steam (only meaningful if same line)
+  const priceSteam =
+    prevOdds != null &&
+    curOdds != null &&
+    Number.isFinite(prevOdds) &&
+    Number.isFinite(curOdds) &&
+    (market === "h2h" ||
+      !Number.isFinite(prevLine) ||
+      !Number.isFinite(curLine) ||
+      (prevLine as number) === (curLine as number))
+      ? movedWorsePrice(prevOdds as number, curOdds as number)
+      : false;
+
+  // Line steam (spreads/totals)
+  let lineSteam = false;
+  if (market === "spreads" && Number.isFinite(prevLine) && Number.isFinite(curLine)) {
+    lineSteam = movedWorseSpreadLine(prevLine as number, curLine as number);
+  }
+  if (market === "totals" && Number.isFinite(prevLine) && Number.isFinite(curLine)) {
+    lineSteam = movedWorseTotalLine(side, prevLine as number, curLine as number);
+  }
+
+  return priceSteam || lineSteam;
 }
 
 /* =========================================================
@@ -486,6 +586,7 @@ function betterThan(a: number, b: number) {
 ========================================================= */
 
 function gamePlayKey(r: EvPlayRow) {
+  // Keep line in key for EV aggregation so you still see the best EV by line in normal mode.
   const team = (r.team || "").trim().toLowerCase();
   const line = r.line == null ? "x" : String(r.line);
   return `g|${r.event_id}|${r.market}|${r.side}|${line}|${team}`;
@@ -537,15 +638,23 @@ function sortPlays(a: AggregatedPlay, b: AggregatedPlay) {
 }
 
 /* =========================================================
-   History series builder
+   History series (odds + line per book for games)
 ========================================================= */
 
 type HistoryPoint = {
   ts: string;
+
+  // odds
   draftkings?: number | null;
   fanduel?: number | null;
   betmgm?: number | null;
   pinnacle?: number | null;
+
+  // line
+  draftkings_line?: number | null;
+  fanduel_line?: number | null;
+  betmgm_line?: number | null;
+  pinnacle_line?: number | null;
 };
 
 function normalizeIso(raw: any): string | null {
@@ -554,18 +663,44 @@ function normalizeIso(raw: any): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
-function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: string): HistoryPoint[] {
+function collapseGameHistory(rows: any[]): HistoryPoint[] {
   const map = new Map<string, HistoryPoint>();
 
   for (const r of rows) {
-    const ts = normalizeIso(r?.[tsCol]);
+    const ts = normalizeIso(r?.[TS_COL_GAME]);
     if (!ts) continue;
 
-    const book = String(r?.[bookCol] ?? "").toLowerCase();
+    const book = String(r?.[BOOK_COL_GAME] ?? "").toLowerCase();
     const bk = normalizeHistoryBookKey(book);
     if (bk === "other") continue;
 
-    const odds = Number(r?.[oddsCol]);
+    const odds = Number(r?.[ODDS_COL_GAME]);
+    const line = r?.[LINE_COL_GAME] == null ? null : Number(r?.[LINE_COL_GAME]);
+
+    if (!Number.isFinite(odds)) continue;
+
+    const cur = map.get(ts) ?? { ts };
+    (cur as any)[bk] = odds;
+    (cur as any)[`${bk}_line`] = Number.isFinite(line as number) ? (line as number) : null;
+
+    map.set(ts, cur);
+  }
+
+  return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+}
+
+function collapsePropsHistory(rows: any[]): { ts: string; draftkings?: number | null; fanduel?: number | null; betmgm?: number | null; pinnacle?: number | null }[] {
+  const map = new Map<string, any>();
+
+  for (const r of rows) {
+    const ts = normalizeIso(r?.[TS_COL_PROPS]);
+    if (!ts) continue;
+
+    const book = String(r?.[BOOK_COL_PROPS] ?? "").toLowerCase();
+    const bk = normalizeHistoryBookKey(book);
+    if (bk === "other") continue;
+
+    const odds = Number(r?.[ODDS_COL_PROPS]);
     if (!Number.isFinite(odds)) continue;
 
     const cur = map.get(ts) ?? { ts };
@@ -574,6 +709,28 @@ function collapseHistory(rows: any[], tsCol: string, bookCol: string, oddsCol: s
   }
 
   return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+}
+
+/* =========================================================
+   Steam Eligibility (LINE + PRICE aware; NO line in key)
+========================================================= */
+
+type Quote = { line: number | null; odds: number };
+
+type SteamInfo = {
+  pinPrev: Quote;
+  pinCur: Quote;
+
+  // soft books that are better than pin right now (by line or price)
+  // and a snapshot of their latest quote (line+odds)
+  lagging: Partial<Record<SoftOfferKey, Quote>>;
+
+  // why pin moved (for tooltip/label)
+  pinMove: "line" | "price" | "both";
+};
+
+function steamKey(sport_key: string | null | undefined, event_id: string, market: GameMarketKey, side: GameSideKey) {
+  return `${String(sport_key ?? "").trim()}|${event_id}|${market}|${side}`;
 }
 
 /* =========================================================
@@ -586,37 +743,6 @@ const SOFT_BOOK_FILTERS: { key: SoftBookFilter; label: string }[] = [
   { key: "fanduel", label: "FanDuel" },
   { key: "betmgm", label: "BetMGM" },
 ];
-
-/* =========================================================
-   Steam eligibility (games only) — FIXED: LINE-AWARE
-========================================================= */
-
-type SteamInfo = {
-  lagging: SoftOfferKey[]; // soft books that haven't moved worse yet AND still better than PIN (same line)
-  pinLatest: number; // latest PIN odds (this side, this line)
-  pinPrev: number; // previous PIN odds (this side, this line)
-  line: number | null; // the line we evaluated
-};
-
-function lineKeyForGame(market: GameMarketKey, line: number | null) {
-  // For h2h there is no line dimension
-  if (market === "h2h") return "x";
-  return line == null || !Number.isFinite(line) ? "x" : String(line);
-}
-
-function steamKeyFromPlay(p: AggregatedPlay) {
-  const sk = (p.sport_key ?? "").trim();
-  const m = p.gameMeta?.market ?? "x";
-  const s = p.gameMeta?.side ?? "x";
-  const lk = lineKeyForGame(p.gameMeta?.market ?? "h2h", p.gameMeta?.line ?? null);
-  return `${sk}|${p.event_id}|${m}|${s}|${lk}`;
-}
-
-function steamKeyFromRow(r: { sport_key: string; event_id: string; market: string; side: string; line?: number | null }) {
-  const m = r.market as GameMarketKey;
-  const lk = lineKeyForGame(m, (r as any).line ?? null);
-  return `${String(r.sport_key ?? "").trim()}|${r.event_id}|${r.market}|${r.side}|${lk}`;
-}
 
 /* =========================================================
    Screen
@@ -792,7 +918,7 @@ export const ModelScreen = () => {
           quantum_odds: safeNum(r.quantum_odds, NaN),
           quantum_prob: safeNum(r.quantum_prob, NaN),
 
-          gameMeta: { market: r.market, side: r.side, line: r.line ?? null },
+          gameMeta: { market: r.market, side: r.side },
 
           offers: {},
           bestBook: null,
@@ -808,6 +934,7 @@ export const ModelScreen = () => {
         odds,
         ev_pct: ev,
         bet_fraction: clamp(safeNum(r.bet_fraction, 0), 0, 1),
+        line: r.line ?? null,
       };
 
       base.bestScore = Math.max(safeNum(base.bestScore, 0), safeNum(r.confidence_score, 0));
@@ -884,7 +1011,6 @@ export const ModelScreen = () => {
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
       base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
-      // preserve mu/line if missing
       if (base.propMeta) {
         const nextMu = (r.mu ?? null) as number | null;
         if (nextMu != null && Number.isFinite(nextMu) && (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu))) {
@@ -911,9 +1037,10 @@ export const ModelScreen = () => {
     return plays.sort(sortPlays);
   }, [games, props]);
 
-  // -------------------------------------------
-  // Steam computation (games only) from odds_snapshot_history — FIXED: LINE-AWARE
-  // -------------------------------------------
+  /* =========================================================
+     Steam computation (games only) — LINE + PRICE aware, no line in key
+  ========================================================= */
+
   useEffect(() => {
     let mounted = true;
 
@@ -959,19 +1086,12 @@ export const ModelScreen = () => {
           allRows.push(...(data ?? []));
         }
 
-        // Last-2 odds per (sport_key,event_id,market,side,lineKey,book)
-        type Last2 = { prev?: number; cur?: number };
+        // last-2 per (sport_key,event_id,market,side,book)
+        type Last2 = { prev?: Quote; cur?: Quote };
         const last2 = new Map<string, Last2>();
 
-        function lineKeyFromRow(market: GameMarketKey, line: number | null) {
-          if (market === "h2h") return "x";
-          return line == null || !Number.isFinite(line) ? "x" : String(line);
-        }
-
-        function kRow(r: any, book: string) {
-          const m = r.market as GameMarketKey;
-          const lk = lineKeyFromRow(m, r.line ?? null);
-          return `${String(r.sport_key ?? "").trim()}|${r.event_id}|${r.market}|${r.side}|${lk}|${book}`;
+        function kRow(r: any, book: AnyBookHistory) {
+          return steamKey(r.sport_key, r.event_id, r.market as GameMarketKey, r.side as GameSideKey) + `|${book}`;
         }
 
         for (const r of allRows) {
@@ -979,60 +1099,94 @@ export const ModelScreen = () => {
           if (book === "other") continue;
 
           const odds = Number(r.odds);
+          const line = r.line == null ? null : Number(r.line);
           if (!Number.isFinite(odds)) continue;
 
           const key = kRow(r, book);
           const cur = last2.get(key) ?? {};
           cur.prev = cur.cur;
-          cur.cur = odds;
+          cur.cur = { line: Number.isFinite(line as number) ? (line as number) : null, odds };
           last2.set(key, cur);
         }
 
         const eligible: Record<string, SteamInfo> = {};
 
         for (const p of gamePlays) {
-          const sk = (p.sport_key ?? "").trim();
-          const m = p.gameMeta!.market;
-          const s = p.gameMeta!.side;
-          const line = p.gameMeta!.line ?? null;
+          const market = p.gameMeta!.market;
+          const side = p.gameMeta!.side;
+          const k = steamKey(p.sport_key, p.event_id, market, side);
 
-          const lk = lineKeyForGame(m, line);
-
-          const pinKey = `${sk}|${p.event_id}|${m}|${s}|${lk}|pinnacle`;
-          const pin = last2.get(pinKey);
+          const pin = last2.get(`${k}|pinnacle`);
           const pinPrev = pin?.prev;
           const pinCur = pin?.cur;
 
-          // Need two PIN points on SAME LINE
-          if (!Number.isFinite(pinPrev) || !Number.isFinite(pinCur)) continue;
+          if (!pinPrev || !pinCur) continue;
 
-          // PIN must have moved worse (steam) on same line
-          if (!movedWorse(pinPrev!, pinCur!)) continue;
-
-          const lagging: SoftOfferKey[] = [];
-
-          (["draftkings", "fanduel", "betmgm"] as SoftOfferKey[]).forEach((sb) => {
-            // must exist in offers
-            const offer = p.offers[sb];
-            if (!offer || !Number.isFinite(offer.odds)) return;
-
-            const softKey = `${sk}|${p.event_id}|${m}|${s}|${lk}|${sb}`;
-            const soft = last2.get(softKey);
-
-            // If we have history on the same line, use it; else fallback to current offer odds
-            const softPrev = soft?.prev;
-            const softCur = (soft?.cur ?? offer.odds) as number;
-
-            // Not moved worse yet (on same line), and still better than PIN now
-            const softNotWorse = !Number.isFinite(softPrev) || !movedWorse(softPrev!, softCur);
-            const stillBetter = betterThan(softCur, pinCur!);
-
-            if (softNotWorse && stillBetter) lagging.push(sb);
+          const pinMoved = pinSteamMoved({
+            market,
+            side,
+            prevLine: pinPrev.line,
+            curLine: pinCur.line,
+            prevOdds: pinPrev.odds,
+            curOdds: pinCur.odds,
           });
 
-          if (lagging.length) {
-            eligible[steamKeyFromPlay(p)] = { lagging, pinLatest: pinCur!, pinPrev: pinPrev!, line };
+          if (!pinMoved) continue;
+
+          // Why moved?
+          const priceSteam = (market === "h2h" || (pinPrev.line ?? null) === (pinCur.line ?? null)) && movedWorsePrice(pinPrev.odds, pinCur.odds);
+          let lineSteam = false;
+          if (market === "spreads" && Number.isFinite(pinPrev.line) && Number.isFinite(pinCur.line)) {
+            lineSteam = movedWorseSpreadLine(pinPrev.line as number, pinCur.line as number);
           }
+          if (market === "totals" && Number.isFinite(pinPrev.line) && Number.isFinite(pinCur.line)) {
+            lineSteam = movedWorseTotalLine(side, pinPrev.line as number, pinCur.line as number);
+          }
+          const pinMove: SteamInfo["pinMove"] = priceSteam && lineSteam ? "both" : lineSteam ? "line" : "price";
+
+          const lagging: SteamInfo["lagging"] = {};
+
+          (["draftkings", "fanduel", "betmgm"] as SoftOfferKey[]).forEach((sb) => {
+            const soft = last2.get(`${k}|${sb}`);
+            const softCur = soft?.cur;
+
+            // if we don't have soft history rows, fall back to the current offer (from ev_plays aggregation)
+            const offer = p.offers[sb];
+            const fallbackCur: Quote | null =
+              offer && Number.isFinite(offer.odds)
+                ? { line: offer.line ?? null, odds: offer.odds }
+                : null;
+
+            const curQuote = softCur ?? fallbackCur;
+            if (!curQuote) return;
+
+            // Must be within odds gate right now (because user is looking to take it)
+            if (!withinOddsGate(curQuote.odds)) return;
+
+            // Soft must currently be BETTER than Pinnacle now — by line or price
+            const better = softBetterThanPin({
+              market,
+              side,
+              softLine: curQuote.line,
+              softOdds: curQuote.odds,
+              pinLine: pinCur.line,
+              pinOdds: pinCur.odds,
+            });
+
+            if (!better) return;
+
+            lagging[sb] = curQuote;
+          });
+
+          const lagCount = Object.keys(lagging).length;
+          if (!lagCount) continue;
+
+          eligible[k] = {
+            pinPrev,
+            pinCur,
+            lagging,
+            pinMove,
+          };
         }
 
         if (mounted) setSteamEligible(eligible);
@@ -1046,6 +1200,10 @@ export const ModelScreen = () => {
       mounted = false;
     };
   }, [aggregated, steamLookbackHours]);
+
+  /* =========================================================
+     Filtering
+  ========================================================= */
 
   const filtered = useMemo(() => {
     let list = aggregated;
@@ -1062,15 +1220,15 @@ export const ModelScreen = () => {
       list = list.filter((p) => !!p.offers[bookFilter]);
     }
 
-    // Steam gating (only for games)
+    // Steam gating (only for games): require eligibility, and if a specific book is selected,
+    // require that book is one of the "better than PIN right now" lagging books.
     if (steamOnly) {
       list = list.filter((p) => {
-        const k = steamKeyFromPlay(p);
+        const k = steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side);
         const info = steamEligible[k];
         if (!info) return false;
 
-        // If specific soft book is selected, require that it is one of the lagging books
-        if (bookFilter !== "any") return info.lagging.includes(bookFilter);
+        if (bookFilter !== "any") return !!info.lagging[bookFilter];
         return true;
       });
     }
@@ -1111,14 +1269,14 @@ export const ModelScreen = () => {
             </div>
 
             <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">
-              {steamOnly ? "Steam Opportunities" : "Best +EV Plays"}
+              {steamOnly ? "Steam (PIN moved · Soft stale/value)" : "Best +EV Plays"}
             </h2>
 
             <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
               {steamOnly ? (
                 <>
-                  Shows plays where <span className="text-white">Pinnacle moved</span> on the{" "}
-                  <span className="text-white">same line</span>, but a <span className="text-white">soft book hasn’t yet</span>.
+                  Detects <span className="text-white">Pinnacle steam</span> by <span className="text-white">line OR price</span>, then shows
+                  soft books that are still <span className="text-white">better than PIN right now</span> (line or price).
                 </>
               ) : (
                 <>
@@ -1127,7 +1285,7 @@ export const ModelScreen = () => {
               )}
             </div>
 
-            <div className="text-[11px] text-[#9a9a9a] mt-2">
+            <div className="text-[11px] text-[#9a9a9a] mt-2 leading-relaxed">
               Gates: Odds {ODDS_MIN} to +{ODDS_MAX} • Games EV ≤ {MAX_EV_PCT}% • Props EV {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}%
               {steamOnly ? <span className="text-[#606060]"> • Steam lookback: {steamLookbackHours}h</span> : null}
             </div>
@@ -1205,7 +1363,7 @@ export const ModelScreen = () => {
 
         {steamOnly && steamLoading ? (
           <div className="relative mt-2 text-xs text-[#808080] px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg">
-            Computing steam signals from odds_snapshot_history…
+            Computing steam signals from odds_snapshot_history (line + price)…
           </div>
         ) : null}
 
@@ -1225,8 +1383,8 @@ export const ModelScreen = () => {
                 <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
                   <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">Matchup</th>
                   <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[280px]">Pick</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[80px]">Line</th>
+                  <th className="text-left p-3 text-[#808080] min-w-[320px]">Pick</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[90px]">Line</th>
                   <th className="text-center p-3 text-[#808080] min-w-[120px]">Fair Odds</th>
                   <th className="text-center p-3 text-[#808080] min-w-[120px]">DK</th>
                   <th className="text-center p-3 text-[#808080] min-w-[120px]">FD</th>
@@ -1238,18 +1396,25 @@ export const ModelScreen = () => {
               </thead>
 
               <tbody className="divide-y divide-[#141414]">
-                {filtered.map((p) => (
-                  <PlayRow
-                    key={p.playKey}
-                    play={p}
-                    bankroll={bankroll}
-                    kellyFactor={kellyFactor}
-                    settingsReady={settingsReady}
-                    onOpenDetails={() => openDetails(p)}
-                    steamInfo={p.kind === "game" ? steamEligible[steamKeyFromPlay(p)] : undefined}
-                    steamOnly={steamOnly}
-                  />
-                ))}
+                {filtered.map((p) => {
+                  const sInfo =
+                    p.kind === "game"
+                      ? steamEligible[steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side)]
+                      : undefined;
+
+                  return (
+                    <PlayRow
+                      key={p.playKey}
+                      play={p}
+                      bankroll={bankroll}
+                      kellyFactor={kellyFactor}
+                      settingsReady={settingsReady}
+                      onOpenDetails={() => openDetails(p)}
+                      steamInfo={sInfo}
+                      steamOnly={steamOnly}
+                    />
+                  );
+                })}
 
                 {!loading && !filtered.length ? (
                   <tr>
@@ -1277,28 +1442,28 @@ export const ModelScreen = () => {
           </div>
         ) : null}
 
-        {filtered.map((p) => (
-          <PlayCard
-            key={p.playKey}
-            play={p}
-            bankroll={bankroll}
-            kellyFactor={kellyFactor}
-            settingsReady={settingsReady}
-            onOpenDetails={() => openDetails(p)}
-            steamInfo={p.kind === "game" ? steamEligible[steamKeyFromPlay(p)] : undefined}
-            steamOnly={steamOnly}
-          />
-        ))}
+        {filtered.map((p) => {
+          const sInfo =
+            p.kind === "game"
+              ? steamEligible[steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side)]
+              : undefined;
+
+          return (
+            <PlayCard
+              key={p.playKey}
+              play={p}
+              bankroll={bankroll}
+              kellyFactor={kellyFactor}
+              settingsReady={settingsReady}
+              onOpenDetails={() => openDetails(p)}
+              steamInfo={sInfo}
+              steamOnly={steamOnly}
+            />
+          );
+        })}
       </div>
 
-      <PlayDetailsModal
-        open={detailsOpen}
-        play={selected}
-        onClose={closeDetails}
-        bankroll={bankroll}
-        kellyFactor={kellyFactor}
-        settingsReady={settingsReady}
-      />
+      <PlayDetailsModal open={detailsOpen} play={selected} onClose={closeDetails} bankroll={bankroll} kellyFactor={kellyFactor} settingsReady={settingsReady} />
     </div>
   );
 };
@@ -1333,13 +1498,18 @@ function PlayRow({
     steamOnly && play.kind === "game" && steamInfo ? (
       <div
         className="mt-1 inline-flex items-center gap-2 rounded-md border border-[#a855f7]/30 bg-[#a855f7]/10 px-2 py-0.5 text-[10px] text-[#d8b4fe]"
-        title={`PIN moved worse (same line): ${american(steamInfo.pinPrev)} → ${american(steamInfo.pinLatest)} | Line: ${steamInfo.line ?? "—"} | Lagging: ${steamInfo.lagging.join(", ")}`}
+        title={`PIN moved (${steamInfo.pinMove}). PIN: ${steamInfo.pinPrev.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinPrev.line) + " " : ""}${american(
+          steamInfo.pinPrev.odds
+        )} → ${steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}${american(steamInfo.pinCur.odds)} | Soft better now: ${Object.keys(
+          steamInfo.lagging
+        ).join(", ")}`}
       >
         <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR.pinnacle }} />
         <span>Steam</span>
         <span className="text-[#808080]">·</span>
         <span className="text-[#d0d0d0]">
-          {steamInfo.lagging.map((b) => (b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM")).join(", ")}
+          PIN {steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}
+          {american(steamInfo.pinCur.odds)}
         </span>
       </div>
     ) : null;
@@ -1404,6 +1574,28 @@ function PlayRow({
               <div className="text-[10px] text-[#606060] mt-0.5 truncate">
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
               </div>
+
+              {/* In steam mode, show soft-vs-pin line/price if available */}
+              {steamOnly && steamInfo ? (
+                <div className="text-[10px] text-[#808080] mt-1 truncate">
+                  PIN now:{" "}
+                  <span className="text-[#d8b4fe]">
+                    {steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}
+                    {american(steamInfo.pinCur.odds)}
+                  </span>
+                  <span className="text-[#404040]"> · </span>
+                  Soft better:{" "}
+                  <span className="text-white">
+                    {Object.entries(steamInfo.lagging)
+                      .map(([b, q]) => {
+                        const tag = b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM";
+                        const line = q?.line != null ? fmtLineGame(play.gameMeta!.market, q.line) + " " : "";
+                        return `${tag} ${line}${american(q!.odds)}`;
+                      })
+                      .join(" · ")}
+                  </span>
+                </div>
+              ) : null}
             </div>
           )}
         </button>
@@ -1432,14 +1624,7 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-center">
-        <div
-          className={[
-            "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
-            sTone.bg,
-            sTone.border,
-            sTone.text,
-          ].join(" ")}
-        >
+        <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
           {score}
         </div>
       </td>
@@ -1481,11 +1666,13 @@ function PlayCard({
     steamOnly && play.kind === "game" && steamInfo ? (
       <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-[#a855f7]/30 bg-[#a855f7]/10 px-2 py-1 text-[11px] text-[#d8b4fe]">
         <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR.pinnacle }} />
-        <span className="text-[#d0d0d0]">
-          {american(steamInfo.pinPrev)} → {american(steamInfo.pinLatest)}
+        <span>
+          PIN moved ({steamInfo.pinMove}) to{" "}
+          <span className="text-white">
+            {steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}
+            {american(steamInfo.pinCur.odds)}
+          </span>
         </span>
-        <span className="text-[#606060]">·</span>
-        <span>Lag: {steamInfo.lagging.map((b) => (b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM")).join(", ")}</span>
       </div>
     ) : null;
 
@@ -1509,14 +1696,7 @@ function PlayCard({
 
         <div className="shrink-0 text-right">
           <div className="inline-flex items-center gap-2">
-            <div
-              className={[
-                "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
-                sTone.bg,
-                sTone.border,
-                sTone.text,
-              ].join(" ")}
-            >
+            <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
               {score}
             </div>
             <div className="text-right">
@@ -1546,11 +1726,28 @@ function PlayCard({
             </div>
           </div>
         ) : (
-          <div className="text-white text-sm">
-            {play.pickLabel}{" "}
-            <span className="text-[#808080] text-xs">
-              · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
-            </span>
+          <div className="min-w-0">
+            <div className="text-white text-sm truncate">
+              {play.pickLabel}{" "}
+              <span className="text-[#808080] text-xs">
+                · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
+              </span>
+            </div>
+
+            {steamOnly && steamInfo ? (
+              <div className="text-[11px] text-[#808080] mt-1 truncate">
+                Soft better:{" "}
+                <span className="text-white">
+                  {Object.entries(steamInfo.lagging)
+                    .map(([b, q]) => {
+                      const tag = b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM";
+                      const line = q?.line != null ? fmtLineGame(play.gameMeta!.market, q.line) + " " : "";
+                      return `${tag} ${line}${american(q!.odds)}`;
+                    })
+                    .join(" · ")}
+                </span>
+              </div>
+            ) : null}
           </div>
         )}
       </button>
@@ -1576,7 +1773,7 @@ function PlayCard({
 }
 
 /* =========================================================
-   Details Modal (NO scroll-to-find footer; tabbed content)
+   Details Modal (tabs; safe-area; no scroll-to-footer)
 ========================================================= */
 
 type ModalTab = "line" | "hit";
@@ -1585,9 +1782,6 @@ function PlayDetailsModal({
   open,
   play,
   onClose,
-  bankroll,
-  kellyFactor,
-  settingsReady,
 }: {
   open: boolean;
   play: AggregatedPlay | null;
@@ -1603,9 +1797,6 @@ function PlayDetailsModal({
   }, [open, play?.playKey]);
 
   if (!open || !play) return null;
-
-  const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
-  const mu = play.propMeta?.mu ?? null;
 
   const canShowHitRate = play.kind === "prop";
 
@@ -1652,16 +1843,9 @@ function PlayDetailsModal({
 
                 {play.kind === "prop" ? (
                   <div className="mt-1 text-[11px] text-[#b0b0b0]">
-                    Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
+                    Projection: <span className="text-white tabular-nums">{fmtMu(play.propMeta?.mu ?? null)}</span>
                   </div>
                 ) : null}
-              </div>
-
-              <div className="shrink-0 text-right">
-                <div className="text-[10px] text-[#606060]">Best EV</div>
-                <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
-                <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">{settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}</div>
               </div>
             </div>
 
@@ -1678,7 +1862,7 @@ function PlayDetailsModal({
                 <LegendDot label="MGM" color={BOOK_COLOR.betmgm} />
                 <LegendDot label="PIN" color={BOOK_COLOR.pinnacle} />
                 <span className="text-[#404040]">·</span>
-                <span>Tooltip shows date + time (CT)</span>
+                <span>Tooltip includes line + odds</span>
               </div>
             </div>
           </div>
@@ -1720,7 +1904,7 @@ function TabButton({ active, onClick, label, disabled }: { active: boolean; onCl
 }
 
 /* =========================================================
-   Line History Panel — FIXED: LINE FILTER FOR GAMES
+   Line History Panel — games show ALL lines (tooltip includes line)
 ========================================================= */
 
 function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
@@ -1768,7 +1952,8 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
             return;
           }
 
-          const pts = collapseHistory(data ?? [], TS_COL_PROPS, BOOK_COL_PROPS, ODDS_COL_PROPS);
+          // props series uses odds only; reuse HistoryPoint shape (line fields unused)
+          const pts = collapsePropsHistory(data ?? []).map((p) => ({ ts: p.ts, draftkings: p.draftkings ?? null, fanduel: p.fanduel ?? null, betmgm: p.betmgm ?? null, pinnacle: p.pinnacle ?? null })) as any;
           setSeries(pts);
 
           if (!pts.length) {
@@ -1777,18 +1962,18 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
           return;
         }
 
+        // game history: pull ALL rows for event+market+side (NO line filter!)
         const sport_key = (play.sport_key ?? "").trim();
         const event_id = play.event_id;
         const market = play.gameMeta?.market ?? null;
         const side = play.gameMeta?.side ?? null;
-        const line = play.gameMeta?.line ?? null;
 
         if (!sport_key || !event_id || !market || !side) {
           if (mounted) setDebug(`game keys missing: sport_key=${!!sport_key} event_id=${!!event_id} market=${market ?? "null"} side=${side ?? "null"}`);
           return;
         }
 
-        let q = supabase
+        const { data, error } = await supabase
           .from(GAME_HISTORY_TABLE)
           .select(`sport_key,event_id,market,side,line,${BOOK_COL_GAME},${ODDS_COL_GAME},${TS_COL_GAME}`)
           .eq("sport_key", sport_key)
@@ -1798,13 +1983,6 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
           .in(BOOK_COL_GAME, HISTORY_BOOKS)
           .order(TS_COL_GAME, { ascending: true });
 
-        // ✅ FIX: for spreads/totals, filter to the SAME line to prevent false price jumps
-        if (market !== "h2h") {
-          q = q.eq("line", line);
-        }
-
-        const { data, error } = await q;
-
         if (!mounted) return;
 
         if (error) {
@@ -1813,13 +1991,11 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
           return;
         }
 
-        const pts = collapseHistory(data ?? [], TS_COL_GAME, BOOK_COL_GAME, ODDS_COL_GAME);
+        const pts = collapseGameHistory(data ?? []);
         setSeries(pts);
 
         if (!pts.length) {
-          setDebug(
-            `no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" line="${market === "h2h" ? "—" : line ?? "null"}" books=${HISTORY_BOOKS.join(",")}`
-          );
+          setDebug(`no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`);
         }
       } finally {
         if (mounted) setLoading(false);
@@ -1839,21 +2015,24 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
     if (!active || !payload?.length) return null;
 
     const ts = String(label ?? "");
-    const matchup = play.matchup ?? "—";
-    const market = play.marketLabel;
-    const side = play.sideLabel;
-    const line = play.lineLabel;
-    const start = play.commence_time ? `${fmtDateCentral(play.commence_time)} · ${fmtTimeCentral(play.commence_time)}` : "—";
 
     const order: AnyBookHistory[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
     const rows = order
       .map((k) => {
         const found = payload.find((p: any) => p.dataKey === k);
-        const v = found?.value;
-        if (!Number.isFinite(Number(v))) return null;
-        return { k, v: Number(v) };
+        const odds = found?.value;
+        if (!Number.isFinite(Number(odds))) return null;
+
+        const lineField = `${k}_line`;
+        const lineVal = (found?.payload as any)?.[lineField];
+        const lineText =
+          play.kind === "game" && play.gameMeta && play.gameMeta.market !== "h2h" && Number.isFinite(Number(lineVal))
+            ? fmtLineGame(play.gameMeta.market, Number(lineVal))
+            : null;
+
+        return { k, odds: Number(odds), lineText };
       })
-      .filter(Boolean) as { k: AnyBookHistory; v: number }[];
+      .filter(Boolean) as { k: AnyBookHistory; odds: number; lineText: string | null }[];
 
     return (
       <div
@@ -1863,35 +2042,29 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
           padding: "10px",
           borderRadius: 10,
           color: "#d0d0d0",
-          minWidth: 250,
+          minWidth: 260,
           boxShadow: "0 16px 40px rgba(0,0,0,0.45)",
         }}
       >
         <div style={{ fontSize: 12, fontWeight: 700, color: "#fff", marginBottom: 6 }}>{fmtDateTimeCT(ts)}</div>
 
         <div style={{ fontSize: 11, color: "#b0b0b0", marginBottom: 8, lineHeight: 1.35 }}>
-          <div style={{ color: "#ffffff" }}>{matchup}</div>
+          <div style={{ color: "#ffffff" }}>{play.matchup ?? "—"}</div>
           <div>
-            <span style={{ color: "#d4af37" }}>{market}</span> <span style={{ color: "#606060" }}>·</span>{" "}
+            <span style={{ color: "#d4af37" }}>{play.marketLabel}</span> <span style={{ color: "#606060" }}>·</span>{" "}
             <span style={{ color: "#d0d0d0" }}>
-              {side} {line !== "—" ? line : ""}
+              {play.sideLabel} {play.kind === "prop" ? play.lineLabel : ""}
             </span>
           </div>
-          <div style={{ color: "#808080" }}>Starts: {start}</div>
-
-          {play.kind === "prop" ? (
-            <div style={{ color: "#808080" }}>
-              Projection:{" "}
-              <span style={{ color: "#fff", fontVariantNumeric: "tabular-nums" }}>{fmtMu(play.propMeta?.mu ?? null)}</span>
-            </div>
-          ) : null}
         </div>
 
         <div style={{ display: "grid", gap: 4 }}>
-          {rows.map(({ k, v }) => (
+          {rows.map(({ k, odds, lineText }) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
               <span style={{ fontSize: 11, color: BOOK_COLOR[k] }}>{bookShort(k)}</span>
-              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>{american(v)}</span>
+              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>
+                {play.kind === "game" && lineText ? `${lineText}  ${american(odds)}` : american(odds)}
+              </span>
             </div>
           ))}
         </div>
@@ -1903,7 +2076,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="text-[10px] text-[#606060] mb-2">Line Movement (this side)</div>
+      <div className="text-[10px] text-[#606060] mb-2">Line Movement (odds chart; tooltip includes line)</div>
 
       {loading && !series.length ? (
         <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
@@ -1946,18 +2119,10 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
                 formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
               />
 
-              {hasAny("draftkings") ? (
-                <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-              ) : null}
-              {hasAny("fanduel") ? (
-                <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-              ) : null}
-              {hasAny("betmgm") ? (
-                <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-              ) : null}
-              {hasAny("pinnacle") ? (
-                <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-              ) : null}
+              {hasAny("draftkings") ? <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
+              {hasAny("fanduel") ? <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
+              {hasAny("betmgm") ? <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
+              {hasAny("pinnacle") ? <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -2104,11 +2269,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
                   <span style={{ color: "#808080" }}>Today Line</span>
                   <span style={{ color: "#fff" }}>{line}</span>
                 </div>
-                {overUnder ? (
-                  <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>
-                    {overUnder}
-                  </div>
-                ) : null}
+                {overUnder ? <div style={{ marginTop: 4, fontSize: 11, color: overUnder === "OVER" ? OVER_GREEN : UNDER_RED }}>{overUnder}</div> : null}
               </>
             ) : null}
           </div>
@@ -2179,17 +2340,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
    UI atoms
 ========================================================= */
 
-function KindPill({
-  active,
-  onClick,
-  label,
-  disabled,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  disabled?: boolean;
-}) {
+function KindPill({ active, onClick, label, disabled }: { active: boolean; onClick: () => void; label: string; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
@@ -2239,19 +2390,9 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book as AnyBookHistory]}]` : "shadow-none";
 
   return (
-    <div
-      className={[
-        "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border",
-        isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]",
-        ring,
-      ].join(" ")}
-    >
+    <div className={["inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
       <div className="inline-flex items-center justify-center gap-2">
-        {logo ? (
-          <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
-        ) : (
-          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>
-        )}
+        {logo ? <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} /> : <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
@@ -2315,19 +2456,7 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
   );
 }
 
-function PropPickInline({
-  name,
-  position,
-  picture_url,
-  sub,
-  mu,
-}: {
-  name: string;
-  position: string | null;
-  picture_url: string | null;
-  sub?: string;
-  mu?: number | null;
-}) {
+function PropPickInline({ name, position, picture_url, sub, mu }: { name: string; position: string | null; picture_url: string | null; sub?: string; mu?: number | null }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
       <PropAvatar url={picture_url} name={name} />
