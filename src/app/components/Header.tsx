@@ -1,4 +1,4 @@
-// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate) + Parlay + Props
+// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate) + Parlay + Props + Calculator
 // ---------------------------------------------------------------------------------------------------
 // ✅ Theme matches provided Prism logo (black/gold/slate) — removes rainbow prism gradients
 // ✅ Fix retained: first dropdown item no longer “pre-highlighted”
@@ -7,7 +7,7 @@
 // ✅ Desktop nav centered; logo bigger (md:h-24)
 // ✅ Clicking logo -> Overview
 // ✅ Logo path: /logos/mainlogo.png (kept as-is)
-// ✅ Adds "Parlay" + NEW "Props" to nav
+// ✅ Adds "Parlay" + "Props" + NEW "Calculator" to nav
 // ✅ Mobile: hamburger remains (menu controlled by parent)
 // ✅ Everything else unchanged (API + behavior)
 
@@ -20,6 +20,7 @@ type Screen =
   | "model"
   | "props"
   | "parlay"
+  | "calculator" // ✅ NEW
   | "monte-carlo"
   | "odds"
   | "results"
@@ -453,6 +454,14 @@ export function Header({
               <NavItem label="Picks" active={activeScreen === "model"} onClick={() => onNavigate?.("model")} />
               <NavItem label="Props" active={activeScreen === "props"} onClick={() => onNavigate?.("props")} />
               <NavItem label="Parlay" active={activeScreen === "parlay"} onClick={() => onNavigate?.("parlay")} />
+
+              {/* ✅ NEW: Calculator */}
+              <NavItem
+                label="Calculator"
+                active={activeScreen === "calculator"}
+                onClick={() => onNavigate?.("calculator")}
+              />
+
               <NavItem label="Results" active={activeScreen === "results"} onClick={() => onNavigate?.("results")} />
               <NavItem label="Settings" active={activeScreen === "settings"} onClick={() => onNavigate?.("settings")} />
             </nav>
