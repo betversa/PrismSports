@@ -1,8 +1,9 @@
-// src/app/screens/PropsScreen.tsx — FULL REWRITE (Modal aligned with ModelScreen tables + FP API)
+// src/app/screens/PropsScreen.tsx — FULL REWRITE (Mobile-safe + ModelScreen modal pattern + FP API)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Markets: Points, Rebounds, Assists, 3PM ONLY
-// ✅ Table header STICKS at top of table container
-// ✅ Opponent works (team_map canonical -> Abbreviation / Abbreviation2) with case-safe Supabase .in()
+// ✅ Desktop: sticky table header + sticky left Pick col (like ModelScreen)
+// ✅ Mobile: NO wide table — responsive cards (no horizontal scroll needed)
+// ✅ Opponent works (team_map canonical -> Abbreviation / Abbreviation2) CASE-SAFE (build lowercase map)
 // ✅ Over/Under badge colors distinct
 // ✅ Modal = SAME pattern as ModelScreen:
 //    - Tabs: Line History + Hit Rate
@@ -10,6 +11,11 @@
 //    - Hit Rate pulls from /api/fantasypros-gamelog?player_name=...
 //    - Tooltip in CT, no shaded cursor, bars colored OVER/UNDER vs today line
 // ✅ μ header renamed to Projection
+//
+// Notes for mobile correctness:
+// - We avoid min-w table on small screens (cards instead)
+// - Modal uses fixed header/footer + body min-h-0 so “Done” is always reachable
+// - Locks background scroll when modal open
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -37,7 +43,6 @@ type SoftBook = "draftkings" | "fanduel" | "betmgm";
 type BookFilter = "any" | SoftBook;
 
 type UiMarket = "Points" | "Rebounds" | "Assists" | "3PM";
-type DbMarket = "points" | "rebounds" | "assists" | "threes";
 
 type AppSettingsRow = {
   bankroll: number | null;
@@ -63,7 +68,7 @@ type PlayerPropEvLatestRow = {
   position: string | null;
   picture_url: string | null;
 
-  market: string | null; // may be "points"/"player_points"/etc
+  market: string | null;
   side: string | null; // "over"/"under"
   line: number | null;
 
@@ -94,14 +99,16 @@ type AggregatedProp = {
   picture_url: string | null;
 
   ui_market: UiMarket;
-  raw_market: string | null; // store raw for history key mapping
+  raw_market: string | null;
   side: "over" | "under";
   line: number;
 
   projection: number | null; // mu
-  sigma?: number | null;
 
-  offers: Partial<Record<SoftBook, { odds: number; ev_pct: number; kelly_fraction: number }>>;
+  offers: Partial<
+    Record<SoftBook, { odds: number; ev_pct: number; kelly_fraction: number }>
+  >;
+
   bestBook: SoftBook;
   bestOdds: number;
   bestEvPct: number;
@@ -125,7 +132,7 @@ const BOOK_FILTERS: { key: BookFilter; label: string }[] = [
   { key: "betmgm", label: "MGM" },
 ];
 
-// ✅ Match ModelScreen history tables/cols
+// History tables/cols
 const PROPS_HISTORY_TABLE = "player_props_history";
 const TS_COL_PROPS = "ts";
 const BOOK_COL_PROPS = "bookmaker";
@@ -136,7 +143,12 @@ const SIDE_COL_PROPS = "side";
 
 // History includes Pinnacle
 type AnyBookHistory = "draftkings" | "fanduel" | "betmgm" | "pinnacle";
-const HISTORY_BOOKS: AnyBookHistory[] = ["draftkings", "fanduel", "betmgm", "pinnacle"];
+const HISTORY_BOOKS: AnyBookHistory[] = [
+  "draftkings",
+  "fanduel",
+  "betmgm",
+  "pinnacle",
+];
 
 const BOOK_COLOR: Record<AnyBookHistory, string> = {
   draftkings: "#22c55e",
@@ -250,7 +262,6 @@ function initials(name: string) {
   return (a + b).toUpperCase();
 }
 
-// Soft offer normalize
 function normalizeSoftBookKey(bookmaker: string): SoftBook | "other" {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings" || b === "dk") return "draftkings";
@@ -259,7 +270,6 @@ function normalizeSoftBookKey(bookmaker: string): SoftBook | "other" {
   return "other";
 }
 
-// History normalize (includes pinnacle)
 function normalizeHistoryBookKey(bookmaker: string): AnyBookHistory | "other" {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings" || b === "dk") return "draftkings";
@@ -269,8 +279,12 @@ function normalizeHistoryBookKey(bookmaker: string): AnyBookHistory | "other" {
   return "other";
 }
 
-// Match ModelScreen market mapping for history table keys
-type PropHistoryMarketKey = "player_points" | "player_rebounds" | "player_assists" | "player_threes";
+// Match ModelScreen market mapping for history keys
+type PropHistoryMarketKey =
+  | "player_points"
+  | "player_rebounds"
+  | "player_assists"
+  | "player_threes";
 
 function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | null {
   const m = (marketRaw || "").trim().toLowerCase();
@@ -285,7 +299,7 @@ function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | 
   if (m === "rebounds" || m === "reb") return "player_rebounds";
   if (m === "assists" || m === "ast") return "player_assists";
   if (m === "3pt" || m === "3pm" || m === "threes" || m === "3") return "player_threes";
-  if (m === "threes" || m === "three_pointers") return "player_threes";
+  if (m === "three_pointers") return "player_threes";
 
   if (m.includes("player_points")) return "player_points";
   if (m.includes("player_rebounds")) return "player_rebounds";
@@ -346,11 +360,13 @@ function collapseHistory(rows: any[]): HistoryPoint[] {
     map.set(ts, cur);
   }
 
-  return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime()
+  );
 }
 
 /* =========================================================
-   FantasyPros (API response type) — same as ModelScreen
+   FantasyPros types — same as ModelScreen
 ========================================================= */
 
 type FantasyProsLogRow = {
@@ -390,7 +406,7 @@ export function PropsScreen() {
   };
   const closeModal = () => setModalOpen(false);
 
-  // ESC to close modal + lock body scroll (same behavior as ModelScreen)
+  // ESC to close modal + lock body scroll (ModelScreen behavior)
   useEffect(() => {
     if (!modalOpen) return;
 
@@ -416,6 +432,7 @@ export function PropsScreen() {
       setErr(null);
 
       try {
+        // Load settings + latest props
         const [{ data: s, error: sErr }, { data: p, error: pErr }] = await Promise.all([
           supabase.from("app_settings").select("bankroll, kelly_factor").eq("id", 1).limit(1),
           supabase
@@ -454,49 +471,41 @@ export function PropsScreen() {
         const settingsRow = (s?.[0] ?? null) as any as AppSettingsRow | null;
         const props = ((p as any) ?? []) as PlayerPropEvLatestRow[];
 
-        // build team_map lookup (case-safe)
-        const canonOriginalSet = new Set<string>();
-        for (const r of props) {
-          const t = (r.team ?? "").trim();
-          const o = (r.opponent ?? "").trim();
-          if (t) canonOriginalSet.add(t);
-          if (o) canonOriginalSet.add(o);
-        }
+        // ✅ Case-safe team_map: load once, build lowercase canonical->abbr map
+        const { data: tm, error: tmErr } = await supabase
+          .from("team_map")
+          .select("canonical, Abbreviation, Abbreviation2");
 
-        const canonOriginalList = Array.from(canonOriginalSet);
+        if (tmErr) throw tmErr;
+
         const canonToAbbr: Record<string, string> = {};
-
-        const CHUNK = 200;
-        for (let i = 0; i < canonOriginalList.length; i += CHUNK) {
-          const chunk = canonOriginalList.slice(i, i + CHUNK);
-
-          const { data: tm, error: tmErr } = await supabase
-            .from("team_map")
-            .select("canonical, Abbreviation, Abbreviation2")
-            .in("canonical", chunk);
-
-          if (tmErr) throw tmErr;
-
-          for (const r of (tm ?? []) as TeamMapRow[]) {
-            const key = normCanon(r.canonical);
-            const abbr = (r.Abbreviation ?? "").trim() || (r.Abbreviation2 ?? "").trim();
-            if (key && abbr) canonToAbbr[key] = abbr;
-          }
+        for (const r of (tm ?? []) as TeamMapRow[]) {
+          const key = normCanon(r.canonical);
+          const abbr = (r.Abbreviation ?? "").trim() || (r.Abbreviation2 ?? "").trim();
+          if (key && abbr) canonToAbbr[key] = abbr;
         }
 
-        // aggregate to 1 row per (event, player, market, side, line)
+        // Aggregate 1 row per (event, player, market, side, line)
         const map = new Map<string, AggregatedProp>();
 
         for (const r of props) {
           const player = (r.player_name ?? "").trim();
           const sideRaw = (r.side ?? "").trim().toLowerCase();
-          const side = sideRaw === "o" ? "over" : sideRaw === "u" ? "under" : sideRaw;
+          const side =
+            sideRaw === "o" ? "over" : sideRaw === "u" ? "under" : (sideRaw as any);
 
           const line = r.line ?? null;
-          if (!player || !line || !Number.isFinite(line)) continue;
+          if (!player || line == null || !Number.isFinite(line)) continue;
           if (side !== "over" && side !== "under") continue;
 
-          const key = `p|${r.event_id}|${player.toLowerCase()}|${(r.market ?? "").toLowerCase()}|${side}|${String(line)}`;
+          // ✅ ONLY 4 markets shown
+          const uiMarket = uiMarketFromRaw(r.market ?? null);
+          if (!UI_MARKETS.includes(uiMarket)) continue;
+
+          const rawMarketLower = (r.market ?? "").toLowerCase();
+          const key = `p|${r.event_id}|${player.toLowerCase()}|${rawMarketLower}|${side}|${String(
+            line
+          )}`;
 
           const softBook = normalizeSoftBookKey(r.book);
           if (softBook === "other") continue;
@@ -506,8 +515,6 @@ export function PropsScreen() {
 
           const teamAbbr = canonToAbbr[normCanon(teamCanon)] || null;
           const oppAbbr = canonToAbbr[normCanon(oppCanon)] || null;
-
-          const uiMarket = uiMarketFromRaw(r.market ?? null);
 
           if (!map.has(key)) {
             map.set(key, {
@@ -551,7 +558,7 @@ export function PropsScreen() {
             kelly_fraction: r.kelly_fraction ?? 0,
           };
 
-          // best offer = highest EV
+          // Best offer = highest EV
           if ((r.ev_pct ?? -999) > agg.bestEvPct) {
             agg.bestEvPct = r.ev_pct ?? 0;
             agg.bestBook = softBook;
@@ -593,7 +600,10 @@ export function PropsScreen() {
   const kellyFactor = clamp(safeNum(settings?.kelly_factor, 0), 0, 1);
   const settingsReady = !!(bankroll && kellyFactor);
 
-  const playable = useMemo(() => filtered.filter((r) => r.bestKelly > 0).length, [filtered]);
+  const playable = useMemo(
+    () => filtered.filter((r) => r.bestKelly > 0).length,
+    [filtered]
+  );
 
   return (
     <div className="space-y-4">
@@ -606,24 +616,35 @@ export function PropsScreen() {
               "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
           }}
         />
-        <div className="relative flex items-start justify-between gap-3">
+        <div className="relative flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ background: "#d4af37" }}
+              />
               Player Props
             </div>
-            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Top +EV Props</h2>
+            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">
+              Top +EV Props
+            </h2>
             <p className="text-xs text-[#a8a8a8] mt-1">
               {loading ? "Loading…" : `${filtered.length} props · ${playable} playable`}
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-[11px]">
+          <div className="flex items-center gap-2 text-[11px] flex-wrap">
             <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
-              Bankroll: <span className="text-white">{bankroll ? formatMoney(bankroll) : "—"}</span>
+              Bankroll:{" "}
+              <span className="text-white">
+                {bankroll ? formatMoney(bankroll) : "—"}
+              </span>
             </div>
             <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
-              Kelly: <span className="text-white">{settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"}</span>
+              Kelly:{" "}
+              <span className="text-white">
+                {settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"}
+              </span>
             </div>
           </div>
         </div>
@@ -673,10 +694,10 @@ export function PropsScreen() {
         </div>
       </div>
 
-      {/* TABLE */}
-      <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
+      {/* DESKTOP TABLE (md+) */}
+      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
         <div className="relative overflow-auto" style={{ maxHeight: "calc(100vh - 360px)" }}>
-          <table className="w-full text-xs min-w-[1100px]">
+          <table className="w-full text-xs">
             <thead className="sticky top-0 z-30">
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
                 <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-40 min-w-[360px]">
@@ -709,7 +730,7 @@ export function PropsScreen() {
                 </tr>
               ) : (
                 filtered.map((r) => (
-                  <PropRow
+                  <PropRowDesktop
                     key={r.key}
                     row={r}
                     bankroll={bankroll}
@@ -724,12 +745,47 @@ export function PropsScreen() {
         </div>
       </div>
 
-      <PropDetailsModal open={modalOpen} prop={selected} onClose={closeModal} bankroll={bankroll} kellyFactor={kellyFactor} settingsReady={settingsReady} />
+      {/* MOBILE LIST (<= md) */}
+      <div className="md:hidden space-y-2">
+        {loading ? (
+          <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4 text-xs text-[#808080]">
+            Loading props…
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4 text-xs text-[#808080]">
+            No props for this filter.
+          </div>
+        ) : (
+          filtered.map((r) => (
+            <PropCardMobile
+              key={r.key}
+              row={r}
+              bankroll={bankroll}
+              kellyFactor={kellyFactor}
+              settingsReady={settingsReady}
+              onOpen={() => openModal(r)}
+            />
+          ))
+        )}
+      </div>
+
+      <PropDetailsModal
+        open={modalOpen}
+        prop={selected}
+        onClose={closeModal}
+        bankroll={bankroll}
+        kellyFactor={kellyFactor}
+        settingsReady={settingsReady}
+      />
     </div>
   );
 }
 
-function PropRow({
+/* =========================================================
+   Desktop row
+========================================================= */
+
+function PropRowDesktop({
   row,
   bankroll,
   kellyFactor,
@@ -752,7 +808,12 @@ function PropRow({
     <tr className="transition-colors hover:bg-white/[0.02]">
       {/* Pick (ONLY clickable cell) */}
       <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10">
-        <button onClick={onOpen} className="w-full text-left group" type="button" title="Open details">
+        <button
+          onClick={onOpen}
+          className="w-full text-left group"
+          type="button"
+          title="Open details"
+        >
           <div className="flex items-start gap-3">
             <div className="flex-shrink-0">
               {row.picture_url ? (
@@ -765,7 +826,9 @@ function PropRow({
                 />
               ) : (
                 <div className="h-9 w-9 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] flex items-center justify-center">
-                  <span className="text-[11px] text-[#cfcfcf]">{initials(row.player_name)}</span>
+                  <span className="text-[11px] text-[#cfcfcf]">
+                    {initials(row.player_name)}
+                  </span>
                 </div>
               )}
             </div>
@@ -782,7 +845,6 @@ function PropRow({
                   </div>
                 </div>
 
-                {/* ✅ distinct colors */}
                 <span
                   className={[
                     "text-[10px] px-2 py-0.5 rounded border font-medium",
@@ -828,14 +890,14 @@ function PropRow({
       </td>
 
       <td className="p-3 text-center text-white tabular-nums">{american(row.fairOdds)}</td>
-
       <td className="p-3 text-center text-emerald-400 tabular-nums">{pct(row.bestEvPct, 1)}</td>
-
       <td className="p-3 text-center text-[#b0b0b0] tabular-nums">{Math.round(row.bestScore)}</td>
 
       <td className="p-3 text-center">
         <span className="px-2 py-1 rounded border text-[10px] bg-[#0b0b0b] border-[#2a2a2a] text-white tabular-nums">
-          {settingsReady && Number.isFinite(betAmount) && betAmount > 0 ? formatMoney(betAmount) : "—"}
+          {settingsReady && Number.isFinite(betAmount) && betAmount > 0
+            ? formatMoney(betAmount)
+            : "—"}
         </span>
       </td>
     </tr>
@@ -843,7 +905,148 @@ function PropRow({
 }
 
 /* =========================================================
-   Modal — same structure as ModelScreen
+   Mobile card (NO horizontal scroll)
+========================================================= */
+
+function PropCardMobile({
+  row,
+  bankroll,
+  kellyFactor,
+  settingsReady,
+  onOpen,
+}: {
+  row: AggregatedProp;
+  bankroll: number;
+  kellyFactor: number;
+  settingsReady: boolean;
+  onOpen: () => void;
+}) {
+  const team = row.team_abbr || row.team_canonical || "—";
+  const opp = row.opp_abbr || row.opp_canonical || "—";
+  const betAmount = settingsReady ? calcBetAmount(bankroll, row.bestKelly, kellyFactor) : NaN;
+  const over = row.side === "over";
+
+  return (
+    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-2xl overflow-hidden">
+      {/* Pick block (ONLY clickable area) */}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="w-full text-left p-3 active:opacity-90"
+        aria-label="Open prop details"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0">
+            {row.picture_url ? (
+              <img
+                src={row.picture_url}
+                alt={row.player_name}
+                className="h-10 w-10 rounded-full object-cover border border-[#2a2a2a]"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="h-10 w-10 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] flex items-center justify-center">
+                <span className="text-[11px] text-[#cfcfcf]">{initials(row.player_name)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-white truncate">
+                  {row.player_name} — {row.ui_market} {row.side} {row.line}
+                </div>
+                <div className="text-[11px] text-[#6e6e6e] mt-0.5 truncate">
+                  {team} vs {opp}
+                  {row.position ? ` · ${row.position}` : ""}
+                </div>
+              </div>
+
+              <span
+                className={[
+                  "text-[10px] px-2 py-0.5 rounded border font-medium shrink-0",
+                  over
+                    ? "bg-emerald-500/15 border-emerald-400/30 text-emerald-200"
+                    : "bg-red-500/15 border-red-400/30 text-red-200",
+                ].join(" ")}
+              >
+                {row.side}
+              </span>
+            </div>
+
+            {/* Best strip */}
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] px-2 py-1 rounded border bg-[#0b0b0b] border-[#2a2a2a] text-[#b0b0b0]">
+                Best:{" "}
+                <span className="text-white">
+                  {row.bestBook === "draftkings" ? "DK" : row.bestBook === "fanduel" ? "FD" : "MGM"}{" "}
+                  {american(row.bestOdds)}
+                </span>
+              </span>
+
+              <span className="text-[10px] px-2 py-1 rounded border bg-[#0b0b0b] border-[#2a2a2a] text-[#b0b0b0]">
+                Fair: <span className="text-white">{american(row.fairOdds)}</span>
+              </span>
+
+              <span className="text-[10px] px-2 py-1 rounded border bg-emerald-500/10 border-emerald-400/20 text-emerald-200 tabular-nums">
+                EV {pct(row.bestEvPct, 1)}
+              </span>
+
+              <span className="text-[10px] px-2 py-1 rounded border bg-[#0b0b0b] border-[#2a2a2a] text-[#b0b0b0]">
+                Score: <span className="text-white tabular-nums">{Math.round(row.bestScore)}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </button>
+
+      {/* Non-clickable details (so ONLY pick block opens modal) */}
+      <div className="px-3 pb-3 -mt-1">
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-2">
+            <div className="text-[10px] text-[#6e6e6e]">Projection</div>
+            <div className="text-[12px] text-white tabular-nums mt-0.5">{fmtMu(row.projection)}</div>
+          </div>
+
+          <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-2">
+            <div className="text-[10px] text-[#6e6e6e]">Bet $</div>
+            <div className="text-[12px] text-[#d4af37] tabular-nums mt-0.5">
+              {settingsReady && Number.isFinite(betAmount) && betAmount > 0 ? formatMoney(betAmount) : "—"}
+            </div>
+          </div>
+
+          <div className="col-span-2 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-2">
+            <div className="text-[10px] text-[#6e6e6e] mb-1">Books</div>
+            <div className="flex items-center gap-1 flex-wrap">
+              {SOFT_BOOKS.map((b) => {
+                const offer = row.offers[b];
+                const isBest = row.bestBook === b;
+                return (
+                  <span
+                    key={b}
+                    className={`px-2 py-1 rounded border text-[10px] ${
+                      isBest
+                        ? "bg-[#d4af37]/15 border-[#d4af37]/40 text-[#d4af37]"
+                        : "bg-[#101010] border-[#2a2a2a] text-[#777777]"
+                    }`}
+                  >
+                    {b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM"}{" "}
+                    {offer ? american(offer.odds) : "—"}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Modal — same structure as ModelScreen (fixed header/footer)
 ========================================================= */
 
 type ModalTab = "line" | "hit";
@@ -877,7 +1080,12 @@ function PropDetailsModal({
 
   return (
     <div className="fixed inset-0 z-[100]">
-      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" aria-label="Close details modal" />
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/70"
+        aria-label="Close details modal"
+      />
 
       <div
         className="absolute inset-0 flex items-end md:items-center md:justify-center"
@@ -916,7 +1124,8 @@ function PropDetailsModal({
                 </div>
 
                 <div className="mt-1 text-[11px] text-[#b0b0b0]">
-                  Projection: <span className="text-white tabular-nums">{fmtMu(prop.projection)}</span>
+                  Projection:{" "}
+                  <span className="text-white tabular-nums">{fmtMu(prop.projection)}</span>
                 </div>
               </div>
 
@@ -931,7 +1140,9 @@ function PropDetailsModal({
                 </button>
 
                 <div className="mt-2 text-[10px] text-[#606060]">Best EV</div>
-                <div className="text-emerald-400 font-semibold tabular-nums">{pct(prop.bestEvPct, 1)}</div>
+                <div className="text-emerald-400 font-semibold tabular-nums">
+                  {pct(prop.bestEvPct, 1)}
+                </div>
 
                 <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
                 <div className="text-[#d4af37] font-semibold tabular-nums">
@@ -958,8 +1169,8 @@ function PropDetailsModal({
             </div>
           </div>
 
-          {/* Body */}
-          <div className="flex-1 min-h-0 p-4">
+          {/* Body (scrollable if needed, but header/footer fixed) */}
+          <div className="flex-1 min-h-0 p-4 overflow-auto">
             {tab === "line" ? <PropOddsHistoryPanel prop={prop} /> : <PropHitRatePanel prop={prop} />}
           </div>
 
@@ -1004,7 +1215,7 @@ function LegendDot({ label, color }: { label: string; color: string }) {
 }
 
 /* =========================================================
-   Modal Tab: Line History (uses player_props_history)
+   Modal Tab: Line History (player_props_history)
 ========================================================= */
 
 function PropOddsHistoryPanel({ prop }: { prop: AggregatedProp }) {
@@ -1036,7 +1247,9 @@ function PropOddsHistoryPanel({ prop }: { prop: AggregatedProp }) {
 
         const { data, error } = await supabase
           .from(PROPS_HISTORY_TABLE)
-          .select(`${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`)
+          .select(
+            `${PLAYER_COL_PROPS},${MARKET_COL_PROPS},${SIDE_COL_PROPS},${BOOK_COL_PROPS},${ODDS_COL_PROPS},${TS_COL_PROPS}`
+          )
           .eq(PLAYER_COL_PROPS, playerName)
           .eq(MARKET_COL_PROPS, marketKey)
           .eq(SIDE_COL_PROPS, sideCanon)
@@ -1120,7 +1333,9 @@ function PropOddsHistoryPanel({ prop }: { prop: AggregatedProp }) {
           {rows.map(({ k, v }) => (
             <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
               <span style={{ fontSize: 11, color: BOOK_COLOR[k] }}>{bookShort(k)}</span>
-              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>{american(v)}</span>
+              <span style={{ fontSize: 11, color: "#fff", fontVariantNumeric: "tabular-nums" }}>
+                {american(v)}
+              </span>
             </div>
           ))}
         </div>
@@ -1174,16 +1389,52 @@ function PropOddsHistoryPanel({ prop }: { prop: AggregatedProp }) {
               />
 
               {hasAny("draftkings") ? (
-                <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                <Line
+                  type="monotone"
+                  dataKey="draftkings"
+                  name="DK"
+                  stroke={BOOK_COLOR.draftkings}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                  isAnimationActive={false}
+                />
               ) : null}
               {hasAny("fanduel") ? (
-                <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                <Line
+                  type="monotone"
+                  dataKey="fanduel"
+                  name="FD"
+                  stroke={BOOK_COLOR.fanduel}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                  isAnimationActive={false}
+                />
               ) : null}
               {hasAny("betmgm") ? (
-                <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                <Line
+                  type="monotone"
+                  dataKey="betmgm"
+                  name="MGM"
+                  stroke={BOOK_COLOR.betmgm}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                  isAnimationActive={false}
+                />
               ) : null}
               {hasAny("pinnacle") ? (
-                <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                <Line
+                  type="monotone"
+                  dataKey="pinnacle"
+                  name="PIN"
+                  stroke={BOOK_COLOR.pinnacle}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                  isAnimationActive={false}
+                />
               ) : null}
             </LineChart>
           </ResponsiveContainer>
@@ -1250,7 +1501,14 @@ function PropHitRatePanel({ prop }: { prop: AggregatedProp }) {
 
   const marketKey = historyPropMarketKey(prop.raw_market);
   const statKey: "pts" | "reb" | "ast" | "threes" =
-    marketKey === "player_rebounds" ? "reb" : marketKey === "player_assists" ? "ast" : marketKey === "player_threes" ? "threes" : "pts";
+    marketKey === "player_rebounds"
+      ? "reb"
+      : marketKey === "player_assists"
+      ? "ast"
+      : marketKey === "player_threes"
+      ? "threes"
+      : "pts";
+
   const statLabel = statKey === "reb" ? "REB" : statKey === "ast" ? "AST" : statKey === "threes" ? "3PM" : "PTS";
 
   const chartData = useMemo(() => {
@@ -1296,7 +1554,8 @@ function PropHitRatePanel({ prop }: { prop: AggregatedProp }) {
 
         <div style={{ fontSize: 11, color: "#b0b0b0", lineHeight: 1.35 }}>
           <div>
-            vs <span style={{ color: "#fff" }}>{d.opp}</span> · <span style={{ color: "#808080" }}>{d.score}</span>
+            vs <span style={{ color: "#fff" }}>{d.opp}</span> ·{" "}
+            <span style={{ color: "#808080" }}>{d.score}</span>
           </div>
 
           <div style={{ marginTop: 8, display: "grid", gap: 2 }}>
@@ -1349,8 +1608,19 @@ function PropHitRatePanel({ prop }: { prop: AggregatedProp }) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} barCategoryGap={12}>
                 <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
-                <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "#808080" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  minTickGap={12}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: "#808080" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  width={36}
+                />
 
                 {/* ✅ no shaded cursor */}
                 <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
