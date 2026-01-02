@@ -1,34 +1,114 @@
 /**
- * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.0: CALIBRATED MARGIN/TOTALS + CORRELATED SIMS)
+ * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.1: MODEL_CALIBRATION + CORRELATED SIMS)
  * --------------------------------------------------------------------------------------------------
- * What this fixes (the real reasons spreads/totals lag ML):
- *   ✅ Margin mean now supports learned scaling (alpha + beta*(power diff) + hca_beta*hca)
- *   ✅ Sigmas can be auto-calibrated from recent residuals (if results table exists), else fallback to team sigmas
- *   ✅ Margin + Total are simulated with correlation rho (removes “independent draw” distortion)
- *   ✅ Totals weights can be auto-fit (optional) using completed-game residual regression, else fallback to env weights
- *   ✅ Consensus lines use robust median (less noise than mean) and fill symmetric sides
+ * ✅ Uses public.model_calibration (your table) instead of trying to fit on the fly
+ * ✅ Correlated margin+total sims (rho)
+ * ✅ Calibrated margin mean: intercept + margin_scale*(power diff) + hca_scale*(true_hca)
+ * ✅ Calibrated sigmas via multipliers (sigma_*_mult) applied to team-based sigma (with floors)
+ * ✅ Totals anchoring via total_anchor_w:
+ *      totalMean = (1-w)*modelTotal + w*(consensus total line)   (only when total line exists)
+ * ✅ Robust consensus lines: median of latest-per-book from odds_snapshot, with symmetric fills
  *
- * Data tables used (same as before):
- *   ✅ events
- *   ✅ team_ratings
- *   ✅ team_possessions
- *   ✅ odds_snapshot
- *   ✅ monte_carlo_results (snapshot overwrite per sport)
- *   ✅ monte_carlo_runs (history)
- *   ✅ ev_plays (cleared per sport each run, then rebuilt)
- *
- * Optional results table for calibration (recommended, but script won’t break if missing):
- *   - GAME_RESULTS_TABLE (default "game_results")
- *     Expected columns:
- *       sport_key, event_id, home_score, away_score, close_spread_home, close_total
- *
- * Notes:
- *   - If GAME_RESULTS_TABLE is missing or empty, script gracefully falls back to your current behavior,
- *     but still uses correlated sims (rho env) + robust median consensus.
+ * Tables used (same as your pipeline):
+ *   - events
+ *   - team_ratings
+ *   - team_possessions
+ *   - odds_snapshot
+ *   - monte_carlo_results (snapshot overwrite per sport)
+ *   - monte_carlo_runs (history)
+ *   - ev_plays (cleared per sport each run, then rebuilt)
+ *   - model_calibration (NEW: calibration knobs per sport)
  */
 
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
+
+/* =========================================================
+   UTIL (keep above config — used by env parsing)
+========================================================= */
+
+function clamp(x: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, x));
+}
+function clamp01(x: number) {
+  return clamp(x, 0, 1);
+}
+function round2(x: number) {
+  return Math.round(x * 100) / 100;
+}
+function round3(x: number) {
+  return Math.round(x * 1000) / 1000;
+}
+function mean(arr: number[]) {
+  return arr.reduce((s, x) => s + x, 0) / (arr.length || 1);
+}
+function median(arr: number[]) {
+  const xs = arr.filter((x) => Number.isFinite(x)).slice().sort((a, b) => a - b);
+  if (!xs.length) return NaN;
+  const mid = Math.floor(xs.length / 2);
+  return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
+}
+function stddev(arr: number[]) {
+  const xs = arr.filter((x) => Number.isFinite(x));
+  if (xs.length < 2) return NaN;
+  const m = mean(xs);
+  const v = xs.reduce((s, x) => s + (x - m) * (x - m), 0) / (xs.length - 1);
+  return Math.sqrt(v);
+}
+function corr(a: number[], b: number[]) {
+  const n = Math.min(a.length, b.length);
+  if (n < 3) return NaN;
+  const xa = a.slice(0, n);
+  const xb = b.slice(0, n);
+  const ma = mean(xa);
+  const mb = mean(xb);
+  let sxx = 0,
+    syy = 0,
+    sxy = 0;
+  for (let i = 0; i < n; i++) {
+    const da = xa[i] - ma;
+    const db = xb[i] - mb;
+    sxx += da * da;
+    syy += db * db;
+    sxy += da * db;
+  }
+  if (sxx <= 0 || syy <= 0) return NaN;
+  return sxy / Math.sqrt(sxx * syy);
+}
+function nearlyEqual(a: number, b: number, tol: number) {
+  return Math.abs(a - b) <= tol;
+}
+function num(v: any, fallback: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function toNullNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function avg(a: number, b: number) {
+  return (a + b) / 2;
+}
+function avgNullable(a: number | null, b: number | null): number | null {
+  if (a == null && b == null) return null;
+  if (a == null) return b;
+  if (b == null) return a;
+  return (a + b) / 2;
+}
+function averageNonNull(arr: Array<number | null | undefined>): number | null {
+  const xs = arr.filter((x): x is number => x != null && Number.isFinite(x));
+  if (!xs.length) return null;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+// Box–Muller
+function randn() {
+  let u = 0,
+    v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+}
 
 /* =========================================================
    TYPES
@@ -62,7 +142,7 @@ type TeamRatingRow = {
 
   true_hca: number | null; // points per game
 
-  // per-100 sigmas (scaled, but we can override via calibration)
+  // per-100 sigmas (scaled by pace to per-game)
   sigma_margin_100: number | null;
   sigma_total_100: number | null;
 };
@@ -161,13 +241,23 @@ type PossRow = {
   "2024": number | null;
 };
 
-type GameResultRow = {
+type ModelCalibrationRow = {
   sport_key: string;
-  event_id: string;
-  home_score: number | null;
-  away_score: number | null;
-  close_spread_home: number | null;
-  close_total: number | null;
+  window_days: number;
+  min_sample: number;
+  n_games: number;
+
+  margin_scale: number; // scale on powerDiff
+  margin_intercept: number;
+  hca_scale: number;
+
+  sigma_margin_mult: number; // multiplier on team-based sigma (after pace scaling)
+  sigma_total_mult: number;
+
+  total_anchor_w: number; // blend weight to market total line (0..1), when line exists
+  rho_margin_total: number; // correlation between margin and total
+
+  updated_at: string;
 };
 
 /* =========================================================
@@ -245,7 +335,7 @@ const PACE_W_LAST1 = Number(process.env.PACE_W_LAST1 ?? "0.10");
 const PACE_W_SPLIT = Number(process.env.PACE_W_SPLIT ?? "0.10");
 
 /**
- * Default totals component weights (used if auto-fit is unavailable)
+ * Default totals component weights (used always; model_calibration only anchors to market total)
  */
 const TOTAL_W_OFFDEF_PACE = Number(process.env.TOTAL_W_OFFDEF_PACE ?? "0.40");
 const TOTAL_W_PFPA = Number(process.env.TOTAL_W_PFPA ?? "0.10");
@@ -258,37 +348,27 @@ const PTS_BLEND_WEIGHT_OFF = Number(process.env.PTS_BLEND_WEIGHT_OFF ?? "0.50");
 const PTS_BLEND_WEIGHT_DEF = 1 - PTS_BLEND_WEIGHT_OFF;
 
 /**
- * NEW: correlation between margin and total simulations (critical for spread/total realism)
- * - basketball often has small +rho (~0.10 to 0.30). Start at 0.18 unless you calibrate.
+ * Default rho used if model_calibration is missing/unready
  */
 const RHO_MT_DEFAULT = clamp(Number(process.env.MC_RHO_MT ?? "0.18"), -0.75, 0.75);
 
 /**
- * NEW: margin calibration fallback knobs (used if results calibration not available)
- * marginMean = alpha + beta*(homePow-awayPow) + hca_beta*hcaPts
+ * Default margin knobs used if model_calibration missing/unready
  */
-const MARGIN_ALPHA = Number(process.env.MC_MARGIN_ALPHA ?? "0");
-const MARGIN_BETA = Number(process.env.MC_MARGIN_BETA ?? "1.00");
-const MARGIN_HCA_BETA = Number(process.env.MC_MARGIN_HCA_BETA ?? "1.00");
+const MARGIN_INTERCEPT_DEFAULT = Number(process.env.MC_MARGIN_ALPHA ?? "0");
+const MARGIN_SCALE_DEFAULT = Number(process.env.MC_MARGIN_BETA ?? "1.00");
+const HCA_SCALE_DEFAULT = Number(process.env.MC_MARGIN_HCA_BETA ?? "1.00");
 
 /**
- * NEW: sigma calibration mode
- * - "residual" (preferred): use rolling residual std from completed games if GAME_RESULTS_TABLE exists
- * - "team": old behavior (team sigmas scaled by paceFactor + floors)
+ * Default sigma multipliers if calibration missing
  */
-const SIGMA_MODE = (process.env.MC_SIGMA_MODE ?? "residual").toLowerCase(); // "residual" | "team"
+const SIGMA_MARGIN_MULT_DEFAULT = Number(process.env.MC_SIGMA_MARGIN_MULT ?? "1.00");
+const SIGMA_TOTAL_MULT_DEFAULT = Number(process.env.MC_SIGMA_TOTAL_MULT ?? "1.00");
 
 /**
- * NEW: optional calibration from results
+ * Default total anchoring to market total if calibration missing
  */
-const GAME_RESULTS_TABLE = process.env.GAME_RESULTS_TABLE ?? "game_results";
-const CALIB_LOOKBACK_DAYS = Number(process.env.MC_CALIB_LOOKBACK_DAYS ?? "60");
-const CALIB_MIN_SAMPLES = Number(process.env.MC_CALIB_MIN_SAMPLES ?? "80");
-
-/**
- * NEW: totals auto-fit flag (uses completed games if available)
- */
-const TOTALS_AUTOFIT = (process.env.MC_TOTALS_AUTOFIT ?? "true").toLowerCase() === "true";
+const TOTAL_ANCHOR_W_DEFAULT = clamp(Number(process.env.MC_TOTAL_ANCHOR_W ?? "0.00"), 0, 0.85);
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
@@ -319,6 +399,9 @@ async function main() {
 async function runForSport(sportKey: string, startCutoff: Date) {
   console.log(`\n[MC+EV] >>> SPORT=${sportKey}`);
 
+  // 0) Load calibration row (model_calibration)
+  const calib = await fetchModelCalibrationForSport(sportKey);
+
   // 1) Future events
   const events = await fetchFutureEvents(startCutoff, sportKey);
   if (!events.length) {
@@ -330,7 +413,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   // 2) Create run row
   const runId = await createMonteCarloRun({
     sport_key: sportKey,
-    config: buildRunConfig(sportKey),
+    config: buildRunConfig(sportKey, calib),
   });
 
   // 3) Clear snapshot rows for this sport
@@ -355,9 +438,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   const possRows = await fetchTeamPossessionsForSportSeason(sportKey, POSS_SEASON, teams);
   const possMap = new Map<string, PossRow>();
   for (const p of possRows) possMap.set(p.canonical, p);
-
-  // 6b) Optional calibration from completed games (margin scale, sigmas, rho, totals weights)
-  const calib = await tryBuildCalibrationFromResults(sportKey, ratingMap, possMap);
 
   // 7) Simulate games
   const results: MonteCarloResultUpsert[] = [];
@@ -396,23 +476,14 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
 
-    // Inputs (now calibrated)
+    // Build calibrated inputs
     const input = buildInputsPaceAware({
       sportKey,
       home: homeR,
       away: awayR,
       paceGame,
-      totalsWeights: calib?.totalsWeights ?? {
-        w_offdef_pace: TOTAL_W_OFFDEF_PACE,
-        w_pfpa: TOTAL_W_PFPA,
-        w_avg_total: TOTAL_W_AVG_TOTAL,
-      },
-      marginParams: calib?.marginParams ?? {
-        alpha: MARGIN_ALPHA,
-        beta: MARGIN_BETA,
-        hca_beta: MARGIN_HCA_BETA,
-      },
-      sigmaOverride: calib?.sigmaOverride ?? null,
+      consensusTotalLine: totalLine,
+      calib,
     });
 
     const sim = simulateGameWithProbs(SIMS, input, {
@@ -420,7 +491,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       totalLine,
       eps: EPS,
       marginHomeWinNegativeStore: MARGIN_HOME_WIN_NEGATIVE,
-      rhoMT: calib?.rhoMT ?? RHO_MT_DEFAULT,
+      rhoMT: input.rhoMT,
     });
 
     // Convert (margin,total) to points
@@ -437,15 +508,47 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           pace_home_poss_per_game: paceHome,
           pace_away_poss_per_game: paceAway,
           pace_game_poss_per_game: paceGame,
-          calibration: calib ?? null,
+
+          calibration: calib
+            ? {
+                source: "model_calibration",
+                window_days: calib.window_days,
+                min_sample: calib.min_sample,
+                n_games: calib.n_games,
+                updated_at: calib.updated_at,
+              }
+            : null,
+
+          margin: {
+            intercept: input.marginParams.intercept,
+            scale: input.marginParams.scale,
+            hca_scale: input.marginParams.hca_scale,
+          },
+
+          totals: {
+            model_total_mean: input.totalMean_model,
+            anchor_w: input.totalAnchorW,
+            consensus_total_line: totalLine,
+            blended_total_mean: input.totalMean,
+          },
+
+          sigma: {
+            base_margin_game: input.sigmaMarginGame_base,
+            base_total_game: input.sigmaTotalGame_base,
+            mult_margin: input.sigmaMult.margin,
+            mult_total: input.sigmaMult.total,
+            final_margin_game: input.sigmaMarginGame,
+            final_total_game: input.sigmaTotalGame,
+          },
+
+          rho_mt: input.rhoMT,
+
           totals_components: input.totalsComponents,
-          margin_mean_pts: input.marginMean,
-          total_mean_pts: input.totalMean,
-          sigma_margin_game_pts: input.sigmaMarginGame,
-          sigma_total_game_pts: input.sigmaTotalGame,
+
           spread_line_home_consensus: spreadLineHome,
           total_line_consensus: totalLine,
           sims: SIMS,
+
           stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
         }
       : null;
@@ -507,209 +610,99 @@ async function runForSport(sportKey: string, startCutoff: Date) {
 }
 
 /* =========================================================
-   OPTIONAL CALIBRATION (RESULTS-BASED)
+   MODEL_CALIBRATION
 ========================================================= */
 
-type MarginParams = { alpha: number; beta: number; hca_beta: number };
-type TotalsWeights = { w_offdef_pace: number; w_pfpa: number; w_avg_total: number };
-type SigmaOverride = { sigmaMarginGame: number; sigmaTotalGame: number };
+type EffectiveCalibration = {
+  // margin mean
+  margin_intercept: number;
+  margin_scale: number;
+  hca_scale: number;
 
-type Calibration = {
-  source: string;
-  samples: number;
-  marginParams: MarginParams;
-  totalsWeights: TotalsWeights;
-  sigmaOverride: SigmaOverride | null;
-  rhoMT: number;
+  // sigma multipliers
+  sigma_margin_mult: number;
+  sigma_total_mult: number;
+
+  // totals anchoring
+  total_anchor_w: number;
+
+  // correlation
+  rho_margin_total: number;
+
+  // readiness gates
+  window_days: number;
+  min_sample: number;
+  n_games: number;
+  updated_at: string;
 };
 
-async function tryBuildCalibrationFromResults(
-  sportKey: string,
-  ratingMap: Map<string, TeamRatingRow>,
-  possMap: Map<string, PossRow>
-): Promise<Calibration | null> {
-  // If user forces team sigma mode and no autofit, still allow rho default; return null.
-  const wantResidual = SIGMA_MODE === "residual";
-  const wantTotalsFit = TOTALS_AUTOFIT;
+function calibrationIsReady(row: ModelCalibrationRow | null): boolean {
+  if (!row) return false;
+  const n = Number(row.n_games);
+  const min = Number(row.min_sample);
+  if (!Number.isFinite(n) || !Number.isFinite(min)) return false;
+  return n >= min;
+}
 
-  if (!wantResidual && !wantTotalsFit) return null;
-
-  const since = new Date(Date.now() - CALIB_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-
+async function fetchModelCalibrationForSport(sportKey: string): Promise<EffectiveCalibration | null> {
   try {
     const { data, error } = await supabase
-      .from(GAME_RESULTS_TABLE)
-      .select("sport_key,event_id,home_score,away_score,close_spread_home,close_total")
+      .from("model_calibration")
+      .select(
+        "sport_key,window_days,min_sample,n_games,margin_scale,margin_intercept,hca_scale,sigma_margin_mult,sigma_total_mult,total_anchor_w,rho_margin_total,updated_at"
+      )
       .eq("sport_key", sportKey)
-      // if your table has a completed_at/commence_time, filter it there; we can’t assume column names.
-      .limit(2000);
-
-    if (error) {
-      console.warn(`[CALIB] (${sportKey}) results table not available (${GAME_RESULTS_TABLE}): ${error.message}`);
-      return null;
-    }
-
-    const rows = (data ?? []) as any as GameResultRow[];
-    const usable: Array<{
-      margin_actual: number;
-      total_actual: number;
-      power_diff: number;
-      hca: number;
-      paceGame: number;
-      comp_offdef_pace: number;
-      comp_pfpa: number | null;
-      comp_avg_total: number | null;
-    }> = [];
-
-    for (const r of rows) {
-      const hs = toNullNum((r as any).home_score);
-      const as = toNullNum((r as any).away_score);
-      if (hs == null || as == null) continue;
-
-      const e = await fetchEventById(r.event_id);
-      if (!e) continue;
-      if (e.sport_key !== sportKey) continue;
-
-      const home = e.canon_home_team;
-      const away = e.canon_away_team;
-      if (!home || !away) continue;
-
-      const homeR = ratingMap.get(home);
-      const awayR = ratingMap.get(away);
-      if (!homeR || !awayR) continue;
-
-      const homeP = possMap.get(home) ?? null;
-      const awayP = possMap.get(away) ?? null;
-
-      const paceHome = computeTeamPace(sportKey, homeP, "home");
-      const paceAway = computeTeamPace(sportKey, awayP, "away");
-      const paceGame = averageNonNull([paceHome, paceAway]) ?? defaultPaceForSport(sportKey);
-
-      const components = computeTotalsComponents(sportKey, homeR, awayR, paceGame);
-
-      const homePow = num(homeR.engine_power, 0);
-      const awayPow = num(awayR.engine_power, 0);
-      const hcaPts = num(homeR.true_hca, 0);
-
-      usable.push({
-        margin_actual: hs - as,
-        total_actual: hs + as,
-        power_diff: homePow - awayPow,
-        hca: hcaPts,
-        paceGame,
-        comp_offdef_pace: components.total_offdef_pace,
-        comp_pfpa: components.total_pfpa,
-        comp_avg_total: components.total_avg_total,
-      });
-    }
-
-    if (usable.length < CALIB_MIN_SAMPLES) {
-      console.warn(`[CALIB] (${sportKey}) not enough samples (${usable.length} < ${CALIB_MIN_SAMPLES}). Using defaults.`);
-      return null;
-    }
-
-    // ---- Fit margin: margin_actual ~ alpha + beta*power_diff + hca_beta*hca
-    const marginFit = fitLinear2(usable.map((u) => [u.power_diff, u.hca]), usable.map((u) => u.margin_actual));
-    const marginParams: MarginParams = {
-      alpha: marginFit.intercept,
-      beta: marginFit.coef[0],
-      hca_beta: marginFit.coef[1],
-    };
-
-    // ---- Fit totals weights (non-negative renorm) if possible
-    let totalsWeights: TotalsWeights = {
-      w_offdef_pace: TOTAL_W_OFFDEF_PACE,
-      w_pfpa: TOTAL_W_PFPA,
-      w_avg_total: TOTAL_W_AVG_TOTAL,
-    };
-
-    if (wantTotalsFit) {
-      // Use only rows with pfpa + avg_total present
-      const tRows = usable.filter((u) => u.comp_pfpa != null && u.comp_avg_total != null);
-      if (tRows.length >= Math.max(50, Math.floor(CALIB_MIN_SAMPLES * 0.6))) {
-        const fit = fitLinear3(
-          tRows.map((u) => [u.comp_offdef_pace, u.comp_pfpa as number, u.comp_avg_total as number]),
-          tRows.map((u) => u.total_actual)
-        );
-
-        // Convert coefficients into non-negative weights (ignore intercept for weights)
-        const wRaw = fit.coef.map((x) => Math.max(0, x));
-        const s = wRaw.reduce((a, b) => a + b, 0);
-        if (s > 0) {
-          totalsWeights = {
-            w_offdef_pace: wRaw[0] / s,
-            w_pfpa: wRaw[1] / s,
-            w_avg_total: wRaw[2] / s,
-          };
-        }
-      }
-    }
-
-    // ---- Residual sigmas + rho (from fitted means)
-    const residM: number[] = [];
-    const residT: number[] = [];
-
-    for (const u of usable) {
-      const mHat = marginParams.alpha + marginParams.beta * u.power_diff + marginParams.hca_beta * u.hca;
-
-      const tHat = blendTotals({
-        offdef_pace: u.comp_offdef_pace,
-        pfpa: u.comp_pfpa,
-        avg_total: u.comp_avg_total,
-        w_offdef_pace: totalsWeights.w_offdef_pace,
-        w_pfpa: totalsWeights.w_pfpa,
-        w_avg_total: totalsWeights.w_avg_total,
-      });
-
-      residM.push(u.margin_actual - mHat);
-      residT.push(u.total_actual - tHat);
-    }
-
-    const sigmaOverride: SigmaOverride | null =
-      wantResidual && residM.length >= CALIB_MIN_SAMPLES
-        ? {
-            sigmaMarginGame: Math.max(SIGMA_MARGIN_FLOOR_GAME, stddev(residM)),
-            sigmaTotalGame: Math.max(SIGMA_TOTAL_FLOOR_GAME, stddev(residT)),
-          }
-        : null;
-
-    const rhoMT = clamp(corr(residM, residT), -0.75, 0.75);
-    const out: Calibration = {
-      source: `${GAME_RESULTS_TABLE} (${CALIB_LOOKBACK_DAYS}d)`,
-      samples: usable.length,
-      marginParams,
-      totalsWeights,
-      sigmaOverride,
-      rhoMT: Number.isFinite(rhoMT) ? rhoMT : RHO_MT_DEFAULT,
-    };
-
-    console.log(
-      `[CALIB] (${sportKey}) samples=${out.samples} margin(alpha=${round3(out.marginParams.alpha)}, beta=${round3(
-        out.marginParams.beta
-      )}, hca_beta=${round3(out.marginParams.hca_beta)}) totals(w1=${round3(out.totalsWeights.w_offdef_pace)}, w2=${round3(
-        out.totalsWeights.w_pfpa
-      )}, w3=${round3(out.totalsWeights.w_avg_total)}) sigma(m=${out.sigmaOverride?.sigmaMarginGame?.toFixed(
-        2
-      ) ?? "team"}, t=${out.sigmaOverride?.sigmaTotalGame?.toFixed(2) ?? "team"}) rho=${round3(out.rhoMT)}`
-    );
-
-    return out;
-  } catch (e: any) {
-    console.warn(`[CALIB] (${sportKey}) calibration skipped: ${e?.message || String(e)}`);
-    return null;
-  }
-
-  async function fetchEventById(eventId: string): Promise<EventRow | null> {
-    // Small helper; if you have an indexed event table, this is fast enough for calibration sample sizes.
-    const { data, error } = await supabase
-      .from("events")
-      .select("event_id,sport_key,commence_time,canon_home_team,canon_away_team,matchup,api_home_team,api_away_team")
-      .eq("event_id", eventId)
       .limit(1);
 
-    if (error) return null;
-    const row = (data ?? [])[0] as any;
-    return row ? (row as EventRow) : null;
+    if (error) {
+      console.warn(`[CALIB] (${sportKey}) model_calibration not available: ${error.message}`);
+      return null;
+    }
+
+    const row = (data ?? [])[0] as any as ModelCalibrationRow | undefined;
+    if (!row) {
+      console.warn(`[CALIB] (${sportKey}) model_calibration row missing. Using defaults.`);
+      return null;
+    }
+
+    const ready = calibrationIsReady(row);
+    const eff: EffectiveCalibration = {
+      margin_intercept: num(row.margin_intercept, MARGIN_INTERCEPT_DEFAULT),
+      margin_scale: num(row.margin_scale, MARGIN_SCALE_DEFAULT),
+      hca_scale: num(row.hca_scale, HCA_SCALE_DEFAULT),
+
+      sigma_margin_mult: clamp(num(row.sigma_margin_mult, SIGMA_MARGIN_MULT_DEFAULT), 0.25, 3.0),
+      sigma_total_mult: clamp(num(row.sigma_total_mult, SIGMA_TOTAL_MULT_DEFAULT), 0.25, 3.0),
+
+      total_anchor_w: clamp(num(row.total_anchor_w, TOTAL_ANCHOR_W_DEFAULT), 0, 0.85),
+      rho_margin_total: clamp(num(row.rho_margin_total, RHO_MT_DEFAULT), -0.75, 0.75),
+
+      window_days: num(row.window_days, 60),
+      min_sample: num(row.min_sample, 80),
+      n_games: num(row.n_games, 0),
+      updated_at: String(row.updated_at || ""),
+    };
+
+    if (!ready) {
+      console.warn(
+        `[CALIB] (${sportKey}) NOT READY n_games=${eff.n_games} < min_sample=${eff.min_sample}. Using defaults (but keeping row for trace).`
+      );
+      // still return row so trace can show it, but we’ll ignore it in buildInputsPaceAware via `ready` flag
+      return { ...eff, __not_ready: true } as any;
+    }
+
+    console.log(
+      `[CALIB] (${sportKey}) READY n_games=${eff.n_games} margin(i=${round3(eff.margin_intercept)}, scale=${round3(
+        eff.margin_scale
+      )}, hca=${round3(eff.hca_scale)}) sigma(mult_m=${round3(eff.sigma_margin_mult)}, mult_t=${round3(
+        eff.sigma_total_mult
+      )}) total_anchor_w=${round3(eff.total_anchor_w)} rho=${round3(eff.rho_margin_total)}`
+    );
+
+    return eff;
+  } catch (e: any) {
+    console.warn(`[CALIB] (${sportKey}) fetch skipped: ${e?.message || String(e)}`);
+    return null;
   }
 }
 
@@ -717,7 +710,9 @@ async function tryBuildCalibrationFromResults(
    RUN CONFIG
 ========================================================= */
 
-function buildRunConfig(sportKey: string) {
+function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
+  const ready = calib ? calibrationIsReady(calib as any) : false;
+
   return {
     sport_key: sportKey,
     season: SEASON,
@@ -728,14 +723,33 @@ function buildRunConfig(sportKey: string) {
     margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
     write_trace: WRITE_TRACE,
 
-    // new modeling knobs
-    rho_mt_default: RHO_MT_DEFAULT,
-    sigma_mode: SIGMA_MODE,
-    calib: {
-      results_table: GAME_RESULTS_TABLE,
-      lookback_days: CALIB_LOOKBACK_DAYS,
-      min_samples: CALIB_MIN_SAMPLES,
-      totals_autofit: TOTALS_AUTOFIT,
+    calibration: {
+      source: "model_calibration",
+      ready,
+      row: calib
+        ? {
+            window_days: calib.window_days,
+            min_sample: calib.min_sample,
+            n_games: calib.n_games,
+            updated_at: calib.updated_at,
+            margin_intercept: calib.margin_intercept,
+            margin_scale: calib.margin_scale,
+            hca_scale: calib.hca_scale,
+            sigma_margin_mult: calib.sigma_margin_mult,
+            sigma_total_mult: calib.sigma_total_mult,
+            total_anchor_w: calib.total_anchor_w,
+            rho_margin_total: calib.rho_margin_total,
+          }
+        : null,
+      defaults: {
+        margin_intercept: MARGIN_INTERCEPT_DEFAULT,
+        margin_scale: MARGIN_SCALE_DEFAULT,
+        hca_scale: HCA_SCALE_DEFAULT,
+        sigma_margin_mult: SIGMA_MARGIN_MULT_DEFAULT,
+        sigma_total_mult: SIGMA_TOTAL_MULT_DEFAULT,
+        total_anchor_w: TOTAL_ANCHOR_W_DEFAULT,
+        rho: RHO_MT_DEFAULT,
+      },
     },
 
     pace_weights: { w_2025: PACE_W_2025, w_last3: PACE_W_LAST3, w_last1: PACE_W_LAST1, w_split: PACE_W_SPLIT },
@@ -747,8 +761,6 @@ function buildRunConfig(sportKey: string) {
       w_avg_total: TOTAL_W_AVG_TOTAL,
       offdef_blend: { w_off: PTS_BLEND_WEIGHT_OFF, w_def: PTS_BLEND_WEIGHT_DEF },
     },
-
-    margin_defaults: { alpha: MARGIN_ALPHA, beta: MARGIN_BETA, hca_beta: MARGIN_HCA_BETA },
 
     line_source: "consensus(median latest-per-book from odds_snapshot)",
     generated_at: new Date().toISOString(),
@@ -818,14 +830,8 @@ function defaultPaceForSport(sportKey: string) {
   return 70;
 }
 
-function averageNonNull(arr: Array<number | null | undefined>): number | null {
-  const xs = arr.filter((x): x is number => x != null && Number.isFinite(x));
-  if (!xs.length) return null;
-  return xs.reduce((a, b) => a + b, 0) / xs.length;
-}
-
 /* =========================================================
-   MODEL (CALIBRATED)
+   MODEL (CALIBRATED via model_calibration)
 ========================================================= */
 
 function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
@@ -873,69 +879,6 @@ function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: Te
   return { total_offdef_pace, total_pfpa, total_avg_total };
 }
 
-function buildInputsPaceAware(args: {
-  sportKey: string;
-  home: TeamRatingRow;
-  away: TeamRatingRow;
-  paceGame: number;
-  totalsWeights: TotalsWeights;
-  marginParams: MarginParams;
-  sigmaOverride: SigmaOverride | null;
-}) {
-  const { sportKey, home, away, paceGame } = args;
-  const paceFactor = paceGame / 100;
-
-  const comps = computeTotalsComponents(sportKey, home, away, paceGame);
-
-  const totalMean = blendTotals({
-    offdef_pace: comps.total_offdef_pace,
-    pfpa: comps.total_pfpa,
-    avg_total: comps.total_avg_total,
-    w_offdef_pace: args.totalsWeights.w_offdef_pace,
-    w_pfpa: args.totalsWeights.w_pfpa,
-    w_avg_total: args.totalsWeights.w_avg_total,
-  });
-
-  // Calibrated margin mean
-  const homePow = num(home.engine_power, 0);
-  const awayPow = num(away.engine_power, 0);
-  const hcaPts = num(home.true_hca, 0);
-  const powerDiff = homePow - awayPow;
-
-  const marginMean = args.marginParams.alpha + args.marginParams.beta * powerDiff + args.marginParams.hca_beta * hcaPts;
-
-  // Sigma
-  let sigmaMarginGame: number;
-  let sigmaTotalGame: number;
-
-  if (args.sigmaOverride && SIGMA_MODE === "residual") {
-    sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, args.sigmaOverride.sigmaMarginGame);
-    sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, args.sigmaOverride.sigmaTotalGame);
-  } else {
-    // team-based fallback (your old behavior)
-    const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
-    const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
-
-    sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMargin100 * paceFactor);
-    sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotal100 * paceFactor);
-  }
-
-  return {
-    marginMean,
-    totalMean,
-    sigmaMarginGame,
-    sigmaTotalGame,
-    totalsComponents: {
-      ...comps,
-      weights: {
-        w_offdef_pace: args.totalsWeights.w_offdef_pace,
-        w_pfpa: args.totalsWeights.w_pfpa,
-        w_avg_total: args.totalsWeights.w_avg_total,
-      },
-    },
-  };
-}
-
 function blendTotals(args: {
   offdef_pace: number;
   pfpa: number | null;
@@ -961,11 +904,96 @@ function blendTotals(args: {
   return Math.max(0, total);
 }
 
-function avgNullable(a: number | null, b: number | null): number | null {
-  if (a == null && b == null) return null;
-  if (a == null) return b;
-  if (b == null) return a;
-  return (a + b) / 2;
+function buildInputsPaceAware(args: {
+  sportKey: string;
+  home: TeamRatingRow;
+  away: TeamRatingRow;
+  paceGame: number;
+  consensusTotalLine: number | null;
+  calib: EffectiveCalibration | null;
+}) {
+  const { sportKey, home, away, paceGame, consensusTotalLine, calib } = args;
+  const paceFactor = paceGame / 100;
+
+  const ready = calib ? calibrationIsReady(calib as any) : false;
+
+  const comps = computeTotalsComponents(sportKey, home, away, paceGame);
+
+  const totalMean_model = blendTotals({
+    offdef_pace: comps.total_offdef_pace,
+    pfpa: comps.total_pfpa,
+    avg_total: comps.total_avg_total,
+    w_offdef_pace: TOTAL_W_OFFDEF_PACE,
+    w_pfpa: TOTAL_W_PFPA,
+    w_avg_total: TOTAL_W_AVG_TOTAL,
+  });
+
+  // totals anchoring (only if line exists)
+  const totalAnchorW = ready ? clamp(calib!.total_anchor_w, 0, 0.85) : TOTAL_ANCHOR_W_DEFAULT;
+  const totalMean =
+    consensusTotalLine != null && Number.isFinite(consensusTotalLine)
+      ? Math.max(0, (1 - totalAnchorW) * totalMean_model + totalAnchorW * consensusTotalLine)
+      : totalMean_model;
+
+  // margin mean
+  const homePow = num(home.engine_power, 0);
+  const awayPow = num(away.engine_power, 0);
+  const hcaPts = num(home.true_hca, 0);
+  const powerDiff = homePow - awayPow;
+
+  const marginParams = {
+    intercept: ready ? num(calib!.margin_intercept, MARGIN_INTERCEPT_DEFAULT) : MARGIN_INTERCEPT_DEFAULT,
+    scale: ready ? num(calib!.margin_scale, MARGIN_SCALE_DEFAULT) : MARGIN_SCALE_DEFAULT,
+    hca_scale: ready ? num(calib!.hca_scale, HCA_SCALE_DEFAULT) : HCA_SCALE_DEFAULT,
+  };
+
+  const marginMean = marginParams.intercept + marginParams.scale * powerDiff + marginParams.hca_scale * hcaPts;
+
+  // team-based base sigmas (per-100 -> per-game)
+  const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
+  const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
+
+  const sigmaMarginGame_base = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMargin100 * paceFactor);
+  const sigmaTotalGame_base = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotal100 * paceFactor);
+
+  // multipliers from calibration (or defaults)
+  const sigmaMult = {
+    margin: ready ? clamp(num(calib!.sigma_margin_mult, 1), 0.25, 3.0) : SIGMA_MARGIN_MULT_DEFAULT,
+    total: ready ? clamp(num(calib!.sigma_total_mult, 1), 0.25, 3.0) : SIGMA_TOTAL_MULT_DEFAULT,
+  };
+
+  const sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMarginGame_base * sigmaMult.margin);
+  const sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotalGame_base * sigmaMult.total);
+
+  // rho
+  const rhoMT = ready ? clamp(num(calib!.rho_margin_total, RHO_MT_DEFAULT), -0.75, 0.75) : RHO_MT_DEFAULT;
+
+  return {
+    marginMean,
+    totalMean,
+    totalMean_model,
+    totalAnchorW,
+
+    sigmaMarginGame,
+    sigmaTotalGame,
+
+    sigmaMarginGame_base,
+    sigmaTotalGame_base,
+    sigmaMult,
+
+    rhoMT,
+
+    marginParams,
+
+    totalsComponents: {
+      ...comps,
+      weights: {
+        w_offdef_pace: TOTAL_W_OFFDEF_PACE,
+        w_pfpa: TOTAL_W_PFPA,
+        w_avg_total: TOTAL_W_AVG_TOTAL,
+      },
+    },
+  };
 }
 
 /* =========================================================
@@ -1004,10 +1032,10 @@ function simulateGameWithProbs(
     const z1 = randn();
     const z2 = randn();
 
-    // m uses z1
+    // margin uses z1
     const m = input.marginMean + z1 * input.sigmaMarginGame;
 
-    // t uses correlated normal with z1
+    // total uses correlated normal with z1
     const t = Math.max(0, input.totalMean + (rho * z1 + s * z2) * input.sigmaTotalGame);
 
     sumM += m;
@@ -1064,7 +1092,7 @@ function simulateGameWithProbs(
 }
 
 /* =========================================================
-   EV PIPELINE (PER SPORT) — (UNCHANGED LOGIC, but benefits from improved probs)
+   EV PIPELINE (UNCHANGED — benefits from improved probs)
 ========================================================= */
 
 async function rebuildEvPlaysForSport(
@@ -1103,7 +1131,7 @@ async function rebuildEvPlaysForSport(
         const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
         if (!sharp) continue;
 
-        // Tail-safe blending (as before)
+        // Tail-safe blending
         const tail = tailness(sharp.prob);
         const wSharp = clamp(
           TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail,
@@ -1313,7 +1341,7 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
 }
 
 /**
- * Robust consensus: median of latest-per-book lines (less sensitive to outliers than mean)
+ * Robust consensus: median of latest-per-book lines
  */
 async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
@@ -1596,215 +1624,6 @@ function kellyFraction(trueProb: number, bookOdds: number): number {
   const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
   const k = (p * b - (1 - p)) / b;
   return Math.max(0, k);
-}
-
-/* =========================================================
-   UTIL
-========================================================= */
-
-function num(v: any, fallback: number) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function toNullNum(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function avg(a: number, b: number) {
-  return (a + b) / 2;
-}
-
-function mean(arr: number[]) {
-  return arr.reduce((s, x) => s + x, 0) / arr.length;
-}
-
-function median(arr: number[]) {
-  const xs = arr.filter((x) => Number.isFinite(x)).slice().sort((a, b) => a - b);
-  if (!xs.length) return NaN;
-  const mid = Math.floor(xs.length / 2);
-  return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
-}
-
-function stddev(arr: number[]) {
-  const xs = arr.filter((x) => Number.isFinite(x));
-  if (xs.length < 2) return NaN;
-  const m = mean(xs);
-  const v = xs.reduce((s, x) => s + (x - m) * (x - m), 0) / (xs.length - 1);
-  return Math.sqrt(v);
-}
-
-function corr(a: number[], b: number[]) {
-  const n = Math.min(a.length, b.length);
-  if (n < 3) return NaN;
-  const xa = a.slice(0, n);
-  const xb = b.slice(0, n);
-  const ma = mean(xa);
-  const mb = mean(xb);
-  let sxx = 0,
-    syy = 0,
-    sxy = 0;
-  for (let i = 0; i < n; i++) {
-    const da = xa[i] - ma;
-    const db = xb[i] - mb;
-    sxx += da * da;
-    syy += db * db;
-    sxy += da * db;
-  }
-  if (sxx <= 0 || syy <= 0) return NaN;
-  return sxy / Math.sqrt(sxx * syy);
-}
-
-function round2(x: number) {
-  return Math.round(x * 100) / 100;
-}
-function round3(x: number) {
-  return Math.round(x * 1000) / 1000;
-}
-
-function clamp(x: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, x));
-}
-
-function clamp01(x: number) {
-  return clamp(x, 0, 1);
-}
-
-function nearlyEqual(a: number, b: number, tol: number) {
-  return Math.abs(a - b) <= tol;
-}
-
-// Box–Muller
-function randn() {
-  let u = 0,
-    v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-}
-
-/**
- * Ordinary least squares:
- *  y ~ intercept + c1*x1 + c2*x2
- */
-function fitLinear2(X: number[][], y: number[]) {
-  // Solve (X'X) beta = X'y for beta=[c1,c2], with intercept handled by centering.
-  const n = Math.min(X.length, y.length);
-  const x1 = new Array(n);
-  const x2 = new Array(n);
-  const yy = new Array(n);
-  for (let i = 0; i < n; i++) {
-    x1[i] = X[i][0];
-    x2[i] = X[i][1];
-    yy[i] = y[i];
-  }
-  const mx1 = mean(x1);
-  const mx2 = mean(x2);
-  const my = mean(yy);
-
-  let s11 = 0,
-    s22 = 0,
-    s12 = 0,
-    sy1 = 0,
-    sy2 = 0;
-
-  for (let i = 0; i < n; i++) {
-    const a = x1[i] - mx1;
-    const b = x2[i] - mx2;
-    const dy = yy[i] - my;
-    s11 += a * a;
-    s22 += b * b;
-    s12 += a * b;
-    sy1 += dy * a;
-    sy2 += dy * b;
-  }
-
-  // Invert 2x2
-  const det = s11 * s22 - s12 * s12;
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) {
-    return { intercept: my, coef: [0, 0] };
-  }
-  const inv11 = s22 / det;
-  const inv22 = s11 / det;
-  const inv12 = -s12 / det;
-
-  const c1 = inv11 * sy1 + inv12 * sy2;
-  const c2 = inv12 * sy1 + inv22 * sy2;
-
-  const intercept = my - c1 * mx1 - c2 * mx2;
-  return { intercept, coef: [c1, c2] };
-}
-
-/**
- * OLS:
- * y ~ intercept + c1*x1 + c2*x2 + c3*x3
- */
-function fitLinear3(X: number[][], y: number[]) {
-  const n = Math.min(X.length, y.length);
-  const xs = X.slice(0, n);
-  const yy = y.slice(0, n);
-
-  // center
-  const mx = [0, 0, 0];
-  for (let j = 0; j < 3; j++) mx[j] = mean(xs.map((r) => r[j]));
-  const my = mean(yy);
-
-  // build normal equations for 3 vars
-  const A = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-  ];
-  const b = [0, 0, 0];
-
-  for (let i = 0; i < n; i++) {
-    const v = [xs[i][0] - mx[0], xs[i][1] - mx[1], xs[i][2] - mx[2]];
-    const dy = yy[i] - my;
-
-    for (let r = 0; r < 3; r++) {
-      b[r] += v[r] * dy;
-      for (let c = 0; c < 3; c++) A[r][c] += v[r] * v[c];
-    }
-  }
-
-  const coef = solve3x3(A, b);
-  const intercept = my - coef[0] * mx[0] - coef[1] * mx[1] - coef[2] * mx[2];
-  return { intercept, coef };
-}
-
-function solve3x3(A: number[][], b: number[]) {
-  // Gaussian elimination (3x3)
-  const M = [
-    [A[0][0], A[0][1], A[0][2], b[0]],
-    [A[1][0], A[1][1], A[1][2], b[1]],
-    [A[2][0], A[2][1], A[2][2], b[2]],
-  ];
-
-  for (let col = 0; col < 3; col++) {
-    // pivot
-    let pivot = col;
-    for (let r = col + 1; r < 3; r++) if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
-    if (Math.abs(M[pivot][col]) < 1e-12) return [0, 0, 0];
-    if (pivot !== col) {
-      const tmp = M[col];
-      M[col] = M[pivot];
-      M[pivot] = tmp;
-    }
-
-    // normalize
-    const div = M[col][col];
-    for (let c = col; c < 4; c++) M[col][c] /= div;
-
-    // eliminate
-    for (let r = 0; r < 3; r++) {
-      if (r === col) continue;
-      const f = M[r][col];
-      for (let c = col; c < 4; c++) M[r][c] -= f * M[col][c];
-    }
-  }
-
-  return [M[0][3], M[1][3], M[2][3]];
 }
 
 /* =========================================================
