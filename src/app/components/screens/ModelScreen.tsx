@@ -1,4 +1,4 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Newest Steam + Gates + Mobile Modal)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -6,15 +6,14 @@
 //
 // ✅ Filters: Play Type + Book (BOOK FILTER OPTIONS = soft books only: Any / DK / FD / MGM)
 //
-// ✅ STEAM MODE (your corrected definition — LINE + PRICE aware; no longer crippled):
-//    Shows plays where Pinnacle is moving AGAINST the bettor (steam) in either of these ways:
+// ✅ STEAM MODE (LINE + PRICE aware; FIXED stale/value logic):
+//    Shows plays where Pinnacle is moving AGAINST the bettor (steam) via:
 //      A) PRICE steam: Pinnacle odds moved worse on SAME LINE (e.g., -110 → -125 or +120 → +105)
-//      B) LINE steam: Pinnacle moved the LINE worse for bettor (e.g. favorite -3.5 → -4.5, Over 228.5 → 229.5)
+//      B) LINE steam: Pinnacle moved the LINE worse for bettor (favorite -3.5 → -4.5, Over 228.5 → 229.5)
 //
-//    AND at least one soft book is still "stale/value":
-//      - Soft is currently BETTER than Pinnacle RIGHT NOW either by:
-//          • a better LINE (spread/total) OR
-//          • same line with better PRICE (moneyline/spread/total)
+//    AND at least one soft book is still BETTER than Pinnacle RIGHT NOW by:
+//      - better LINE (spread/total) OR
+//      - same line with better PRICE (moneyline/spread/total)
 //      - Soft can be on a different line than Pinnacle (THIS IS THE FIX).
 //
 // ✅ Steam calculations use odds_snapshot_history last-2 per (event,market,side,book) — line changes included.
@@ -33,7 +32,7 @@
 // ✅ Line History: LINE CHART (DK/FD/MGM/PIN) — tooltip shows DATE+TIME (CT) + LINE + ODDS per book
 // ✅ Hit Rate tab: FantasyPros GAME LOGS = BAR CHART (OVER green / UNDER red), cursor transparent
 //
-// NOTE: Exports both named + default to avoid import mismatch.
+// ✅ Exports both named + default to avoid import mismatch.
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -152,7 +151,7 @@ type BookOffer = {
   odds: number;
   ev_pct: number;
   bet_fraction: number;
-  line?: number | null; // optional for display (ev_plays already has line globally; keep for steam display)
+  line?: number | null; // needed for steam fallback + display
 };
 
 type AggregatedPlay = {
@@ -509,39 +508,39 @@ function softBetterThanPin(args: {
 
   if (!Number.isFinite(softOdds) || !Number.isFinite(pinOdds)) return false;
 
-  if (market === "h2h") {
-    // moneyline: price only (higher is better)
-    return softOdds > pinOdds;
-  }
+  // ML: price only (higher is better)
+  if (market === "h2h") return softOdds > pinOdds;
 
+  // Spread:
   if (market === "spreads") {
     const sL = softLine;
     const pL = pinLine;
+
     if (Number.isFinite(sL) && Number.isFinite(pL)) {
-      if ((sL as number) > (pL as number)) return true; // better spread line
+      if ((sL as number) > (pL as number)) return true; // better line
       if ((sL as number) < (pL as number)) return false;
-      // same line -> price
-      return softOdds > pinOdds;
+      return softOdds > pinOdds; // same line -> better price
     }
-    // missing lines -> fallback to price
-    return softOdds > pinOdds;
+    return softOdds > pinOdds; // fallback
   }
 
-  // totals
+  // Totals:
   const sL = softLine;
   const pL = pinLine;
+
   if (Number.isFinite(sL) && Number.isFinite(pL)) {
     if (side === "over") {
-      if ((sL as number) < (pL as number)) return true; // lower total for over is better
+      if ((sL as number) < (pL as number)) return true; // lower total is better for over
       if ((sL as number) > (pL as number)) return false;
       return softOdds > pinOdds;
     }
     if (side === "under") {
-      if ((sL as number) > (pL as number)) return true; // higher total for under is better
+      if ((sL as number) > (pL as number)) return true; // higher total is better for under
       if ((sL as number) < (pL as number)) return false;
       return softOdds > pinOdds;
     }
   }
+
   return softOdds > pinOdds;
 }
 
@@ -556,27 +555,23 @@ function pinSteamMoved(args: {
 }) {
   const { market, side, prevLine, curLine, prevOdds, curOdds } = args;
 
-  // Price steam (only meaningful if same line)
+  const prevHasLine = Number.isFinite(prevLine as number);
+  const curHasLine = Number.isFinite(curLine as number);
+  const sameLine = !prevHasLine || !curHasLine ? true : (prevLine as number) === (curLine as number);
+
+  // Price steam: only apply when same line (or line unknown)
   const priceSteam =
     prevOdds != null &&
     curOdds != null &&
     Number.isFinite(prevOdds) &&
     Number.isFinite(curOdds) &&
-    (market === "h2h" ||
-      !Number.isFinite(prevLine) ||
-      !Number.isFinite(curLine) ||
-      (prevLine as number) === (curLine as number))
-      ? movedWorsePrice(prevOdds as number, curOdds as number)
-      : false;
+    sameLine &&
+    movedWorsePrice(prevOdds as number, curOdds as number);
 
-  // Line steam (spreads/totals)
+  // Line steam:
   let lineSteam = false;
-  if (market === "spreads" && Number.isFinite(prevLine) && Number.isFinite(curLine)) {
-    lineSteam = movedWorseSpreadLine(prevLine as number, curLine as number);
-  }
-  if (market === "totals" && Number.isFinite(prevLine) && Number.isFinite(curLine)) {
-    lineSteam = movedWorseTotalLine(side, prevLine as number, curLine as number);
-  }
+  if (market === "spreads" && prevHasLine && curHasLine) lineSteam = movedWorseSpreadLine(prevLine as number, curLine as number);
+  if (market === "totals" && prevHasLine && curHasLine) lineSteam = movedWorseTotalLine(side, prevLine as number, curLine as number);
 
   return priceSteam || lineSteam;
 }
@@ -586,7 +581,7 @@ function pinSteamMoved(args: {
 ========================================================= */
 
 function gamePlayKey(r: EvPlayRow) {
-  // Keep line in key for EV aggregation so you still see the best EV by line in normal mode.
+  // Keep line in key for normal aggregation (best EV by line).
   const team = (r.team || "").trim().toLowerCase();
   const line = r.line == null ? "x" : String(r.line);
   return `g|${r.event_id}|${r.market}|${r.side}|${line}|${team}`;
@@ -689,7 +684,7 @@ function collapseGameHistory(rows: any[]): HistoryPoint[] {
   return Array.from(map.values()).sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
 }
 
-function collapsePropsHistory(rows: any[]): { ts: string; draftkings?: number | null; fanduel?: number | null; betmgm?: number | null; pinnacle?: number | null }[] {
+function collapsePropsHistory(rows: any[]) {
   const map = new Map<string, any>();
 
   for (const r of rows) {
@@ -1090,7 +1085,7 @@ export const ModelScreen = () => {
         type Last2 = { prev?: Quote; cur?: Quote };
         const last2 = new Map<string, Last2>();
 
-        function kRow(r: any, book: AnyBookHistory) {
+        function rowKey(r: any, book: AnyBookHistory) {
           return steamKey(r.sport_key, r.event_id, r.market as GameMarketKey, r.side as GameSideKey) + `|${book}`;
         }
 
@@ -1102,7 +1097,7 @@ export const ModelScreen = () => {
           const line = r.line == null ? null : Number(r.line);
           if (!Number.isFinite(odds)) continue;
 
-          const key = kRow(r, book);
+          const key = rowKey(r, book);
           const cur = last2.get(key) ?? {};
           cur.prev = cur.cur;
           cur.cur = { line: Number.isFinite(line as number) ? (line as number) : null, odds };
@@ -1134,14 +1129,16 @@ export const ModelScreen = () => {
           if (!pinMoved) continue;
 
           // Why moved?
-          const priceSteam = (market === "h2h" || (pinPrev.line ?? null) === (pinCur.line ?? null)) && movedWorsePrice(pinPrev.odds, pinCur.odds);
+          const prevHasLine = Number.isFinite(pinPrev.line as number);
+          const curHasLine = Number.isFinite(pinCur.line as number);
+          const sameLine = !prevHasLine || !curHasLine ? true : (pinPrev.line as number) === (pinCur.line as number);
+
+          const priceSteam = sameLine && movedWorsePrice(pinPrev.odds, pinCur.odds);
+
           let lineSteam = false;
-          if (market === "spreads" && Number.isFinite(pinPrev.line) && Number.isFinite(pinCur.line)) {
-            lineSteam = movedWorseSpreadLine(pinPrev.line as number, pinCur.line as number);
-          }
-          if (market === "totals" && Number.isFinite(pinPrev.line) && Number.isFinite(pinCur.line)) {
-            lineSteam = movedWorseTotalLine(side, pinPrev.line as number, pinCur.line as number);
-          }
+          if (market === "spreads" && prevHasLine && curHasLine) lineSteam = movedWorseSpreadLine(pinPrev.line as number, pinCur.line as number);
+          if (market === "totals" && prevHasLine && curHasLine) lineSteam = movedWorseTotalLine(side, pinPrev.line as number, pinCur.line as number);
+
           const pinMove: SteamInfo["pinMove"] = priceSteam && lineSteam ? "both" : lineSteam ? "line" : "price";
 
           const lagging: SteamInfo["lagging"] = {};
@@ -1150,7 +1147,7 @@ export const ModelScreen = () => {
             const soft = last2.get(`${k}|${sb}`);
             const softCur = soft?.cur;
 
-            // if we don't have soft history rows, fall back to the current offer (from ev_plays aggregation)
+            // if no soft history rows, fall back to current offer (from aggregation)
             const offer = p.offers[sb];
             const fallbackCur: Quote | null =
               offer && Number.isFinite(offer.odds)
@@ -1160,7 +1157,7 @@ export const ModelScreen = () => {
             const curQuote = softCur ?? fallbackCur;
             if (!curQuote) return;
 
-            // Must be within odds gate right now (because user is looking to take it)
+            // Must be within odds gate right now (user is looking to take it)
             if (!withinOddsGate(curQuote.odds)) return;
 
             // Soft must currently be BETTER than Pinnacle now — by line or price
@@ -1178,8 +1175,7 @@ export const ModelScreen = () => {
             lagging[sb] = curQuote;
           });
 
-          const lagCount = Object.keys(lagging).length;
-          if (!lagCount) continue;
+          if (!Object.keys(lagging).length) continue;
 
           eligible[k] = {
             pinPrev,
@@ -1220,14 +1216,13 @@ export const ModelScreen = () => {
       list = list.filter((p) => !!p.offers[bookFilter]);
     }
 
-    // Steam gating (only for games): require eligibility, and if a specific book is selected,
+    // Steam gating: require eligibility. If a specific soft book is selected,
     // require that book is one of the "better than PIN right now" lagging books.
     if (steamOnly) {
       list = list.filter((p) => {
         const k = steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side);
         const info = steamEligible[k];
         if (!info) return false;
-
         if (bookFilter !== "any") return !!info.lagging[bookFilter];
         return true;
       });
@@ -1463,7 +1458,14 @@ export const ModelScreen = () => {
         })}
       </div>
 
-      <PlayDetailsModal open={detailsOpen} play={selected} onClose={closeDetails} bankroll={bankroll} kellyFactor={kellyFactor} settingsReady={settingsReady} />
+      <PlayDetailsModal
+        open={detailsOpen}
+        play={selected}
+        onClose={closeDetails}
+        bankroll={bankroll}
+        kellyFactor={kellyFactor}
+        settingsReady={settingsReady}
+      />
     </div>
   );
 };
@@ -1952,8 +1954,14 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
             return;
           }
 
-          // props series uses odds only; reuse HistoryPoint shape (line fields unused)
-          const pts = collapsePropsHistory(data ?? []).map((p) => ({ ts: p.ts, draftkings: p.draftkings ?? null, fanduel: p.fanduel ?? null, betmgm: p.betmgm ?? null, pinnacle: p.pinnacle ?? null })) as any;
+          const pts = collapsePropsHistory(data ?? []).map((p: any) => ({
+            ts: p.ts,
+            draftkings: p.draftkings ?? null,
+            fanduel: p.fanduel ?? null,
+            betmgm: p.betmgm ?? null,
+            pinnacle: p.pinnacle ?? null,
+          })) as any;
+
           setSeries(pts);
 
           if (!pts.length) {
@@ -2025,6 +2033,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
 
         const lineField = `${k}_line`;
         const lineVal = (found?.payload as any)?.[lineField];
+
         const lineText =
           play.kind === "game" && play.gameMeta && play.gameMeta.market !== "h2h" && Number.isFinite(Number(lineVal))
             ? fmtLineGame(play.gameMeta.market, Number(lineVal))
@@ -2392,7 +2401,11 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   return (
     <div className={["inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
       <div className="inline-flex items-center justify-center gap-2">
-        {logo ? <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} /> : <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>}
+        {logo ? (
+          <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
+        ) : (
+          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>
+        )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
@@ -2485,3 +2498,4 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
 export default ModelScreen;
+
