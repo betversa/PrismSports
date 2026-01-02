@@ -1,6 +1,6 @@
-// components/Sidebar.tsx — FULL REWRITE (adds Parlay + Props nav item)
+// components/Sidebar.tsx — FULL REWRITE (adds Parlay + Props + Calculator nav item)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Adds Parlay + NEW Props to sidebar nav (desktop + mobile)
+// ✅ Adds Parlay + Props + NEW Calculator to sidebar nav (desktop + mobile)
 // ✅ Keeps existing Odds/Predictions sport dropdown behavior
 // ✅ Keeps styling + enabled sport logic unchanged
 
@@ -170,7 +170,7 @@ export function Sidebar({
             </button>
           </li>
 
-          {/* Props (NEW) */}
+          {/* Props */}
           <li>
             <button
               onClick={() => {
@@ -200,6 +200,23 @@ export function Sidebar({
               <div className="flex items-center gap-3">
                 <Layers className="w-4 h-4" />
                 <span className="text-sm">Parlay</span>
+              </div>
+            </button>
+          </li>
+
+          {/* ✅ NEW: Calculator */}
+          <li>
+            <button
+              onClick={() => {
+                onNavigate("calculator");
+                if (isMobile) onClose?.();
+              }}
+              className={baseItemClasses(activeScreen === "calculator")}
+              type="button"
+            >
+              <div className="flex items-center gap-3">
+                <Calculator className="w-4 h-4" />
+                <span className="text-sm">Calculator</span>
               </div>
             </button>
           </li>
