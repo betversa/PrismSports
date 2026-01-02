@@ -1,7 +1,7 @@
-// App.tsx — FULL REWRITE (adds Props + Parlay screens + fixes prop mismatch with Sidebar/Header props)
+// App.tsx — FULL REWRITE (adds Calculator screen; keeps everything else unchanged)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Adds "props" + "parlay" to Screen union + routing map
-// ✅ Imports + mounts PropsScreen + ParlayScreen
+// ✅ Adds "calculator" to Screen union + routing map
+// ✅ Imports + mounts CalculatorScreen
 // ✅ Keeps separate Odds vs Predictions sport selectors
 // ✅ Keeps mobile drawer behavior + header height padding
 // ✅ Keeps Sidebar/Header prop contracts (no extra props)
@@ -15,6 +15,7 @@ import { OverviewScreen } from "./components/screens/OverviewScreen";
 import { ModelScreen } from "./components/screens/ModelScreen";
 import { PropsScreen } from "./components/screens/PropsScreen";
 import { ParlayScreen } from "./components/screens/ParlayScreen";
+import { CalculatorScreen } from "./components/screens/CalculatorScreen"; // ✅ NEW
 import { MonteCarloScreen } from "./components/screens/MonteCarloScreen";
 import { OddsScreen } from "./components/screens/OddsScreen";
 import { ResultsScreen } from "./components/screens/ResultsScreen";
@@ -26,6 +27,7 @@ export type Screen =
   | "model"
   | "props"
   | "parlay"
+  | "calculator" // ✅ NEW
   | "monte-carlo"
   | "odds"
   | "results"
@@ -118,6 +120,9 @@ export default function App() {
 
       // ✅ Parlay screen (fetches both tables internally)
       parlay: <ParlayScreen />,
+
+      // ✅ NEW: Calculator screen (pure UI math tools)
+      calculator: <CalculatorScreen />,
 
       // ✅ Predictions sport wired here
       "monte-carlo": <MonteCarloScreen sportKey={predSportKey} />,
