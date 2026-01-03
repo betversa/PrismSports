@@ -1,14 +1,16 @@
-// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (ModelScreen visual parity)
+// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (adds Power Rank + removes Event ID display + game separators)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Visual layout matches ModelScreen (hero gradient + badge + chips + dark sticky table)
 // ✅ Mobile: cards + Details collapsible (unchanged behavior pattern)
-// ✅ Desktop: NO details box; inline columns:
+// ✅ Desktop: inline columns:
 //    Proj Score | Win% | Proj Margin | Proj Total | Cons Spread | Cons Total
 // ✅ Logos + abbreviations via team_map (canonical, "Logo URL", Abbreviation)
+// ✅ NEW: Power Rank via team_ratings (canonical -> power_rank), shown next to team name
 // ✅ Consensus via odds_snapshot (spreads/totals) median across books, latest ts per event
-// ✅ Filters by sportKey (expects parent passes SportKey like Model/Overview screens)
+// ✅ Removes redundant Event ID display — only shows Date + Time for each matchup
+// ✅ Adds a subtle divider row between games on desktop
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import type { SportKey } from "../../App";
 
@@ -54,6 +56,13 @@ type TeamMapRow = {
   "Logo URL": string | null;
 };
 
+type TeamRatingsRow = {
+  canonical: string;
+  power_rank: number | null;
+  // NOTE: If your table has sport_key, we filter by it (recommended).
+  sport_key?: string | null;
+};
+
 type OddsSnapshotRow = {
   ts: string;
   event_id: string;
@@ -88,6 +97,7 @@ type TeamRow = {
   teamName: string;
   teamAbbr: string;
   logoUrl: string | null;
+  powerRank: number | null;
 
   projPoints: number;
 
@@ -124,10 +134,6 @@ type EventBundle = {
 function safeNum(n: any, fallback = 0) {
   const x = Number(n);
   return Number.isFinite(x) ? x : fallback;
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
 }
 
 function american(odds: number | null) {
@@ -265,6 +271,15 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
   );
 }
 
+function RankBadge({ rank }: { rank: number | null }) {
+  if (rank == null || !Number.isFinite(rank)) return null;
+  return (
+    <span className="ml-2 inline-flex items-center rounded-md border border-[#2a2a2a] bg-[#0b0b0b] px-1.5 py-0.5 text-[10px] font-extrabold text-[#d4af37] tabular-nums">
+      #{Math.round(rank)}
+    </span>
+  );
+}
+
 /* =========================================================
    Mobile details block (same behavior as earlier)
 ========================================================= */
@@ -351,8 +366,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
-  const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
+  const [powerRankMap, setPowerRankMap] = useState<Map<string, number>>(new Map());
 
+  const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
 
   const [loadingRun, setLoadingRun] = useState(true);
@@ -397,6 +413,44 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       mounted = false;
     };
   }, []);
+
+  /* 0b) team_ratings power_rank (canonical -> power_rank), filtered by sport_key when available */
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadPowerRanks() {
+      // If your team_ratings is large, consider adding .eq("sport_key", sportKey) + an index.
+      const { data, error } = await supabase
+        .from("team_ratings")
+        .select("canonical,power_rank,sport_key")
+        .eq("sport_key", sportKey);
+
+      if (!mounted) return;
+
+      if (error) {
+        // If your team_ratings table does NOT have sport_key, change select() to "canonical,power_rank"
+        // and remove the .eq("sport_key", sportKey).
+        console.warn("[MonteCarloScreen] team_ratings error:", error.message);
+        setPowerRankMap(new Map());
+        return;
+      }
+
+      const pm = new Map<string, number>();
+      for (const r of (data ?? []) as TeamRatingsRow[]) {
+        const k = normKey(r.canonical);
+        const pr = r.power_rank == null ? null : Number(r.power_rank);
+        if (!k) continue;
+        if (pr != null && Number.isFinite(pr)) pm.set(k, pr);
+      }
+
+      setPowerRankMap(pm);
+    }
+
+    loadPowerRanks();
+    return () => {
+      mounted = false;
+    };
+  }, [sportKey]);
 
   /* 1) latest run for sportKey */
   useEffect(() => {
@@ -620,10 +674,8 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const homePtsStored = Number(r.projected_home_points);
       const awayPtsStored = Number(r.projected_away_points);
 
-      const homePts =
-        Number.isFinite(homePtsStored) ? homePtsStored : (totalProj + marginHome) / 2;
-      const awayPts =
-        Number.isFinite(awayPtsStored) ? awayPtsStored : (totalProj - marginHome) / 2;
+      const homePts = Number.isFinite(homePtsStored) ? homePtsStored : (totalProj + marginHome) / 2;
+      const awayPts = Number.isFinite(awayPtsStored) ? awayPtsStored : (totalProj - marginHome) / 2;
 
       const pHomeCover = r.home_cover_prob != null ? Number(r.home_cover_prob) : null;
       const pAwayCover = r.away_cover_prob != null ? Number(r.away_cover_prob) : null;
@@ -652,6 +704,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         teamName: awayRaw,
         teamAbbr: awayAbbr,
         logoUrl: logoMap.get(awayKey) ?? null,
+        powerRank: powerRankMap.get(awayKey) ?? null,
 
         projPoints: Math.round(awayPts * 10) / 10,
 
@@ -682,6 +735,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         teamName: homeRaw,
         teamAbbr: homeAbbr,
         logoUrl: logoMap.get(homeKey) ?? null,
+        powerRank: powerRankMap.get(homeKey) ?? null,
 
         projPoints: Math.round(homePts * 10) / 10,
 
@@ -713,7 +767,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     }
 
     return out;
-  }, [results, abbrMap, logoMap, consensusMap]);
+  }, [results, abbrMap, logoMap, consensusMap, powerRankMap]);
 
   /* keep open state aligned */
   useEffect(() => {
@@ -813,8 +867,8 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
               </thead>
 
               <tbody className="divide-y divide-[#141414]">
-                {events.map((ev) => (
-                  <DesktopEventRows key={ev.eventId} ev={ev} />
+                {events.map((ev, idx) => (
+                  <DesktopEventRows key={ev.eventId} ev={ev} showDivider={idx < events.length - 1} />
                 ))}
 
                 {!loading && !events.length ? (
@@ -868,6 +922,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 <div className="min-w-0 leading-tight">
                   <div className="text-[11px] text-white font-extrabold truncate" title={ev.away.teamName}>
                     {ev.away.teamName}
+                    <RankBadge rank={ev.away.powerRank} />
                   </div>
                   <div className="text-[9px] text-[#7a7a7a] font-semibold">AWAY · {ev.away.teamAbbr}</div>
                 </div>
@@ -890,6 +945,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 <div className="min-w-0 leading-tight">
                   <div className="text-[11px] text-white font-extrabold truncate" title={ev.home.teamName}>
                     {ev.home.teamName}
+                    <RankBadge rank={ev.home.powerRank} />
                   </div>
                   <div className="text-[9px] text-[#7a7a7a] font-semibold">HOME · {ev.home.teamAbbr}</div>
                 </div>
@@ -906,7 +962,11 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 </div>
               </div>
 
-              {open ? <div className="mt-3"><MobileDetailsBlock away={ev.away} home={ev.home} /></div> : null}
+              {open ? (
+                <div className="mt-3">
+                  <MobileDetailsBlock away={ev.away} home={ev.home} />
+                </div>
+              ) : null}
             </div>
           );
         })}
@@ -919,7 +979,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
    Desktop rows (2 rows per event, but visually one "block")
 ========================================================= */
 
-function DesktopEventRows({ ev }: { ev: EventBundle }) {
+function DesktopEventRows({ ev, showDivider }: { ev: EventBundle; showDivider: boolean }) {
   const away = ev.away;
   const home = ev.home;
 
@@ -933,14 +993,12 @@ function DesktopEventRows({ ev }: { ev: EventBundle }) {
           <span className="text-[#404040]"> </span>
           <span className="text-[#b0b0b0]">{fmtTimeCentral(ev.commenceTime)}</span>
         </div>
-        <div className="text-[10px] text-[#606060] mt-0.5 truncate">
-          Event: <span className="text-[#404040]">{ev.eventId}</span>
-        </div>
+        {/* Removed: Event ID line (redundant noise) */}
       </div>
     </div>
   );
 
-  const CellProjMargin = ({ row, isAway }: { row: TeamRow; isAway: boolean }) => (
+  const CellProjMargin = ({ row }: { row: TeamRow }) => (
     <div className="text-white tabular-nums">
       {fmtSigned1(row.projMarginTeam)}{" "}
       <span className="text-[#808080] text-[10px] font-semibold">({pct01(row.coverProbTeam)})</span>
@@ -991,6 +1049,7 @@ function DesktopEventRows({ ev }: { ev: EventBundle }) {
       <div className="min-w-0">
         <div className="text-white truncate font-semibold" title={row.teamName}>
           {row.teamName}
+          <RankBadge rank={row.powerRank} />
         </div>
         <div className="text-[10px] text-[#606060] mt-0.5">
           {row.side} · {row.teamAbbr}
@@ -1026,7 +1085,7 @@ function DesktopEventRows({ ev }: { ev: EventBundle }) {
         </td>
 
         <td className="p-3 text-center">
-          <CellProjMargin row={away} isAway />
+          <CellProjMargin row={away} />
         </td>
 
         <td className="p-3 text-center">
@@ -1064,7 +1123,7 @@ function DesktopEventRows({ ev }: { ev: EventBundle }) {
         </td>
 
         <td className="p-3 text-center">
-          <CellProjMargin row={home} isAway={false} />
+          <CellProjMargin row={home} />
         </td>
 
         <td className="p-3 text-center">
@@ -1079,6 +1138,15 @@ function DesktopEventRows({ ev }: { ev: EventBundle }) {
           <CellConsTotal row={home} isAway={false} />
         </td>
       </tr>
+
+      {/* Divider between games (desktop only) */}
+      {showDivider ? (
+        <tr>
+          <td colSpan={7} className="p-0">
+            <div className="h-2 bg-[#0a0a0a] border-t border-[#141414]" />
+          </td>
+        </tr>
+      ) : null}
     </>
   );
 }
