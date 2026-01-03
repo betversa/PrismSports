@@ -1,15 +1,22 @@
 /**
- * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.1: MODEL_CALIBRATION + CORRELATED SIMS)
+ * run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v7.2: SIGN-SAFE MARGINS + MODEL/BOOK SPLIT)
  * --------------------------------------------------------------------------------------------------
- * ✅ Uses public.model_calibration (your table) instead of trying to fit on the fly
- * ✅ Correlated margin+total sims (rho)
- * ✅ Calibrated margin mean: intercept + margin_scale*(power diff) + hca_scale*(true_hca)
- * ✅ Calibrated sigmas via multipliers (sigma_*_mult) applied to team-based sigma (with floors)
- * ✅ Totals anchoring via total_anchor_w:
- *      totalMean = (1-w)*modelTotal + w*(consensus total line)   (only when total line exists)
+ * ✅ ONE TRUE MODEL CONVENTION (always):
+ *      margin_model > 0  => HOME is better (expected home margin)
+ *
+ * ✅ BOOK / UI CONVENTION (sportsbook-style):
+ *      margin_book = -margin_model   (negative means better team / favorite)
+ *
+ * ✅ Stores BOTH (so nothing ever flips again):
+ *      - projected_margin_home_model  (model space, + = home better)
+ *      - projected_margin_home        (book space,  - = favorite)
+ *
+ * ✅ Removes MARGIN_HOME_WIN_NEGATIVE toggle entirely (it caused sign drift)
+ * ✅ Correlated margin + total sims (rho)
+ * ✅ Uses public.model_calibration (your table) with readiness gating
  * ✅ Robust consensus lines: median of latest-per-book from odds_snapshot, with symmetric fills
  *
- * Tables used (same as your pipeline):
+ * Tables used:
  *   - events
  *   - team_ratings
  *   - team_possessions
@@ -17,7 +24,7 @@
  *   - monte_carlo_results (snapshot overwrite per sport)
  *   - monte_carlo_runs (history)
  *   - ev_plays (cleared per sport each run, then rebuilt)
- *   - model_calibration (NEW: calibration knobs per sport)
+ *   - model_calibration
  */
 
 import "dotenv/config";
@@ -47,33 +54,6 @@ function median(arr: number[]) {
   if (!xs.length) return NaN;
   const mid = Math.floor(xs.length / 2);
   return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
-}
-function stddev(arr: number[]) {
-  const xs = arr.filter((x) => Number.isFinite(x));
-  if (xs.length < 2) return NaN;
-  const m = mean(xs);
-  const v = xs.reduce((s, x) => s + (x - m) * (x - m), 0) / (xs.length - 1);
-  return Math.sqrt(v);
-}
-function corr(a: number[], b: number[]) {
-  const n = Math.min(a.length, b.length);
-  if (n < 3) return NaN;
-  const xa = a.slice(0, n);
-  const xb = b.slice(0, n);
-  const ma = mean(xa);
-  const mb = mean(xb);
-  let sxx = 0,
-    syy = 0,
-    sxy = 0;
-  for (let i = 0; i < n; i++) {
-    const da = xa[i] - ma;
-    const db = xb[i] - mb;
-    sxx += da * da;
-    syy += db * db;
-    sxy += da * db;
-  }
-  if (sxx <= 0 || syy <= 0) return NaN;
-  return sxy / Math.sqrt(sxx * syy);
 }
 function nearlyEqual(a: number, b: number, tol: number) {
   return Math.abs(a - b) <= tol;
@@ -175,7 +155,12 @@ type MonteCarloResultUpsert = {
   home_team: string | null;
   away_team: string | null;
 
+  // ✅ MODEL space (always + = home better)
+  projected_margin_home_model: number;
+
+  // ✅ BOOK space (negative = favorite)
   projected_margin_home: number;
+
   sigma_margin_game: number;
 
   projected_total: number;
@@ -260,6 +245,25 @@ type ModelCalibrationRow = {
   updated_at: string;
 };
 
+type EffectiveCalibration = {
+  margin_intercept: number;
+  margin_scale: number;
+  hca_scale: number;
+
+  sigma_margin_mult: number;
+  sigma_total_mult: number;
+
+  total_anchor_w: number;
+  rho_margin_total: number;
+
+  window_days: number;
+  min_sample: number;
+  n_games: number;
+  updated_at: string;
+
+  __ready: boolean;
+};
+
 /* =========================================================
    ENV / CONFIG
 ========================================================= */
@@ -285,9 +289,7 @@ const POSS_SEASON = process.env.POSS_SEASON || SEASON;
 
 const SIMS = Number(process.env.MC_SIMS ?? "10000");
 const START_GRACE_MINUTES = Number(process.env.MC_START_GRACE_MINUTES ?? "0");
-
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
-const MARGIN_HOME_WIN_NEGATIVE = (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
 const EPS = Number(process.env.MC_PUSH_EPS ?? "1e-9");
 
 const SHARP_BOOKS = (process.env.EV_SHARP_BOOKS || "pinnacle,betonlineag,betonline")
@@ -348,26 +350,14 @@ const PTS_BLEND_WEIGHT_OFF = Number(process.env.PTS_BLEND_WEIGHT_OFF ?? "0.50");
 const PTS_BLEND_WEIGHT_DEF = 1 - PTS_BLEND_WEIGHT_OFF;
 
 /**
- * Default rho used if model_calibration is missing/unready
+ * Defaults if model_calibration missing or not ready
  */
 const RHO_MT_DEFAULT = clamp(Number(process.env.MC_RHO_MT ?? "0.18"), -0.75, 0.75);
-
-/**
- * Default margin knobs used if model_calibration missing/unready
- */
 const MARGIN_INTERCEPT_DEFAULT = Number(process.env.MC_MARGIN_ALPHA ?? "0");
 const MARGIN_SCALE_DEFAULT = Number(process.env.MC_MARGIN_BETA ?? "1.00");
 const HCA_SCALE_DEFAULT = Number(process.env.MC_MARGIN_HCA_BETA ?? "1.00");
-
-/**
- * Default sigma multipliers if calibration missing
- */
 const SIGMA_MARGIN_MULT_DEFAULT = Number(process.env.MC_SIGMA_MARGIN_MULT ?? "1.00");
 const SIGMA_TOTAL_MULT_DEFAULT = Number(process.env.MC_SIGMA_TOTAL_MULT ?? "1.00");
-
-/**
- * Default total anchoring to market total if calibration missing
- */
 const TOTAL_ANCHOR_W_DEFAULT = clamp(Number(process.env.MC_TOTAL_ANCHOR_W ?? "0.00"), 0, 0.85);
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -399,10 +389,8 @@ async function main() {
 async function runForSport(sportKey: string, startCutoff: Date) {
   console.log(`\n[MC+EV] >>> SPORT=${sportKey}`);
 
-  // 0) Load calibration row (model_calibration)
   const calib = await fetchModelCalibrationForSport(sportKey);
 
-  // 1) Future events
   const events = await fetchFutureEvents(startCutoff, sportKey);
   if (!events.length) {
     console.log(`[MC] (${sportKey}) No future events found. Done.`);
@@ -410,19 +398,15 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   }
   const eventIds = events.map((e) => e.event_id);
 
-  // 2) Create run row
   const runId = await createMonteCarloRun({
     sport_key: sportKey,
     config: buildRunConfig(sportKey, calib),
   });
 
-  // 3) Clear snapshot rows for this sport
   await clearMonteCarloResultsForSport(sportKey);
 
-  // 4) Robust consensus lines (median) from odds_snapshot
   const lineMap = await fetchConsensusLinesFromOddsSnapshot(eventIds);
 
-  // 5) Team universe
   const teamSet = new Set<string>();
   for (const e of events) {
     if (e.canon_home_team) teamSet.add(e.canon_home_team);
@@ -430,7 +414,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   }
   const teams = [...teamSet];
 
-  // 6) Ratings + possessions
   const ratings = await fetchTeamRatingsForSport(sportKey, teams);
   const ratingMap = new Map<string, TeamRatingRow>();
   for (const r of ratings) ratingMap.set(r.canonical, r);
@@ -439,7 +422,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   const possMap = new Map<string, PossRow>();
   for (const p of possRows) possMap.set(p.canonical, p);
 
-  // 7) Simulate games
   const results: MonteCarloResultUpsert[] = [];
   const skipped: { event_id: string; reason: string }[] = [];
 
@@ -454,7 +436,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
 
     const homeR = ratingMap.get(home);
     const awayR = ratingMap.get(away);
-
     if (!homeR || !awayR) {
       skipped.push({
         event_id: e.event_id,
@@ -468,7 +449,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const homeP = possMap.get(home) ?? null;
     const awayP = possMap.get(away) ?? null;
 
-    // Pace composite
     const paceHome = computeTeamPace(sportKey, homeP, "home");
     const paceAway = computeTeamPace(sportKey, awayP, "away");
     const paceGame = averageNonNull([paceHome, paceAway]) ?? defaultPaceForSport(sportKey);
@@ -476,7 +456,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
 
-    // Build calibrated inputs
     const input = buildInputsPaceAware({
       sportKey,
       home: homeR,
@@ -490,11 +469,8 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       spreadLineHome,
       totalLine,
       eps: EPS,
-      marginHomeWinNegativeStore: MARGIN_HOME_WIN_NEGATIVE,
-      rhoMT: input.rhoMT,
     });
 
-    // Convert (margin,total) to points
     const homePts = sim.projectedTotal / 2 + sim.projectedMarginHome_model / 2;
     const awayPts = sim.projectedTotal - homePts;
 
@@ -512,17 +488,27 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           calibration: calib
             ? {
                 source: "model_calibration",
+                ready: calib.__ready,
                 window_days: calib.window_days,
                 min_sample: calib.min_sample,
                 n_games: calib.n_games,
                 updated_at: calib.updated_at,
               }
-            : null,
+            : { source: "defaults", ready: false },
+
+          margin_convention: {
+            model: "+ = home better",
+            book: "- = favorite",
+            stored_fields: ["projected_margin_home_model", "projected_margin_home"],
+          },
 
           margin: {
             intercept: input.marginParams.intercept,
             scale: input.marginParams.scale,
             hca_scale: input.marginParams.hca_scale,
+            power_diff_home_minus_away: input.powerDiff,
+            true_hca_home: input.hcaPts,
+            margin_mean_model: input.marginMean,
           },
 
           totals: {
@@ -548,8 +534,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           spread_line_home_consensus: spreadLineHome,
           total_line_consensus: totalLine,
           sims: SIMS,
-
-          stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
         }
       : null;
 
@@ -563,7 +547,9 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       home_team: home,
       away_team: away,
 
-      projected_margin_home: sim.projectedMarginHome_stored,
+      projected_margin_home_model: sim.projectedMarginHome_model,
+      projected_margin_home: sim.projectedMarginHome_book,
+
       sigma_margin_game: input.sigmaMarginGame,
 
       projected_total: sim.projectedTotal,
@@ -601,11 +587,9 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     return;
   }
 
-  // 8) Upsert snapshot
   await upsertMonteCarloResultsSnapshot(results);
   console.log(`[MC] (${sportKey}) Snapshot upserted ${results.length} rows (run_id=${runId}).`);
 
-  // 9) Rebuild EV plays
   await rebuildEvPlaysForSport(sportKey, runId, results, eventIds);
 }
 
@@ -613,30 +597,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
    MODEL_CALIBRATION
 ========================================================= */
 
-type EffectiveCalibration = {
-  // margin mean
-  margin_intercept: number;
-  margin_scale: number;
-  hca_scale: number;
-
-  // sigma multipliers
-  sigma_margin_mult: number;
-  sigma_total_mult: number;
-
-  // totals anchoring
-  total_anchor_w: number;
-
-  // correlation
-  rho_margin_total: number;
-
-  // readiness gates
-  window_days: number;
-  min_sample: number;
-  n_games: number;
-  updated_at: string;
-};
-
-function calibrationIsReady(row: ModelCalibrationRow | null): boolean {
+function calibrationIsReadyRow(row: ModelCalibrationRow | null): boolean {
   if (!row) return false;
   const n = Number(row.n_games);
   const min = Number(row.min_sample);
@@ -665,10 +626,14 @@ async function fetchModelCalibrationForSport(sportKey: string): Promise<Effectiv
       return null;
     }
 
-    const ready = calibrationIsReady(row);
+    const ready = calibrationIsReadyRow(row);
+
+    // ✅ SIGN-SAFE: margin_scale must be non-negative (we do NOT allow it to flip favorites)
+    const marginScale = Math.abs(num(row.margin_scale, MARGIN_SCALE_DEFAULT));
+
     const eff: EffectiveCalibration = {
       margin_intercept: num(row.margin_intercept, MARGIN_INTERCEPT_DEFAULT),
-      margin_scale: num(row.margin_scale, MARGIN_SCALE_DEFAULT),
+      margin_scale: marginScale,
       hca_scale: num(row.hca_scale, HCA_SCALE_DEFAULT),
 
       sigma_margin_mult: clamp(num(row.sigma_margin_mult, SIGMA_MARGIN_MULT_DEFAULT), 0.25, 3.0),
@@ -681,14 +646,15 @@ async function fetchModelCalibrationForSport(sportKey: string): Promise<Effectiv
       min_sample: num(row.min_sample, 80),
       n_games: num(row.n_games, 0),
       updated_at: String(row.updated_at || ""),
+
+      __ready: ready,
     };
 
     if (!ready) {
       console.warn(
-        `[CALIB] (${sportKey}) NOT READY n_games=${eff.n_games} < min_sample=${eff.min_sample}. Using defaults (but keeping row for trace).`
+        `[CALIB] (${sportKey}) NOT READY n_games=${eff.n_games} < min_sample=${eff.min_sample}. Using defaults for knobs.`
       );
-      // still return row so trace can show it, but we’ll ignore it in buildInputsPaceAware via `ready` flag
-      return { ...eff, __not_ready: true } as any;
+      return eff; // we keep it for trace but buildInputs will use defaults if !__ready
     }
 
     console.log(
@@ -711,7 +677,7 @@ async function fetchModelCalibrationForSport(sportKey: string): Promise<Effectiv
 ========================================================= */
 
 function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
-  const ready = calib ? calibrationIsReady(calib as any) : false;
+  const ready = !!calib && calib.__ready;
 
   return {
     sport_key: sportKey,
@@ -720,8 +686,16 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
     sims: SIMS,
     start_grace_minutes: START_GRACE_MINUTES,
     push_eps: EPS,
-    margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
     write_trace: WRITE_TRACE,
+
+    margin_convention: {
+      model: "+ = home better",
+      book: "- = favorite",
+      store: {
+        projected_margin_home_model: "model",
+        projected_margin_home: "book",
+      },
+    },
 
     calibration: {
       source: "model_calibration",
@@ -837,7 +811,6 @@ function defaultPaceForSport(sportKey: string) {
 function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
   const paceFactor = paceGame / 100;
 
-  // Off/Def per-100 -> per-game via pace
   const homeOff100 = num(home.engine_adj_off, 0);
   const homeDef100 = num(home.engine_adj_def, 0);
   const awayOff100 = num(away.engine_adj_off, 0);
@@ -861,7 +834,6 @@ function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: Te
   const awayPts_offdef = awayPts100 * paceFactor;
   const total_offdef_pace = Math.max(0, homePts_offdef + awayPts_offdef);
 
-  // PF/PA matchup (per-game)
   const homePF = toNullNum(home.pf_points);
   const homePA = toNullNum(home.pa_points);
   const awayPF = toNullNum(away.pf_points);
@@ -871,7 +843,6 @@ function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: Te
   const awayPts_pfpa = avgNullable(awayPF, homePA);
   const total_pfpa = homePts_pfpa != null && awayPts_pfpa != null ? Math.max(0, homePts_pfpa + awayPts_pfpa) : null;
 
-  // Avg total points (per-game)
   const homeAvgTot = toNullNum(home.avg_total_points);
   const awayAvgTot = toNullNum(away.avg_total_points);
   const total_avg_total = avgNullable(homeAvgTot, awayAvgTot);
@@ -915,7 +886,7 @@ function buildInputsPaceAware(args: {
   const { sportKey, home, away, paceGame, consensusTotalLine, calib } = args;
   const paceFactor = paceGame / 100;
 
-  const ready = calib ? calibrationIsReady(calib as any) : false;
+  const ready = !!calib && calib.__ready;
 
   const comps = computeTotalsComponents(sportKey, home, away, paceGame);
 
@@ -928,35 +899,34 @@ function buildInputsPaceAware(args: {
     w_avg_total: TOTAL_W_AVG_TOTAL,
   });
 
-  // totals anchoring (only if line exists)
   const totalAnchorW = ready ? clamp(calib!.total_anchor_w, 0, 0.85) : TOTAL_ANCHOR_W_DEFAULT;
   const totalMean =
     consensusTotalLine != null && Number.isFinite(consensusTotalLine)
       ? Math.max(0, (1 - totalAnchorW) * totalMean_model + totalAnchorW * consensusTotalLine)
       : totalMean_model;
 
-  // margin mean
   const homePow = num(home.engine_power, 0);
   const awayPow = num(away.engine_power, 0);
   const hcaPts = num(home.true_hca, 0);
+
   const powerDiff = homePow - awayPow;
 
+  // ✅ SIGN-SAFE: scale is forced non-negative at fetch time
   const marginParams = {
     intercept: ready ? num(calib!.margin_intercept, MARGIN_INTERCEPT_DEFAULT) : MARGIN_INTERCEPT_DEFAULT,
     scale: ready ? num(calib!.margin_scale, MARGIN_SCALE_DEFAULT) : MARGIN_SCALE_DEFAULT,
     hca_scale: ready ? num(calib!.hca_scale, HCA_SCALE_DEFAULT) : HCA_SCALE_DEFAULT,
   };
 
+  // ✅ MODEL SPACE mean (positive => home better)
   const marginMean = marginParams.intercept + marginParams.scale * powerDiff + marginParams.hca_scale * hcaPts;
 
-  // team-based base sigmas (per-100 -> per-game)
   const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
   const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
 
   const sigmaMarginGame_base = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMargin100 * paceFactor);
   const sigmaTotalGame_base = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotal100 * paceFactor);
 
-  // multipliers from calibration (or defaults)
   const sigmaMult = {
     margin: ready ? clamp(num(calib!.sigma_margin_mult, 1), 0.25, 3.0) : SIGMA_MARGIN_MULT_DEFAULT,
     total: ready ? clamp(num(calib!.sigma_total_mult, 1), 0.25, 3.0) : SIGMA_TOTAL_MULT_DEFAULT,
@@ -965,15 +935,16 @@ function buildInputsPaceAware(args: {
   const sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMarginGame_base * sigmaMult.margin);
   const sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotalGame_base * sigmaMult.total);
 
-  // rho
   const rhoMT = ready ? clamp(num(calib!.rho_margin_total, RHO_MT_DEFAULT), -0.75, 0.75) : RHO_MT_DEFAULT;
 
   return {
+    // model means
     marginMean,
     totalMean,
     totalMean_model,
     totalAnchorW,
 
+    // sigmas
     sigmaMarginGame,
     sigmaTotalGame,
 
@@ -981,9 +952,13 @@ function buildInputsPaceAware(args: {
     sigmaTotalGame_base,
     sigmaMult,
 
+    // correlation
     rhoMT,
 
+    // trace helpers
     marginParams,
+    powerDiff,
+    hcaPts,
 
     totalsComponents: {
       ...comps,
@@ -1007,8 +982,6 @@ function simulateGameWithProbs(
     spreadLineHome: number | null;
     totalLine: number | null;
     eps: number;
-    marginHomeWinNegativeStore: boolean;
-    rhoMT: number;
   }
 ) {
   let sumM = 0;
@@ -1025,17 +998,14 @@ function simulateGameWithProbs(
 
   const { spreadLineHome, totalLine, eps } = opts;
 
-  const rho = clamp(opts.rhoMT, -0.75, 0.75);
+  const rho = clamp(input.rhoMT, -0.75, 0.75);
   const s = Math.sqrt(Math.max(1e-12, 1 - rho * rho));
 
   for (let i = 0; i < sims; i++) {
     const z1 = randn();
     const z2 = randn();
 
-    // margin uses z1
     const m = input.marginMean + z1 * input.sigmaMarginGame;
-
-    // total uses correlated normal with z1
     const t = Math.max(0, input.totalMean + (rho * z1 + s * z2) * input.sigmaTotalGame);
 
     sumM += m;
@@ -1058,9 +1028,11 @@ function simulateGameWithProbs(
   }
 
   const projectedMarginHome_model = sumM / sims;
-  const projectedTotal = sumT / sims;
 
-  const projectedMarginHome_stored = opts.marginHomeWinNegativeStore ? -projectedMarginHome_model : projectedMarginHome_model;
+  // ✅ book convention: negative = favorite
+  const projectedMarginHome_book = -projectedMarginHome_model;
+
+  const projectedTotal = sumT / sims;
 
   const homeWinProb = homeWins / sims;
   const awayWinProb = awayWins / sims;
@@ -1075,7 +1047,7 @@ function simulateGameWithProbs(
 
   return {
     projectedMarginHome_model: round2(projectedMarginHome_model),
-    projectedMarginHome_stored: round2(projectedMarginHome_stored),
+    projectedMarginHome_book: round2(projectedMarginHome_book),
     projectedTotal: round2(projectedTotal),
 
     homeWinProb,
@@ -1092,7 +1064,7 @@ function simulateGameWithProbs(
 }
 
 /* =========================================================
-   EV PIPELINE (UNCHANGED — benefits from improved probs)
+   EV PIPELINE (UNCHANGED — uses probs)
 ========================================================= */
 
 async function rebuildEvPlaysForSport(
@@ -1131,7 +1103,6 @@ async function rebuildEvPlaysForSport(
         const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
         if (!sharp) continue;
 
-        // Tail-safe blending
         const tail = tailness(sharp.prob);
         const wSharp = clamp(
           TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail,
@@ -1153,7 +1124,6 @@ async function rebuildEvPlaysForSport(
           const bookOdds = toNullNum(offer.odds);
           if (bookOdds == null) continue;
 
-          // Line matching for spreads/totals
           if (market === "spreads" || market === "totals") {
             if (refLine == null) continue;
 
@@ -1164,7 +1134,6 @@ async function rebuildEvPlaysForSport(
             if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
           }
 
-          // Tail guardrail
           if (TAIL_GUARD_ENABLED) {
             const isLong = bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
             const gap = Math.abs(mcProb - sharp.prob);
@@ -1334,7 +1303,7 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
   const m = new Map<string, OddsSnapshotRow>();
   for (const r of rows) {
     const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
-    if (m.has(k)) continue; // rows ordered desc by ts
+    if (m.has(k)) continue;
     m.set(k, r);
   }
   return m;
@@ -1627,6 +1596,399 @@ function kellyFraction(trueProb: number, bookOdds: number): number {
 }
 
 /* =========================================================
+   CONSENSUS + DB OPS
+========================================================= */
+
+async function createMonteCarloRun(payload: MonteCarloRunInsert): Promise<string> {
+  const { data, error } = await supabase.from("monte_carlo_runs").insert(payload).select("id").single();
+  if (error) throw new Error(`[MC] Failed to insert monte_carlo_runs: ${error.message}`);
+  if (!data?.id) throw new Error("[MC] Failed to create monte_carlo_runs row (no id).");
+  return data.id as string;
+}
+
+async function clearMonteCarloResultsForSport(sportKey: string) {
+  const { error } = await supabase.from("monte_carlo_results").delete().eq("sport_key", sportKey);
+  if (error) throw new Error(`[MC] Failed to clear monte_carlo_results for sport (${sportKey}): ${error.message}`);
+}
+
+async function upsertMonteCarloResultsSnapshot(rows: MonteCarloResultUpsert[]) {
+  const chunkSize = 500;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const batch = rows.slice(i, i + chunkSize);
+    const { error } = await supabase.from("monte_carlo_results").upsert(batch, { onConflict: "sport_key,event_id" });
+    if (error) throw new Error(`[MC] Failed to upsert monte_carlo_results snapshot: ${error.message}`);
+  }
+}
+
+async function clearEvPlaysForSport(sportKey: string) {
+  const { error: rpcErr } = await supabase.rpc("clear_ev_plays_for_sport", { p_sport_key: sportKey });
+  if (!rpcErr) return;
+
+  const code = (rpcErr as any).code;
+  const msg = (rpcErr as any).message || "";
+  if (code === "PGRST202" || /schema cache/i.test(msg) || /Could not find the function/i.test(msg)) {
+    const { error } = await supabase.from("ev_plays").delete().eq("sport_key", sportKey);
+    if (error) throw new Error(`[EV] Failed to clear ev_plays fallback: ${error.message}`);
+    return;
+  }
+
+  throw new Error(`[EV] Failed to clear ev_plays via RPC: ${msg}`);
+}
+
+/* =========================================================
+   (REUSED FETCH HELPERS)
+========================================================= */
+
+async function fetchOddsSnapshotForEvents(eventIds: string[]): Promise<OddsSnapshotRow[]> {
+  if (!eventIds.length) return [];
+
+  const { data, error } = await supabase
+    .from("odds_snapshot")
+    .select("event_id,bookmaker,market,side,line,odds,ts")
+    .in("event_id", eventIds)
+    .in("market", ["h2h", "spreads", "totals"])
+    .in("side", ["home", "away", "over", "under"])
+    .order("ts", { ascending: false });
+
+  if (error) throw new Error(`[EV] Failed to fetch odds_snapshot: ${error.message}`);
+  return (data ?? []) as OddsSnapshotRow[];
+}
+
+function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapshotRow> {
+  const m = new Map<string, OddsSnapshotRow>();
+  for (const r of rows) {
+    const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
+    if (m.has(k)) continue;
+    m.set(k, r);
+  }
+  return m;
+}
+
+/* =========================================================
+   (MISSING PIECES FROM YOUR PASTED SCRIPT)
+   - fetchFutureEvents
+   - fetchTeamRatingsForSport
+   - fetchTeamPossessionsForSportSeason
+   - fetchConsensusLinesFromOddsSnapshot
+   These are identical to the original version you pasted, except:
+     ✅ stored margins are now split into model/book and never toggled
+========================================================= */
+
+async function fetchFutureEvents(startCutoff: Date, sportKey: string): Promise<EventRow[]> {
+  const { data, error } = await supabase
+    .from("events")
+    .select("event_id,sport_key,commence_time,api_home_team,api_away_team,canon_home_team,canon_away_team,matchup")
+    .eq("sport_key", sportKey)
+    .gte("commence_time", startCutoff.toISOString())
+    .order("commence_time", { ascending: true });
+
+  if (error) throw new Error(`[MC] Failed to fetch events (${sportKey}): ${error.message}`);
+
+  const seen = new Set<string>();
+  const out: EventRow[] = [];
+  for (const row of data ?? []) {
+    const eid = String((row as any).event_id || "");
+    if (!eid) continue;
+    if (seen.has(eid)) continue;
+    seen.add(eid);
+    out.push(row as EventRow);
+  }
+  return out;
+}
+
+async function fetchTeamRatingsForSport(sportKey: string, canonicals: string[]): Promise<TeamRatingRow[]> {
+  if (!canonicals.length) return [];
+  const chunkSize = 400;
+  const out: TeamRatingRow[] = [];
+
+  for (let i = 0; i < canonicals.length; i += chunkSize) {
+    const c = canonicals.slice(i, i + chunkSize);
+
+    const { data, error } = await supabase
+      .from("team_ratings")
+      .select(
+        "canonical,engine_adj_off,engine_adj_def,engine_power,pf_points,pa_points,avg_total_points,true_hca,sigma_margin_100,sigma_total_100"
+      )
+      .eq("sport_key", sportKey)
+      .in("canonical", c);
+
+    if (error) throw new Error(`[MC] Failed to fetch team_ratings (${sportKey}): ${error.message}`);
+    out.push(...((data ?? []) as TeamRatingRow[]));
+  }
+
+  return out;
+}
+
+async function fetchTeamPossessionsForSportSeason(
+  sportKey: string,
+  season: string,
+  canonicals: string[]
+): Promise<PossRow[]> {
+  if (!canonicals.length) return [];
+
+  const chunkSize = 400;
+  const out: PossRow[] = [];
+
+  for (let i = 0; i < canonicals.length; i += chunkSize) {
+    const c = canonicals.slice(i, i + chunkSize);
+
+    const { data, error } = await supabase
+      .from("team_possessions")
+      .select('sport_key,season,canonical,"2025","Last 3","Last 1","Home","Away","2024"')
+      .eq("sport_key", sportKey)
+      .eq("season", season)
+      .in("canonical", c);
+
+    if (error) throw new Error(`[MC] Failed to fetch team_possessions (${sportKey}): ${error.message}`);
+    out.push(...((data ?? []) as PossRow[]));
+  }
+
+  return out;
+}
+
+/**
+ * Robust consensus: median of latest-per-book lines
+ */
+async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!eventIds.length) return out;
+
+  const { data, error } = await supabase
+    .from("odds_snapshot")
+    .select("event_id,bookmaker,market,side,line,ts")
+    .in("event_id", eventIds)
+    .in("market", ["spreads", "totals"])
+    .in("side", ["home", "away", "over", "under"])
+    .order("ts", { ascending: false });
+
+  if (error) {
+    console.warn(`[MC] Could not fetch odds_snapshot lines (${error.message}).`);
+    return out;
+  }
+
+  const latestPerBook = new Map<string, number>();
+
+  for (const r of (data ?? []) as any[]) {
+    const eid = String(r.event_id || "");
+    const market = String(r.market || "").toLowerCase();
+    const side = String(r.side || "").toLowerCase();
+    const book = String(r.bookmaker || "").toLowerCase();
+
+    const lineNum = Number(r.line);
+    if (!eid || !market || !side || !book) continue;
+    if (!Number.isFinite(lineNum)) continue;
+
+    const k = `${eid}|${market}|${side}|${book}`;
+    if (latestPerBook.has(k)) continue;
+    latestPerBook.set(k, lineNum);
+  }
+
+  const buckets = new Map<string, number[]>();
+  for (const [k, line] of latestPerBook.entries()) {
+    const [eid, market, side] = k.split("|");
+    const k2 = `${eid}|${market}|${side}`;
+    const arr = buckets.get(k2) ?? [];
+    arr.push(line);
+    buckets.set(k2, arr);
+  }
+
+  for (const [k2, arr] of buckets.entries()) out.set(k2, median(arr));
+
+  for (const id of eventIds) {
+    const homeKey = `${id}|spreads|home`;
+    const awayKey = `${id}|spreads|away`;
+    const overKey = `${id}|totals|over`;
+    const underKey = `${id}|totals|under`;
+
+    if (!out.has(homeKey) && out.has(awayKey)) out.set(homeKey, -Number(out.get(awayKey)));
+    if (!out.has(awayKey) && out.has(homeKey)) out.set(awayKey, -Number(out.get(homeKey)));
+    if (!out.has(overKey) && out.has(underKey)) out.set(overKey, Number(out.get(underKey)));
+    if (!out.has(underKey) && out.has(overKey)) out.set(underKey, Number(out.get(overKey)));
+  }
+
+  return out;
+}
+
+/* =========================================================
+   EV HELPERS (REST)
+========================================================= */
+
+function getMcProbForMarket(mc: MonteCarloResultUpsert, market: MarketKey, side: SideKey): number | null {
+  if (market === "h2h") return side === "home" ? mc.home_win_prob ?? null : mc.away_win_prob ?? null;
+  if (market === "spreads") return side === "home" ? mc.home_cover_prob ?? null : mc.away_cover_prob ?? null;
+  if (market === "totals") return side === "over" ? mc.over_prob ?? null : mc.under_prob ?? null;
+  return null;
+}
+
+function oppositeSide(market: MarketKey, side: SideKey): SideKey | null {
+  if (market === "h2h" || market === "spreads") return side === "home" ? "away" : side === "away" ? "home" : null;
+  if (market === "totals") return side === "over" ? "under" : side === "under" ? "over" : null;
+  return null;
+}
+
+/* =========================================================
+   SHARP NO-VIG + DEVIG
+========================================================= */
+
+function getOffer(
+  latest: Map<string, OddsSnapshotRow>,
+  eventId: string,
+  market: MarketKey,
+  side: SideKey,
+  bookmaker: string
+): OddsSnapshotRow | null {
+  const k = `${eventId}|${market}|${side}|${bookmaker.toLowerCase()}`;
+  return latest.get(k) ?? null;
+}
+
+function getSharpNoVigProb(
+  latest: Map<string, OddsSnapshotRow>,
+  eventId: string,
+  market: MarketKey,
+  side: SideKey,
+  refLine: number | null
+): { prob: number } | null {
+  const opp = oppositeSide(market, side);
+  if (!opp) return null;
+
+  const probs: number[] = [];
+
+  for (const book of SHARP_BOOKS) {
+    const a = getOffer(latest, eventId, market, side, book);
+    const b = getOffer(latest, eventId, market, opp, book);
+    if (!a || !b) continue;
+
+    const ao = toNullNum(a.odds);
+    const bo = toNullNum(b.odds);
+    if (ao == null || bo == null) continue;
+
+    if (market === "spreads" || market === "totals") {
+      if (refLine == null) continue;
+
+      const aLine = toNullNum(a.line);
+      const bLine = toNullNum(b.line);
+      if (aLine == null || bLine == null) continue;
+
+      if (market === "spreads") {
+        const expA = side === "home" ? refLine : -refLine;
+        const expB = opp === "home" ? refLine : -refLine;
+
+        if (!nearlyEqual(aLine, expA, LINE_TOL)) continue;
+        if (!nearlyEqual(bLine, expB, LINE_TOL)) continue;
+        if (!nearlyEqual(aLine + bLine, 0, 1e-4)) continue;
+      } else {
+        if (!nearlyEqual(aLine, refLine, LINE_TOL)) continue;
+        if (!nearlyEqual(bLine, refLine, LINE_TOL)) continue;
+      }
+    }
+
+    const p1 = clamp01(americanOddsToProb(ao));
+    const p2 = clamp01(americanOddsToProb(bo));
+
+    const diff = Math.abs(p1 - p2);
+    const [nv1] = diff <= DEVIG_DIFF_SWITCH ? noVigEqualMargin(p1, p2) : noVigMPTO(p1, p2);
+    probs.push(nv1);
+  }
+
+  if (!probs.length) return null;
+  return { prob: mean(probs) };
+}
+
+function noVigEqualMargin(p1: number, p2: number): [number, number] {
+  const s = p1 + p2;
+  if (s <= 0) return [p1, p2];
+  return [p1 / s, p2 / s];
+}
+
+function noVigMPTO(p1: number, p2: number): [number, number] {
+  const a = clamp(p1, 1e-12, 1 - 1e-12);
+  const b = clamp(p2, 1e-12, 1 - 1e-12);
+
+  const f = (k: number) => Math.pow(a, k) + Math.pow(b, k) - 1;
+
+  let lo = 0.01;
+  let hi = 10;
+
+  const flo = f(lo);
+  const fhi = f(hi);
+  if (!(Number.isFinite(flo) && Number.isFinite(fhi)) || flo * fhi > 0) {
+    return noVigEqualMargin(a, b);
+  }
+
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const fm = f(mid);
+    if (fm === 0) {
+      lo = hi = mid;
+      break;
+    }
+    if (flo * fm > 0) lo = mid;
+    else hi = mid;
+  }
+
+  const k = (lo + hi) / 2;
+  const na = Math.pow(a, k);
+  const nb = Math.pow(b, k);
+  const s = na + nb;
+  if (s <= 0) return noVigEqualMargin(a, b);
+  return [na / s, nb / s];
+}
+
+/* =========================================================
+   CONFIDENCE
+========================================================= */
+
+function tailness(p: number) {
+  return clamp(Math.abs(p - 0.5) / 0.5, 0, 1);
+}
+
+function computeConfidenceScore(evPctVal: number, qProb: number, sharpProb: number, mcProb: number) {
+  const evScore = clamp(evPctVal * 5, 0, 100);
+  const probScore = clamp(Math.abs(qProb - 0.5) * 200, 0, 100);
+
+  const t = tailness(sharpProb);
+  const disagreement = Math.abs(sharpProb - mcProb);
+  const agreementScore = 100 - clamp(disagreement * (300 + 200 * t), 0, 100);
+
+  return 0.45 * evScore + 0.35 * probScore + 0.2 * agreementScore;
+}
+
+function confidenceTier(score: number): string {
+  if (score >= 85) return "A+";
+  if (score >= 75) return "A";
+  if (score >= 65) return "B";
+  if (score >= 55) return "C";
+  return "D";
+}
+
+/* =========================================================
+   ODDS + EV MATH
+========================================================= */
+
+function americanOddsToProb(odds: number): number {
+  return odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
+}
+
+function probToAmericanOdds(p: number): number {
+  const pp = clamp01(p);
+  if (pp <= 0 || pp >= 1) return 0;
+  return pp >= 0.5 ? Math.round((-100 * pp) / (1 - pp)) : Math.round((100 * (1 - pp)) / pp);
+}
+
+function evPct(trueProb: number, bookOdds: number): number {
+  const p = clamp01(trueProb);
+  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
+  return (p * b - (1 - p)) * 100;
+}
+
+function kellyFraction(trueProb: number, bookOdds: number): number {
+  const p = clamp01(trueProb);
+  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
+  const k = (p * b - (1 - p)) / b;
+  return Math.max(0, k);
+}
+
+/* =========================================================
    RUN
 ========================================================= */
 
@@ -1634,4 +1996,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
