@@ -1,13 +1,16 @@
 /**
- * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.1.1: DUPLICATE-SAFE SINGLE FILE)
- * --------------------------------------------------------------------------------------------------
- * ✅ Uses public.model_calibration (your table) instead of fitting on the fly
+ * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.2.0: SIGN-SAFE + DUPLICATE-SAFE SINGLE FILE)
+ * ------------------------------------------------------------------------------------------------------
+ * ✅ Duplicate-safe: single declarations only (fixes “already been declared” esbuild crash)
+ * ✅ Uses public.model_calibration (no fitting on the fly)
  * ✅ Correlated margin+total sims (rho)
- * ✅ Calibrated margin mean: intercept + margin_scale*(power diff) + hca_scale*(true_hca)
- * ✅ Calibrated sigmas via multipliers (sigma_*_mult) applied to team-based sigma (with floors)
+ * ✅ SIGN-SAFE margin:
+ *      - MODEL space is ALWAYS: +margin = home better
+ *      - Calibration margin_scale is forced POSITIVE (abs), so favorites cannot invert
  * ✅ Totals anchoring via total_anchor_w:
  *      totalMean = (1-w)*modelTotal + w*(consensus total line)   (only when total line exists)
  * ✅ Robust consensus lines: median of latest-per-book from odds_snapshot, with symmetric fills
+ * ✅ Rebuilds ev_plays per sport after snapshot write
  *
  * Tables used:
  *   - events
@@ -18,6 +21,10 @@
  *   - monte_carlo_runs (history)
  *   - ev_plays (cleared per sport each run, then rebuilt)
  *   - model_calibration
+ *
+ * NOTE ON MARGIN STORAGE:
+ *   - We KEEP your existing storage behavior controlled by MARGIN_HOME_WIN_NEGATIVE.
+ *   - But we also write BOTH model-margin and stored-margin into trace so UI/debug can never be “mysteriously reversed”.
  */
 
 import "dotenv/config";
@@ -256,7 +263,11 @@ const SIMS = Number(process.env.MC_SIMS ?? "10000");
 const START_GRACE_MINUTES = Number(process.env.MC_START_GRACE_MINUTES ?? "0");
 
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
+
+// IMPORTANT: storage convention (kept for backward compatibility)
+// If true: stored margin is NEGATIVE when home is better (old UI convention)
 const MARGIN_HOME_WIN_NEGATIVE = (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
+
 const EPS = Number(process.env.MC_PUSH_EPS ?? "1e-9");
 
 const SHARP_BOOKS = (process.env.EV_SHARP_BOOKS || "pinnacle,betonlineag,betonline")
@@ -318,7 +329,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 type EffectiveCalibration = {
   margin_intercept: number;
-  margin_scale: number;
+  margin_scale: number; // NOTE: can be negative in table, we will abs() at use-time
   hca_scale: number;
 
   sigma_margin_mult: number;
@@ -415,7 +426,7 @@ function paceClampForSport(sportKey: string): { lo: number; hi: number } {
 }
 
 function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
-  const ready = calib ? calibrationIsReady(calib) : false;
+  const ready = calib ? calibrationIsReady(calib) && !calib.__not_ready : false;
 
   return {
     sport_key: sportKey,
@@ -424,8 +435,13 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
     sims: SIMS,
     start_grace_minutes: START_GRACE_MINUTES,
     push_eps: EPS,
-    margin_home_win_negative: MARGIN_HOME_WIN_NEGATIVE,
     write_trace: WRITE_TRACE,
+
+    // sign + storage convention
+    margin_conventions: {
+      model: "positive_means_home_better",
+      stored: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
+    },
 
     calibration: {
       source: "model_calibration",
@@ -531,7 +547,7 @@ function defaultPaceForSport(sportKey: string) {
 }
 
 /* =========================================================
-   MODEL (calibrated)
+   MODEL (calibrated) — SIGN SAFE
 ========================================================= */
 
 function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
@@ -612,7 +628,7 @@ function buildInputsPaceAware(args: {
   const { sportKey, home, away, paceGame, consensusTotalLine, calib } = args;
   const paceFactor = paceGame / 100;
 
-  const ready = calib ? calibrationIsReady(calib) : false;
+  const ready = calib ? calibrationIsReady(calib) && !calib.__not_ready : false;
 
   const comps = computeTotalsComponents(sportKey, home, away, paceGame);
 
@@ -642,7 +658,11 @@ function buildInputsPaceAware(args: {
     hca_scale: ready ? num(calib!.hca_scale, HCA_SCALE_DEFAULT) : HCA_SCALE_DEFAULT,
   };
 
-  const marginMean = marginParams.intercept + marginParams.scale * powerDiff + marginParams.hca_scale * hcaPts;
+  // ✅ SIGN-SAFE: force scale positive so favorites cannot invert
+  const safeScale = Math.abs(marginParams.scale);
+
+  // MODEL margin is ALWAYS: + means home better
+  const marginMean = marginParams.intercept + safeScale * powerDiff + marginParams.hca_scale * hcaPts;
 
   const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
   const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
@@ -675,7 +695,7 @@ function buildInputsPaceAware(args: {
 
     rhoMT,
 
-    marginParams,
+    marginParams: { ...marginParams, scale_used_abs: safeScale },
 
     totalsComponents: {
       ...comps,
@@ -699,7 +719,7 @@ function simulateGameWithProbs(
     spreadLineHome: number | null;
     totalLine: number | null;
     eps: number;
-    marginHomeWinNegativeStore: boolean;
+    storeMarginHomeWinNegative: boolean;
     rhoMT: number;
   }
 ) {
@@ -724,6 +744,7 @@ function simulateGameWithProbs(
     const z1 = randn();
     const z2 = randn();
 
+    // MODEL margin: + means home better
     const m = input.marginMean + z1 * input.sigmaMarginGame;
     const t = Math.max(0, input.totalMean + (rho * z1 + s * z2) * input.sigmaTotalGame);
 
@@ -734,6 +755,8 @@ function simulateGameWithProbs(
     else if (m < 0) awayWins++;
 
     if (spreadLineHome != null) {
+      // spreadLineHome is the sportsbook HOME line (e.g., -3.5)
+      // Home covers when: margin_home + spread_home > 0
       const v = m + spreadLineHome;
       if (v > eps) homeCovers++;
       else if (Math.abs(v) <= eps) coverPushes++;
@@ -749,7 +772,8 @@ function simulateGameWithProbs(
   const projectedMarginHome_model = sumM / sims;
   const projectedTotal = sumT / sims;
 
-  const projectedMarginHome_stored = opts.marginHomeWinNegativeStore ? -projectedMarginHome_model : projectedMarginHome_model;
+  // Stored margin: keep your legacy switch
+  const projectedMarginHome_stored = opts.storeMarginHomeWinNegative ? -projectedMarginHome_model : projectedMarginHome_model;
 
   const homeWinProb = homeWins / sims;
   const awayWinProb = awayWins / sims;
@@ -778,148 +802,6 @@ function simulateGameWithProbs(
     totalPushProb,
     underProb,
   };
-}
-
-/* =========================================================
-   EV PIPELINE
-========================================================= */
-
-async function rebuildEvPlaysForSport(
-  sportKey: string,
-  runId: string,
-  mcRows: MonteCarloResultUpsert[],
-  eventIds: string[]
-) {
-  console.log(`[EV] (${sportKey}) Rebuilding ev_plays (run_id=${runId})...`);
-
-  await clearEvPlaysForSport(sportKey);
-
-  const oddsRows = await fetchOddsSnapshotForEvents(eventIds);
-  const latest = indexLatestOddsPerBook(oddsRows);
-
-  const inserts: EvPlayInsert[] = [];
-
-  for (const mc of mcRows) {
-    const eid = mc.event_id;
-
-    const homeTeam = mc.home_team ?? null;
-    const awayTeam = mc.away_team ?? null;
-
-    const markets: MarketKey[] = ["h2h", "spreads", "totals"];
-
-    for (const market of markets) {
-      const sides: SideKey[] =
-        market === "h2h" ? ["home", "away"] : market === "spreads" ? ["home", "away"] : ["over", "under"];
-
-      const refLine = market === "spreads" ? mc.spread_line_home : market === "totals" ? mc.total_line : null;
-
-      for (const side of sides) {
-        const mcProb = getMcProbForMarket(mc, market, side);
-        if (mcProb == null) continue;
-
-        const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
-        if (!sharp) continue;
-
-        const tail = tailness(sharp.prob);
-        const wSharp = clamp(
-          TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail,
-          TAIL_SHARP_W_MIN,
-          TAIL_SHARP_W_MAX
-        );
-        const wMc = 1 - wSharp;
-
-        const shrink = clamp(0.10 + 0.50 * tail, 0.10, 0.60);
-        const mcAdj = clamp01(mcProb * (1 - shrink) + sharp.prob * shrink);
-
-        const quantumProb = clamp01(wSharp * sharp.prob + wMc * mcAdj);
-        const quantumOdds = probToAmericanOdds(quantumProb);
-
-        for (const book of SOFT_BOOKS) {
-          const offer = getOffer(latest, eid, market, side, book);
-          if (!offer) continue;
-
-          const bookOdds = toNullNum(offer.odds);
-          if (bookOdds == null) continue;
-
-          if (market === "spreads" || market === "totals") {
-            if (refLine == null) continue;
-
-            const offerLine = toNullNum(offer.line);
-            if (offerLine == null) continue;
-
-            const expected = market === "spreads" ? (side === "home" ? refLine : -refLine) : refLine;
-            if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
-          }
-
-          if (TAIL_GUARD_ENABLED) {
-            const isLong = bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
-            const gap = Math.abs(mcProb - sharp.prob);
-            if (isLong && mcProb > sharp.prob && gap > TAIL_GUARD_MAX_GAP) continue;
-          }
-
-          const ev = evPct(quantumProb, bookOdds);
-          if (!(ev > MIN_EV_PCT)) continue;
-
-          const rawKelly = kellyFraction(quantumProb, bookOdds);
-          const betFraction = rawKelly * KELLY_MULTIPLIER;
-
-          const confidenceScore = computeConfidenceScore(ev, quantumProb, sharp.prob, mcProb);
-          const tier = confidenceTier(confidenceScore);
-
-          const team =
-            market === "totals"
-              ? homeTeam && awayTeam
-                ? `${awayTeam} vs ${homeTeam}`
-                : mc.matchup ?? null
-              : side === "home"
-              ? homeTeam
-              : awayTeam;
-
-          inserts.push({
-            sport_key: sportKey,
-
-            run_id: runId,
-            event_id: eid,
-            commence_time: mc.commence_time,
-            matchup: mc.matchup,
-
-            team,
-
-            market,
-            side,
-            line: market === "h2h" ? null : toNullNum(offer.line),
-
-            bookmaker: book,
-            book_odds: bookOdds,
-
-            quantum_prob: quantumProb,
-            quantum_odds: quantumOdds,
-            ev_pct: ev,
-
-            confidence_score: Math.round(confidenceScore),
-            confidence_tier: tier,
-
-            kelly_fraction: rawKelly,
-            bet_fraction: betFraction,
-          });
-        }
-      }
-    }
-  }
-
-  if (!inserts.length) {
-    console.log(`[EV] (${sportKey}) No +EV plays found.`);
-    return;
-  }
-
-  const chunkSize = 1000;
-  for (let i = 0; i < inserts.length; i += chunkSize) {
-    const batch = inserts.slice(i, i + chunkSize);
-    const { error } = await supabase.from("ev_plays").insert(batch);
-    if (error) throw new Error(`[EV] (${sportKey}) Failed to insert ev_plays: ${error.message}`);
-  }
-
-  console.log(`[EV] (${sportKey}) Inserted ${inserts.length} plays into ev_plays.`);
 }
 
 /* =========================================================
@@ -1028,6 +910,7 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
 
 /**
  * Robust consensus: median of latest-per-book lines, symmetric fills
+ * Output keys: `${event_id}|${market}|${side}` where market in spreads/totals, side in home/away/over/under
  */
 async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
@@ -1046,6 +929,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     return out;
   }
 
+  // latest per (event, market, side, book)
   const latestPerBook = new Map<string, number>();
 
   for (const r of (data ?? []) as any[]) {
@@ -1063,6 +947,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     latestPerBook.set(k, lineNum);
   }
 
+  // bucket by (event, market, side)
   const buckets = new Map<string, number[]>();
   for (const [k, line] of latestPerBook.entries()) {
     const [eid, market, side] = k.split("|");
@@ -1074,6 +959,7 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
 
   for (const [k2, arr] of buckets.entries()) out.set(k2, median(arr));
 
+  // symmetric fills
   for (const id of eventIds) {
     const homeKey = `${id}|spreads|home`;
     const awayKey = `${id}|spreads|away`;
@@ -1161,6 +1047,8 @@ function getOffer(
 
 /**
  * Sharp no-vig probability builder with devig SWITCH
+ * - For spreads: requires exact symmetric lines at refLine (home=refLine, away=-refLine)
+ * - For totals: requires both sides at same refLine
  */
 function getSharpNoVigProb(
   latest: Map<string, OddsSnapshotRow>,
@@ -1314,6 +1202,148 @@ function kellyFraction(trueProb: number, bookOdds: number): number {
 }
 
 /* =========================================================
+   EV PIPELINE
+========================================================= */
+
+async function rebuildEvPlaysForSport(
+  sportKey: string,
+  runId: string,
+  mcRows: MonteCarloResultUpsert[],
+  eventIds: string[]
+) {
+  console.log(`[EV] (${sportKey}) Rebuilding ev_plays (run_id=${runId})...`);
+
+  await clearEvPlaysForSport(sportKey);
+
+  const oddsRows = await fetchOddsSnapshotForEvents(eventIds);
+  const latest = indexLatestOddsPerBook(oddsRows);
+
+  const inserts: EvPlayInsert[] = [];
+
+  for (const mc of mcRows) {
+    const eid = mc.event_id;
+
+    const homeTeam = mc.home_team ?? null;
+    const awayTeam = mc.away_team ?? null;
+
+    const markets: MarketKey[] = ["h2h", "spreads", "totals"];
+
+    for (const market of markets) {
+      const sides: SideKey[] =
+        market === "h2h" ? ["home", "away"] : market === "spreads" ? ["home", "away"] : ["over", "under"];
+
+      const refLine = market === "spreads" ? mc.spread_line_home : market === "totals" ? mc.total_line : null;
+
+      for (const side of sides) {
+        const mcProb = getMcProbForMarket(mc, market, side);
+        if (mcProb == null) continue;
+
+        const sharp = getSharpNoVigProb(latest, eid, market, side, refLine);
+        if (!sharp) continue;
+
+        const tail = tailness(sharp.prob);
+        const wSharp = clamp(
+          TAIL_SHARP_W_MIN + (TAIL_SHARP_W_MAX - TAIL_SHARP_W_MIN) * tail,
+          TAIL_SHARP_W_MIN,
+          TAIL_SHARP_W_MAX
+        );
+        const wMc = 1 - wSharp;
+
+        const shrink = clamp(0.10 + 0.50 * tail, 0.10, 0.60);
+        const mcAdj = clamp01(mcProb * (1 - shrink) + sharp.prob * shrink);
+
+        const quantumProb = clamp01(wSharp * sharp.prob + wMc * mcAdj);
+        const quantumOdds = probToAmericanOdds(quantumProb);
+
+        for (const book of SOFT_BOOKS) {
+          const offer = getOffer(latest, eid, market, side, book);
+          if (!offer) continue;
+
+          const bookOdds = toNullNum(offer.odds);
+          if (bookOdds == null) continue;
+
+          if (market === "spreads" || market === "totals") {
+            if (refLine == null) continue;
+
+            const offerLine = toNullNum(offer.line);
+            if (offerLine == null) continue;
+
+            const expected = market === "spreads" ? (side === "home" ? refLine : -refLine) : refLine;
+            if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
+          }
+
+          if (TAIL_GUARD_ENABLED) {
+            const isLong = bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
+            const gap = Math.abs(mcProb - sharp.prob);
+            if (isLong && mcProb > sharp.prob && gap > TAIL_GUARD_MAX_GAP) continue;
+          }
+
+          const ev = evPct(quantumProb, bookOdds);
+          if (!(ev > MIN_EV_PCT)) continue;
+
+          const rawKelly = kellyFraction(quantumProb, bookOdds);
+          const betFraction = rawKelly * KELLY_MULTIPLIER;
+
+          const confidenceScore = computeConfidenceScore(ev, quantumProb, sharp.prob, mcProb);
+          const tier = confidenceTier(confidenceScore);
+
+          const team =
+            market === "totals"
+              ? homeTeam && awayTeam
+                ? `${awayTeam} vs ${homeTeam}`
+                : mc.matchup ?? null
+              : side === "home"
+              ? homeTeam
+              : awayTeam;
+
+          inserts.push({
+            sport_key: sportKey,
+
+            run_id: runId,
+            event_id: eid,
+            commence_time: mc.commence_time,
+            matchup: mc.matchup,
+
+            team,
+
+            market,
+            side,
+            line: market === "h2h" ? null : toNullNum(offer.line),
+
+            bookmaker: book,
+            book_odds: bookOdds,
+
+            quantum_prob: quantumProb,
+            quantum_odds: quantumOdds,
+            ev_pct: ev,
+
+            confidence_score: Math.round(confidenceScore),
+            confidence_tier: tier,
+
+            kelly_fraction: rawKelly,
+            bet_fraction: betFraction,
+          });
+        }
+      }
+    }
+  }
+
+  if (!inserts.length) {
+    console.log(`[EV] (${sportKey}) No +EV plays found.`);
+    return;
+  }
+
+  const chunkSize = 1000;
+  for (let i = 0; i < inserts.length; i += chunkSize) {
+    const batch = inserts.slice(i, i + chunkSize);
+    const { error } = await supabase.from("ev_plays").insert(batch);
+    if (error) throw new Error(`[EV] (${sportKey}) Failed to insert ev_plays: ${error.message}`);
+  }
+
+  console.log(`[EV] (${sportKey}) Inserted ${inserts.length} plays into ev_plays.`);
+}
+
+/* =========================================================
    MAIN
 ========================================================= */
 
@@ -1325,7 +1355,7 @@ async function main() {
   const startCutoff = new Date(now.getTime() - graceMs);
 
   console.log(
-    `[MC+EV] sports=${SPORT_KEYS.join(",")} season=${SEASON} possSeason=${POSS_SEASON} sims=${SIMS} startGraceMin=${START_GRACE_MINUTES}`
+    `[MC+EV] sports=${SPORT_KEYS.join(",")} season=${SEASON} possSeason=${POSS_SEASON} sims=${SIMS} startGraceMin=${START_GRACE_MINUTES} storeMarginHomeWinNegative=${MARGIN_HOME_WIN_NEGATIVE}`
   );
 
   for (const sportKey of SPORT_KEYS) {
@@ -1419,10 +1449,11 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       spreadLineHome,
       totalLine,
       eps: EPS,
-      marginHomeWinNegativeStore: MARGIN_HOME_WIN_NEGATIVE,
+      storeMarginHomeWinNegative: MARGIN_HOME_WIN_NEGATIVE,
       rhoMT: input.rhoMT,
     });
 
+    // Points always derived from MODEL margin (not stored margin)
     const homePts = sim.projectedTotal / 2 + sim.projectedMarginHome_model / 2;
     const awayPts = sim.projectedTotal - homePts;
 
@@ -1437,6 +1468,16 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           pace_away_poss_per_game: paceAway,
           pace_game_poss_per_game: paceGame,
 
+          margin_conventions: {
+            model: "positive_means_home_better",
+            stored: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
+          },
+
+          margin_debug: {
+            projected_margin_home_model: sim.projectedMarginHome_model,
+            projected_margin_home_stored: sim.projectedMarginHome_stored,
+          },
+
           calibration: calib
             ? {
                 source: "model_calibration",
@@ -1450,8 +1491,10 @@ async function runForSport(sportKey: string, startCutoff: Date) {
 
           margin: {
             intercept: input.marginParams.intercept,
-            scale: input.marginParams.scale,
+            scale_raw: input.marginParams.scale,
+            scale_used_abs: input.marginParams.scale_used_abs,
             hca_scale: input.marginParams.hca_scale,
+            margin_mean_model_space: input.marginMean,
           },
 
           totals: {
@@ -1476,8 +1519,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           spread_line_home_consensus: spreadLineHome,
           total_line_consensus: totalLine,
           sims: SIMS,
-
-          stored_margin_convention: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
         }
       : null;
 
