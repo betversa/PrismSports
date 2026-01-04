@@ -1,5 +1,5 @@
 /**
- * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.4.2: OE/DE FROM TEAM_RATINGS ONLY)
+ * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.5.0: CONFIDENCE NORMALIZATION vB + OE/DE FROM team_ratings)
  * ------------------------------------------------------------------------------------------------------
  * ✅ Duplicate-safe: single declarations only
  * ✅ Uses public.model_calibration (no fitting on the fly)
@@ -12,30 +12,44 @@
  * ✅ Robust consensus lines: median of latest-per-book from odds_snapshot, symmetric fills
  * ✅ Rebuilds ev_plays per sport after snapshot write
  *
- * ✅ NCAAB: Uses public.ncaab_stats ONLY for:
- *      - Pace override (possessions-per-game / tempo) if available
- *      - Style modifiers (eFG%, TO%, ORB%, FTR, 3P rate)
- *      - Margin bump (average-scoring-margin)
- *
- * ✅ OE/DE SOURCE FIX (your request):
- *      - Offensive/Defensive efficiency ALWAYS from team_ratings:
- *          engine_adj_off / engine_adj_def
- *      - NO use of ncaab_stats offensive-efficiency / defensive-efficiency anywhere in totals
+ * ✅ NCAAB:
+ *      - Pace still allowed to prefer ncaab_stats ("possessions-per-game"/aliases) over team_possessions (optional)
+ *      - Style modifiers from public.ncaab_stats (eFG%, TO%, ORB%, FTR, 3P rate, avg scoring margin)
+ *      - IMPORTANT: OE/DE used for totals are ALWAYS from team_ratings (engine_adj_off/engine_adj_def)
  *
  * ✅ STAT SAFETY:
- *      - ONLY reads: stat_key + home_score + away_score (avoids “column does not exist” issues)
+ *      - ONLY reads: stat_key + home_score + away_score from ncaab_stats (avoids “column does not exist” issues)
  *      - Never uses v_2025/last_3/etc for modeling in this script
+ *
+ * ✅ CONFIDENCE NORMALIZATION (Option B):
+ *      - Confidence is normalized per “market family” (props vs h2h vs spreads vs totals)
+ *      - Uses rolling mean/std from last N days of ev_plays (or fallback to current run)
+ *      - z-score each component (EV, tail, disagreement), combine, then sigmoid→0–100
+ *      - Makes ML/spread/total comparable to props on the same 0–100 scale
  *
  * Tables used:
  *   - events
  *   - team_ratings
  *   - team_possessions
- *   - ncaab_stats            (NCAAB only; pace/style/margin bump only)
+ *   - ncaab_stats            (NCAAB only; style + optional pace)
  *   - odds_snapshot
  *   - monte_carlo_results (snapshot overwrite per sport)
  *   - monte_carlo_runs (history)
  *   - ev_plays (cleared per sport each run, then rebuilt)
  *   - model_calibration
+ *
+ * Optional (recommended):
+ *   - confidence_norm (rolling stats cache per sport + market_family)
+ *       columns:
+ *         sport_key text
+ *         market_family text  ('props'|'h2h'|'spreads'|'totals')
+ *         window_days int
+ *         n int
+ *         mu_ev float8, sd_ev float8
+ *         mu_tail float8, sd_tail float8
+ *         mu_disagree float8, sd_disagree float8
+ *         updated_at timestamptz
+ *       PK/unique: (sport_key, market_family)
  */
 
 import "dotenv/config";
@@ -91,6 +105,21 @@ function averageNonNull(arr: Array<number | null | undefined>): number | null {
   if (!xs.length) return null;
   return xs.reduce((a, b) => a + b, 0) / xs.length;
 }
+function safeStd(xs: number[], mu: number) {
+  if (xs.length < 2) return 0;
+  const v = xs.reduce((s, x) => s + (x - mu) * (x - mu), 0) / (xs.length - 1);
+  return Math.sqrt(Math.max(0, v));
+}
+function sigmoid(x: number) {
+  // numerically stable-ish for typical ranges
+  if (x >= 0) {
+    const z = Math.exp(-x);
+    return 1 / (1 + z);
+  } else {
+    const z = Math.exp(x);
+    return z / (1 + z);
+  }
+}
 
 // Box–Muller
 function randn() {
@@ -119,8 +148,8 @@ type EventRow = {
 type TeamRatingRow = {
   canonical: string;
 
-  engine_adj_off: number | null; // points per 100 possessions
-  engine_adj_def: number | null; // points allowed per 100 possessions
+  engine_adj_off: number | null;
+  engine_adj_def: number | null;
 
   engine_power: number | null;
 
@@ -257,6 +286,26 @@ type ModelCalibrationRow = {
   updated_at: string;
 };
 
+type MarketFamily = "props" | "h2h" | "spreads" | "totals";
+
+type ConfidenceNormRow = {
+  sport_key: string;
+  market_family: MarketFamily;
+  window_days: number;
+  n: number;
+
+  mu_ev: number;
+  sd_ev: number;
+
+  mu_tail: number;
+  sd_tail: number;
+
+  mu_disagree: number;
+  sd_disagree: number;
+
+  updated_at: string;
+};
+
 /* =========================================================
    ENV / CONFIG
 ========================================================= */
@@ -364,6 +413,14 @@ const NCAAB_ORB_TOTAL_SCALE = Number(process.env.NCAAB_ORB_TOTAL_SCALE ?? "10");
 const NCAAB_TOV_PACE_SCALE = Number(process.env.NCAAB_TOV_PACE_SCALE ?? "0.30");
 const NCAAB_3PR_SIGMA_SCALE = Number(process.env.NCAAB_3PR_SIGMA_SCALE ?? "0.35");
 const NCAAB_TOV_MARGIN_SCALE = Number(process.env.NCAAB_TOV_MARGIN_SCALE ?? "18");
+
+/**
+ * Confidence normalization window
+ */
+const CONF_NORM_WINDOW_DAYS = Number(process.env.CONF_NORM_WINDOW_DAYS ?? "30");
+const CONF_MIN_SD = Number(process.env.CONF_MIN_SD ?? "1e-6");
+// optional shaping: divide score_raw by this to reduce saturation; 1.0–1.5 typical
+const CONF_SIGMOID_TEMP = Number(process.env.CONF_SIGMOID_TEMP ?? "1.25");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
 
@@ -514,8 +571,6 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
       sportKey === "basketball_ncaab"
         ? {
             enabled: true,
-            used_for: ["pace_override", "style_modifiers", "margin_bump"],
-            explicitly_not_used_for: ["offensive-efficiency", "defensive-efficiency"],
             style_keys: [
               "possessions-per-game",
               "effective-field-goal-pct",
@@ -525,6 +580,7 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
               "three-point-rate",
               "average-scoring-margin",
             ],
+            note: "Uses stat_key + home_score/away_score ONLY. OE/DE come from team_ratings.",
           }
         : { enabled: false },
 
@@ -536,7 +592,13 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
       w_pfpa: TOTAL_W_PFPA,
       w_avg_total: TOTAL_W_AVG_TOTAL,
       offdef_blend: { w_off: PTS_BLEND_WEIGHT_OFF, w_def: PTS_BLEND_WEIGHT_DEF },
-      oe_de_source: "team_ratings.engine_adj_off/engine_adj_def ONLY",
+    },
+
+    confidence_norm: {
+      mode: "zscore+sigmoid",
+      window_days: CONF_NORM_WINDOW_DAYS,
+      sigmoid_temp: CONF_SIGMOID_TEMP,
+      note: "Normalizes EV/tail/disagreement per market family to align games with props.",
     },
 
     line_source: "consensus(median latest-per-book from odds_snapshot)",
@@ -603,7 +665,7 @@ function defaultPaceForSport(sportKey: string) {
 }
 
 /* =========================================================
-   NCAAB_STATS helpers + style model (PACE/STYLE ONLY)
+   NCAAB_STATS helpers + style model
 ========================================================= */
 
 type TeamStatIndex = Map<string, Map<string, StatRow>>;
@@ -656,8 +718,8 @@ function preferNcaabStatPace(
   if (sportKey === "basketball_ncaab" && idx) {
     const h = getTeamStatSplitAliases(idx, homeCanon, ["possessions-per-game", "pace", "adjusted-tempo"]);
     const a = getTeamStatSplitAliases(idx, awayCanon, ["possessions-per-game", "pace", "adjusted-tempo"]);
-    paceHome = h.home ?? paceHome; // home split
-    paceAway = a.away ?? paceAway; // away split
+    paceHome = h.home ?? paceHome;
+    paceAway = a.away ?? paceAway;
   }
 
   return { paceHome, paceAway };
@@ -684,7 +746,7 @@ type NcaabStyle = {
   marginAdd: number;
   used: {
     efg?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
-    tov?: { home: number | null; away: number | null; alias: string | null };
+    tov?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
     orb?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
     ftr?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
     three?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
@@ -722,6 +784,7 @@ function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string
 
   const tovHome = hTov.home;
   const tovAway = aTov.away;
+  const tovAvg = averageNonNull([tovHome, tovAway]);
 
   const orbHome = hOrb.home;
   const orbAway = aOrb.away;
@@ -735,7 +798,6 @@ function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string
   const threeAway = a3.away;
   const threeAvg = averageNonNull([threeHome, threeAway]);
 
-  const tovAvg = averageNonNull([tovHome, tovAway]);
   if (tovAvg != null) {
     const raw = 1 - (tovAvg - NCAAB_BASE_TOV) * NCAAB_TOV_PACE_SCALE;
     base.paceMult = clamp(raw, NCAAB_STYLE_PACE_MULT_MIN, NCAAB_STYLE_PACE_MULT_MAX);
@@ -758,7 +820,7 @@ function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string
   }
 
   base.used.efg = { home: efgHome, away: efgAway, avg: efgAvg, alias: (hEfg.used_alias || aEfg.used_alias || null) };
-  base.used.tov = { home: tovHome, away: tovAway, alias: (hTov.used_alias || aTov.used_alias || null) };
+  base.used.tov = { home: tovHome, away: tovAway, avg: tovAvg, alias: (hTov.used_alias || aTov.used_alias || null) };
   base.used.orb = { home: orbHome, away: orbAway, avg: orbAvg, alias: (hOrb.used_alias || aOrb.used_alias || null) };
   base.used.ftr = { home: ftrHome, away: ftrAway, avg: ftrAvg, alias: (hFtr.used_alias || aFtr.used_alias || null) };
   base.used.three = { home: threeHome, away: threeAway, avg: threeAvg, alias: (h3.used_alias || a3.used_alias || null) };
@@ -767,7 +829,7 @@ function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string
 }
 
 /* =========================================================
-   TOTALS COMPONENTS (OE/DE FROM TEAM_RATINGS ONLY)
+   MODEL (calibrated) — SIGN SAFE
 ========================================================= */
 
 function computeTotalsComponents(args: {
@@ -777,7 +839,6 @@ function computeTotalsComponents(args: {
   paceGame: number;
 }) {
   const { sportKey, home, away, paceGame } = args;
-
   const paceFactor = paceGame / 100;
 
   // ✅ OE/DE ALWAYS from team_ratings
@@ -785,8 +846,8 @@ function computeTotalsComponents(args: {
   const offFallback = sportKey === "basketball_nba" ? 112 : 100;
 
   const homeOff100 = num(home.engine_adj_off, offFallback);
-  const awayOff100 = num(away.engine_adj_off, offFallback);
   const homeDef100 = num(home.engine_adj_def, defFallback);
+  const awayOff100 = num(away.engine_adj_off, offFallback);
   const awayDef100 = num(away.engine_adj_def, defFallback);
 
   const wOff = clamp01(PTS_BLEND_WEIGHT_OFF);
@@ -799,7 +860,6 @@ function computeTotalsComponents(args: {
   const awayPts_offdef = awayPts100 * paceFactor;
   const total_offdef_pace = Math.max(0, homePts_offdef + awayPts_offdef);
 
-  // PF/PA component (from team_ratings)
   const homePF = toNullNum(home.pf_points);
   const homePA = toNullNum(home.pa_points);
   const awayPF = toNullNum(away.pf_points);
@@ -809,23 +869,11 @@ function computeTotalsComponents(args: {
   const awayPts_pfpa = avgNullable(awayPF, homePA);
   const total_pfpa = homePts_pfpa != null && awayPts_pfpa != null ? Math.max(0, homePts_pfpa + awayPts_pfpa) : null;
 
-  // avg_total_points component
   const homeAvgTot = toNullNum(home.avg_total_points);
   const awayAvgTot = toNullNum(away.avg_total_points);
   const total_avg_total = avgNullable(homeAvgTot, awayAvgTot);
 
-  return {
-    total_offdef_pace,
-    total_pfpa,
-    total_avg_total,
-    oe_de_source: {
-      home_off_100: homeOff100,
-      home_def_100: homeDef100,
-      away_off_100: awayOff100,
-      away_def_100: awayDef100,
-      note: "OE/DE from team_ratings.engine_adj_off/engine_adj_def",
-    },
-  };
+  return { total_offdef_pace, total_pfpa, total_avg_total };
 }
 
 function blendTotals(args: {
@@ -852,10 +900,6 @@ function blendTotals(args: {
   for (const p of avail) total += (p.w / wSum) * (p.v as number);
   return Math.max(0, total);
 }
-
-/* =========================================================
-   MODEL INPUTS (PACE + STYLE)
-========================================================= */
 
 function buildInputsPaceAware(args: {
   sportKey: string;
@@ -891,7 +935,8 @@ function buildInputsPaceAware(args: {
     w_avg_total: TOTAL_W_AVG_TOTAL,
   });
 
-  const totalMean_model = sportKey === "basketball_ncaab" ? Math.max(0, totalMean_model_base + style.totalAdd) : totalMean_model_base;
+  const totalMean_model =
+    sportKey === "basketball_ncaab" ? Math.max(0, totalMean_model_base + style.totalAdd) : totalMean_model_base;
 
   const totalAnchorW = ready ? clamp(calib!.total_anchor_w, 0, 0.85) : TOTAL_ANCHOR_W_DEFAULT;
   const totalMean =
@@ -964,7 +1009,6 @@ function buildInputsPaceAware(args: {
     totalsComponents: {
       ...comps,
       weights: { w_offdef_pace: TOTAL_W_OFFDEF_PACE, w_pfpa: TOTAL_W_PFPA, w_avg_total: TOTAL_W_AVG_TOTAL },
-      paceFactor,
     },
 
     ncaabStyle: sportKey === "basketball_ncaab" ? style : null,
@@ -1384,7 +1428,7 @@ function getSharpNoVigProb(
   market: MarketKey,
   side: SideKey,
   refLine: number | null
-): { prob: number } | null {
+): { prob: number; sharpProb: number } | null {
   const opp = oppositeSide(market, side);
   if (!opp) return null;
 
@@ -1428,7 +1472,8 @@ function getSharpNoVigProb(
   }
 
   if (!probs.length) return null;
-  return { prob: mean(probs) };
+  const sharpProb = mean(probs);
+  return { prob: sharpProb, sharpProb };
 }
 
 function probToAmericanOdds(p: number): number {
@@ -1454,15 +1499,54 @@ function tailness(p: number) {
   return clamp(Math.abs(p - 0.5) / 0.5, 0, 1);
 }
 
-function computeConfidenceScore(evPctVal: number, qProb: number, sharpProb: number, mcProb: number) {
-  const evScore = clamp(evPctVal * 5, 0, 100);
-  const probScore = clamp(Math.abs(qProb - 0.5) * 200, 0, 100);
+function marketFamilyFromMarket(market: MarketKey): MarketFamily {
+  if (market === "h2h") return "h2h";
+  if (market === "spreads") return "spreads";
+  return "totals";
+}
 
-  const t = tailness(sharpProb);
-  const disagreement = Math.abs(sharpProb - mcProb);
-  const agreementScore = 100 - clamp(disagreement * (300 + 200 * t), 0, 100);
+/* =========================================================
+   CONFIDENCE NORMALIZATION (Option B)
+========================================================= */
 
-  return 0.45 * evScore + 0.35 * probScore + 0.2 * agreementScore;
+type ConfFeatures = {
+  ev_pct: number;          // already % scale
+  tail: number;            // 0..1
+  disagree: number;        // 0..1-ish
+};
+
+type ConfNormParams = {
+  mu_ev: number; sd_ev: number;
+  mu_tail: number; sd_tail: number;
+  mu_disagree: number; sd_disagree: number;
+  n: number;
+};
+
+function z(x: number, mu: number, sd: number) {
+  const s = Math.max(CONF_MIN_SD, sd);
+  return (x - mu) / s;
+}
+
+/**
+ * Combine z-scores into a 0–100 confidence score via sigmoid.
+ * - Higher EV is better
+ * - Higher tail is better (more “true” probability away from 50/50)
+ * - Lower disagreement is better → we invert by negating z_disagree
+ */
+function computeConfidenceScoreNormalized(
+  f: ConfFeatures,
+  norm: ConfNormParams
+) {
+  const zEv = z(f.ev_pct, norm.mu_ev, norm.sd_ev);
+  const zTail = z(f.tail, norm.mu_tail, norm.sd_tail);
+  const zDis = z(f.disagree, norm.mu_disagree, norm.sd_disagree);
+
+  const scoreRaw = 0.45 * zEv + 0.35 * zTail + 0.20 * (-zDis);
+
+  const s = sigmoid(scoreRaw / Math.max(1e-6, CONF_SIGMOID_TEMP));
+  const score = Math.round(100 * s);
+
+  return { score, score_raw: scoreRaw, z_ev: zEv, z_tail: zTail, z_disagree: zDis };
 }
 
 function confidenceTier(score: number): string {
@@ -1471,6 +1555,116 @@ function confidenceTier(score: number): string {
   if (score >= 65) return "B";
   if (score >= 55) return "C";
   return "D";
+}
+
+/**
+ * Pull rolling normalization stats from:
+ *  1) confidence_norm table (recommended)
+ *  2) fallback: compute from last N days of ev_plays
+ *  3) fallback: compute from current-run features
+ */
+async function fetchConfidenceNormParams(
+  sportKey: string,
+  family: MarketFamily,
+  fallbackFromEvPlays: boolean
+): Promise<ConfNormParams | null> {
+  // Try cached table first (if it exists)
+  const { data: cached, error: cachedErr } = await supabase
+    .from("confidence_norm")
+    .select("sport_key,market_family,window_days,n,mu_ev,sd_ev,mu_tail,sd_tail,mu_disagree,sd_disagree,updated_at")
+    .eq("sport_key", sportKey)
+    .eq("market_family", family)
+    .limit(1);
+
+  if (!cachedErr && cached && cached[0]) {
+    const r = cached[0] as any as ConfidenceNormRow;
+    return {
+      mu_ev: num((r as any).mu_ev, 0),
+      sd_ev: Math.max(CONF_MIN_SD, num((r as any).sd_ev, 1)),
+      mu_tail: num((r as any).mu_tail, 0.2),
+      sd_tail: Math.max(CONF_MIN_SD, num((r as any).sd_tail, 0.1)),
+      mu_disagree: num((r as any).mu_disagree, 0.05),
+      sd_disagree: Math.max(CONF_MIN_SD, num((r as any).sd_disagree, 0.03)),
+      n: num((r as any).n, 0),
+    };
+  }
+
+  if (!fallbackFromEvPlays) return null;
+
+  // Fallback: compute from last N days of ev_plays (if confidence_norm table isn't present)
+  const since = new Date(Date.now() - CONF_NORM_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from("ev_plays")
+    .select("market,ev_pct,quantum_prob,run_id,event_id")
+    .eq("sport_key", sportKey)
+    .gte("commence_time", since) // best available without created_at; keeps it “recent slate”
+    .limit(5000);
+
+  if (error) {
+    console.warn(`[CONF] (${sportKey}) failed to build norm from ev_plays: ${error.message}`);
+    return null;
+  }
+
+  const xsEv: number[] = [];
+  const xsTail: number[] = [];
+  // without sharp/mc stored, we can’t rebuild disagreement; fallback to a proxy: tail itself (weak)
+  const xsDis: number[] = [];
+
+  for (const r of (data ?? []) as any[]) {
+    const m = String(r.market || "").toLowerCase();
+    if (m !== family) continue;
+    const ev = num(r.ev_pct, NaN);
+    const qp = num(r.quantum_prob, NaN);
+    if (!Number.isFinite(ev) || !Number.isFinite(qp)) continue;
+
+    xsEv.push(ev);
+    xsTail.push(tailness(qp));
+    xsDis.push(0.05); // neutral placeholder if we lack sharp/mc; cache table fixes this
+  }
+
+  if (xsEv.length < 25) return null;
+
+  const muEv = mean(xsEv);
+  const muTail = mean(xsTail);
+  const muDis = mean(xsDis);
+
+  return {
+    mu_ev: muEv,
+    sd_ev: Math.max(CONF_MIN_SD, safeStd(xsEv, muEv)),
+    mu_tail: muTail,
+    sd_tail: Math.max(CONF_MIN_SD, safeStd(xsTail, muTail)),
+    mu_disagree: muDis,
+    sd_disagree: Math.max(CONF_MIN_SD, safeStd(xsDis, muDis)),
+    n: xsEv.length,
+  };
+}
+
+async function upsertConfidenceNormRows(
+  sportKey: string,
+  rows: Array<{ market_family: MarketFamily; norm: ConfNormParams }>
+) {
+  // If the table doesn't exist, this will error; we swallow it (your pipeline keeps going).
+  const payload = rows.map((r) => ({
+    sport_key: sportKey,
+    market_family: r.market_family,
+    window_days: CONF_NORM_WINDOW_DAYS,
+    n: r.norm.n,
+    mu_ev: r.norm.mu_ev,
+    sd_ev: r.norm.sd_ev,
+    mu_tail: r.norm.mu_tail,
+    sd_tail: r.norm.sd_tail,
+    mu_disagree: r.norm.mu_disagree,
+    sd_disagree: r.norm.sd_disagree,
+    updated_at: new Date().toISOString(),
+  }));
+
+  const { error } = await supabase.from("confidence_norm").upsert(payload, { onConflict: "sport_key,market_family" });
+  if (error) {
+    const msg = error.message || "";
+    const notFoundish = /relation .* does not exist/i.test(msg) || /schema cache/i.test(msg);
+    if (!notFoundish) console.warn(`[CONF] upsert confidence_norm failed: ${msg}`);
+  }
 }
 
 /* =========================================================
@@ -1490,7 +1684,17 @@ async function rebuildEvPlaysForSport(
   const oddsRows = await fetchOddsSnapshotForEvents(eventIds);
   const latest = indexLatestOddsPerBook(oddsRows);
 
-  const inserts: EvPlayInsert[] = [];
+  // We build candidate features first, then normalize per-family.
+  type Candidate = {
+    family: MarketFamily;
+    insert: Omit<EvPlayInsert, "confidence_score" | "confidence_tier">;
+    features: ConfFeatures;
+    // debug
+    sharpProb: number;
+    mcProb: number;
+  };
+
+  const candidates: Candidate[] = [];
 
   for (const mc of mcRows) {
     const eid = mc.event_id;
@@ -1505,6 +1709,7 @@ async function rebuildEvPlaysForSport(
         market === "h2h" ? ["home", "away"] : market === "spreads" ? ["home", "away"] : ["over", "under"];
 
       const refLine = market === "spreads" ? mc.spread_line_home : market === "totals" ? mc.total_line : null;
+      const family = marketFamilyFromMarket(market);
 
       for (const side of sides) {
         const mcProb = getMcProbForMarket(mc, market, side);
@@ -1521,11 +1726,14 @@ async function rebuildEvPlaysForSport(
         );
         const wMc = 1 - wSharp;
 
+        // shrink MC towards sharp when tail is high
         const shrink = clamp(0.10 + 0.50 * tail, 0.10, 0.60);
         const mcAdj = clamp01(mcProb * (1 - shrink) + sharp.prob * shrink);
 
         const quantumProb = clamp01(wSharp * sharp.prob + wMc * mcAdj);
         const quantumOdds = probToAmericanOdds(quantumProb);
+
+        const disagreement = Math.abs(sharp.prob - mcProb); // 0..1
 
         for (const book of SOFT_BOOKS) {
           const offer = getOffer(latest, eid, market, side, book);
@@ -1534,6 +1742,7 @@ async function rebuildEvPlaysForSport(
           const bookOdds = toNullNum(offer.odds);
           if (bookOdds == null) continue;
 
+          // gate line match for spreads/totals
           if (market === "spreads" || market === "totals") {
             if (refLine == null) continue;
 
@@ -1544,6 +1753,7 @@ async function rebuildEvPlaysForSport(
             if (!nearlyEqual(offerLine, expected, LINE_TOL)) continue;
           }
 
+          // tail guard
           if (TAIL_GUARD_ENABLED) {
             const isLong = bookOdds >= TAIL_GUARD_LONG_ODDS || bookOdds <= -TAIL_GUARD_LONG_ODDS;
             const gap = Math.abs(mcProb - sharp.prob);
@@ -1556,9 +1766,6 @@ async function rebuildEvPlaysForSport(
           const rawKelly = kellyFraction(quantumProb, bookOdds);
           const betFraction = rawKelly * KELLY_MULTIPLIER;
 
-          const confidenceScore = computeConfidenceScore(ev, quantumProb, sharp.prob, mcProb);
-          const tier = confidenceTier(confidenceScore);
-
           const team =
             market === "totals"
               ? homeTeam && awayTeam
@@ -1568,36 +1775,117 @@ async function rebuildEvPlaysForSport(
               ? homeTeam
               : awayTeam;
 
-          inserts.push({
-            sport_key: sportKey,
-            run_id: runId,
-            event_id: eid,
-            commence_time: mc.commence_time,
-            matchup: mc.matchup,
-            team,
-            market,
-            side,
-            line: market === "h2h" ? null : toNullNum(offer.line),
-            bookmaker: book,
-            book_odds: bookOdds,
-            quantum_prob: quantumProb,
-            quantum_odds: quantumOdds,
-            ev_pct: ev,
-            confidence_score: Math.round(confidenceScore),
-            confidence_tier: tier,
-            kelly_fraction: rawKelly,
-            bet_fraction: betFraction,
+          candidates.push({
+            family,
+            features: { ev_pct: ev, tail: tailness(quantumProb), disagree: disagreement },
+            sharpProb: sharp.prob,
+            mcProb,
+            insert: {
+              sport_key: sportKey,
+              run_id: runId,
+              event_id: eid,
+              commence_time: mc.commence_time,
+              matchup: mc.matchup,
+              team,
+              market,
+              side,
+              line: market === "h2h" ? null : toNullNum(offer.line),
+              bookmaker: book,
+              book_odds: bookOdds,
+              quantum_prob: quantumProb,
+              quantum_odds: quantumOdds,
+              ev_pct: ev,
+              kelly_fraction: rawKelly,
+              bet_fraction: betFraction,
+              // filled after normalization
+              confidence_score: 0 as any,
+              confidence_tier: "" as any,
+            },
           });
         }
       }
     }
   }
 
-  if (!inserts.length) {
+  if (!candidates.length) {
     console.log(`[EV] (${sportKey}) No +EV plays found.`);
     return;
   }
 
+  // Build norm params per family:
+  const families: MarketFamily[] = ["h2h", "spreads", "totals"]; // this script only builds game plays
+  const normMap = new Map<MarketFamily, ConfNormParams>();
+
+  for (const fam of families) {
+    // 1) try cached table; 2) fallback to ev_plays; else null
+    const fromCacheOrEv = await fetchConfidenceNormParams(sportKey, fam, true);
+
+    if (fromCacheOrEv) {
+      normMap.set(fam, fromCacheOrEv);
+      continue;
+    }
+
+    // fallback: compute from this run’s candidates (per family)
+    const xs = candidates.filter((c) => c.family === fam);
+    if (xs.length < 10) continue;
+
+    const evs = xs.map((x) => x.features.ev_pct);
+    const tails = xs.map((x) => x.features.tail);
+    const dis = xs.map((x) => x.features.disagree);
+
+    const muEv = mean(evs);
+    const muTail = mean(tails);
+    const muDis = mean(dis);
+
+    normMap.set(fam, {
+      mu_ev: muEv,
+      sd_ev: Math.max(CONF_MIN_SD, safeStd(evs, muEv)),
+      mu_tail: muTail,
+      sd_tail: Math.max(CONF_MIN_SD, safeStd(tails, muTail)),
+      mu_disagree: muDis,
+      sd_disagree: Math.max(CONF_MIN_SD, safeStd(dis, muDis)),
+      n: xs.length,
+    });
+  }
+
+  // Optional: upsert cache table (if you create it)
+  await upsertConfidenceNormRows(
+    sportKey,
+    families
+      .map((fam) => {
+        const n = normMap.get(fam);
+        return n ? { market_family: fam, norm: n } : null;
+      })
+      .filter(Boolean) as any
+  );
+
+  // Now score each candidate using the family’s norm:
+  const inserts: EvPlayInsert[] = [];
+  for (const c of candidates) {
+    const norm = normMap.get(c.family);
+    const use = norm
+      ? norm
+      : {
+          mu_ev: 0,
+          sd_ev: 1,
+          mu_tail: 0.2,
+          sd_tail: 0.1,
+          mu_disagree: 0.05,
+          sd_disagree: 0.03,
+          n: 0,
+        };
+
+    const scored = computeConfidenceScoreNormalized(c.features, use);
+    const tier = confidenceTier(scored.score);
+
+    inserts.push({
+      ...(c.insert as any),
+      confidence_score: scored.score,
+      confidence_tier: tier,
+    });
+  }
+
+  // Insert
   const chunkSize = 1000;
   for (let i = 0; i < inserts.length; i += chunkSize) {
     const batch = inserts.slice(i, i + chunkSize);
@@ -1605,7 +1893,7 @@ async function rebuildEvPlaysForSport(
     if (error) throw new Error(`[EV] (${sportKey}) Failed to insert ev_plays: ${error.message}`);
   }
 
-  console.log(`[EV] (${sportKey}) Inserted ${inserts.length} plays into ev_plays.`);
+  console.log(`[EV] (${sportKey}) Inserted ${inserts.length} plays into ev_plays (confidence normalized).`);
 }
 
 /* =========================================================
@@ -1755,16 +2043,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             game_final: input.paceGame_final,
           },
           ncaab_style: input.ncaabStyle,
-          totals: {
-            oe_de_source: input.totalsComponents.oe_de_source,
-            model_total_mean_base: input.totalMean_model_base,
-            style_total_add: input.totalStyleAdd,
-            model_total_mean_after_style: input.totalMean_model,
-            anchor_w: input.totalAnchorW,
-            consensus_total_line: totalLine,
-            blended_total_mean: input.totalMean,
-            components: input.totalsComponents,
-          },
           margin_conventions: {
             model: "positive_means_home_better",
             stored: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
@@ -1783,8 +2061,26 @@ async function runForSport(sportKey: string, startCutoff: Date) {
                 ready: calibrationIsReady(calib) && !calib.__not_ready,
               }
             : null,
-          spread_line_home_consensus: spreadLineHome,
-          total_line_consensus: totalLine,
+          margin: {
+            intercept: input.marginParams.intercept,
+            scale_raw: input.marginParams.scale,
+            scale_used_abs: input.marginParams.scale_used_abs,
+            hca_scale: input.marginParams.hca_scale,
+            power_diff: num(homeR.engine_power, 0) - num(awayR.engine_power, 0),
+            margin_mean_base_model_space: input.marginMean_base,
+            margin_bump_scoring_margin: input.marginBump,
+            margin_add_style: input.marginStyleAdd,
+            margin_mean_final_model_space: input.marginMean,
+          },
+          totals: {
+            model_total_mean_base: input.totalMean_model_base,
+            style_total_add: input.totalStyleAdd,
+            model_total_mean_after_style: input.totalMean_model,
+            anchor_w: input.totalAnchorW,
+            consensus_total_line: totalLine,
+            blended_total_mean: input.totalMean,
+            components: input.totalsComponents,
+          },
           sigma: {
             base_margin_game: input.sigmaMarginGame_base,
             base_total_game: input.sigmaTotalGame_base,
@@ -1795,6 +2091,8 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             final_total_game: input.sigmaTotalGame,
           },
           rho_mt: input.rhoMT,
+          spread_line_home_consensus: spreadLineHome,
+          total_line_consensus: totalLine,
           sims: SIMS,
         }
       : null;
@@ -1830,6 +2128,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       over_prob: sim.overProb,
       total_push_prob: sim.totalPushProb,
       under_prob: sim.underProb,
+
       trace,
     });
   }
