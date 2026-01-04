@@ -1,4 +1,4 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (Steam annotation only + remove filters)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -22,11 +22,21 @@
 //    - Pinnacle is history-only (used for steam + line chart), NOT a filter option
 //
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
+//
 // ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
+//
 // ✅ Modal: NO scrolling required to reach Done (header/footer fixed, safe-area aware)
 // ✅ Modal: Tabs: "Line History" + "Hit Rate"
 // ✅ Line History: LINE CHART (DK/FD/MGM/PIN) — tooltip shows DATE+TIME (CT) + LINE + ODDS per book
 // ✅ Hit Rate tab: FantasyPros GAME LOGS = BAR CHART (OVER green / UNDER red), cursor transparent
+//
+// ✅ MODAL STATS (FIXED):
+//    - Uses ONLY model efficiency + net rating from public.team_ratings
+//      • Off Eff: engine_adj_off
+//      • Def Eff: engine_adj_def
+//      • Net Rating: engine_power
+//    - DOES NOT use ncaab_stats or TeamRankings for modal stats
+//    - Percent stats formatting helper included (0.456 -> 45.6%)
 //
 // ✅ Exports both named + default to avoid import mismatch.
 
@@ -195,6 +205,18 @@ type AggregatedPlay = {
 };
 
 /* =========================================================
+   Team Ratings (MODEL STATS SOURCE for modal)
+========================================================= */
+
+type TeamRatingsRow = {
+  canonical: string;
+  engine_adj_off: number | null; // efficiency
+  engine_adj_def: number | null; // efficiency
+  engine_power: number | null; // net rating
+  engine_possessions?: number | null; // optional if present
+};
+
+/* =========================================================
    FantasyPros logs (API response type)
 ========================================================= */
 
@@ -272,6 +294,18 @@ function american(odds: number) {
 function pct(n: number, digits = 1) {
   const x = safeNum(n, 0);
   return `${x > 0 ? "+" : ""}${x.toFixed(digits)}%`;
+}
+
+// Percent stored as 0.456 -> 45.6%
+function fmtPct(v: number | null, digits = 1) {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${(v * 100).toFixed(digits)}%`;
+}
+
+function fmtSigned(n: number | null, digits = 1) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const v = n.toFixed(digits);
+  return n > 0 ? `+${v}` : v;
 }
 
 function formatMoney(n: number) {
@@ -716,7 +750,6 @@ type SteamInfo = {
   pinCur: Quote;
 
   // soft books that are better than pin right now (by line or price)
-  // and a snapshot of their latest quote (line+odds)
   lagging: Partial<Record<SoftOfferKey, Quote>>;
 
   // why pin moved (for tooltip/label)
@@ -725,6 +758,50 @@ type SteamInfo = {
 
 function steamKey(sport_key: string | null | undefined, event_id: string, market: GameMarketKey, side: GameSideKey) {
   return `${String(sport_key ?? "").trim()}|${event_id}|${market}|${side}`;
+}
+
+/* =========================================================
+   Matchup parsing (for modal team_ratings lookup)
+========================================================= */
+
+function parseTeamsFromMatchup(matchup: string | null): { a: string | null; b: string | null } {
+  const raw = (matchup ?? "").trim();
+  if (!raw) return { a: null, b: null };
+
+  // common separators
+  const candidates = [
+    " vs ",
+    " VS ",
+    " Vs ",
+    " @ ",
+    " at ",
+    " AT ",
+    " At ",
+    "·", // in case someone embeds, we will ignore if no split
+  ];
+
+  // normalize a bit
+  const cleaned = raw.replace(/\s+/g, " ").trim();
+
+  // prefer explicit vs / @ / at
+  const re = /\s(vs\.?|@|at)\s/i;
+  if (re.test(cleaned)) {
+    const parts = cleaned.split(re).map((s) => s.trim()).filter(Boolean);
+    // split yields [team1, sep, team2] or more; we want first and last
+    const a = parts[0] ?? null;
+    const b = parts[parts.length - 1] ?? null;
+    return { a: a || null, b: b || null };
+  }
+
+  // fallback: try " vs " literal
+  for (const sep of candidates) {
+    if (cleaned.includes(sep)) {
+      const [a, b] = cleaned.split(sep).map((s) => s.trim());
+      return { a: a || null, b: b || null };
+    }
+  }
+
+  return { a: null, b: null };
 }
 
 /* =========================================================
@@ -1141,7 +1218,7 @@ export const ModelScreen = () => {
             const curQuote = softCur ?? fallbackCur;
             if (!curQuote) return;
 
-            // Must be within odds gate right now (user is looking to take it)
+            // Must be within odds gate right now
             if (!withinOddsGate(curQuote.odds)) return;
 
             // Soft must currently be BETTER than Pinnacle now — by line or price
@@ -1159,8 +1236,7 @@ export const ModelScreen = () => {
             lagging[sb] = curQuote;
           });
 
-          // Keep steam annotation even if no lagging books? No — you said you want steam detected,
-          // but the original definition includes stale/value. We'll keep original: requires at least 1 lagging soft book.
+          // keep original definition: requires at least 1 lagging soft book
           if (!Object.keys(lagging).length) continue;
 
           eligible[k] = {
@@ -1187,9 +1263,7 @@ export const ModelScreen = () => {
      Filtering (NONE) — all current +EV plays show after gates
   ========================================================= */
 
-  const filtered = useMemo(() => {
-    return aggregated;
-  }, [aggregated]);
+  const filtered = useMemo(() => aggregated, [aggregated]);
 
   const bankroll = safeNum(settings?.bankroll, 0);
   const kellyFactor = clamp(safeNum(settings?.kelly_factor, 0), 0, 1);
@@ -1354,9 +1428,6 @@ export const ModelScreen = () => {
         open={detailsOpen}
         play={selected}
         onClose={closeDetails}
-        bankroll={bankroll}
-        kellyFactor={kellyFactor}
-        settingsReady={settingsReady}
       />
     </div>
   );
@@ -1424,9 +1495,7 @@ function PlayRow({
                 </span>
               ) : null}
             </div>
-            <div className="text-[10px] text-[#606060] mt-0.5 truncate">
-              Event: <span className="text-[#404040]">{play.event_id}</span>
-            </div>
+
             {steamBadge}
           </div>
 
@@ -1664,6 +1733,7 @@ function PlayCard({
 
 /* =========================================================
    Details Modal (tabs; safe-area; no scroll-to-footer)
+   + FIXED model stats from team_ratings
 ========================================================= */
 
 type ModalTab = "line" | "hit";
@@ -1676,14 +1746,93 @@ function PlayDetailsModal({
   open: boolean;
   play: AggregatedPlay | null;
   onClose: () => void;
-  bankroll: number;
-  kellyFactor: number;
-  settingsReady: boolean;
 }) {
   const [tab, setTab] = useState<ModalTab>("line");
 
+  // MODEL STATS state (team_ratings)
+  const [teamStatsLoading, setTeamStatsLoading] = useState(false);
+  const [teamStatsErr, setTeamStatsErr] = useState<string>("");
+  const [teamStats, setTeamStats] = useState<Record<string, TeamRatingsRow>>({});
+
   useEffect(() => {
     if (open) setTab("line");
+  }, [open, play?.playKey]);
+
+  // fetch team_ratings only for GAME plays when modal opens
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadTeamRatings() {
+      if (!open || !play || play.kind !== "game") {
+        if (mounted) {
+          setTeamStats({});
+          setTeamStatsErr("");
+          setTeamStatsLoading(false);
+        }
+        return;
+      }
+
+      const { a, b } = parseTeamsFromMatchup(play.matchup);
+      const teams = [a, b].filter(Boolean) as string[];
+
+      if (!teams.length) {
+        if (mounted) {
+          setTeamStats({});
+          setTeamStatsErr("Could not parse teams from matchup for team_ratings lookup.");
+          setTeamStatsLoading(false);
+        }
+        return;
+      }
+
+      setTeamStatsLoading(true);
+      setTeamStatsErr("");
+      setTeamStats({});
+
+      try {
+        // Note: engine_possessions is optional; if your table doesn't have it, Supabase will ignore it if not selected.
+        const { data, error } = await supabase
+          .from("team_ratings")
+          .select("canonical,engine_adj_off,engine_adj_def,engine_power,engine_possessions")
+          .in("canonical", teams);
+
+        if (!mounted) return;
+
+        if (error) {
+          setTeamStatsErr(error.message);
+          setTeamStats({});
+          return;
+        }
+
+        const map: Record<string, TeamRatingsRow> = {};
+        (data ?? []).forEach((r: any) => {
+          if (!r?.canonical) return;
+          map[String(r.canonical)] = {
+            canonical: String(r.canonical),
+            engine_adj_off: r.engine_adj_off == null ? null : Number(r.engine_adj_off),
+            engine_adj_def: r.engine_adj_def == null ? null : Number(r.engine_adj_def),
+            engine_power: r.engine_power == null ? null : Number(r.engine_power),
+            engine_possessions: r.engine_possessions == null ? null : Number(r.engine_possessions),
+          };
+        });
+
+        setTeamStats(map);
+
+        if (!Object.keys(map).length) {
+          setTeamStatsErr(`No team_ratings rows found for: ${teams.join(", ")}`);
+        }
+      } catch (e: any) {
+        if (!mounted) return;
+        setTeamStatsErr(e?.message ?? String(e));
+        setTeamStats({});
+      } finally {
+        if (mounted) setTeamStatsLoading(false);
+      }
+    }
+
+    loadTeamRatings();
+    return () => {
+      mounted = false;
+    };
   }, [open, play?.playKey]);
 
   if (!open || !play) return null;
@@ -1736,6 +1885,58 @@ function PlayDetailsModal({
                     Projection: <span className="text-white tabular-nums">{fmtMu(play.propMeta?.mu ?? null)}</span>
                   </div>
                 ) : null}
+
+                {/* ✅ MODEL TEAM STATS (games only) */}
+                {play.kind === "game" ? (
+                  <div className="mt-3">
+                    <div className="text-[10px] text-[#606060] mb-2">Model Team Stats (team_ratings)</div>
+
+                    {teamStatsLoading ? (
+                      <div className="text-xs text-[#808080] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
+                        Loading team_ratings…
+                      </div>
+                    ) : null}
+
+                    {!teamStatsLoading && teamStatsErr ? (
+                      <div className="text-xs text-[#a0a0a0] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
+                        {teamStatsErr}
+                      </div>
+                    ) : null}
+
+                    {!teamStatsLoading && Object.keys(teamStats).length ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {Object.values(teamStats).map((r) => (
+                          <div key={r.canonical} className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3">
+                            <div className="text-xs text-white font-medium truncate">{r.canonical}</div>
+
+                            <div className="mt-2 grid grid-cols-2 gap-y-1 text-[11px]">
+                              <span className="text-[#808080]">Off Eff</span>
+                              <span className="text-white tabular-nums">
+                                {r.engine_adj_off != null && Number.isFinite(r.engine_adj_off) ? r.engine_adj_off.toFixed(1) : "—"}
+                              </span>
+
+                              <span className="text-[#808080]">Def Eff</span>
+                              <span className="text-white tabular-nums">
+                                {r.engine_adj_def != null && Number.isFinite(r.engine_adj_def) ? r.engine_adj_def.toFixed(1) : "—"}
+                              </span>
+
+                              <span className="text-[#808080]">Net Rating</span>
+                              <span className="text-[#d4af37] tabular-nums">{fmtSigned(r.engine_power, 1)}</span>
+
+                              {/* optional pace */}
+                              {r.engine_possessions != null && Number.isFinite(r.engine_possessions) ? (
+                                <>
+                                  <span className="text-[#808080]">Pace</span>
+                                  <span className="text-white tabular-nums">{r.engine_possessions.toFixed(1)}</span>
+                                </>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -1758,7 +1959,9 @@ function PlayDetailsModal({
           </div>
 
           {/* Body */}
-          <div className="flex-1 min-h-0 p-4">{tab === "line" ? <OddsHistoryPanel play={play} /> : <HitRatePanel play={play} />}</div>
+          <div className="flex-1 min-h-0 p-4">
+            {tab === "line" ? <OddsHistoryPanel play={play} /> : <HitRatePanel play={play} />}
+          </div>
 
           {/* Footer */}
           <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a]">
@@ -2281,7 +2484,9 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
-      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
+      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
+        {pct(offer.ev_pct, 1)}
+      </div>
     </div>
   );
 }
@@ -2305,7 +2510,9 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         {logo ? <img src={logo} alt={offer.book} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
+      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
+        {pct(offer.ev_pct, 1)}
+      </div>
     </div>
   );
 }
