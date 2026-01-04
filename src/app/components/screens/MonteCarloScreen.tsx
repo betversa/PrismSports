@@ -427,20 +427,20 @@ const NCAAB_STAT_DEFS: Array<{
   hint?: string;
   fmt?: (v: number) => string;
 }> = [
-  { key: "off_eff", label: "Off Efficiency", hint: "Points per 100", fmt: (v) => v.toFixed(1) },
-  { key: "def_eff", label: "Def Efficiency", hint: "Allowed per 100", fmt: (v) => v.toFixed(1) },
-  { key: "net_rating", label: "Net Rating", hint: "Off − Def", fmt: (v) => v.toFixed(1) },
-  { key: "pace", label: "Pace", hint: "Possessions / 40", fmt: (v) => v.toFixed(1) },
+  { key: "offensive-efficiency", label: "Off Efficiency", hint: "Points per 100", fmt: (v) => v.toFixed(1) },
+  { key: "defensive-efficiency", label: "Def Efficiency", hint: "Allowed per 100", fmt: (v) => v.toFixed(1) },
+  { key: "average-scoring-margin", label: "Net Rating", hint: "Off − Def", fmt: (v) => v.toFixed(1) },
+  { key: "possessions-per-game", label: "Pace", hint: "Possessions / 40", fmt: (v) => v.toFixed(1) },
 
-  { key: "efg_pct", label: "eFG%", hint: "Effective FG%", fmt: (v) => `${v.toFixed(1)}%` },
-  { key: "tov_pct", label: "TO%", hint: "Turnover rate", fmt: (v) => `${v.toFixed(1)}%` },
-  { key: "orb_pct", label: "ORB%", hint: "Off reb rate", fmt: (v) => `${v.toFixed(1)}%` },
-  { key: "ft_rate", label: "FT Rate", hint: "FTA/FGA", fmt: (v) => v.toFixed(3) },
+  { key: "effective-field-goal-pct", label: "eFG%", hint: "Effective FG%", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "turnovers-per-game", label: "TO%", hint: "Turnover rate", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "offensive-rebounds-per-game", label: "ORB/G", hint: "Off reb rate", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "free-throw-rate", label: "FT Rate", hint: "FTA/FGA", fmt: (v) => v.toFixed(3) },
 
   { key: "three_rate", label: "3PA Rate", hint: "3PA/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%` },
-  { key: "three_pct", label: "3P%", hint: "3PT%", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "three-point-pct", label: "3P%", hint: "3PT%", fmt: (v) => `${v.toFixed(1)}%` },
 
-  { key: "two_pct", label: "2P%", hint: "2PT%", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "two_point_pct", label: "2P%", hint: "2PT%", fmt: (v) => `${v.toFixed(1)}%` },
   { key: "rim_rate", label: "Rim Rate", hint: "Rim/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%` },
 ];
 
