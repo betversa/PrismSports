@@ -1,5 +1,5 @@
 /**
- * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.4.1: NCAAB STYLE MODIFIERS + STAT SAFETY)
+ * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.4.2: OE/DE FROM TEAM_RATINGS ONLY)
  * ------------------------------------------------------------------------------------------------------
  * ✅ Duplicate-safe: single declarations only
  * ✅ Uses public.model_calibration (no fitting on the fly)
@@ -12,17 +12,15 @@
  * ✅ Robust consensus lines: median of latest-per-book from odds_snapshot, symmetric fills
  * ✅ Rebuilds ev_plays per sport after snapshot write
  *
- * ✅ NCAAB: Uses public.ncaab_stats beyond pace + OE/DE:
- *      - Pace: possessions-per-game (home/away splits) if available
- *      - Efficiency: offensive-efficiency + defensive-efficiency (home/away splits) if available
- *      - Style modifiers (lightweight, clamped; only applied when stat exists):
- *          • eFG% (shot quality): nudges total up/down
- *          • TO% (ball security): nudges pace & margin
- *          • ORB% (second chances): nudges total & variance
- *          • FTR (foul/FT rate): nudges total
- *          • 3P rate: nudges variance & slightly total
- *      - Margin bump: average-scoring-margin (home/away) (light weight + clamped)
- *      - Full transparency: all used stats + modifiers written into trace
+ * ✅ NCAAB: Uses public.ncaab_stats ONLY for:
+ *      - Pace override (possessions-per-game / tempo) if available
+ *      - Style modifiers (eFG%, TO%, ORB%, FTR, 3P rate)
+ *      - Margin bump (average-scoring-margin)
+ *
+ * ✅ OE/DE SOURCE FIX (your request):
+ *      - Offensive/Defensive efficiency ALWAYS from team_ratings:
+ *          engine_adj_off / engine_adj_def
+ *      - NO use of ncaab_stats offensive-efficiency / defensive-efficiency anywhere in totals
  *
  * ✅ STAT SAFETY:
  *      - ONLY reads: stat_key + home_score + away_score (avoids “column does not exist” issues)
@@ -32,7 +30,7 @@
  *   - events
  *   - team_ratings
  *   - team_possessions
- *   - ncaab_stats            (NCAAB only)
+ *   - ncaab_stats            (NCAAB only; pace/style/margin bump only)
  *   - odds_snapshot
  *   - monte_carlo_results (snapshot overwrite per sport)
  *   - monte_carlo_runs (history)
@@ -121,8 +119,8 @@ type EventRow = {
 type TeamRatingRow = {
   canonical: string;
 
-  engine_adj_off: number | null;
-  engine_adj_def: number | null;
+  engine_adj_off: number | null; // points per 100 possessions
+  engine_adj_def: number | null; // points allowed per 100 possessions
 
   engine_power: number | null;
 
@@ -516,10 +514,10 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
       sportKey === "basketball_ncaab"
         ? {
             enabled: true,
+            used_for: ["pace_override", "style_modifiers", "margin_bump"],
+            explicitly_not_used_for: ["offensive-efficiency", "defensive-efficiency"],
             style_keys: [
               "possessions-per-game",
-              "offensive-efficiency",
-              "defensive-efficiency",
               "effective-field-goal-pct",
               "turnover-pct",
               "offensive-rebounding-pct",
@@ -527,7 +525,6 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
               "three-point-rate",
               "average-scoring-margin",
             ],
-            note: "Only uses stat_key + home_score/away_score in this script.",
           }
         : { enabled: false },
 
@@ -539,6 +536,7 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
       w_pfpa: TOTAL_W_PFPA,
       w_avg_total: TOTAL_W_AVG_TOTAL,
       offdef_blend: { w_off: PTS_BLEND_WEIGHT_OFF, w_def: PTS_BLEND_WEIGHT_DEF },
+      oe_de_source: "team_ratings.engine_adj_off/engine_adj_def ONLY",
     },
 
     line_source: "consensus(median latest-per-book from odds_snapshot)",
@@ -605,7 +603,7 @@ function defaultPaceForSport(sportKey: string) {
 }
 
 /* =========================================================
-   NCAAB_STATS helpers + style model
+   NCAAB_STATS helpers + style model (PACE/STYLE ONLY)
 ========================================================= */
 
 type TeamStatIndex = Map<string, Map<string, StatRow>>;
@@ -658,8 +656,8 @@ function preferNcaabStatPace(
   if (sportKey === "basketball_ncaab" && idx) {
     const h = getTeamStatSplitAliases(idx, homeCanon, ["possessions-per-game", "pace", "adjusted-tempo"]);
     const a = getTeamStatSplitAliases(idx, awayCanon, ["possessions-per-game", "pace", "adjusted-tempo"]);
-    paceHome = h.home ?? paceHome;
-    paceAway = a.away ?? paceAway;
+    paceHome = h.home ?? paceHome; // home split
+    paceAway = a.away ?? paceAway; // away split
   }
 
   return { paceHome, paceAway };
@@ -769,7 +767,7 @@ function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string
 }
 
 /* =========================================================
-   MODEL (calibrated) — SIGN SAFE
+   TOTALS COMPONENTS (OE/DE FROM TEAM_RATINGS ONLY)
 ========================================================= */
 
 function computeTotalsComponents(args: {
@@ -777,69 +775,31 @@ function computeTotalsComponents(args: {
   home: TeamRatingRow;
   away: TeamRatingRow;
   paceGame: number;
-
-  statIdx: TeamStatIndex | null;
-  homeCanon: string;
-  awayCanon: string;
 }) {
-  const { sportKey, home, away, paceGame, statIdx, homeCanon, awayCanon } = args;
+  const { sportKey, home, away, paceGame } = args;
+
   const paceFactor = paceGame / 100;
 
-  let homeOff100 = num(home.engine_adj_off, 0);
-  let homeDef100 = num(home.engine_adj_def, 0);
-  let awayOff100 = num(away.engine_adj_off, 0);
-  let awayDef100 = num(away.engine_adj_def, 0);
-
-  let usedNcaabEff = false;
-  let ncaabEff: any = null;
-
-  if (sportKey === "basketball_ncaab" && statIdx) {
-    const homeOE = getTeamStatSplitAliases(statIdx, homeCanon, ["offensive-efficiency", "off-efficiency", "adj-off-efficiency"]);
-    const homeDE = getTeamStatSplitAliases(statIdx, homeCanon, ["defensive-efficiency", "def-efficiency", "adj-def-efficiency"]);
-    const awayOE = getTeamStatSplitAliases(statIdx, awayCanon, ["offensive-efficiency", "off-efficiency", "adj-off-efficiency"]);
-    const awayDE = getTeamStatSplitAliases(statIdx, awayCanon, ["defensive-efficiency", "def-efficiency", "adj-def-efficiency"]);
-
-    const hOE = homeOE.home;
-    const hDE = homeDE.home;
-    const aOE = awayOE.away;
-    const aDE = awayDE.away;
-
-    const haveAll = hOE != null && hDE != null && aOE != null && aDE != null;
-    ncaabEff = {
-      home_oe_home: hOE,
-      home_de_home: hDE,
-      away_oe_away: aOE,
-      away_de_away: aDE,
-      used_aliases: { homeOE: homeOE.used_alias, homeDE: homeDE.used_alias, awayOE: awayOE.used_alias, awayDE: awayDE.used_alias },
-    };
-
-    if (haveAll) {
-      homeOff100 = hOE!;
-      homeDef100 = hDE!;
-      awayOff100 = aOE!;
-      awayDef100 = aDE!;
-      usedNcaabEff = true;
-    }
-  }
-
+  // ✅ OE/DE ALWAYS from team_ratings
   const defFallback = sportKey === "basketball_nba" ? 112 : 100;
   const offFallback = sportKey === "basketball_nba" ? 112 : 100;
 
-  const homeOff = homeOff100 > 0 ? homeOff100 : offFallback;
-  const awayOff = awayOff100 > 0 ? awayOff100 : offFallback;
-  const homeDef = homeDef100 > 0 ? homeDef100 : defFallback;
-  const awayDef = awayDef100 > 0 ? awayDef100 : defFallback;
+  const homeOff100 = num(home.engine_adj_off, offFallback);
+  const awayOff100 = num(away.engine_adj_off, offFallback);
+  const homeDef100 = num(home.engine_adj_def, defFallback);
+  const awayDef100 = num(away.engine_adj_def, defFallback);
 
   const wOff = clamp01(PTS_BLEND_WEIGHT_OFF);
   const wDef = 1 - wOff;
 
-  const homePts100 = wOff * homeOff + wDef * awayDef;
-  const awayPts100 = wOff * awayOff + wDef * homeDef;
+  const homePts100 = wOff * homeOff100 + wDef * awayDef100;
+  const awayPts100 = wOff * awayOff100 + wDef * homeDef100;
 
   const homePts_offdef = homePts100 * paceFactor;
   const awayPts_offdef = awayPts100 * paceFactor;
   const total_offdef_pace = Math.max(0, homePts_offdef + awayPts_offdef);
 
+  // PF/PA component (from team_ratings)
   const homePF = toNullNum(home.pf_points);
   const homePA = toNullNum(home.pa_points);
   const awayPF = toNullNum(away.pf_points);
@@ -849,11 +809,23 @@ function computeTotalsComponents(args: {
   const awayPts_pfpa = avgNullable(awayPF, homePA);
   const total_pfpa = homePts_pfpa != null && awayPts_pfpa != null ? Math.max(0, homePts_pfpa + awayPts_pfpa) : null;
 
+  // avg_total_points component
   const homeAvgTot = toNullNum(home.avg_total_points);
   const awayAvgTot = toNullNum(away.avg_total_points);
   const total_avg_total = avgNullable(homeAvgTot, awayAvgTot);
 
-  return { total_offdef_pace, total_pfpa, total_avg_total, usedNcaabEff, ncaabEff };
+  return {
+    total_offdef_pace,
+    total_pfpa,
+    total_avg_total,
+    oe_de_source: {
+      home_off_100: homeOff100,
+      home_def_100: homeDef100,
+      away_off_100: awayOff100,
+      away_def_100: awayDef100,
+      note: "OE/DE from team_ratings.engine_adj_off/engine_adj_def",
+    },
+  };
 }
 
 function blendTotals(args: {
@@ -881,6 +853,10 @@ function blendTotals(args: {
   return Math.max(0, total);
 }
 
+/* =========================================================
+   MODEL INPUTS (PACE + STYLE)
+========================================================= */
+
 function buildInputsPaceAware(args: {
   sportKey: string;
   home: TeamRatingRow;
@@ -891,14 +867,10 @@ function buildInputsPaceAware(args: {
   consensusTotalLine: number | null;
   calib: EffectiveCalibration | null;
 
-  statIdx: TeamStatIndex | null;
-  homeCanon: string;
-  awayCanon: string;
   marginBump: number;
   style: NcaabStyle;
 }) {
-  const { sportKey, home, away, paceGameRaw, consensusTotalLine, calib, statIdx, homeCanon, awayCanon, marginBump, style } =
-    args;
+  const { sportKey, home, away, paceGameRaw, consensusTotalLine, calib, marginBump, style } = args;
 
   const paceGame = sportKey === "basketball_ncaab" ? paceGameRaw * style.paceMult : paceGameRaw;
 
@@ -908,7 +880,7 @@ function buildInputsPaceAware(args: {
   const paceFactor = paceGameClamped / 100;
   const ready = calib ? calibrationIsReady(calib) && !calib.__not_ready : false;
 
-  const comps = computeTotalsComponents({ sportKey, home, away, paceGame: paceGameClamped, statIdx, homeCanon, awayCanon });
+  const comps = computeTotalsComponents({ sportKey, home, away, paceGame: paceGameClamped });
 
   const totalMean_model_base = blendTotals({
     offdef_pace: comps.total_offdef_pace,
@@ -992,6 +964,7 @@ function buildInputsPaceAware(args: {
     totalsComponents: {
       ...comps,
       weights: { w_offdef_pace: TOTAL_W_OFFDEF_PACE, w_pfpa: TOTAL_W_PFPA, w_avg_total: TOTAL_W_AVG_TOTAL },
+      paceFactor,
     },
 
     ncaabStyle: sportKey === "basketball_ncaab" ? style : null,
@@ -1328,7 +1301,6 @@ async function clearEvPlaysForSport(sportKey: string) {
     return;
   }
 
-  // If the function exists but is buggy internally, we still fallback to delete to keep pipeline moving.
   console.warn(`[EV] clear_ev_plays_for_sport RPC failed (${code}): ${msg} — falling back to delete`);
   const { error } = await supabase.from("ev_plays").delete().eq("sport_key", sportKey);
   if (error) throw new Error(`[EV] Failed to clear ev_plays fallback: ${error.message}`);
@@ -1754,9 +1726,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       paceGameRaw,
       consensusTotalLine: totalLine,
       calib,
-      statIdx,
-      homeCanon: home,
-      awayCanon: away,
       marginBump,
       style,
     });
@@ -1786,6 +1755,16 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             game_final: input.paceGame_final,
           },
           ncaab_style: input.ncaabStyle,
+          totals: {
+            oe_de_source: input.totalsComponents.oe_de_source,
+            model_total_mean_base: input.totalMean_model_base,
+            style_total_add: input.totalStyleAdd,
+            model_total_mean_after_style: input.totalMean_model,
+            anchor_w: input.totalAnchorW,
+            consensus_total_line: totalLine,
+            blended_total_mean: input.totalMean,
+            components: input.totalsComponents,
+          },
           margin_conventions: {
             model: "positive_means_home_better",
             stored: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
@@ -1804,26 +1783,8 @@ async function runForSport(sportKey: string, startCutoff: Date) {
                 ready: calibrationIsReady(calib) && !calib.__not_ready,
               }
             : null,
-          margin: {
-            intercept: input.marginParams.intercept,
-            scale_raw: input.marginParams.scale,
-            scale_used_abs: input.marginParams.scale_used_abs,
-            hca_scale: input.marginParams.hca_scale,
-            power_diff: num(homeR.engine_power, 0) - num(awayR.engine_power, 0),
-            margin_mean_base_model_space: input.marginMean_base,
-            margin_bump_scoring_margin: input.marginBump,
-            margin_add_style: input.marginStyleAdd,
-            margin_mean_final_model_space: input.marginMean,
-          },
-          totals: {
-            model_total_mean_base: input.totalMean_model_base,
-            style_total_add: input.totalStyleAdd,
-            model_total_mean_after_style: input.totalMean_model,
-            anchor_w: input.totalAnchorW,
-            consensus_total_line: totalLine,
-            blended_total_mean: input.totalMean,
-            components: input.totalsComponents,
-          },
+          spread_line_home_consensus: spreadLineHome,
+          total_line_consensus: totalLine,
           sigma: {
             base_margin_game: input.sigmaMarginGame_base,
             base_total_game: input.sigmaTotalGame_base,
@@ -1834,8 +1795,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             final_total_game: input.sigmaTotalGame,
           },
           rho_mt: input.rhoMT,
-          spread_line_home_consensus: spreadLineHome,
-          total_line_consensus: totalLine,
           sims: SIMS,
         }
       : null;
@@ -1871,7 +1830,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       over_prob: sim.overProb,
       total_push_prob: sim.totalPushProb,
       under_prob: sim.underProb,
-
       trace,
     });
   }
