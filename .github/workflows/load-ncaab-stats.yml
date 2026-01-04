@@ -27,11 +27,16 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Run loader
+      - name: Sanity check script exists
+        run: |
+          ls -la scripts || true
+          test -f scripts/teamRankingsStatsLoader.ts && echo "✅ Found loader" || (echo "❌ Missing scripts/teamRankingsStatsLoader.ts" && exit 1)
+
+      - name: Run loader (tsx)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SEASON: "2025-26"
         run: |
           node --version
-          node --loader ts-node/esm ./scripts/teamRankingsStatsLoader.ts
+          npx tsx ./scripts/teamRankingsStatsLoader.ts
