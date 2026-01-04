@@ -1,5 +1,5 @@
 /**
- * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.4.0: NCAAB STYLE MODIFIERS)
+ * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.4.1: NCAAB STYLE MODIFIERS + STAT SAFETY)
  * ------------------------------------------------------------------------------------------------------
  * ✅ Duplicate-safe: single declarations only
  * ✅ Uses public.model_calibration (no fitting on the fly)
@@ -23,6 +23,10 @@
  *          • 3P rate: nudges variance & slightly total
  *      - Margin bump: average-scoring-margin (home/away) (light weight + clamped)
  *      - Full transparency: all used stats + modifiers written into trace
+ *
+ * ✅ STAT SAFETY:
+ *      - ONLY reads: stat_key + home_score + away_score (avoids “column does not exist” issues)
+ *      - Never uses v_2025/last_3/etc for modeling in this script
  *
  * Tables used:
  *   - events
@@ -88,9 +92,6 @@ function averageNonNull(arr: Array<number | null | undefined>): number | null {
   const xs = arr.filter((x): x is number => x != null && Number.isFinite(x));
   if (!xs.length) return null;
   return xs.reduce((a, b) => a + b, 0) / xs.length;
-}
-function safeDiv(a: number, b: number, fb = 0) {
-  return b === 0 ? fb : a / b;
 }
 
 // Box–Muller
@@ -234,17 +235,8 @@ type StatRow = {
   season: string;
   canonical: string;
   stat_key: string;
-
-  v_2025: number | null;
-  last_3: number | null;
-  last_1: number | null;
-  home_raw: number | null;
-  away_raw: number | null;
-  v_2024: number | null;
-
   home_score: number | null;
   away_score: number | null;
-
   updated_at: string;
 };
 
@@ -350,10 +342,6 @@ const TOTAL_ANCHOR_W_DEFAULT = clamp(Number(process.env.MC_TOTAL_ANCHOR_W ?? "0.
 
 /**
  * NCAAB style knobs (all are intentionally small + clamped)
- * - pace multiplier affects paceGame before totals components
- * - totalAdd is points added to totalMean_model
- * - sigmaMultStyle scales sigma_total_game (extra variance layer) (clamped)
- * - marginAdd adds to marginMean (model space; + means home better)
  */
 const NCAAB_MARGIN_BUMP_W = clamp(Number(process.env.NCAAB_MARGIN_BUMP_W ?? "0.15"), 0, 0.5);
 const NCAAB_MARGIN_BUMP_CLAMP = Number(process.env.NCAAB_MARGIN_BUMP_CLAMP ?? "3");
@@ -364,7 +352,7 @@ const NCAAB_STYLE_SIGMA_MULT_MAX = Number(process.env.NCAAB_STYLE_SIGMA_MULT_MAX
 const NCAAB_STYLE_PACE_MULT_MIN = Number(process.env.NCAAB_STYLE_PACE_MULT_MIN ?? "0.93");
 const NCAAB_STYLE_PACE_MULT_MAX = Number(process.env.NCAAB_STYLE_PACE_MULT_MAX ?? "1.07");
 
-// Baselines (NCAAB typical-ish) used only for SMALL deltas
+// Baselines (used only for SMALL deltas)
 const NCAAB_BASE_EFG = Number(process.env.NCAAB_BASE_EFG ?? "0.50");
 const NCAAB_BASE_TOV = Number(process.env.NCAAB_BASE_TOV ?? "0.18");
 const NCAAB_BASE_ORB = Number(process.env.NCAAB_BASE_ORB ?? "0.30");
@@ -372,22 +360,22 @@ const NCAAB_BASE_FTR = Number(process.env.NCAAB_BASE_FTR ?? "0.30");
 const NCAAB_BASE_3PR = Number(process.env.NCAAB_BASE_3PR ?? "0.38");
 
 // Scales
-const NCAAB_EFG_TOTAL_SCALE = Number(process.env.NCAAB_EFG_TOTAL_SCALE ?? "40"); // (efg - base) * scale
-const NCAAB_FTR_TOTAL_SCALE = Number(process.env.NCAAB_FTR_TOTAL_SCALE ?? "12"); // (ftr - base) * scale
-const NCAAB_ORB_TOTAL_SCALE = Number(process.env.NCAAB_ORB_TOTAL_SCALE ?? "10"); // (orb - base) * scale
-const NCAAB_TOV_PACE_SCALE = Number(process.env.NCAAB_TOV_PACE_SCALE ?? "0.30"); // paceMult = 1 - (tov - base)*scale
-const NCAAB_3PR_SIGMA_SCALE = Number(process.env.NCAAB_3PR_SIGMA_SCALE ?? "0.35"); // sigmaMult = 1 + (3pr - base)*scale
-const NCAAB_TOV_MARGIN_SCALE = Number(process.env.NCAAB_TOV_MARGIN_SCALE ?? "18"); // (awayTov - homeTov)*scale
+const NCAAB_EFG_TOTAL_SCALE = Number(process.env.NCAAB_EFG_TOTAL_SCALE ?? "40");
+const NCAAB_FTR_TOTAL_SCALE = Number(process.env.NCAAB_FTR_TOTAL_SCALE ?? "12");
+const NCAAB_ORB_TOTAL_SCALE = Number(process.env.NCAAB_ORB_TOTAL_SCALE ?? "10");
+const NCAAB_TOV_PACE_SCALE = Number(process.env.NCAAB_TOV_PACE_SCALE ?? "0.30");
+const NCAAB_3PR_SIGMA_SCALE = Number(process.env.NCAAB_3PR_SIGMA_SCALE ?? "0.35");
+const NCAAB_TOV_MARGIN_SCALE = Number(process.env.NCAAB_TOV_MARGIN_SCALE ?? "18");
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
 
 /* =========================================================
-   MODEL_CALIBRATION (effective + readiness)
+   MODEL_CALIBRATION
 ========================================================= */
 
 type EffectiveCalibration = {
   margin_intercept: number;
-  margin_scale: number; // can be negative in table; abs() at use-time
+  margin_scale: number;
   hca_scale: number;
 
   sigma_margin_mult: number;
@@ -413,69 +401,63 @@ function calibrationIsReady(row: ModelCalibrationRow | EffectiveCalibration | nu
 }
 
 async function fetchModelCalibrationForSport(sportKey: string): Promise<EffectiveCalibration | null> {
-  try {
-    const { data, error } = await supabase
-      .from("model_calibration")
-      .select(
-        "sport_key,window_days,min_sample,n_games,margin_scale,margin_intercept,hca_scale,sigma_margin_mult,sigma_total_mult,total_anchor_w,rho_margin_total,updated_at"
-      )
-      .eq("sport_key", sportKey)
-      .limit(1);
+  const { data, error } = await supabase
+    .from("model_calibration")
+    .select(
+      "sport_key,window_days,min_sample,n_games,margin_scale,margin_intercept,hca_scale,sigma_margin_mult,sigma_total_mult,total_anchor_w,rho_margin_total,updated_at"
+    )
+    .eq("sport_key", sportKey)
+    .limit(1);
 
-    if (error) {
-      console.warn(`[CALIB] (${sportKey}) model_calibration not available: ${error.message}`);
-      return null;
-    }
-
-    const row = (data ?? [])[0] as any as ModelCalibrationRow | undefined;
-    if (!row) {
-      console.warn(`[CALIB] (${sportKey}) model_calibration row missing. Using defaults.`);
-      return null;
-    }
-
-    const ready = calibrationIsReady(row);
-
-    const eff: EffectiveCalibration = {
-      margin_intercept: num((row as any).margin_intercept, MARGIN_INTERCEPT_DEFAULT),
-      margin_scale: num((row as any).margin_scale, MARGIN_SCALE_DEFAULT),
-      hca_scale: num((row as any).hca_scale, HCA_SCALE_DEFAULT),
-
-      sigma_margin_mult: clamp(num((row as any).sigma_margin_mult, SIGMA_MARGIN_MULT_DEFAULT), 0.25, 3.0),
-      sigma_total_mult: clamp(num((row as any).sigma_total_mult, SIGMA_TOTAL_MULT_DEFAULT), 0.25, 3.0),
-
-      total_anchor_w: clamp(num((row as any).total_anchor_w, TOTAL_ANCHOR_W_DEFAULT), 0, 0.85),
-      rho_margin_total: clamp(num((row as any).rho_margin_total, RHO_MT_DEFAULT), -0.75, 0.75),
-
-      window_days: num((row as any).window_days, 60),
-      min_sample: num((row as any).min_sample, 80),
-      n_games: num((row as any).n_games, 0),
-      updated_at: String((row as any).updated_at || ""),
-    };
-
-    if (!ready) {
-      console.warn(
-        `[CALIB] (${sportKey}) NOT READY n_games=${eff.n_games} < min_sample=${eff.min_sample}. Using defaults (keeping row for trace).`
-      );
-      return { ...eff, __not_ready: true };
-    }
-
-    console.log(
-      `[CALIB] (${sportKey}) READY n_games=${eff.n_games} margin(i=${round3(eff.margin_intercept)}, scale=${round3(
-        eff.margin_scale
-      )}, hca=${round3(eff.hca_scale)}) sigma(mult_m=${round3(eff.sigma_margin_mult)}, mult_t=${round3(
-        eff.sigma_total_mult
-      )}) total_anchor_w=${round3(eff.total_anchor_w)} rho=${round3(eff.rho_margin_total)}`
-    );
-
-    return eff;
-  } catch (e: any) {
-    console.warn(`[CALIB] (${sportKey}) fetch skipped: ${e?.message || String(e)}`);
+  if (error) {
+    console.warn(`[CALIB] (${sportKey}) model_calibration not available: ${error.message}`);
     return null;
   }
+  const row = (data ?? [])[0] as any as ModelCalibrationRow | undefined;
+  if (!row) {
+    console.warn(`[CALIB] (${sportKey}) model_calibration row missing. Using defaults.`);
+    return null;
+  }
+
+  const ready = calibrationIsReady(row);
+
+  const eff: EffectiveCalibration = {
+    margin_intercept: num((row as any).margin_intercept, MARGIN_INTERCEPT_DEFAULT),
+    margin_scale: num((row as any).margin_scale, MARGIN_SCALE_DEFAULT),
+    hca_scale: num((row as any).hca_scale, HCA_SCALE_DEFAULT),
+
+    sigma_margin_mult: clamp(num((row as any).sigma_margin_mult, SIGMA_MARGIN_MULT_DEFAULT), 0.25, 3.0),
+    sigma_total_mult: clamp(num((row as any).sigma_total_mult, SIGMA_TOTAL_MULT_DEFAULT), 0.25, 3.0),
+
+    total_anchor_w: clamp(num((row as any).total_anchor_w, TOTAL_ANCHOR_W_DEFAULT), 0, 0.85),
+    rho_margin_total: clamp(num((row as any).rho_margin_total, RHO_MT_DEFAULT), -0.75, 0.75),
+
+    window_days: num((row as any).window_days, 60),
+    min_sample: num((row as any).min_sample, 80),
+    n_games: num((row as any).n_games, 0),
+    updated_at: String((row as any).updated_at || ""),
+  };
+
+  if (!ready) {
+    console.warn(
+      `[CALIB] (${sportKey}) NOT READY n_games=${eff.n_games} < min_sample=${eff.min_sample}. Using defaults (keeping row for trace).`
+    );
+    return { ...eff, __not_ready: true };
+  }
+
+  console.log(
+    `[CALIB] (${sportKey}) READY n_games=${eff.n_games} margin(i=${round3(eff.margin_intercept)}, scale=${round3(
+      eff.margin_scale
+    )}, hca=${round3(eff.hca_scale)}) sigma(mult_m=${round3(eff.sigma_margin_mult)}, mult_t=${round3(
+      eff.sigma_total_mult
+    )}) total_anchor_w=${round3(eff.total_anchor_w)} rho=${round3(eff.rho_margin_total)}`
+  );
+
+  return eff;
 }
 
 /* =========================================================
-   RUN CONFIG (stored in monte_carlo_runs)
+   RUN CONFIG
 ========================================================= */
 
 function paceClampForSport(sportKey: string): { lo: number; hi: number } {
@@ -530,22 +512,24 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
       },
     },
 
-    ncaab_stats: sportKey === "basketball_ncaab"
-      ? {
-          enabled: true,
-          style_keys: [
-            "possessions-per-game",
-            "offensive-efficiency",
-            "defensive-efficiency",
-            "effective-field-goal-pct",
-            "turnover-pct",
-            "offensive-rebounding-pct",
-            "free-throw-rate",
-            "three-point-rate",
-            "average-scoring-margin",
-          ],
-        }
-      : { enabled: false },
+    ncaab_stats:
+      sportKey === "basketball_ncaab"
+        ? {
+            enabled: true,
+            style_keys: [
+              "possessions-per-game",
+              "offensive-efficiency",
+              "defensive-efficiency",
+              "effective-field-goal-pct",
+              "turnover-pct",
+              "offensive-rebounding-pct",
+              "free-throw-rate",
+              "three-point-rate",
+              "average-scoring-margin",
+            ],
+            note: "Only uses stat_key + home_score/away_score in this script.",
+          }
+        : { enabled: false },
 
     pace_weights: { w_2025: PACE_W_2025, w_last3: PACE_W_LAST3, w_last1: PACE_W_LAST1, w_split: PACE_W_SPLIT },
     pace_clamp: paceClampForSport(sportKey),
@@ -647,16 +631,17 @@ function getTeamStatSplit(idx: TeamStatIndex, canonical: string, statKey: string
   return { home: toNullNum(row.home_score), away: toNullNum(row.away_score), found_key: statKey.toLowerCase() };
 }
 
-/**
- * Many TeamRankings keys vary slightly depending on scrape.
- * We allow alias lists and return first available.
- */
 function getTeamStatSplitAliases(idx: TeamStatIndex, canonical: string, keys: string[]) {
   for (const k of keys) {
     const v = getTeamStatSplit(idx, canonical, k);
     if (v.home != null || v.away != null) return { ...v, used_alias: k };
   }
-  return { home: null as number | null, away: null as number | null, found_key: null as string | null, used_alias: null as string | null };
+  return {
+    home: null as number | null,
+    away: null as number | null,
+    found_key: null as string | null,
+    used_alias: null as string | null,
+  };
 }
 
 function preferNcaabStatPace(
@@ -695,10 +680,10 @@ function computeNcaabMarginBump(idx: TeamStatIndex | null, homeCanon: string, aw
 }
 
 type NcaabStyle = {
-  paceMult: number;      // multiplicative
-  totalAdd: number;      // additive points on totalMean_model
-  sigmaMultStyle: number;// multiplicative extra sigma layer on total
-  marginAdd: number;     // additive points on marginMean (model space)
+  paceMult: number;
+  totalAdd: number;
+  sigmaMultStyle: number;
+  marginAdd: number;
   used: {
     efg?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
     tov?: { home: number | null; away: number | null; alias: string | null };
@@ -709,16 +694,9 @@ type NcaabStyle = {
 };
 
 function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string, awayCanon: string): NcaabStyle {
-  const base: NcaabStyle = {
-    paceMult: 1,
-    totalAdd: 0,
-    sigmaMultStyle: 1,
-    marginAdd: 0,
-    used: {},
-  };
+  const base: NcaabStyle = { paceMult: 1, totalAdd: 0, sigmaMultStyle: 1, marginAdd: 0, used: {} };
   if (!idx) return base;
 
-  // Aliases (safe: if your scraper uses different strings, add them here)
   const efgKeys = ["effective-field-goal-pct", "efg-pct", "effective-fg-pct"];
   const tovKeys = ["turnover-pct", "turnovers-per-possession", "turnover-rate"];
   const orbKeys = ["offensive-rebounding-pct", "off-reb-pct", "offensive-rebound-pct"];
@@ -740,7 +718,6 @@ function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string
   const h3 = getTeamStatSplitAliases(idx, homeCanon, threeKeys);
   const a3 = getTeamStatSplitAliases(idx, awayCanon, threeKeys);
 
-  // Home uses HOME split; Away uses AWAY split (same pattern as your pace/margin usage)
   const efgHome = hEfg.home;
   const efgAway = aEfg.away;
   const efgAvg = averageNonNull([efgHome, efgAway]);
@@ -760,39 +737,24 @@ function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string
   const threeAway = a3.away;
   const threeAvg = averageNonNull([threeHome, threeAway]);
 
-  // --- Pace multiplier (TO-heavy games tend to depress possessions slightly)
-  // paceMult = 1 - (avgTov - base)*scale
   const tovAvg = averageNonNull([tovHome, tovAway]);
   if (tovAvg != null) {
     const raw = 1 - (tovAvg - NCAAB_BASE_TOV) * NCAAB_TOV_PACE_SCALE;
     base.paceMult = clamp(raw, NCAAB_STYLE_PACE_MULT_MIN, NCAAB_STYLE_PACE_MULT_MAX);
   }
 
-  // --- Total add (small, clamped)
   let totalAdd = 0;
-
-  // Shot quality: eFG above baseline adds points
   if (efgAvg != null) totalAdd += (efgAvg - NCAAB_BASE_EFG) * NCAAB_EFG_TOTAL_SCALE;
-
-  // Free throws: higher FTR adds points
   if (ftrAvg != null) totalAdd += (ftrAvg - NCAAB_BASE_FTR) * NCAAB_FTR_TOTAL_SCALE;
-
-  // ORB: more second chances adds points
   if (orbAvg != null) totalAdd += (orbAvg - NCAAB_BASE_ORB) * NCAAB_ORB_TOTAL_SCALE;
-
-  // 3P rate: small effect on total
   if (threeAvg != null) totalAdd += (threeAvg - NCAAB_BASE_3PR) * 6;
-
   base.totalAdd = clamp(totalAdd, -NCAAB_STYLE_TOTAL_ADD_CLAMP, NCAAB_STYLE_TOTAL_ADD_CLAMP);
 
-  // --- Sigma multiplier (3P heavy games are higher variance; ORB also adds volatility)
   let sigmaMult = 1;
   if (threeAvg != null) sigmaMult *= 1 + (threeAvg - NCAAB_BASE_3PR) * NCAAB_3PR_SIGMA_SCALE;
   if (orbAvg != null) sigmaMult *= 1 + (orbAvg - NCAAB_BASE_ORB) * 0.15;
   base.sigmaMultStyle = clamp(sigmaMult, NCAAB_STYLE_SIGMA_MULT_MIN, NCAAB_STYLE_SIGMA_MULT_MAX);
 
-  // --- Margin add (TO differential: if away is sloppy & home is secure -> home edge)
-  // marginAdd = (awayTov - homeTov) * scale (positive favors home)
   if (tovHome != null && tovAway != null) {
     base.marginAdd = clamp((tovAway - tovHome) * NCAAB_TOV_MARGIN_SCALE, -2.5, 2.5);
   }
@@ -816,7 +778,6 @@ function computeTotalsComponents(args: {
   away: TeamRatingRow;
   paceGame: number;
 
-  // NCAAB stats optional
   statIdx: TeamStatIndex | null;
   homeCanon: string;
   awayCanon: string;
@@ -829,7 +790,6 @@ function computeTotalsComponents(args: {
   let awayOff100 = num(away.engine_adj_off, 0);
   let awayDef100 = num(away.engine_adj_def, 0);
 
-  // Prefer NCAAB OE/DE splits when complete
   let usedNcaabEff = false;
   let ncaabEff: any = null;
 
@@ -850,12 +810,7 @@ function computeTotalsComponents(args: {
       home_de_home: hDE,
       away_oe_away: aOE,
       away_de_away: aDE,
-      used_aliases: {
-        homeOE: homeOE.used_alias,
-        homeDE: homeDE.used_alias,
-        awayOE: awayOE.used_alias,
-        awayDE: awayDE.used_alias,
-      },
+      used_aliases: { homeOE: homeOE.used_alias, homeDE: homeDE.used_alias, awayOE: awayOE.used_alias, awayDE: awayDE.used_alias },
     };
 
     if (haveAll) {
@@ -898,13 +853,7 @@ function computeTotalsComponents(args: {
   const awayAvgTot = toNullNum(away.avg_total_points);
   const total_avg_total = avgNullable(homeAvgTot, awayAvgTot);
 
-  return {
-    total_offdef_pace,
-    total_pfpa,
-    total_avg_total,
-    usedNcaabEff,
-    ncaabEff,
-  };
+  return { total_offdef_pace, total_pfpa, total_avg_total, usedNcaabEff, ncaabEff };
 }
 
 function blendTotals(args: {
@@ -937,23 +886,20 @@ function buildInputsPaceAware(args: {
   home: TeamRatingRow;
   away: TeamRatingRow;
 
-  // NOTE: paceGame passed in is AFTER pace-source selection, but BEFORE style multiplier
   paceGameRaw: number;
 
   consensusTotalLine: number | null;
   calib: EffectiveCalibration | null;
 
-  // NCAAB optional
   statIdx: TeamStatIndex | null;
   homeCanon: string;
   awayCanon: string;
-  marginBump: number; // scoring-margin bump (already clamped)
-  style: NcaabStyle;  // style modifiers (already clamped)
+  marginBump: number;
+  style: NcaabStyle;
 }) {
   const { sportKey, home, away, paceGameRaw, consensusTotalLine, calib, statIdx, homeCanon, awayCanon, marginBump, style } =
     args;
 
-  // Apply style pace multiplier ONLY for NCAAB
   const paceGame = sportKey === "basketball_ncaab" ? paceGameRaw * style.paceMult : paceGameRaw;
 
   const { lo, hi } = paceClampForSport(sportKey);
@@ -962,15 +908,7 @@ function buildInputsPaceAware(args: {
   const paceFactor = paceGameClamped / 100;
   const ready = calib ? calibrationIsReady(calib) && !calib.__not_ready : false;
 
-  const comps = computeTotalsComponents({
-    sportKey,
-    home,
-    away,
-    paceGame: paceGameClamped,
-    statIdx,
-    homeCanon,
-    awayCanon,
-  });
+  const comps = computeTotalsComponents({ sportKey, home, away, paceGame: paceGameClamped, statIdx, homeCanon, awayCanon });
 
   const totalMean_model_base = blendTotals({
     offdef_pace: comps.total_offdef_pace,
@@ -981,9 +919,7 @@ function buildInputsPaceAware(args: {
     w_avg_total: TOTAL_W_AVG_TOTAL,
   });
 
-  // NCAAB: add style total points (small)
-  const totalMean_model =
-    sportKey === "basketball_ncaab" ? Math.max(0, totalMean_model_base + style.totalAdd) : totalMean_model_base;
+  const totalMean_model = sportKey === "basketball_ncaab" ? Math.max(0, totalMean_model_base + style.totalAdd) : totalMean_model_base;
 
   const totalAnchorW = ready ? clamp(calib!.total_anchor_w, 0, 0.85) : TOTAL_ANCHOR_W_DEFAULT;
   const totalMean =
@@ -1002,14 +938,10 @@ function buildInputsPaceAware(args: {
     hca_scale: ready ? num(calib!.hca_scale, HCA_SCALE_DEFAULT) : HCA_SCALE_DEFAULT,
   };
 
-  // SIGN-SAFE scale
   const safeScale = Math.abs(marginParams.scale);
-
   const marginMean_base = marginParams.intercept + safeScale * powerDiff + marginParams.hca_scale * hcaPts;
 
-  // NCAAB: include scoring-margin bump + style margin add (TO diff)
-  const marginMean =
-    sportKey === "basketball_ncaab" ? marginMean_base + marginBump + style.marginAdd : marginMean_base;
+  const marginMean = sportKey === "basketball_ncaab" ? marginMean_base + marginBump + style.marginAdd : marginMean_base;
 
   const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
   const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
@@ -1022,14 +954,10 @@ function buildInputsPaceAware(args: {
     total: ready ? clamp(num(calib!.sigma_total_mult, 1), 0.25, 3.0) : SIGMA_TOTAL_MULT_DEFAULT,
   };
 
-  // NCAAB style volatility layer multiplies AFTER calibration mult
   const sigmaTotalStyleMult = sportKey === "basketball_ncaab" ? style.sigmaMultStyle : 1;
 
   const sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMarginGame_base * sigmaMult.margin);
-  const sigmaTotalGame = Math.max(
-    SIGMA_TOTAL_FLOOR_GAME,
-    sigmaTotalGame_base * sigmaMult.total * sigmaTotalStyleMult
-  );
+  const sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotalGame_base * sigmaMult.total * sigmaTotalStyleMult);
 
   const rhoMT = ready ? clamp(num(calib!.rho_margin_total, RHO_MT_DEFAULT), -0.75, 0.75) : RHO_MT_DEFAULT;
 
@@ -1063,11 +991,7 @@ function buildInputsPaceAware(args: {
 
     totalsComponents: {
       ...comps,
-      weights: {
-        w_offdef_pace: TOTAL_W_OFFDEF_PACE,
-        w_pfpa: TOTAL_W_PFPA,
-        w_avg_total: TOTAL_W_AVG_TOTAL,
-      },
+      weights: { w_offdef_pace: TOTAL_W_OFFDEF_PACE, w_pfpa: TOTAL_W_PFPA, w_avg_total: TOTAL_W_AVG_TOTAL },
     },
 
     ncaabStyle: sportKey === "basketball_ncaab" ? style : null,
@@ -1075,7 +999,7 @@ function buildInputsPaceAware(args: {
 }
 
 /* =========================================================
-   SIMULATION (correlated margin + total)
+   SIMULATION
 ========================================================= */
 
 function simulateGameWithProbs(
@@ -1110,7 +1034,7 @@ function simulateGameWithProbs(
     const z1 = randn();
     const z2 = randn();
 
-    const m = input.marginMean + z1 * input.sigmaMarginGame; // model margin (+home better)
+    const m = input.marginMean + z1 * input.sigmaMarginGame;
     const t = Math.max(0, input.totalMean + (rho * z1 + s * z2) * input.sigmaTotalGame);
 
     sumM += m;
@@ -1120,7 +1044,7 @@ function simulateGameWithProbs(
     else if (m < 0) awayWins++;
 
     if (spreadLineHome != null) {
-      const v = m + spreadLineHome; // home covers if > 0
+      const v = m + spreadLineHome;
       if (v > eps) homeCovers++;
       else if (Math.abs(v) <= eps) coverPushes++;
     }
@@ -1196,13 +1120,11 @@ async function fetchFutureEvents(startCutoff: Date, sportKey: string): Promise<E
 
 async function fetchTeamRatingsForSport(sportKey: string, canonicals: string[]): Promise<TeamRatingRow[]> {
   if (!canonicals.length) return [];
-
   const chunkSize = 400;
   const out: TeamRatingRow[] = [];
 
   for (let i = 0; i < canonicals.length; i += chunkSize) {
     const c = canonicals.slice(i, i + chunkSize);
-
     const { data, error } = await supabase
       .from("team_ratings")
       .select(
@@ -1218,13 +1140,8 @@ async function fetchTeamRatingsForSport(sportKey: string, canonicals: string[]):
   return out;
 }
 
-async function fetchTeamPossessionsForSportSeason(
-  sportKey: string,
-  season: string,
-  canonicals: string[]
-): Promise<PossRow[]> {
+async function fetchTeamPossessionsForSportSeason(sportKey: string, season: string, canonicals: string[]): Promise<PossRow[]> {
   if (!canonicals.length) return [];
-
   const chunkSize = 400;
   const out: PossRow[] = [];
 
@@ -1245,11 +1162,10 @@ async function fetchTeamPossessionsForSportSeason(
   return out;
 }
 
-async function fetchNcaabStatsForSportSeason(
-  sportKey: string,
-  season: string,
-  canonicals: string[]
-): Promise<StatRow[]> {
+/**
+ * ✅ STAT SAFETY: only stat_key + home_score + away_score + updated_at are read.
+ */
+async function fetchNcaabStatsForSportSeason(sportKey: string, season: string, canonicals: string[]): Promise<StatRow[]> {
   if (!canonicals.length) return [];
   const chunkSize = 300;
   const out: StatRow[] = [];
@@ -1259,9 +1175,7 @@ async function fetchNcaabStatsForSportSeason(
 
     const { data, error } = await supabase
       .from("ncaab_stats")
-      .select(
-        "sport_key,season,canonical,stat_key,v_2025,last_3,last_1,home_raw,away_raw,v_2024,home_score,away_score,updated_at"
-      )
+      .select("sport_key,season,canonical,stat_key,home_score,away_score,updated_at")
       .eq("sport_key", sportKey)
       .eq("season", season)
       .in("canonical", c);
@@ -1383,19 +1297,41 @@ async function upsertMonteCarloResultsSnapshot(rows: MonteCarloResultUpsert[]) {
   }
 }
 
+/**
+ * ✅ More resilient clear:
+ *   1) try RPC with {p_sport_key}
+ *   2) if fails, try RPC with {sport_key}
+ *   3) if still fails or missing, fallback delete
+ */
 async function clearEvPlaysForSport(sportKey: string) {
-  const { error: rpcErr } = await supabase.rpc("clear_ev_plays_for_sport", { p_sport_key: sportKey });
+  const tryRpc = async (args: any) => {
+    const { error } = await supabase.rpc("clear_ev_plays_for_sport", args);
+    return error ?? null;
+  };
+
+  let rpcErr = await tryRpc({ p_sport_key: sportKey });
+  if (rpcErr) rpcErr = await tryRpc({ sport_key: sportKey });
+
   if (!rpcErr) return;
 
   const code = (rpcErr as any).code;
   const msg = (rpcErr as any).message || "";
-  if (code === "PGRST202" || /schema cache/i.test(msg) || /Could not find the function/i.test(msg)) {
+  const notFoundish =
+    code === "PGRST202" ||
+    /schema cache/i.test(msg) ||
+    /Could not find the function/i.test(msg) ||
+    /function .* does not exist/i.test(msg);
+
+  if (notFoundish) {
     const { error } = await supabase.from("ev_plays").delete().eq("sport_key", sportKey);
     if (error) throw new Error(`[EV] Failed to clear ev_plays fallback: ${error.message}`);
     return;
   }
 
-  throw new Error(`[EV] Failed to clear ev_plays via RPC: ${msg}`);
+  // If the function exists but is buggy internally, we still fallback to delete to keep pipeline moving.
+  console.warn(`[EV] clear_ev_plays_for_sport RPC failed (${code}): ${msg} — falling back to delete`);
+  const { error } = await supabase.from("ev_plays").delete().eq("sport_key", sportKey);
+  if (error) throw new Error(`[EV] Failed to clear ev_plays fallback: ${error.message}`);
 }
 
 /* =========================================================
@@ -1424,6 +1360,50 @@ function getOffer(
 ): OddsSnapshotRow | null {
   const k = `${eventId}|${market}|${side}|${bookmaker.toLowerCase()}`;
   return latest.get(k) ?? null;
+}
+
+function americanOddsToProb(odds: number): number {
+  return odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
+}
+
+function noVigEqualMargin(p1: number, p2: number): [number, number] {
+  const s = p1 + p2;
+  if (s <= 0) return [p1, p2];
+  return [p1 / s, p2 / s];
+}
+
+function noVigMPTO(p1: number, p2: number): [number, number] {
+  const a = clamp(p1, 1e-12, 1 - 1e-12);
+  const b = clamp(p2, 1e-12, 1 - 1e-12);
+
+  const f = (k: number) => Math.pow(a, k) + Math.pow(b, k) - 1;
+
+  let lo = 0.01;
+  let hi = 10;
+
+  const flo = f(lo);
+  const fhi = f(hi);
+  if (!(Number.isFinite(flo) && Number.isFinite(fhi)) || flo * fhi > 0) {
+    return noVigEqualMargin(a, b);
+  }
+
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const fm = f(mid);
+    if (fm === 0) {
+      lo = hi = mid;
+      break;
+    }
+    if (flo * fm > 0) lo = mid;
+    else hi = mid;
+  }
+
+  const k = (lo + hi) / 2;
+  const na = Math.pow(a, k);
+  const nb = Math.pow(b, k);
+  const s = na + nb;
+  if (s <= 0) return noVigEqualMargin(a, b);
+  return [na / s, nb / s];
 }
 
 function getSharpNoVigProb(
@@ -1479,53 +1459,24 @@ function getSharpNoVigProb(
   return { prob: mean(probs) };
 }
 
-/* =========================================================
-   DEVIG METHODS
-========================================================= */
-
-function noVigEqualMargin(p1: number, p2: number): [number, number] {
-  const s = p1 + p2;
-  if (s <= 0) return [p1, p2];
-  return [p1 / s, p2 / s];
+function probToAmericanOdds(p: number): number {
+  const pp = clamp01(p);
+  if (pp <= 0 || pp >= 1) return 0;
+  return pp >= 0.5 ? Math.round((-100 * pp) / (1 - pp)) : Math.round((100 * (1 - pp)) / pp);
 }
 
-function noVigMPTO(p1: number, p2: number): [number, number] {
-  const a = clamp(p1, 1e-12, 1 - 1e-12);
-  const b = clamp(p2, 1e-12, 1 - 1e-12);
-
-  const f = (k: number) => Math.pow(a, k) + Math.pow(b, k) - 1;
-
-  let lo = 0.01;
-  let hi = 10;
-
-  const flo = f(lo);
-  const fhi = f(hi);
-  if (!(Number.isFinite(flo) && Number.isFinite(fhi)) || flo * fhi > 0) {
-    return noVigEqualMargin(a, b);
-  }
-
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    const fm = f(mid);
-    if (fm === 0) {
-      lo = hi = mid;
-      break;
-    }
-    if (flo * fm > 0) lo = mid;
-    else hi = mid;
-  }
-
-  const k = (lo + hi) / 2;
-  const na = Math.pow(a, k);
-  const nb = Math.pow(b, k);
-  const s = na + nb;
-  if (s <= 0) return noVigEqualMargin(a, b);
-  return [na / s, nb / s];
+function evPct(trueProb: number, bookOdds: number): number {
+  const p = clamp01(trueProb);
+  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
+  return (p * b - (1 - p)) * 100;
 }
 
-/* =========================================================
-   CONFIDENCE
-========================================================= */
+function kellyFraction(trueProb: number, bookOdds: number): number {
+  const p = clamp01(trueProb);
+  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
+  const k = (p * b - (1 - p)) / b;
+  return Math.max(0, k);
+}
 
 function tailness(p: number) {
   return clamp(Math.abs(p - 0.5) / 0.5, 0, 1);
@@ -1548,33 +1499,6 @@ function confidenceTier(score: number): string {
   if (score >= 65) return "B";
   if (score >= 55) return "C";
   return "D";
-}
-
-/* =========================================================
-   ODDS + EV MATH
-========================================================= */
-
-function americanOddsToProb(odds: number): number {
-  return odds > 0 ? 100 / (odds + 100) : Math.abs(odds) / (Math.abs(odds) + 100);
-}
-
-function probToAmericanOdds(p: number): number {
-  const pp = clamp01(p);
-  if (pp <= 0 || pp >= 1) return 0;
-  return pp >= 0.5 ? Math.round((-100 * pp) / (1 - pp)) : Math.round((100 * (1 - pp)) / pp);
-}
-
-function evPct(trueProb: number, bookOdds: number): number {
-  const p = clamp01(trueProb);
-  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
-  return (p * b - (1 - p)) * 100;
-}
-
-function kellyFraction(trueProb: number, bookOdds: number): number {
-  const p = clamp01(trueProb);
-  const b = bookOdds > 0 ? bookOdds / 100 : 100 / Math.abs(bookOdds);
-  const k = (p * b - (1 - p)) / b;
-  return Math.max(0, k);
 }
 
 /* =========================================================
@@ -1674,28 +1598,21 @@ async function rebuildEvPlaysForSport(
 
           inserts.push({
             sport_key: sportKey,
-
             run_id: runId,
             event_id: eid,
             commence_time: mc.commence_time,
             matchup: mc.matchup,
-
             team,
-
             market,
             side,
             line: market === "h2h" ? null : toNullNum(offer.line),
-
             bookmaker: book,
             book_odds: bookOdds,
-
             quantum_prob: quantumProb,
             quantum_odds: quantumOdds,
             ev_pct: ev,
-
             confidence_score: Math.round(confidenceScore),
             confidence_tier: tier,
-
             kelly_fraction: rawKelly,
             bet_fraction: betFraction,
           });
@@ -1753,10 +1670,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   }
   const eventIds = events.map((e) => e.event_id);
 
-  const runId = await createMonteCarloRun({
-    sport_key: sportKey,
-    config: buildRunConfig(sportKey, calib),
-  });
+  const runId = await createMonteCarloRun({ sport_key: sportKey, config: buildRunConfig(sportKey, calib) });
 
   await clearMonteCarloResultsForSport(sportKey);
 
@@ -1777,7 +1691,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   const possMap = new Map<string, PossRow>();
   for (const p of possRows) possMap.set(p.canonical, p);
 
-  // NCAAB stats
   let statIdx: TeamStatIndex | null = null;
   if (sportKey === "basketball_ncaab") {
     try {
@@ -1808,9 +1721,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     if (!homeR || !awayR) {
       skipped.push({
         event_id: e.event_id,
-        reason: `missing team_ratings(${sportKey}) for ${!homeR ? home : ""}${!homeR && !awayR ? " & " : ""}${
-          !awayR ? away : ""
-        }`,
+        reason: `missing team_ratings(${sportKey}) for ${!homeR ? home : ""}${!homeR && !awayR ? " & " : ""}${!awayR ? away : ""}`,
       });
       continue;
     }
@@ -1818,11 +1729,9 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const homeP = possMap.get(home) ?? null;
     const awayP = possMap.get(away) ?? null;
 
-    // Base pace from possessions table
     const paceHomePoss = computeTeamPace(sportKey, homeP, "home");
     const paceAwayPoss = computeTeamPace(sportKey, awayP, "away");
 
-    // Prefer ncaab_stats pace splits (if present)
     const pacePref = preferNcaabStatPace(sportKey, statIdx, home, away, paceHomePoss, paceAwayPoss);
     const paceHomeUsed = pacePref.paceHome;
     const paceAwayUsed = pacePref.paceAway;
@@ -1832,15 +1741,11 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
 
-    // NCAAB modifiers
     const marginBump = sportKey === "basketball_ncaab" ? computeNcaabMarginBump(statIdx, home, away) : 0;
-    const style = sportKey === "basketball_ncaab" ? computeNcaabStyleModifiers(statIdx, home, away) : ({
-      paceMult: 1,
-      totalAdd: 0,
-      sigmaMultStyle: 1,
-      marginAdd: 0,
-      used: {},
-    } as NcaabStyle);
+    const style =
+      sportKey === "basketball_ncaab"
+        ? computeNcaabStyleModifiers(statIdx, home, away)
+        : ({ paceMult: 1, totalAdd: 0, sigmaMultStyle: 1, marginAdd: 0, used: {} } as NcaabStyle);
 
     const input = buildInputsPaceAware({
       sportKey,
@@ -1874,26 +1779,21 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           poss_season: POSS_SEASON,
           home,
           away,
-
           pace_inputs: {
             from_team_possessions: { home_split: paceHomePoss, away_split: paceAwayPoss },
             after_source_select: { home: paceHomeUsed, away: paceAwayUsed, game_raw: paceGameRaw },
             style_pace_mult: input.paceGame_style_mult,
             game_final: input.paceGame_final,
           },
-
           ncaab_style: input.ncaabStyle,
-
           margin_conventions: {
             model: "positive_means_home_better",
             stored: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
           },
-
           margin_debug: {
             projected_margin_home_model: sim.projectedMarginHome_model,
             projected_margin_home_stored: sim.projectedMarginHome_stored,
           },
-
           calibration: calib
             ? {
                 source: "model_calibration",
@@ -1904,7 +1804,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
                 ready: calibrationIsReady(calib) && !calib.__not_ready,
               }
             : null,
-
           margin: {
             intercept: input.marginParams.intercept,
             scale_raw: input.marginParams.scale,
@@ -1916,7 +1815,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             margin_add_style: input.marginStyleAdd,
             margin_mean_final_model_space: input.marginMean,
           },
-
           totals: {
             model_total_mean_base: input.totalMean_model_base,
             style_total_add: input.totalStyleAdd,
@@ -1926,7 +1824,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             blended_total_mean: input.totalMean,
             components: input.totalsComponents,
           },
-
           sigma: {
             base_margin_game: input.sigmaMarginGame_base,
             base_total_game: input.sigmaTotalGame_base,
@@ -1936,9 +1833,7 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             final_margin_game: input.sigmaMarginGame,
             final_total_game: input.sigmaTotalGame,
           },
-
           rho_mt: input.rhoMT,
-
           spread_line_home_consensus: spreadLineHome,
           total_line_consensus: totalLine,
           sims: SIMS,
