@@ -9,13 +9,13 @@
 // ✅ Removes redundant Event ID display — only shows Date + Time
 // ✅ Adds subtle divider row between games on desktop
 //
-// ✅ NEW: “Model” buttons next to BOTH team names
+// ✅ NEW: “Model” buttons next to team names
 // ✅ NEW: Modal shows side-by-side stats using CANONICAL team names:
-//     - public.team_ratings (engine_power + more)
-//     - public.ncaab_stats (uses the columns you provided; NO ha_2025)
+//     - public.team_ratings (latest row per canonical)
+//     - public.ncaab_stats using stat_key + home_score/away_score (composite stat rows)
 //
-// NOTE: ncaab_stats columns expected (from your CSV):
-//   canonical, v_2025, last_3, last_1, home_raw, away_raw, v_2024, home_score, away_score
+// IMPORTANT: We DO NOT use columns like v_2025/last_3/... as "stats" anymore.
+// We use `stat_key` to identify the stat and `home_score`/`away_score` for values.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -67,38 +67,29 @@ type TeamRatingsRow = {
   canonical: string;
   sport_key?: string | null;
   updated_at?: string | null;
-  season?: string | null;
 
-  // core fields you care about
+  // fields shown in modal
+  power_rank?: number | null;
+  engine_power?: number | null;
   engine_adj_off?: number | null;
   engine_adj_def?: number | null;
-  engine_power?: number | null;
   true_hca?: number | null;
   fun_factor?: number | null;
-
   sigma_total_100?: number | null;
   sigma_margin_100?: number | null;
-
   avg_total_points?: number | null;
   avg_margin_points?: number | null;
-
-  power_rank?: number | null;
   games_played?: number | null;
-
-  pf_points?: number | null;
-  pa_points?: number | null;
 };
 
-type NcaabStatsRow = {
+type NcaabCompositeRow = {
   canonical: string;
-  v_2025?: number | null;
-  last_3?: number | null;
-  last_1?: number | null;
-  home_raw?: number | null;
-  away_raw?: number | null;
-  v_2024?: number | null;
-  home_score?: number | null;
-  away_score?: number | null;
+  stat_key: string;
+  home_score: number | null;
+  away_score: number | null;
+  // optional extras if you have them:
+  updated_at?: string | null;
+  season?: string | null;
 };
 
 type OddsSnapshotRow = {
@@ -114,12 +105,10 @@ type OddsSnapshotRow = {
 type Consensus = {
   ts: string | null;
 
-  // spreads: store HOME line; away is opposite sign
   spread_home_line: number | null;
   spread_home_odds: number | null;
   spread_away_odds: number | null;
 
-  // totals
   total_line: number | null;
   total_over_odds: number | null;
   total_under_odds: number | null;
@@ -132,7 +121,7 @@ type TeamRow = {
   commenceTime: string | null;
 
   side: SideKey;
-  teamName: string; // canonical
+  teamName: string; // CANONICAL
   teamAbbr: string;
   logoUrl: string | null;
 
@@ -140,7 +129,7 @@ type TeamRow = {
 
   projPoints: number;
 
-  projMarginTeam: number; // away = -marginHome
+  projMarginTeam: number;
   coverProbTeam: number | null;
 
   projTotal: number;
@@ -149,7 +138,7 @@ type TeamRow = {
 
   winProbTeam: number | null;
 
-  consSpreadLineTeam: number | null; // away = -spread_home_line
+  consSpreadLineTeam: number | null;
   consSpreadOddsTeam: number | null;
 
   consTotalLine: number | null;
@@ -298,11 +287,7 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
 
   if (!url || !ok) {
     return (
-      <div
-        style={{ width: size, height: size }}
-        className="rounded-md bg-white border border-[#e5e5e5]"
-        aria-label={`${team} logo placeholder`}
-      />
+      <div style={{ width: size, height: size }} className="rounded-md bg-white border border-[#e5e5e5]" />
     );
   }
 
@@ -351,7 +336,7 @@ function MiniButton({
 }
 
 /* =========================================================
-   Modal
+   Modal (Team Ratings + Composite Stats by stat_key)
 ========================================================= */
 
 type ModelModalState = {
@@ -363,7 +348,7 @@ type ModelModalState = {
   commenceTime: string | null;
 };
 
-function StatCell({
+function StatRow({
   label,
   away,
   home,
@@ -387,6 +372,14 @@ function StatCell({
   );
 }
 
+function prettyStatKey(key: string) {
+  const k = (key ?? "").trim();
+  if (!k) return "—";
+  return k
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
 function ModelModal({
   state,
   onClose,
@@ -396,114 +389,120 @@ function ModelModal({
   onClose: () => void;
   sportKey: SportKey;
 }) {
-  const [tab, setTab] = useState<"ratings" | "ncaab">("ratings");
+  const isNcaab = String(sportKey) === "basketball_ncaab";
+  const [tab, setTab] = useState<"ratings" | "composite">("ratings");
+
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [ratingsMap, setRatingsMap] = useState<Map<string, TeamRatingsRow>>(new Map());
-  const [ncaabMap, setNcaabMap] = useState<Map<string, NcaabStatsRow>>(new Map());
+  const [ratingsByTeam, setRatingsByTeam] = useState<Map<string, TeamRatingsRow>>(new Map());
 
-  const isNcaab = String(sportKey) === "basketball_ncaab";
-  const awayKey = normKey(state.awayCanonical ?? "");
-  const homeKey = normKey(state.homeCanonical ?? "");
+  // stat_key -> { away, home }
+  const [compositeByKey, setCompositeByKey] = useState<
+    Map<string, { away: number | null; home: number | null }>
+  >(new Map());
 
   useEffect(() => {
     if (!state.open) return;
-    setTab(isNcaab ? "ncaab" : "ratings");
+    setTab(isNcaab ? "composite" : "ratings");
   }, [state.open, isNcaab]);
 
   useEffect(() => {
     if (!state.open) return;
-    const a = (state.awayCanonical ?? "").trim();
-    const h = (state.homeCanonical ?? "").trim();
-    if (!a || !h) return;
+
+    const away = (state.awayCanonical ?? "").trim();
+    const home = (state.homeCanonical ?? "").trim();
+    if (!away || !home) return;
 
     let mounted = true;
 
     async function load() {
       setLoading(true);
       setErr(null);
-      setRatingsMap(new Map());
-      setNcaabMap(new Map());
+      setRatingsByTeam(new Map());
+      setCompositeByKey(new Map());
 
       try {
-        // --- TEAM RATINGS (prefer sport_key filtered; keep latest row per canonical)
+        // ---- TEAM RATINGS (latest per canonical)
         const ratingsCols = [
           "canonical",
           "sport_key",
           "updated_at",
-          "season",
+          "power_rank",
+          "engine_power",
           "engine_adj_off",
           "engine_adj_def",
-          "engine_power",
           "true_hca",
           "fun_factor",
           "sigma_total_100",
           "sigma_margin_100",
           "avg_total_points",
           "avg_margin_points",
-          "power_rank",
-          "pf_points",
-          "pa_points",
           "games_played",
         ].join(",");
 
         const { data: rData, error: rErr } = await supabase
           .from("team_ratings")
           .select(ratingsCols)
-          .in("canonical", [a, h])
+          .in("canonical", [away, home])
           .eq("sport_key", sportKey as any)
           .order("updated_at", { ascending: false })
-          .limit(20);
+          .limit(50);
 
         if (!mounted) return;
-        if (rErr) {
-          // If your team_ratings table *doesn’t* have sport_key, remove the eq above.
-          throw new Error(`Failed to load team_ratings: ${rErr.message}`);
-        }
+        if (rErr) throw new Error(`Failed to load team_ratings: ${rErr.message}`);
 
-        const rMap = new Map<string, TeamRatingsRow>();
+        const rm = new Map<string, TeamRatingsRow>();
         for (const row of (rData ?? []) as TeamRatingsRow[]) {
           const k = normKey(row.canonical);
           if (!k) continue;
-          if (!rMap.has(k)) rMap.set(k, row); // keep first (latest)
+          if (!rm.has(k)) rm.set(k, row); // first is latest due to order
         }
+        setRatingsByTeam(rm);
 
-        // --- NCAAB STATS (only if sport is ncaab)
+        // ---- NCAAB COMPOSITE STATS (stat_key based) — only for NCAAB
         if (isNcaab) {
-          const ncaabCols = [
-            "canonical",
-            "v_2025",
-            "last_3",
-            "last_1",
-            "home_raw",
-            "away_raw",
-            "v_2024",
-            "home_score",
-            "away_score",
-          ].join(",");
+          // IMPORTANT: we only read stat_key + home_score/away_score (composite values)
+          const nCols = ["canonical", "stat_key", "home_score", "away_score"].join(",");
 
           const { data: nData, error: nErr } = await supabase
             .from("ncaab_stats")
-            .select(ncaabCols)
-            .in("canonical", [a, h])
-            .limit(10);
+            .select(nCols)
+            .in("canonical", [away, home])
+            .limit(5000);
 
           if (!mounted) return;
-          if (nErr) {
-            throw new Error(`Failed to load ncaab_stats: ${nErr.message}`);
+          if (nErr) throw new Error(`Failed to load ncaab_stats: ${nErr.message}`);
+
+          // Build per-team stat maps first
+          const awayStats = new Map<string, number | null>();
+          const homeStats = new Map<string, number | null>();
+
+          for (const row of (nData ?? []) as NcaabCompositeRow[]) {
+            const team = (row.canonical ?? "").trim();
+            const key = (row.stat_key ?? "").trim();
+            if (!team || !key) continue;
+
+            // For each TEAM row:
+            // - use away_score as the "team value" for Away team
+            // - use home_score as the "team value" for Home team
+            // (matches your instruction for composite rows)
+            if (team === away) {
+              awayStats.set(key, row.away_score == null ? null : Number(row.away_score));
+            } else if (team === home) {
+              homeStats.set(key, row.home_score == null ? null : Number(row.home_score));
+            }
           }
 
-          const nMap = new Map<string, NcaabStatsRow>();
-          for (const row of (nData ?? []) as NcaabStatsRow[]) {
-            const k = normKey(row.canonical);
-            if (!k) continue;
-            if (!nMap.has(k)) nMap.set(k, row);
-          }
-          setNcaabMap(nMap);
+          // Union keys
+          const allKeys = new Set<string>([...awayStats.keys(), ...homeStats.keys()]);
+          const merged = new Map<string, { away: number | null; home: number | null }>();
+          Array.from(allKeys)
+            .sort((a, b) => a.localeCompare(b))
+            .forEach((k) => merged.set(k, { away: awayStats.get(k) ?? null, home: homeStats.get(k) ?? null }));
+
+          setCompositeByKey(merged);
         }
-
-        setRatingsMap(rMap);
       } catch (e: any) {
         setErr(e?.message ?? "Failed to load model data.");
       } finally {
@@ -517,27 +516,19 @@ function ModelModal({
     };
   }, [state.open, state.awayCanonical, state.homeCanonical, sportKey, isNcaab]);
 
-  const awayRatings = ratingsMap.get(awayKey) ?? null;
-  const homeRatings = ratingsMap.get(homeKey) ?? null;
-
-  const awayN = ncaabMap.get(awayKey) ?? null;
-  const homeN = ncaabMap.get(homeKey) ?? null;
+  const awayKey = normKey(state.awayCanonical ?? "");
+  const homeKey = normKey(state.homeCanonical ?? "");
+  const awayR = ratingsByTeam.get(awayKey) ?? null;
+  const homeR = ratingsByTeam.get(homeKey) ?? null;
 
   if (!state.open) return null;
 
   return (
     <div className="fixed inset-0 z-[80]">
-      {/* backdrop */}
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute inset-0 bg-black/70"
-        aria-label="Close modal backdrop"
-      />
+      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" />
 
-      {/* sheet */}
       <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-2 md:p-6">
-        <div className="w-full md:max-w-4xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-2xl">
+        <div className="w-full md:max-w-5xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-2xl">
           {/* header */}
           <div
             className="relative px-4 md:px-5 py-4 border-b border-[#141414]"
@@ -587,15 +578,15 @@ function ModelModal({
               {isNcaab ? (
                 <button
                   type="button"
-                  onClick={() => setTab("ncaab")}
+                  onClick={() => setTab("composite")}
                   className={[
                     "px-3 py-2 rounded-lg border text-[11px] font-extrabold",
-                    tab === "ncaab"
+                    tab === "composite"
                       ? "bg-[#0b0b0b] border-[#2a2a2a] text-white"
                       : "bg-transparent border-[#1f1f1f] text-[#bdbdbd] hover:bg-white/[0.03]",
                   ].join(" ")}
                 >
-                  NCAAB Stats
+                  Composite Stats
                 </button>
               ) : null}
             </div>
@@ -611,9 +602,9 @@ function ModelModal({
               <div className="text-xs text-red-400 px-3 py-4 border border-red-900/50 rounded-xl bg-[#0b0b0b]">
                 {err}
               </div>
-            ) : (
+            ) : tab === "ratings" ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* left: away */}
+                {/* Away */}
                 <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
                   <div className="px-4 py-3 border-b border-[#141414]">
                     <div className="text-[12px] font-extrabold text-white">
@@ -622,37 +613,21 @@ function ModelModal({
                     </div>
                     <div className="text-[10px] text-[#7a7a7a] font-semibold">AWAY</div>
                   </div>
-
                   <div className="px-4">
-                    {tab === "ratings" ? (
-                      <>
-                        <StatCell label="Power Rank" away={fmt1(awayRatings?.power_rank ?? null)} home={"—"} />
-                        <StatCell label="Engine Power" away={fmt2(awayRatings?.engine_power ?? null)} home={"—"} />
-                        <StatCell label="Adj Off" away={fmt2(awayRatings?.engine_adj_off ?? null)} home={"—"} />
-                        <StatCell label="Adj Def" away={fmt2(awayRatings?.engine_adj_def ?? null)} home={"—"} />
-                        <StatCell label="True HCA" away={fmt2(awayRatings?.true_hca ?? null)} home={"—"} />
-                        <StatCell label="Fun Factor" away={fmt2(awayRatings?.fun_factor ?? null)} home={"—"} />
-                        <StatCell label="σ Total/100" away={fmt2(awayRatings?.sigma_total_100 ?? null)} home={"—"} />
-                        <StatCell label="σ Margin/100" away={fmt2(awayRatings?.sigma_margin_100 ?? null)} home={"—"} />
-                        <StatCell label="Avg Total" away={fmt2(awayRatings?.avg_total_points ?? null)} home={"—"} />
-                        <StatCell label="Avg Margin" away={fmt2(awayRatings?.avg_margin_points ?? null)} home={"—"} />
-                      </>
-                    ) : (
-                      <>
-                        <StatCell label="v_2025" away={fmt2(awayN?.v_2025 ?? null)} home={"—"} />
-                        <StatCell label="last_3" away={fmt2(awayN?.last_3 ?? null)} home={"—"} />
-                        <StatCell label="last_1" away={fmt2(awayN?.last_1 ?? null)} home={"—"} />
-                        <StatCell label="away_raw" away={fmt2(awayN?.away_raw ?? null)} home={"—"} />
-                        <StatCell label="home_raw" away={fmt2(awayN?.home_raw ?? null)} home={"—"} />
-                        <StatCell label="v_2024" away={fmt2(awayN?.v_2024 ?? null)} home={"—"} />
-                        <StatCell label="away_score" away={fmt2(awayN?.away_score ?? null)} home={"—"} />
-                        <StatCell label="home_score" away={fmt2(awayN?.home_score ?? null)} home={"—"} />
-                      </>
-                    )}
+                    <StatRow label="Power Rank" away={fmt1(awayR?.power_rank ?? null)} home={"—"} />
+                    <StatRow label="Engine Power" away={fmt2(awayR?.engine_power ?? null)} home={"—"} />
+                    <StatRow label="Adj Off" away={fmt2(awayR?.engine_adj_off ?? null)} home={"—"} />
+                    <StatRow label="Adj Def" away={fmt2(awayR?.engine_adj_def ?? null)} home={"—"} />
+                    <StatRow label="True HCA" away={fmt2(awayR?.true_hca ?? null)} home={"—"} />
+                    <StatRow label="Fun Factor" away={fmt2(awayR?.fun_factor ?? null)} home={"—"} />
+                    <StatRow label="σ Total/100" away={fmt2(awayR?.sigma_total_100 ?? null)} home={"—"} />
+                    <StatRow label="σ Margin/100" away={fmt2(awayR?.sigma_margin_100 ?? null)} home={"—"} />
+                    <StatRow label="Avg Total" away={fmt2(awayR?.avg_total_points ?? null)} home={"—"} />
+                    <StatRow label="Avg Margin" away={fmt2(awayR?.avg_margin_points ?? null)} home={"—"} />
                   </div>
                 </div>
 
-                {/* right: home */}
+                {/* Home */}
                 <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
                   <div className="px-4 py-3 border-b border-[#141414]">
                     <div className="text-[12px] font-extrabold text-white">
@@ -661,43 +636,64 @@ function ModelModal({
                     </div>
                     <div className="text-[10px] text-[#7a7a7a] font-semibold">HOME</div>
                   </div>
-
                   <div className="px-4">
-                    {tab === "ratings" ? (
-                      <>
-                        <StatCell label="Power Rank" away={"—"} home={fmt1(homeRatings?.power_rank ?? null)} />
-                        <StatCell label="Engine Power" away={"—"} home={fmt2(homeRatings?.engine_power ?? null)} />
-                        <StatCell label="Adj Off" away={"—"} home={fmt2(homeRatings?.engine_adj_off ?? null)} />
-                        <StatCell label="Adj Def" away={"—"} home={fmt2(homeRatings?.engine_adj_def ?? null)} />
-                        <StatCell label="True HCA" away={"—"} home={fmt2(homeRatings?.true_hca ?? null)} />
-                        <StatCell label="Fun Factor" away={"—"} home={fmt2(homeRatings?.fun_factor ?? null)} />
-                        <StatCell label="σ Total/100" away={"—"} home={fmt2(homeRatings?.sigma_total_100 ?? null)} />
-                        <StatCell label="σ Margin/100" away={"—"} home={fmt2(homeRatings?.sigma_margin_100 ?? null)} />
-                        <StatCell label="Avg Total" away={"—"} home={fmt2(homeRatings?.avg_total_points ?? null)} />
-                        <StatCell label="Avg Margin" away={"—"} home={fmt2(homeRatings?.avg_margin_points ?? null)} />
-                      </>
-                    ) : (
-                      <>
-                        <StatCell label="v_2025" away={"—"} home={fmt2(homeN?.v_2025 ?? null)} />
-                        <StatCell label="last_3" away={"—"} home={fmt2(homeN?.last_3 ?? null)} />
-                        <StatCell label="last_1" away={"—"} home={fmt2(homeN?.last_1 ?? null)} />
-                        <StatCell label="away_raw" away={"—"} home={fmt2(homeN?.away_raw ?? null)} />
-                        <StatCell label="home_raw" away={"—"} home={fmt2(homeN?.home_raw ?? null)} />
-                        <StatCell label="v_2024" away={"—"} home={fmt2(homeN?.v_2024 ?? null)} />
-                        <StatCell label="away_score" away={"—"} home={fmt2(homeN?.away_score ?? null)} />
-                        <StatCell label="home_score" away={"—"} home={fmt2(homeN?.home_score ?? null)} />
-                      </>
-                    )}
+                    <StatRow label="Power Rank" away={"—"} home={fmt1(homeR?.power_rank ?? null)} />
+                    <StatRow label="Engine Power" away={"—"} home={fmt2(homeR?.engine_power ?? null)} />
+                    <StatRow label="Adj Off" away={"—"} home={fmt2(homeR?.engine_adj_off ?? null)} />
+                    <StatRow label="Adj Def" away={"—"} home={fmt2(homeR?.engine_adj_def ?? null)} />
+                    <StatRow label="True HCA" away={"—"} home={fmt2(homeR?.true_hca ?? null)} />
+                    <StatRow label="Fun Factor" away={"—"} home={fmt2(homeR?.fun_factor ?? null)} />
+                    <StatRow label="σ Total/100" away={"—"} home={fmt2(homeR?.sigma_total_100 ?? null)} />
+                    <StatRow label="σ Margin/100" away={"—"} home={fmt2(homeR?.sigma_margin_100 ?? null)} />
+                    <StatRow label="Avg Total" away={"—"} home={fmt2(homeR?.avg_total_points ?? null)} />
+                    <StatRow label="Avg Margin" away={"—"} home={fmt2(homeR?.avg_margin_points ?? null)} />
                   </div>
+                </div>
+              </div>
+            ) : (
+              // Composite stats view: ONE list, side-by-side away/home per stat_key
+              <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
+                <div className="px-4 py-3 border-b border-[#141414] flex items-center justify-between">
+                  <div className="text-[12px] font-extrabold text-white">Composite Stats</div>
+                  <div className="text-[10px] text-[#7a7a7a] font-semibold">
+                    {state.awayAbbr ?? "AWAY"} vs {state.homeAbbr ?? "HOME"}
+                  </div>
+                </div>
+
+                <div className="px-4">
+                  {/* header row */}
+                  <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#141414]">
+                    <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">Stat</div>
+                    <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
+                      {state.awayAbbr ?? "AWAY"}
+                    </div>
+                    <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
+                      {state.homeAbbr ?? "HOME"}
+                    </div>
+                  </div>
+
+                  {compositeByKey.size === 0 ? (
+                    <div className="py-10 text-center text-xs text-[#808080]">
+                      No composite stat rows found for these teams.
+                    </div>
+                  ) : (
+                    Array.from(compositeByKey.entries()).map(([k, v]) => (
+                      <StatRow
+                        key={k}
+                        label={prettyStatKey(k)}
+                        away={fmt2(v.away)}
+                        home={fmt2(v.home)}
+                      />
+                    ))
+                  )}
                 </div>
               </div>
             )}
           </div>
 
-          {/* footer */}
           <div className="px-4 md:px-5 py-3 border-t border-[#141414] flex items-center justify-between">
             <div className="text-[10px] text-[#808080]">
-              Uses canonical names for lookups ({String(sportKey).toUpperCase()}).
+              Composite stats are matched by <span className="text-white font-semibold">stat_key</span> using canonical team names.
             </div>
             <button
               type="button"
@@ -789,7 +785,9 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /* =========================================================
-   Screen
+   Screen (rest of file unchanged from your last version)
+   - Includes Model buttons by team names
+   - Uses canonical teamName for modal lookups
 ========================================================= */
 
 export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
@@ -818,7 +816,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
   });
 
   function openModel(away: TeamRow, home: TeamRow, commenceTime: string | null) {
-    // IMPORTANT: use CANONICAL (teamName) for lookups — not abbreviations
     setModal({
       open: true,
       awayCanonical: away.teamName,
@@ -829,10 +826,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     });
   }
 
-  /* 0) team_map logos + abbrev */
+  // --- team_map
   useEffect(() => {
     let mounted = true;
-
     async function loadTeamMap() {
       const { data, error } = await supabase.from("team_map").select('canonical,"Logo URL","Abbreviation"');
       if (!mounted) return;
@@ -868,7 +864,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, []);
 
-  /* 0b) team_ratings power_rank map (used in table next to team name) */
+  // --- power_rank map
   useEffect(() => {
     let mounted = true;
 
@@ -893,7 +889,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         const k = normKey(r.canonical);
         const pr = r.power_rank == null ? null : Number(r.power_rank);
         if (!k) continue;
-        // keep first seen (latest due to order)
         if (!pm.has(k) && pr != null && Number.isFinite(pr)) pm.set(k, pr);
       }
 
@@ -906,7 +901,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [sportKey]);
 
-  /* 1) latest run for sportKey */
+  // --- latest run
   useEffect(() => {
     let mounted = true;
 
@@ -943,7 +938,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [sportKey]);
 
-  /* 2) results for run */
+  // --- results for run
   useEffect(() => {
     let mounted = true;
 
@@ -996,7 +991,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [run?.id, sportKey]);
 
-  /* 3) consensus from odds_snapshot */
+  // --- consensus
   useEffect(() => {
     let mounted = true;
 
@@ -1106,7 +1101,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [results]);
 
-  /* 4) bundle event rows */
+  // --- bundle events
   const events: EventBundle[] = useMemo(() => {
     const out: EventBundle[] = [];
 
@@ -1115,7 +1110,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const awayRaw = (r.away_team ?? "").trim();
       if (!homeRaw || !awayRaw) continue;
 
-      // IMPORTANT: in your DB, these should already be canonical (as you said)
       const homeKey = normKey(homeRaw);
       const awayKey = normKey(awayRaw);
 
@@ -1223,7 +1217,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     return out;
   }, [results, abbrMap, logoMap, consensusMap, powerRankMap]);
 
-  /* keep open state aligned */
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
@@ -1253,7 +1246,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      {/* Modal */}
       <ModelModal
         state={modal}
         onClose={() =>
@@ -1269,7 +1261,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         sportKey={sportKey}
       />
 
-      {/* HERO / HEADER */}
+      {/* HERO */}
       <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 md:p-5">
         <div
           className="pointer-events-none absolute inset-0 opacity-95"
@@ -1341,7 +1333,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                     key={ev.eventId}
                     ev={ev}
                     showDivider={idx < events.length - 1}
-                    onOpenModel={(away, home) => openModel(away, home, ev.commenceTime)}
+                    onOpenModel={() => openModel(ev.away, ev.home, ev.commenceTime)}
                   />
                 ))}
 
@@ -1411,12 +1403,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                   <div className="text-[9px] text-[#7a7a7a] font-semibold">AWAY · {ev.away.teamAbbr}</div>
                 </div>
                 <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
-                  <div
-                    className={[
-                      "font-extrabold text-[13px]",
-                      ev.away.isProjectedWinner ? "text-green-400" : "text-white",
-                    ].join(" ")}
-                  >
+                  <div className={["font-extrabold text-[13px]", ev.away.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
                     {ev.away.projPoints.toFixed(1)}
                   </div>
                   <div className="font-bold text-[10px] text-[#bdbdbd]">{pct01(ev.away.winProbTeam)}</div>
@@ -1434,12 +1421,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                   <div className="text-[9px] text-[#7a7a7a] font-semibold">HOME · {ev.home.teamAbbr}</div>
                 </div>
                 <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
-                  <div
-                    className={[
-                      "font-extrabold text-[13px]",
-                      ev.home.isProjectedWinner ? "text-green-400" : "text-white",
-                    ].join(" ")}
-                  >
+                  <div className={["font-extrabold text-[13px]", ev.home.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
                     {ev.home.projPoints.toFixed(1)}
                   </div>
                   <div className="font-bold text-[10px] text-[#bdbdbd]">{pct01(ev.home.winProbTeam)}</div>
@@ -1470,7 +1452,7 @@ function DesktopEventRows({
 }: {
   ev: EventBundle;
   showDivider: boolean;
-  onOpenModel: (away: TeamRow, home: TeamRow) => void;
+  onOpenModel: () => void;
 }) {
   const away = ev.away;
   const home = ev.home;
@@ -1541,8 +1523,7 @@ function DesktopEventRows({
         <div className="text-white truncate font-semibold" title={row.teamName}>
           {row.teamName}
           <RankBadge rank={row.powerRank} />
-          {/* ✅ Model button by team name */}
-          <MiniButton label="Model" title="Open model stats" onClick={() => onOpenModel(away, home)} />
+          <MiniButton label="Model" title="Open model stats" onClick={onOpenModel} />
         </div>
         <div className="text-[10px] text-[#606060] mt-0.5">
           {row.side} · {row.teamAbbr}
@@ -1553,7 +1534,6 @@ function DesktopEventRows({
 
   return (
     <>
-      {/* Away row */}
       <tr className="transition-colors hover:bg-white/[0.02]">
         <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[420px]">
           {matchupLine}
@@ -1589,7 +1569,6 @@ function DesktopEventRows({
         </td>
       </tr>
 
-      {/* Home row */}
       <tr className="transition-colors hover:bg-white/[0.02]">
         <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[420px]">
           <TeamBlock row={home} />
@@ -1622,7 +1601,6 @@ function DesktopEventRows({
         </td>
       </tr>
 
-      {/* Divider */}
       {showDivider ? (
         <tr>
           <td colSpan={7} className="p-0">
@@ -1634,6 +1612,5 @@ function DesktopEventRows({
   );
 }
 
-/* ✅ Default export optional */
 export default MonteCarloScreen;
 
