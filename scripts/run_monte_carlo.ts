@@ -1,30 +1,39 @@
 /**
- * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.2.0: SIGN-SAFE + DUPLICATE-SAFE SINGLE FILE)
+ * scripts/run_monte_carlo.ts — MULTI-SPORT (FULL REWRITE v6.4.0: NCAAB STYLE MODIFIERS)
  * ------------------------------------------------------------------------------------------------------
- * ✅ Duplicate-safe: single declarations only (fixes “already been declared” esbuild crash)
+ * ✅ Duplicate-safe: single declarations only
  * ✅ Uses public.model_calibration (no fitting on the fly)
  * ✅ Correlated margin+total sims (rho)
  * ✅ SIGN-SAFE margin:
  *      - MODEL space is ALWAYS: +margin = home better
- *      - Calibration margin_scale is forced POSITIVE (abs), so favorites cannot invert
+ *      - Calibration margin_scale forced POSITIVE (abs)
  * ✅ Totals anchoring via total_anchor_w:
  *      totalMean = (1-w)*modelTotal + w*(consensus total line)   (only when total line exists)
- * ✅ Robust consensus lines: median of latest-per-book from odds_snapshot, with symmetric fills
+ * ✅ Robust consensus lines: median of latest-per-book from odds_snapshot, symmetric fills
  * ✅ Rebuilds ev_plays per sport after snapshot write
+ *
+ * ✅ NCAAB: Uses public.ncaab_stats beyond pace + OE/DE:
+ *      - Pace: possessions-per-game (home/away splits) if available
+ *      - Efficiency: offensive-efficiency + defensive-efficiency (home/away splits) if available
+ *      - Style modifiers (lightweight, clamped; only applied when stat exists):
+ *          • eFG% (shot quality): nudges total up/down
+ *          • TO% (ball security): nudges pace & margin
+ *          • ORB% (second chances): nudges total & variance
+ *          • FTR (foul/FT rate): nudges total
+ *          • 3P rate: nudges variance & slightly total
+ *      - Margin bump: average-scoring-margin (home/away) (light weight + clamped)
+ *      - Full transparency: all used stats + modifiers written into trace
  *
  * Tables used:
  *   - events
  *   - team_ratings
  *   - team_possessions
+ *   - ncaab_stats            (NCAAB only)
  *   - odds_snapshot
  *   - monte_carlo_results (snapshot overwrite per sport)
  *   - monte_carlo_runs (history)
  *   - ev_plays (cleared per sport each run, then rebuilt)
  *   - model_calibration
- *
- * NOTE ON MARGIN STORAGE:
- *   - We KEEP your existing storage behavior controlled by MARGIN_HOME_WIN_NEGATIVE.
- *   - But we also write BOTH model-margin and stored-margin into trace so UI/debug can never be “mysteriously reversed”.
  */
 
 import "dotenv/config";
@@ -79,6 +88,9 @@ function averageNonNull(arr: Array<number | null | undefined>): number | null {
   const xs = arr.filter((x): x is number => x != null && Number.isFinite(x));
   if (!xs.length) return null;
   return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+function safeDiv(a: number, b: number, fb = 0) {
+  return b === 0 ? fb : a / b;
 }
 
 // Box–Muller
@@ -217,6 +229,25 @@ type PossRow = {
   "2024": number | null;
 };
 
+type StatRow = {
+  sport_key: string;
+  season: string;
+  canonical: string;
+  stat_key: string;
+
+  v_2025: number | null;
+  last_3: number | null;
+  last_1: number | null;
+  home_raw: number | null;
+  away_raw: number | null;
+  v_2024: number | null;
+
+  home_score: number | null;
+  away_score: number | null;
+
+  updated_at: string;
+};
+
 type ModelCalibrationRow = {
   sport_key: string;
   window_days: number;
@@ -261,11 +292,9 @@ const POSS_SEASON = process.env.POSS_SEASON || SEASON;
 
 const SIMS = Number(process.env.MC_SIMS ?? "10000");
 const START_GRACE_MINUTES = Number(process.env.MC_START_GRACE_MINUTES ?? "0");
-
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
 
-// IMPORTANT: storage convention (kept for backward compatibility)
-// If true: stored margin is NEGATIVE when home is better (old UI convention)
+// Storage convention
 const MARGIN_HOME_WIN_NEGATIVE = (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
 
 const EPS = Number(process.env.MC_PUSH_EPS ?? "1e-9");
@@ -319,9 +348,38 @@ const SIGMA_TOTAL_MULT_DEFAULT = Number(process.env.MC_SIGMA_TOTAL_MULT ?? "1.00
 
 const TOTAL_ANCHOR_W_DEFAULT = clamp(Number(process.env.MC_TOTAL_ANCHOR_W ?? "0.00"), 0, 0.85);
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: false },
-});
+/**
+ * NCAAB style knobs (all are intentionally small + clamped)
+ * - pace multiplier affects paceGame before totals components
+ * - totalAdd is points added to totalMean_model
+ * - sigmaMultStyle scales sigma_total_game (extra variance layer) (clamped)
+ * - marginAdd adds to marginMean (model space; + means home better)
+ */
+const NCAAB_MARGIN_BUMP_W = clamp(Number(process.env.NCAAB_MARGIN_BUMP_W ?? "0.15"), 0, 0.5);
+const NCAAB_MARGIN_BUMP_CLAMP = Number(process.env.NCAAB_MARGIN_BUMP_CLAMP ?? "3");
+
+const NCAAB_STYLE_TOTAL_ADD_CLAMP = Number(process.env.NCAAB_STYLE_TOTAL_ADD_CLAMP ?? "6");
+const NCAAB_STYLE_SIGMA_MULT_MIN = Number(process.env.NCAAB_STYLE_SIGMA_MULT_MIN ?? "0.92");
+const NCAAB_STYLE_SIGMA_MULT_MAX = Number(process.env.NCAAB_STYLE_SIGMA_MULT_MAX ?? "1.15");
+const NCAAB_STYLE_PACE_MULT_MIN = Number(process.env.NCAAB_STYLE_PACE_MULT_MIN ?? "0.93");
+const NCAAB_STYLE_PACE_MULT_MAX = Number(process.env.NCAAB_STYLE_PACE_MULT_MAX ?? "1.07");
+
+// Baselines (NCAAB typical-ish) used only for SMALL deltas
+const NCAAB_BASE_EFG = Number(process.env.NCAAB_BASE_EFG ?? "0.50");
+const NCAAB_BASE_TOV = Number(process.env.NCAAB_BASE_TOV ?? "0.18");
+const NCAAB_BASE_ORB = Number(process.env.NCAAB_BASE_ORB ?? "0.30");
+const NCAAB_BASE_FTR = Number(process.env.NCAAB_BASE_FTR ?? "0.30");
+const NCAAB_BASE_3PR = Number(process.env.NCAAB_BASE_3PR ?? "0.38");
+
+// Scales
+const NCAAB_EFG_TOTAL_SCALE = Number(process.env.NCAAB_EFG_TOTAL_SCALE ?? "40"); // (efg - base) * scale
+const NCAAB_FTR_TOTAL_SCALE = Number(process.env.NCAAB_FTR_TOTAL_SCALE ?? "12"); // (ftr - base) * scale
+const NCAAB_ORB_TOTAL_SCALE = Number(process.env.NCAAB_ORB_TOTAL_SCALE ?? "10"); // (orb - base) * scale
+const NCAAB_TOV_PACE_SCALE = Number(process.env.NCAAB_TOV_PACE_SCALE ?? "0.30"); // paceMult = 1 - (tov - base)*scale
+const NCAAB_3PR_SIGMA_SCALE = Number(process.env.NCAAB_3PR_SIGMA_SCALE ?? "0.35"); // sigmaMult = 1 + (3pr - base)*scale
+const NCAAB_TOV_MARGIN_SCALE = Number(process.env.NCAAB_TOV_MARGIN_SCALE ?? "18"); // (awayTov - homeTov)*scale
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
 
 /* =========================================================
    MODEL_CALIBRATION (effective + readiness)
@@ -329,7 +387,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 type EffectiveCalibration = {
   margin_intercept: number;
-  margin_scale: number; // NOTE: can be negative in table, we will abs() at use-time
+  margin_scale: number; // can be negative in table; abs() at use-time
   hca_scale: number;
 
   sigma_margin_mult: number;
@@ -437,7 +495,6 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
     push_eps: EPS,
     write_trace: WRITE_TRACE,
 
-    // sign + storage convention
     margin_conventions: {
       model: "positive_means_home_better",
       stored: MARGIN_HOME_WIN_NEGATIVE ? "negative_means_home_better" : "positive_means_home_better",
@@ -472,6 +529,23 @@ function buildRunConfig(sportKey: string, calib: EffectiveCalibration | null) {
         rho: RHO_MT_DEFAULT,
       },
     },
+
+    ncaab_stats: sportKey === "basketball_ncaab"
+      ? {
+          enabled: true,
+          style_keys: [
+            "possessions-per-game",
+            "offensive-efficiency",
+            "defensive-efficiency",
+            "effective-field-goal-pct",
+            "turnover-pct",
+            "offensive-rebounding-pct",
+            "free-throw-rate",
+            "three-point-rate",
+            "average-scoring-margin",
+          ],
+        }
+      : { enabled: false },
 
     pace_weights: { w_2025: PACE_W_2025, w_last3: PACE_W_LAST3, w_last1: PACE_W_LAST1, w_split: PACE_W_SPLIT },
     pace_clamp: paceClampForSport(sportKey),
@@ -547,16 +621,251 @@ function defaultPaceForSport(sportKey: string) {
 }
 
 /* =========================================================
+   NCAAB_STATS helpers + style model
+========================================================= */
+
+type TeamStatIndex = Map<string, Map<string, StatRow>>;
+
+function buildTeamStatIndex(rows: StatRow[]): TeamStatIndex {
+  const idx: TeamStatIndex = new Map();
+  for (const r of rows) {
+    const team = String(r.canonical || "").trim();
+    const key = String(r.stat_key || "").trim().toLowerCase();
+    if (!team || !key) continue;
+    const m = idx.get(team) ?? new Map<string, StatRow>();
+    m.set(key, r);
+    idx.set(team, m);
+  }
+  return idx;
+}
+
+function getTeamStatSplit(idx: TeamStatIndex, canonical: string, statKey: string) {
+  const m = idx.get(canonical);
+  if (!m) return { home: null as number | null, away: null as number | null, found_key: null as string | null };
+  const row = m.get(statKey.toLowerCase());
+  if (!row) return { home: null, away: null, found_key: null };
+  return { home: toNullNum(row.home_score), away: toNullNum(row.away_score), found_key: statKey.toLowerCase() };
+}
+
+/**
+ * Many TeamRankings keys vary slightly depending on scrape.
+ * We allow alias lists and return first available.
+ */
+function getTeamStatSplitAliases(idx: TeamStatIndex, canonical: string, keys: string[]) {
+  for (const k of keys) {
+    const v = getTeamStatSplit(idx, canonical, k);
+    if (v.home != null || v.away != null) return { ...v, used_alias: k };
+  }
+  return { home: null as number | null, away: null as number | null, found_key: null as string | null, used_alias: null as string | null };
+}
+
+function preferNcaabStatPace(
+  sportKey: string,
+  idx: TeamStatIndex | null,
+  homeCanon: string,
+  awayCanon: string,
+  paceHomeFromPoss: number | null,
+  paceAwayFromPoss: number | null
+) {
+  let paceHome = paceHomeFromPoss;
+  let paceAway = paceAwayFromPoss;
+
+  if (sportKey === "basketball_ncaab" && idx) {
+    const h = getTeamStatSplitAliases(idx, homeCanon, ["possessions-per-game", "pace", "adjusted-tempo"]);
+    const a = getTeamStatSplitAliases(idx, awayCanon, ["possessions-per-game", "pace", "adjusted-tempo"]);
+    paceHome = h.home ?? paceHome;
+    paceAway = a.away ?? paceAway;
+  }
+
+  return { paceHome, paceAway };
+}
+
+function computeNcaabMarginBump(idx: TeamStatIndex | null, homeCanon: string, awayCanon: string) {
+  if (!idx) return 0;
+
+  const h = getTeamStatSplitAliases(idx, homeCanon, ["average-scoring-margin", "scoring-margin"]);
+  const a = getTeamStatSplitAliases(idx, awayCanon, ["average-scoring-margin", "scoring-margin"]);
+
+  const hSm = h.home;
+  const aSm = a.away;
+  if (hSm == null || aSm == null) return 0;
+
+  const raw = (hSm - aSm) * NCAAB_MARGIN_BUMP_W;
+  return clamp(raw, -NCAAB_MARGIN_BUMP_CLAMP, NCAAB_MARGIN_BUMP_CLAMP);
+}
+
+type NcaabStyle = {
+  paceMult: number;      // multiplicative
+  totalAdd: number;      // additive points on totalMean_model
+  sigmaMultStyle: number;// multiplicative extra sigma layer on total
+  marginAdd: number;     // additive points on marginMean (model space)
+  used: {
+    efg?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
+    tov?: { home: number | null; away: number | null; alias: string | null };
+    orb?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
+    ftr?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
+    three?: { home: number | null; away: number | null; avg: number | null; alias: string | null };
+  };
+};
+
+function computeNcaabStyleModifiers(idx: TeamStatIndex | null, homeCanon: string, awayCanon: string): NcaabStyle {
+  const base: NcaabStyle = {
+    paceMult: 1,
+    totalAdd: 0,
+    sigmaMultStyle: 1,
+    marginAdd: 0,
+    used: {},
+  };
+  if (!idx) return base;
+
+  // Aliases (safe: if your scraper uses different strings, add them here)
+  const efgKeys = ["effective-field-goal-pct", "efg-pct", "effective-fg-pct"];
+  const tovKeys = ["turnover-pct", "turnovers-per-possession", "turnover-rate"];
+  const orbKeys = ["offensive-rebounding-pct", "off-reb-pct", "offensive-rebound-pct"];
+  const ftrKeys = ["free-throw-rate", "ft-rate", "free-throw-rate-ftr"];
+  const threeKeys = ["three-point-rate", "3pt-rate", "three-pt-rate", "3p-rate"];
+
+  const hEfg = getTeamStatSplitAliases(idx, homeCanon, efgKeys);
+  const aEfg = getTeamStatSplitAliases(idx, awayCanon, efgKeys);
+
+  const hTov = getTeamStatSplitAliases(idx, homeCanon, tovKeys);
+  const aTov = getTeamStatSplitAliases(idx, awayCanon, tovKeys);
+
+  const hOrb = getTeamStatSplitAliases(idx, homeCanon, orbKeys);
+  const aOrb = getTeamStatSplitAliases(idx, awayCanon, orbKeys);
+
+  const hFtr = getTeamStatSplitAliases(idx, homeCanon, ftrKeys);
+  const aFtr = getTeamStatSplitAliases(idx, awayCanon, ftrKeys);
+
+  const h3 = getTeamStatSplitAliases(idx, homeCanon, threeKeys);
+  const a3 = getTeamStatSplitAliases(idx, awayCanon, threeKeys);
+
+  // Home uses HOME split; Away uses AWAY split (same pattern as your pace/margin usage)
+  const efgHome = hEfg.home;
+  const efgAway = aEfg.away;
+  const efgAvg = averageNonNull([efgHome, efgAway]);
+
+  const tovHome = hTov.home;
+  const tovAway = aTov.away;
+
+  const orbHome = hOrb.home;
+  const orbAway = aOrb.away;
+  const orbAvg = averageNonNull([orbHome, orbAway]);
+
+  const ftrHome = hFtr.home;
+  const ftrAway = aFtr.away;
+  const ftrAvg = averageNonNull([ftrHome, ftrAway]);
+
+  const threeHome = h3.home;
+  const threeAway = a3.away;
+  const threeAvg = averageNonNull([threeHome, threeAway]);
+
+  // --- Pace multiplier (TO-heavy games tend to depress possessions slightly)
+  // paceMult = 1 - (avgTov - base)*scale
+  const tovAvg = averageNonNull([tovHome, tovAway]);
+  if (tovAvg != null) {
+    const raw = 1 - (tovAvg - NCAAB_BASE_TOV) * NCAAB_TOV_PACE_SCALE;
+    base.paceMult = clamp(raw, NCAAB_STYLE_PACE_MULT_MIN, NCAAB_STYLE_PACE_MULT_MAX);
+  }
+
+  // --- Total add (small, clamped)
+  let totalAdd = 0;
+
+  // Shot quality: eFG above baseline adds points
+  if (efgAvg != null) totalAdd += (efgAvg - NCAAB_BASE_EFG) * NCAAB_EFG_TOTAL_SCALE;
+
+  // Free throws: higher FTR adds points
+  if (ftrAvg != null) totalAdd += (ftrAvg - NCAAB_BASE_FTR) * NCAAB_FTR_TOTAL_SCALE;
+
+  // ORB: more second chances adds points
+  if (orbAvg != null) totalAdd += (orbAvg - NCAAB_BASE_ORB) * NCAAB_ORB_TOTAL_SCALE;
+
+  // 3P rate: small effect on total
+  if (threeAvg != null) totalAdd += (threeAvg - NCAAB_BASE_3PR) * 6;
+
+  base.totalAdd = clamp(totalAdd, -NCAAB_STYLE_TOTAL_ADD_CLAMP, NCAAB_STYLE_TOTAL_ADD_CLAMP);
+
+  // --- Sigma multiplier (3P heavy games are higher variance; ORB also adds volatility)
+  let sigmaMult = 1;
+  if (threeAvg != null) sigmaMult *= 1 + (threeAvg - NCAAB_BASE_3PR) * NCAAB_3PR_SIGMA_SCALE;
+  if (orbAvg != null) sigmaMult *= 1 + (orbAvg - NCAAB_BASE_ORB) * 0.15;
+  base.sigmaMultStyle = clamp(sigmaMult, NCAAB_STYLE_SIGMA_MULT_MIN, NCAAB_STYLE_SIGMA_MULT_MAX);
+
+  // --- Margin add (TO differential: if away is sloppy & home is secure -> home edge)
+  // marginAdd = (awayTov - homeTov) * scale (positive favors home)
+  if (tovHome != null && tovAway != null) {
+    base.marginAdd = clamp((tovAway - tovHome) * NCAAB_TOV_MARGIN_SCALE, -2.5, 2.5);
+  }
+
+  base.used.efg = { home: efgHome, away: efgAway, avg: efgAvg, alias: (hEfg.used_alias || aEfg.used_alias || null) };
+  base.used.tov = { home: tovHome, away: tovAway, alias: (hTov.used_alias || aTov.used_alias || null) };
+  base.used.orb = { home: orbHome, away: orbAway, avg: orbAvg, alias: (hOrb.used_alias || aOrb.used_alias || null) };
+  base.used.ftr = { home: ftrHome, away: ftrAway, avg: ftrAvg, alias: (hFtr.used_alias || aFtr.used_alias || null) };
+  base.used.three = { home: threeHome, away: threeAway, avg: threeAvg, alias: (h3.used_alias || a3.used_alias || null) };
+
+  return base;
+}
+
+/* =========================================================
    MODEL (calibrated) — SIGN SAFE
 ========================================================= */
 
-function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: TeamRatingRow, paceGame: number) {
+function computeTotalsComponents(args: {
+  sportKey: string;
+  home: TeamRatingRow;
+  away: TeamRatingRow;
+  paceGame: number;
+
+  // NCAAB stats optional
+  statIdx: TeamStatIndex | null;
+  homeCanon: string;
+  awayCanon: string;
+}) {
+  const { sportKey, home, away, paceGame, statIdx, homeCanon, awayCanon } = args;
   const paceFactor = paceGame / 100;
 
-  const homeOff100 = num(home.engine_adj_off, 0);
-  const homeDef100 = num(home.engine_adj_def, 0);
-  const awayOff100 = num(away.engine_adj_off, 0);
-  const awayDef100 = num(away.engine_adj_def, 0);
+  let homeOff100 = num(home.engine_adj_off, 0);
+  let homeDef100 = num(home.engine_adj_def, 0);
+  let awayOff100 = num(away.engine_adj_off, 0);
+  let awayDef100 = num(away.engine_adj_def, 0);
+
+  // Prefer NCAAB OE/DE splits when complete
+  let usedNcaabEff = false;
+  let ncaabEff: any = null;
+
+  if (sportKey === "basketball_ncaab" && statIdx) {
+    const homeOE = getTeamStatSplitAliases(statIdx, homeCanon, ["offensive-efficiency", "off-efficiency", "adj-off-efficiency"]);
+    const homeDE = getTeamStatSplitAliases(statIdx, homeCanon, ["defensive-efficiency", "def-efficiency", "adj-def-efficiency"]);
+    const awayOE = getTeamStatSplitAliases(statIdx, awayCanon, ["offensive-efficiency", "off-efficiency", "adj-off-efficiency"]);
+    const awayDE = getTeamStatSplitAliases(statIdx, awayCanon, ["defensive-efficiency", "def-efficiency", "adj-def-efficiency"]);
+
+    const hOE = homeOE.home;
+    const hDE = homeDE.home;
+    const aOE = awayOE.away;
+    const aDE = awayDE.away;
+
+    const haveAll = hOE != null && hDE != null && aOE != null && aDE != null;
+    ncaabEff = {
+      home_oe_home: hOE,
+      home_de_home: hDE,
+      away_oe_away: aOE,
+      away_de_away: aDE,
+      used_aliases: {
+        homeOE: homeOE.used_alias,
+        homeDE: homeDE.used_alias,
+        awayOE: awayOE.used_alias,
+        awayDE: awayDE.used_alias,
+      },
+    };
+
+    if (haveAll) {
+      homeOff100 = hOE!;
+      homeDef100 = hDE!;
+      awayOff100 = aOE!;
+      awayDef100 = aDE!;
+      usedNcaabEff = true;
+    }
+  }
 
   const defFallback = sportKey === "basketball_nba" ? 112 : 100;
   const offFallback = sportKey === "basketball_nba" ? 112 : 100;
@@ -589,7 +898,13 @@ function computeTotalsComponents(sportKey: string, home: TeamRatingRow, away: Te
   const awayAvgTot = toNullNum(away.avg_total_points);
   const total_avg_total = avgNullable(homeAvgTot, awayAvgTot);
 
-  return { total_offdef_pace, total_pfpa, total_avg_total };
+  return {
+    total_offdef_pace,
+    total_pfpa,
+    total_avg_total,
+    usedNcaabEff,
+    ncaabEff,
+  };
 }
 
 function blendTotals(args: {
@@ -621,18 +936,43 @@ function buildInputsPaceAware(args: {
   sportKey: string;
   home: TeamRatingRow;
   away: TeamRatingRow;
-  paceGame: number;
+
+  // NOTE: paceGame passed in is AFTER pace-source selection, but BEFORE style multiplier
+  paceGameRaw: number;
+
   consensusTotalLine: number | null;
   calib: EffectiveCalibration | null;
-}) {
-  const { sportKey, home, away, paceGame, consensusTotalLine, calib } = args;
-  const paceFactor = paceGame / 100;
 
+  // NCAAB optional
+  statIdx: TeamStatIndex | null;
+  homeCanon: string;
+  awayCanon: string;
+  marginBump: number; // scoring-margin bump (already clamped)
+  style: NcaabStyle;  // style modifiers (already clamped)
+}) {
+  const { sportKey, home, away, paceGameRaw, consensusTotalLine, calib, statIdx, homeCanon, awayCanon, marginBump, style } =
+    args;
+
+  // Apply style pace multiplier ONLY for NCAAB
+  const paceGame = sportKey === "basketball_ncaab" ? paceGameRaw * style.paceMult : paceGameRaw;
+
+  const { lo, hi } = paceClampForSport(sportKey);
+  const paceGameClamped = clamp(paceGame, lo, hi);
+
+  const paceFactor = paceGameClamped / 100;
   const ready = calib ? calibrationIsReady(calib) && !calib.__not_ready : false;
 
-  const comps = computeTotalsComponents(sportKey, home, away, paceGame);
+  const comps = computeTotalsComponents({
+    sportKey,
+    home,
+    away,
+    paceGame: paceGameClamped,
+    statIdx,
+    homeCanon,
+    awayCanon,
+  });
 
-  const totalMean_model = blendTotals({
+  const totalMean_model_base = blendTotals({
     offdef_pace: comps.total_offdef_pace,
     pfpa: comps.total_pfpa,
     avg_total: comps.total_avg_total,
@@ -640,6 +980,10 @@ function buildInputsPaceAware(args: {
     w_pfpa: TOTAL_W_PFPA,
     w_avg_total: TOTAL_W_AVG_TOTAL,
   });
+
+  // NCAAB: add style total points (small)
+  const totalMean_model =
+    sportKey === "basketball_ncaab" ? Math.max(0, totalMean_model_base + style.totalAdd) : totalMean_model_base;
 
   const totalAnchorW = ready ? clamp(calib!.total_anchor_w, 0, 0.85) : TOTAL_ANCHOR_W_DEFAULT;
   const totalMean =
@@ -658,11 +1002,14 @@ function buildInputsPaceAware(args: {
     hca_scale: ready ? num(calib!.hca_scale, HCA_SCALE_DEFAULT) : HCA_SCALE_DEFAULT,
   };
 
-  // ✅ SIGN-SAFE: force scale positive so favorites cannot invert
+  // SIGN-SAFE scale
   const safeScale = Math.abs(marginParams.scale);
 
-  // MODEL margin is ALWAYS: + means home better
-  const marginMean = marginParams.intercept + safeScale * powerDiff + marginParams.hca_scale * hcaPts;
+  const marginMean_base = marginParams.intercept + safeScale * powerDiff + marginParams.hca_scale * hcaPts;
+
+  // NCAAB: include scoring-margin bump + style margin add (TO diff)
+  const marginMean =
+    sportKey === "basketball_ncaab" ? marginMean_base + marginBump + style.marginAdd : marginMean_base;
 
   const sigmaMargin100 = avg(num(home.sigma_margin_100, 8), num(away.sigma_margin_100, 8));
   const sigmaTotal100 = avg(num(home.sigma_total_100, 13.5), num(away.sigma_total_100, 13.5));
@@ -675,16 +1022,32 @@ function buildInputsPaceAware(args: {
     total: ready ? clamp(num(calib!.sigma_total_mult, 1), 0.25, 3.0) : SIGMA_TOTAL_MULT_DEFAULT,
   };
 
+  // NCAAB style volatility layer multiplies AFTER calibration mult
+  const sigmaTotalStyleMult = sportKey === "basketball_ncaab" ? style.sigmaMultStyle : 1;
+
   const sigmaMarginGame = Math.max(SIGMA_MARGIN_FLOOR_GAME, sigmaMarginGame_base * sigmaMult.margin);
-  const sigmaTotalGame = Math.max(SIGMA_TOTAL_FLOOR_GAME, sigmaTotalGame_base * sigmaMult.total);
+  const sigmaTotalGame = Math.max(
+    SIGMA_TOTAL_FLOOR_GAME,
+    sigmaTotalGame_base * sigmaMult.total * sigmaTotalStyleMult
+  );
 
   const rhoMT = ready ? clamp(num(calib!.rho_margin_total, RHO_MT_DEFAULT), -0.75, 0.75) : RHO_MT_DEFAULT;
 
   return {
+    paceGame_raw: paceGameRaw,
+    paceGame_style_mult: sportKey === "basketball_ncaab" ? style.paceMult : 1,
+    paceGame_final: paceGameClamped,
+
     marginMean,
+    marginMean_base,
+    marginBump,
+    marginStyleAdd: sportKey === "basketball_ncaab" ? style.marginAdd : 0,
+
     totalMean,
     totalMean_model,
+    totalMean_model_base,
     totalAnchorW,
+    totalStyleAdd: sportKey === "basketball_ncaab" ? style.totalAdd : 0,
 
     sigmaMarginGame,
     sigmaTotalGame,
@@ -692,6 +1055,7 @@ function buildInputsPaceAware(args: {
     sigmaMarginGame_base,
     sigmaTotalGame_base,
     sigmaMult,
+    sigmaTotalStyleMult,
 
     rhoMT,
 
@@ -705,6 +1069,8 @@ function buildInputsPaceAware(args: {
         w_avg_total: TOTAL_W_AVG_TOTAL,
       },
     },
+
+    ncaabStyle: sportKey === "basketball_ncaab" ? style : null,
   };
 }
 
@@ -744,8 +1110,7 @@ function simulateGameWithProbs(
     const z1 = randn();
     const z2 = randn();
 
-    // MODEL margin: + means home better
-    const m = input.marginMean + z1 * input.sigmaMarginGame;
+    const m = input.marginMean + z1 * input.sigmaMarginGame; // model margin (+home better)
     const t = Math.max(0, input.totalMean + (rho * z1 + s * z2) * input.sigmaTotalGame);
 
     sumM += m;
@@ -755,9 +1120,7 @@ function simulateGameWithProbs(
     else if (m < 0) awayWins++;
 
     if (spreadLineHome != null) {
-      // spreadLineHome is the sportsbook HOME line (e.g., -3.5)
-      // Home covers when: margin_home + spread_home > 0
-      const v = m + spreadLineHome;
+      const v = m + spreadLineHome; // home covers if > 0
       if (v > eps) homeCovers++;
       else if (Math.abs(v) <= eps) coverPushes++;
     }
@@ -772,7 +1135,6 @@ function simulateGameWithProbs(
   const projectedMarginHome_model = sumM / sims;
   const projectedTotal = sumT / sims;
 
-  // Stored margin: keep your legacy switch
   const projectedMarginHome_stored = opts.storeMarginHomeWinNegative ? -projectedMarginHome_model : projectedMarginHome_model;
 
   const homeWinProb = homeWins / sims;
@@ -883,6 +1245,34 @@ async function fetchTeamPossessionsForSportSeason(
   return out;
 }
 
+async function fetchNcaabStatsForSportSeason(
+  sportKey: string,
+  season: string,
+  canonicals: string[]
+): Promise<StatRow[]> {
+  if (!canonicals.length) return [];
+  const chunkSize = 300;
+  const out: StatRow[] = [];
+
+  for (let i = 0; i < canonicals.length; i += chunkSize) {
+    const c = canonicals.slice(i, i + chunkSize);
+
+    const { data, error } = await supabase
+      .from("ncaab_stats")
+      .select(
+        "sport_key,season,canonical,stat_key,v_2025,last_3,last_1,home_raw,away_raw,v_2024,home_score,away_score,updated_at"
+      )
+      .eq("sport_key", sportKey)
+      .eq("season", season)
+      .in("canonical", c);
+
+    if (error) throw new Error(`[MC] Failed to fetch ncaab_stats (${sportKey}): ${error.message}`);
+    out.push(...((data ?? []) as StatRow[]));
+  }
+
+  return out;
+}
+
 async function fetchOddsSnapshotForEvents(eventIds: string[]): Promise<OddsSnapshotRow[]> {
   if (!eventIds.length) return [];
 
@@ -902,16 +1292,12 @@ function indexLatestOddsPerBook(rows: OddsSnapshotRow[]): Map<string, OddsSnapsh
   const m = new Map<string, OddsSnapshotRow>();
   for (const r of rows) {
     const k = `${r.event_id}|${r.market}|${r.side}|${String(r.bookmaker || "").toLowerCase()}`;
-    if (m.has(k)) continue; // rows ordered desc by ts
+    if (m.has(k)) continue;
     m.set(k, r);
   }
   return m;
 }
 
-/**
- * Robust consensus: median of latest-per-book lines, symmetric fills
- * Output keys: `${event_id}|${market}|${side}` where market in spreads/totals, side in home/away/over/under
- */
 async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (!eventIds.length) return out;
@@ -929,7 +1315,6 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     return out;
   }
 
-  // latest per (event, market, side, book)
   const latestPerBook = new Map<string, number>();
 
   for (const r of (data ?? []) as any[]) {
@@ -947,7 +1332,6 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
     latestPerBook.set(k, lineNum);
   }
 
-  // bucket by (event, market, side)
   const buckets = new Map<string, number[]>();
   for (const [k, line] of latestPerBook.entries()) {
     const [eid, market, side] = k.split("|");
@@ -959,7 +1343,6 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
 
   for (const [k2, arr] of buckets.entries()) out.set(k2, median(arr));
 
-  // symmetric fills
   for (const id of eventIds) {
     const homeKey = `${id}|spreads|home`;
     const awayKey = `${id}|spreads|away`;
@@ -1001,11 +1384,9 @@ async function upsertMonteCarloResultsSnapshot(rows: MonteCarloResultUpsert[]) {
 }
 
 async function clearEvPlaysForSport(sportKey: string) {
-  // Try RPC first (preferred)
   const { error: rpcErr } = await supabase.rpc("clear_ev_plays_for_sport", { p_sport_key: sportKey });
   if (!rpcErr) return;
 
-  // Fallback delete
   const code = (rpcErr as any).code;
   const msg = (rpcErr as any).message || "";
   if (code === "PGRST202" || /schema cache/i.test(msg) || /Could not find the function/i.test(msg)) {
@@ -1045,11 +1426,6 @@ function getOffer(
   return latest.get(k) ?? null;
 }
 
-/**
- * Sharp no-vig probability builder with devig SWITCH
- * - For spreads: requires exact symmetric lines at refLine (home=refLine, away=-refLine)
- * - For totals: requires both sides at same refLine
- */
 function getSharpNoVigProb(
   latest: Map<string, OddsSnapshotRow>,
   eventId: string,
@@ -1401,6 +1777,19 @@ async function runForSport(sportKey: string, startCutoff: Date) {
   const possMap = new Map<string, PossRow>();
   for (const p of possRows) possMap.set(p.canonical, p);
 
+  // NCAAB stats
+  let statIdx: TeamStatIndex | null = null;
+  if (sportKey === "basketball_ncaab") {
+    try {
+      const statRows = await fetchNcaabStatsForSportSeason(sportKey, SEASON, teams);
+      statIdx = buildTeamStatIndex(statRows);
+      console.log(`[MC] (${sportKey}) Loaded ncaab_stats rows=${statRows.length} teams_indexed=${statIdx.size}`);
+    } catch (e: any) {
+      console.warn(`[MC] (${sportKey}) ncaab_stats unavailable; continuing without it: ${e?.message || String(e)}`);
+      statIdx = null;
+    }
+  }
+
   const results: MonteCarloResultUpsert[] = [];
   const skipped: { event_id: string; reason: string }[] = [];
 
@@ -1429,20 +1818,42 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     const homeP = possMap.get(home) ?? null;
     const awayP = possMap.get(away) ?? null;
 
-    const paceHome = computeTeamPace(sportKey, homeP, "home");
-    const paceAway = computeTeamPace(sportKey, awayP, "away");
-    const paceGame = averageNonNull([paceHome, paceAway]) ?? defaultPaceForSport(sportKey);
+    // Base pace from possessions table
+    const paceHomePoss = computeTeamPace(sportKey, homeP, "home");
+    const paceAwayPoss = computeTeamPace(sportKey, awayP, "away");
+
+    // Prefer ncaab_stats pace splits (if present)
+    const pacePref = preferNcaabStatPace(sportKey, statIdx, home, away, paceHomePoss, paceAwayPoss);
+    const paceHomeUsed = pacePref.paceHome;
+    const paceAwayUsed = pacePref.paceAway;
+
+    const paceGameRaw = averageNonNull([paceHomeUsed, paceAwayUsed]) ?? defaultPaceForSport(sportKey);
 
     const spreadLineHome = lineMap.get(`${e.event_id}|spreads|home`) ?? null;
     const totalLine = lineMap.get(`${e.event_id}|totals|over`) ?? null;
+
+    // NCAAB modifiers
+    const marginBump = sportKey === "basketball_ncaab" ? computeNcaabMarginBump(statIdx, home, away) : 0;
+    const style = sportKey === "basketball_ncaab" ? computeNcaabStyleModifiers(statIdx, home, away) : ({
+      paceMult: 1,
+      totalAdd: 0,
+      sigmaMultStyle: 1,
+      marginAdd: 0,
+      used: {},
+    } as NcaabStyle);
 
     const input = buildInputsPaceAware({
       sportKey,
       home: homeR,
       away: awayR,
-      paceGame,
+      paceGameRaw,
       consensusTotalLine: totalLine,
       calib,
+      statIdx,
+      homeCanon: home,
+      awayCanon: away,
+      marginBump,
+      style,
     });
 
     const sim = simulateGameWithProbs(SIMS, input, {
@@ -1453,7 +1864,6 @@ async function runForSport(sportKey: string, startCutoff: Date) {
       rhoMT: input.rhoMT,
     });
 
-    // Points always derived from MODEL margin (not stored margin)
     const homePts = sim.projectedTotal / 2 + sim.projectedMarginHome_model / 2;
     const awayPts = sim.projectedTotal - homePts;
 
@@ -1464,9 +1874,15 @@ async function runForSport(sportKey: string, startCutoff: Date) {
           poss_season: POSS_SEASON,
           home,
           away,
-          pace_home_poss_per_game: paceHome,
-          pace_away_poss_per_game: paceAway,
-          pace_game_poss_per_game: paceGame,
+
+          pace_inputs: {
+            from_team_possessions: { home_split: paceHomePoss, away_split: paceAwayPoss },
+            after_source_select: { home: paceHomeUsed, away: paceAwayUsed, game_raw: paceGameRaw },
+            style_pace_mult: input.paceGame_style_mult,
+            game_final: input.paceGame_final,
+          },
+
+          ncaab_style: input.ncaabStyle,
 
           margin_conventions: {
             model: "positive_means_home_better",
@@ -1494,27 +1910,34 @@ async function runForSport(sportKey: string, startCutoff: Date) {
             scale_raw: input.marginParams.scale,
             scale_used_abs: input.marginParams.scale_used_abs,
             hca_scale: input.marginParams.hca_scale,
-            margin_mean_model_space: input.marginMean,
+            power_diff: num(homeR.engine_power, 0) - num(awayR.engine_power, 0),
+            margin_mean_base_model_space: input.marginMean_base,
+            margin_bump_scoring_margin: input.marginBump,
+            margin_add_style: input.marginStyleAdd,
+            margin_mean_final_model_space: input.marginMean,
           },
 
           totals: {
-            model_total_mean: input.totalMean_model,
+            model_total_mean_base: input.totalMean_model_base,
+            style_total_add: input.totalStyleAdd,
+            model_total_mean_after_style: input.totalMean_model,
             anchor_w: input.totalAnchorW,
             consensus_total_line: totalLine,
             blended_total_mean: input.totalMean,
+            components: input.totalsComponents,
           },
 
           sigma: {
             base_margin_game: input.sigmaMarginGame_base,
             base_total_game: input.sigmaTotalGame_base,
-            mult_margin: input.sigmaMult.margin,
-            mult_total: input.sigmaMult.total,
+            mult_margin_calib: input.sigmaMult.margin,
+            mult_total_calib: input.sigmaMult.total,
+            mult_total_style: input.sigmaTotalStyleMult,
             final_margin_game: input.sigmaMarginGame,
             final_total_game: input.sigmaTotalGame,
           },
 
           rho_mt: input.rhoMT,
-          totals_components: input.totalsComponents,
 
           spread_line_home_consensus: spreadLineHome,
           total_line_consensus: totalLine,
@@ -1580,7 +2003,15 @@ async function runForSport(sportKey: string, startCutoff: Date) {
    RUN
 ========================================================= */
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+main()
+  .then(() => console.log("✅ run_monte_carlo.ts finished"))
+  .catch((e: any) => {
+    console.error("❌ run_monte_carlo.ts failed");
+    try {
+      console.error(e?.stack || e);
+      console.error("DETAIL:", JSON.stringify(e, null, 2));
+    } catch {
+      console.error(e);
+    }
+    process.exit(1);
+  });
