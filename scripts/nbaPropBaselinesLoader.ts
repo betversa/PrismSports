@@ -1,6 +1,6 @@
 // scripts/nbaPlayerPropEvBuilder.ts
 //
-// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.7.2: Abbreviation2 fallback)
+// NBA PLAYER PROPS EV BUILDER — SINGLE FINAL TABLE (v3.8.0: ConfidenceNorm Z-Score + Sigmoid)
 // ------------------------------------------------------------------------------------------------------
 // ✅ FIX (kept): pin_spread_line / pin_total_line pulled by (event_id + team) not team-only
 // ✅ SHARP LOGIC (kept):
@@ -9,12 +9,20 @@
 //      3) If both missing OR translate fails -> fallback:
 //           -> MARKET-AVG (devig’d) at SAME target line using ALL books that have both sides
 //           -> If still missing -> MODEL-ONLY (still inserts)
-// ✅ NEW (your request):
-//      - Team canonicalization: if FantasyPros team abbr not found in team_map.Abbreviation
-//        then try team_map.Abbreviation2, then fallback to raw abbr
+// ✅ Team canonicalization (kept): FP abbr -> team_map.Abbreviation -> Abbreviation2 -> raw
 // ✅ Snapshot enrichment (kept): position + picture_url stored in player_props_snapshot (future slate only)
 // ✅ Outputs ONLY SOFT books into player_prop_ev_latest (DK/FD/MGM)
-// ✅ BUILD FIX (kept): invNorm() pp>phigh branch extra “)” removed.
+//
+// ✅ NEW (this rewrite):
+//    - Loads public.confidence_norm for (sport_key=basketball_nba, market_family='props')
+//    - Computes confidence_score 0–100 using z-scores + sigmoid:
+//        z_ev   = (ev_pct - mu_ev)/sd_ev
+//        z_tail = (abs(p_quantum-0.5) - mu_tail)/sd_tail
+//        z_dis  = -(abs(p_ref-p_model) - mu_disagree)/sd_disagree     (0 if no ref)
+//        raw = 0.45*z_ev + 0.35*z_tail + 0.20*z_dis
+//        confidence_score = round(100*sigmoid(raw))
+//    - Writes confidence_score + confidence_tier
+//    - Still writes legacy "score" for backwards compatibility (optional)
 //
 // Run: npm run nba:props:ev:build
 
@@ -27,6 +35,7 @@ import * as cheerio from "cheerio";
 ========================================================= */
 
 const SPORT_KEY = "basketball_nba";
+const MARKET_FAMILY: "props" = "props";
 
 // FantasyPros sources (NO projections page)
 const FP_SZN = "https://www.fantasypros.com/nba/stats/avg-overall.php";
@@ -69,6 +78,11 @@ const SNAP_UPDATE_CHUNK = 500;
 
 // Market-average line tolerance (for floats like 24.5)
 const LINE_TOL = 1e-6;
+
+// Confidence mixing weights (Option B)
+const CONF_W_EV = 0.45;
+const CONF_W_TAIL = 0.35;
+const CONF_W_DISAGREE = 0.20;
 
 /* =========================================================
    TYPES
@@ -151,6 +165,20 @@ type PairAnyBook = {
   under_odds: number;
 };
 
+type ConfidenceNormRow = {
+  sport_key: string;
+  market_family: string;
+  mu_ev: number | null;
+  sd_ev: number | null;
+  mu_tail: number | null;
+  sd_tail: number | null;
+  mu_disagree: number | null;
+  sd_disagree: number | null;
+  window_days?: number | null;
+  n?: number | null;
+  updated_at?: string | null;
+};
+
 /* =========================================================
    UTIL
 ========================================================= */
@@ -163,6 +191,24 @@ function toNum(x: any): number | null {
 
 function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
+}
+
+function safeZ(x: number, mu: number, sd: number) {
+  const s = Math.max(sd, 1e-6);
+  return (x - mu) / s;
+}
+
+function sigmoid(x: number) {
+  // clamp to avoid overflow in exp()
+  const xx = clamp(x, -12, 12);
+  return 1 / (1 + Math.exp(-xx));
+}
+
+function confidenceTier(score100: number): "A" | "B" | "C" | "D" {
+  if (score100 >= 80) return "A";
+  if (score100 >= 65) return "B";
+  if (score100 >= 50) return "C";
+  return "D";
 }
 
 function normName(s: string): string {
@@ -670,6 +716,130 @@ async function enrichSnapshotForFutureEvents(opts: {
 }
 
 /* =========================================================
+   CONFIDENCE NORM (Option B)
+========================================================= */
+
+function defaultNormFallback(): Required<
+  Pick<
+    ConfidenceNormRow,
+    "mu_ev" | "sd_ev" | "mu_tail" | "sd_tail" | "mu_disagree" | "sd_disagree"
+  >
+> {
+  // Conservative defaults if table missing/empty
+  // ev_pct in percent points; tail in [0..0.5]; disagree in [0..1]
+  return {
+    mu_ev: 0.8,
+    sd_ev: 2.5,
+    mu_tail: 0.06,
+    sd_tail: 0.04,
+    mu_disagree: 0.03,
+    sd_disagree: 0.03,
+  };
+}
+
+async function loadConfidenceNorm(supabase: any): Promise<{
+  mu_ev: number;
+  sd_ev: number;
+  mu_tail: number;
+  sd_tail: number;
+  mu_disagree: number;
+  sd_disagree: number;
+  meta: { used_fallback: boolean; n?: number | null; window_days?: number | null; updated_at?: string | null };
+}> {
+  try {
+    const { data, error } = await supabase
+      .from("confidence_norm")
+      .select("sport_key,market_family,mu_ev,sd_ev,mu_tail,sd_tail,mu_disagree,sd_disagree,window_days,n,updated_at")
+      .eq("sport_key", SPORT_KEY)
+      .eq("market_family", MARKET_FAMILY)
+      .order("updated_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+
+    const row = (data?.[0] ?? null) as ConfidenceNormRow | null;
+    const fb = defaultNormFallback();
+
+    const mu_ev = toNum(row?.mu_ev) ?? fb.mu_ev;
+    const sd_ev = Math.max(toNum(row?.sd_ev) ?? fb.sd_ev, 1e-6);
+
+    const mu_tail = toNum(row?.mu_tail) ?? fb.mu_tail;
+    const sd_tail = Math.max(toNum(row?.sd_tail) ?? fb.sd_tail, 1e-6);
+
+    const mu_disagree = toNum(row?.mu_disagree) ?? fb.mu_disagree;
+    const sd_disagree = Math.max(toNum(row?.sd_disagree) ?? fb.sd_disagree, 1e-6);
+
+    const used_fallback =
+      row == null ||
+      row.mu_ev == null ||
+      row.sd_ev == null ||
+      row.mu_tail == null ||
+      row.sd_tail == null ||
+      row.mu_disagree == null ||
+      row.sd_disagree == null;
+
+    return {
+      mu_ev,
+      sd_ev,
+      mu_tail,
+      sd_tail,
+      mu_disagree,
+      sd_disagree,
+      meta: {
+        used_fallback,
+        n: row?.n ?? null,
+        window_days: row?.window_days ?? null,
+        updated_at: row?.updated_at ?? null,
+      },
+    };
+  } catch (e: any) {
+    const fb = defaultNormFallback();
+    return {
+      ...fb,
+      meta: { used_fallback: true, n: null, window_days: null, updated_at: null },
+    };
+  }
+}
+
+function computeConfidenceScore(opts: {
+  ev_pct: number;
+  p_quantum: number;
+  p_model: number;
+  p_ref: number | null; // p_sharp or market_avg (already side-adjusted)
+  has_ref: boolean;
+  norm: {
+    mu_ev: number;
+    sd_ev: number;
+    mu_tail: number;
+    sd_tail: number;
+    mu_disagree: number;
+    sd_disagree: number;
+  };
+}) {
+  const { ev_pct, p_quantum, p_model, p_ref, has_ref, norm } = opts;
+
+  const tail = Math.abs(p_quantum - 0.5);
+  const disagree = has_ref && p_ref != null ? Math.abs(p_ref - p_model) : 0;
+
+  const z_ev = safeZ(ev_pct, norm.mu_ev, norm.sd_ev);
+  const z_tail = safeZ(tail, norm.mu_tail, norm.sd_tail);
+  const z_dis = -safeZ(disagree, norm.mu_disagree, norm.sd_disagree);
+
+  const raw = CONF_W_EV * z_ev + CONF_W_TAIL * z_tail + CONF_W_DISAGREE * z_dis;
+  const score = Math.round(100 * sigmoid(raw));
+
+  return {
+    confidence_score: clamp(score, 0, 100),
+    confidence_raw: raw,
+    z_ev,
+    z_tail,
+    z_disagree: z_dis,
+    tail,
+    disagree,
+  };
+}
+
+/* =========================================================
    MAIN
 ========================================================= */
 
@@ -682,14 +852,25 @@ async function main() {
 
   // @ts-ignore
   const run_id =
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).crypto?.randomUUID
-      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (globalThis as any).crypto.randomUUID()
+      ? (globalThis as any).crypto.randomUUID()
       : `run_${Date.now()}`;
 
   const now = new Date();
   const nowIso = now.toISOString();
+
+  /* -------------------------------------------------------
+     0) Load confidence_norm (props)
+  -------------------------------------------------------- */
+  const normLoaded = await loadConfidenceNorm(supabase);
+  const norm = {
+    mu_ev: normLoaded.mu_ev,
+    sd_ev: normLoaded.sd_ev,
+    mu_tail: normLoaded.mu_tail,
+    sd_tail: normLoaded.sd_tail,
+    mu_disagree: normLoaded.mu_disagree,
+    sd_disagree: normLoaded.sd_disagree,
+  };
 
   /* -------------------------------------------------------
      1) FUTURE events (defines slate)
@@ -710,7 +891,19 @@ async function main() {
   if (allowedEventIds.size === 0) {
     const { error: delErr } = await supabase.from("player_prop_ev_latest").delete().eq("sport_key", SPORT_KEY);
     if (delErr) throw delErr;
-    console.log(JSON.stringify({ ok: true, run_id, inserted_rows: 0, reason: "no_future_events" }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          run_id,
+          inserted_rows: 0,
+          reason: "no_future_events",
+          confidence_norm: normLoaded.meta,
+        },
+        null,
+        2
+      )
+    );
     return;
   }
 
@@ -740,7 +933,19 @@ async function main() {
   if (props.length === 0) {
     const { error: delErr } = await supabase.from("player_prop_ev_latest").delete().eq("sport_key", SPORT_KEY);
     if (delErr) throw delErr;
-    console.log(JSON.stringify({ ok: true, run_id, inserted_rows: 0, reason: "no_future_props_rows" }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          run_id,
+          inserted_rows: 0,
+          reason: "no_future_props_rows",
+          confidence_norm: normLoaded.meta,
+        },
+        null,
+        2
+      )
+    );
     return;
   }
 
@@ -809,7 +1014,7 @@ async function main() {
 
   /* -------------------------------------------------------
      4) Team canonicalization (team_map)
-        ✅ NEW: Abbreviation2 fallback if Abbreviation miss
+        Abbreviation -> Abbreviation2 -> raw
   -------------------------------------------------------- */
   const { data: teamMapRows, error: tmErr } = await supabase
     .from("team_map")
@@ -841,8 +1046,6 @@ async function main() {
     }
   }
 
-  // ✅ FP team_abbr_raw -> canonical:
-  //    Abbreviation -> Abbreviation2 -> raw
   for (const b of baselines.values()) {
     const raw = (b.team_abbr_raw || "").trim();
     b.canonical = raw ? abbrToCanon.get(raw) ?? abbr2ToCanon.get(raw) ?? raw : null;
@@ -874,7 +1077,6 @@ async function main() {
     enrichDiag.updated = res.updated;
     enrichDiag.missing_baseline = res.missing_baseline;
 
-    // Patch in-memory props rows too
     for (const pr of props) {
       if (pr.position && pr.picture_url) continue;
       const b = baselineByName.get(normName(pr.player_name || ""));
@@ -886,7 +1088,7 @@ async function main() {
 
   /* -------------------------------------------------------
      5) Pull odds_wide_latest context
-        ✅ FIX: key by event_id + canonical team
+        ✅ key by event_id + canonical team
   -------------------------------------------------------- */
   const { data: oddsRows, error: oErr } = await supabase
     .from("odds_wide_latest")
@@ -918,12 +1120,10 @@ async function main() {
         B) ANY-book paired lines (ALL books) for MARKET-AVG fallback at target line
   -------------------------------------------------------- */
 
-  // A) SHARP
   type SharpPairsByBook = { pinnacle?: SharpPair[]; betonlineag?: SharpPair[] };
   const sharpPairsByKey = new Map<string, SharpPairsByBook>();
   const tmpSharp = new Map<string, { book: SharpBook; line: number; over?: number; under?: number }>();
 
-  // B) ANY BOOK (market avg)
   const anyPairsByBase = new Map<string, PairAnyBook[]>();
   const tmpAny = new Map<string, { baseKey: string; bookmaker: string; line: number; over?: number; under?: number }>();
 
@@ -936,14 +1136,12 @@ async function main() {
 
     const baseKey = idxKey(r.event_id, r.player_name, r.market);
 
-    // B) accumulate ANY book pairs
     const kAny = `${baseKey}|${bookAny}|${line}`;
     const curAny = tmpAny.get(kAny) ?? { baseKey, bookmaker: bookAny, line };
     if (side === "over") curAny.over = odds;
     if (side === "under") curAny.under = odds;
     tmpAny.set(kAny, curAny);
 
-    // A) accumulate SHARP pairs
     const sharpBook = normBookAnySharp(bookAny);
     if (sharpBook) {
       const kSharp = `${baseKey}|${sharpBook}|${line}`;
@@ -954,7 +1152,6 @@ async function main() {
     }
   }
 
-  // Materialize SHARP pairs
   for (const [k, v] of tmpSharp.entries()) {
     if (v.over == null || v.under == null) continue;
     const baseKey = k.split("|").slice(0, 3).join("|");
@@ -971,7 +1168,6 @@ async function main() {
     sharpPairsByKey.set(baseKey, bucket);
   }
 
-  // Materialize ANY-book pairs
   for (const v of tmpAny.values()) {
     if (v.over == null || v.under == null) continue;
     const arr = anyPairsByBase.get(v.baseKey) ?? [];
@@ -1006,10 +1202,6 @@ async function main() {
     return null;
   }
 
-  /**
-   * MARKET-AVG no-vig OVER probability at the SAME target line
-   * Uses ALL books that have both sides for this exact line.
-   */
   function marketAvgNoVigOverAtLine(baseKey: string, targetLine: number): { p_over: number; n_books: number } | null {
     const pairs = anyPairsByBase.get(baseKey);
     if (!pairs?.length) return null;
@@ -1046,7 +1238,6 @@ async function main() {
 
     used_pinnacle: 0,
     used_betonline: 0,
-
     used_market_avg: 0,
     used_model_only: 0,
 
@@ -1102,7 +1293,6 @@ async function main() {
       continue;
     }
 
-    // Opponent from snapshot home/away
     const homeCanon = canonTeam(r.home_team);
     const awayCanon = canonTeam(r.away_team);
     const opponent =
@@ -1114,7 +1304,6 @@ async function main() {
           : null
         : null;
 
-    // context lookup (event_id + canonical team)
     const ow = oddsByEventTeam.get(`${eid}|${base.canonical}`) ?? null;
     const pin_spread_line = ow?.pin_spread_line ?? null;
     const pin_total_line = ow?.pin_total_line ?? null;
@@ -1127,11 +1316,9 @@ async function main() {
     const team_total_factor =
       implied_team_total != null ? clamp(implied_team_total / NBA_AVG_TEAM_TOTAL, 0.85, 1.15) : null;
 
-    // Minutes mean + adjusted
     const min_base = weightedAvg(base.min_szn, base.min_7, base.min_15);
     const min_adj = min_base != null && minutes_factor != null ? min_base * minutes_factor : min_base;
 
-    // Per-minute rates
     const rate = (stat_szn: number | null, stat_7: number | null, stat_15: number | null) => {
       const rS = stat_szn != null && base.min_szn != null && base.min_szn > 0 ? stat_szn / base.min_szn : null;
       const r7 = stat_7 != null && base.min_7 != null && base.min_7 > 0 ? stat_7 / base.min_7 : null;
@@ -1147,7 +1334,6 @@ async function main() {
     const pf = pace_factor ?? 1.0;
     const ttf = team_total_factor ?? 1.0;
 
-    // Model p
     let mu: number | null = null;
     let sigma: number | null = null;
     let p_model: number | null = null;
@@ -1181,14 +1367,13 @@ async function main() {
       continue;
     }
 
-    // ------------------------------------------------------
     // SHARP -> MARKET_AVG -> MODEL_ONLY
-    // ------------------------------------------------------
     const baseKey = idxKey(r.event_id, r.player_name, r.market);
     const sharpPick = bestAvailableSharpPair(baseKey, line);
 
-    let p_ref: number | null = null;
+    let p_ref: number | null = null; // side-adjusted ref probability
     let ref_source: "pinnacle" | "betonlineag" | "market_avg" | "model_only" = "model_only";
+    let has_ref = false; // true if sharp OR market_avg
     let has_sharp = false;
 
     if (sharpPick) {
@@ -1212,12 +1397,14 @@ async function main() {
         if (mav) {
           p_ref = side === "over" ? mav.p_over : 1 - mav.p_over;
           ref_source = "market_avg";
+          has_ref = true;
           has_sharp = false;
           diag.translate_failed_used_market_avg++;
           diag.used_market_avg++;
         } else {
           p_ref = null;
           ref_source = "model_only";
+          has_ref = false;
           has_sharp = false;
           diag.translate_failed_model_only++;
           diag.used_model_only++;
@@ -1225,6 +1412,7 @@ async function main() {
       } else {
         p_ref = side === "over" ? pOverTarget : 1 - pOverTarget;
         ref_source = sharpPick.book;
+        has_ref = true;
         has_sharp = true;
 
         if (sharpPick.book === "pinnacle") diag.used_pinnacle++;
@@ -1235,29 +1423,42 @@ async function main() {
       if (mav) {
         p_ref = side === "over" ? mav.p_over : 1 - mav.p_over;
         ref_source = "market_avg";
+        has_ref = true;
         has_sharp = false;
         diag.used_market_avg++;
       } else {
         p_ref = null;
         ref_source = "model_only";
+        has_ref = false;
         has_sharp = false;
         diag.used_model_only++;
       }
     }
 
-    // Quantum blend
     const p_quantum =
       p_ref != null
         ? clamp(p_model * QUANTUM_BLEND_MODEL + p_ref * QUANTUM_BLEND_SHARP, 0, 1)
         : clamp(p_model, 0, 1);
 
-    // EV + sizing
     const quantum_fair_odds = impliedProbToAmerican(p_quantum);
     const book_implied_prob = americanToImpliedProb(odds);
     const ev_pct_val = evPct(p_quantum, odds);
 
+    // Legacy score (kept)
     const edge = (p_quantum - book_implied_prob) * 100;
     const score = ev_pct_val * 10 + edge;
+
+    // NEW: normalized confidence (Option B)
+    const conf = computeConfidenceScore({
+      ev_pct: ev_pct_val,
+      p_quantum,
+      p_model,
+      p_ref,
+      has_ref,
+      norm,
+    });
+
+    const conf_tier = confidenceTier(conf.confidence_score);
 
     out.push({
       run_id,
@@ -1298,12 +1499,12 @@ async function main() {
 
       // ref info
       has_sharp,
+      has_ref,
       sharp_source: ref_source,
       p_sharp: has_sharp ? p_ref : null,
-
-      // optional helper column
       p_market_avg: ref_source === "market_avg" ? p_ref : null,
 
+      // blended prob
       p_quantum,
       quantum_fair_odds,
 
@@ -1311,7 +1512,19 @@ async function main() {
       book_implied_prob,
       ev_pct: ev_pct_val,
       kelly_fraction: kellyFraction(p_quantum, odds),
+
+      // legacy / UI
       score,
+
+      // NEW: normalized confidence
+      confidence_score: conf.confidence_score,
+      confidence_tier: conf_tier,
+      confidence_raw: conf.confidence_raw,
+      z_ev: conf.z_ev,
+      z_tail: conf.z_tail,
+      z_disagree: conf.z_disagree,
+      tail: conf.tail,
+      disagree: conf.disagree,
     });
 
     diag.inserted++;
@@ -1332,21 +1545,54 @@ async function main() {
     }
   }
 
-  try {
-    await insertRows(out);
-  } catch (e: any) {
-    const msg = String(e?.message || e || "");
-    if (/p_market_avg/i.test(msg) || /column .* does not exist/i.test(msg)) {
-      console.log("[warn] player_prop_ev_latest missing p_market_avg column; retrying insert without it.");
-      const stripped = out.map((r) => {
-        const { p_market_avg, ...rest } = r;
+  // Strip optional columns if table is behind
+  async function tryInsertWithFallback(rows: any[]) {
+    try {
+      await insertRows(rows);
+      return { mode: "full" as const };
+    } catch (e: any) {
+      const msg = String(e?.message || e || "");
+
+      // Remove columns progressively if schema mismatch
+      const maybeStrip = (r: any) => {
+        const {
+          p_market_avg,
+          confidence_score,
+          confidence_tier,
+          confidence_raw,
+          z_ev,
+          z_tail,
+          z_disagree,
+          tail,
+          disagree,
+          has_ref,
+          ...rest
+        } = r;
         return rest;
-      });
-      await insertRows(stripped);
-    } else {
+      };
+
+      if (/column .*confidence_/i.test(msg) || /confidence_score/i.test(msg)) {
+        console.log("[warn] player_prop_ev_latest missing confidence_* cols; retrying insert without confidence fields.");
+        await insertRows(rows.map(maybeStrip));
+        return { mode: "no_confidence_cols" as const, warn: msg };
+      }
+
+      if (/p_market_avg/i.test(msg) || /column .* does not exist/i.test(msg)) {
+        console.log("[warn] player_prop_ev_latest missing optional cols; retrying insert stripped.");
+        await insertRows(
+          rows.map((r) => {
+            const { p_market_avg, ...rest } = r;
+            return rest;
+          })
+        );
+        return { mode: "no_p_market_avg" as const, warn: msg };
+      }
+
       throw e;
     }
   }
+
+  const insertRes = await tryInsertWithFallback(out);
 
   console.log(
     JSON.stringify(
@@ -1354,7 +1600,21 @@ async function main() {
         ok: true,
         run_id,
         inserted_rows: out.length,
+        insert_mode: insertRes,
         snapshot_enrichment: enrichDiag,
+        confidence_norm: {
+          market_family: MARKET_FAMILY,
+          meta: normLoaded.meta,
+          used_values: {
+            mu_ev: norm.mu_ev,
+            sd_ev: norm.sd_ev,
+            mu_tail: norm.mu_tail,
+            sd_tail: norm.sd_tail,
+            mu_disagree: norm.mu_disagree,
+            sd_disagree: norm.sd_disagree,
+          },
+          weights: { ev: CONF_W_EV, tail: CONF_W_TAIL, disagree: CONF_W_DISAGREE },
+        },
         dropped: {
           dropped_bad_side_or_odds: diag.dropped_bad_side_or_odds,
           dropped_no_baseline: diag.dropped_no_baseline,
@@ -1371,10 +1631,9 @@ async function main() {
         },
         notes: {
           team_map_fallback: "FantasyPros team abbr: Abbreviation -> Abbreviation2 -> raw",
-          new_fallback:
-            "If sharp missing or translate fails => use market-avg devig at SAME line (all books) + model (0.2/0.8)",
           sharp_fallbacks: "pinnacle -> betonlineag -> market_avg(same-line) -> model_only",
           context_fix: "odds_wide_latest indexed by (event_id + canonical team)",
+          confidence: "Option B (z-score + sigmoid) normalization via public.confidence_norm (market_family='props')",
         },
       },
       null,
@@ -1387,4 +1646,3 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
-
