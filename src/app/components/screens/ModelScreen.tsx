@@ -1,47 +1,27 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.0.0)
+"use client";
+
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.0.1)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
 // ✅ Player prop +EV plays from public.player_prop_ev_latest
 //
-// ✅ NO FILTER MODES:
-//    - No "Steam Only"
-//    - No Play Type filter
-//    - No Book filter
-//    - All CURRENT +EV plays show (future commence_time), gated by odds/EV rules
-//
-// ✅ Steam = annotation only:
-//    - Detects Pinnacle steam (line OR price) using odds_snapshot_history last-2 per (event,market,side,book)
-//    - Steam key does NOT include line, so line moves are captured correctly
-//    - Shows Steam badge + tooltip; DOES NOT hide plays
-//
-// ✅ RULES (same as Overview):
-//    - Odds gate (book price): only include offers with odds between -200 and +200
-//    - Games: positive EV only, cap EV at 15% (NO 2% min gate)
-//    - Props: EV must be 2% to 15% (inclusive), AND odds within -200..+200
-//    - Pinnacle is history-only (used for steam + line chart), NOT a filter option
-//
+// ✅ NO FILTER MODES (NO Steam Only / Play Type / Book filters)
+// ✅ Steam = annotation only (never hides plays)
+// ✅ Gates (match Overview rules):
+//    - Odds gate (book price): -200..+200
+//    - Games: EV > 0, cap EV at 15% (NO min gate)
+//    - Props: EV 2%..15% (inclusive) + odds gate
+// ✅ Pinnacle is history-only (steam + charts), not an offer filter
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
+// ✅ ONLY Pick column (desktop) / Pick block (mobile) opens modal
+// ✅ Modal: header/footer fixed, safe-area aware, tabs (Line History / Hit Rate)
+// ✅ Modal GAME stats: canonical teams from public.events + stats ONLY from public.team_ratings
 //
-// ✅ ONLY the Pick column (desktop) / Pick block (mobile) opens the modal
-//
-// ✅ Modal: NO scrolling required to reach Done (header/footer fixed, safe-area aware)
-// ✅ Modal: Tabs: "Line History" + "Hit Rate"
-// ✅ Line History: LINE CHART (DK/FD/MGM/PIN) — tooltip shows DATE+TIME (CT) + LINE + ODDS per book
-// ✅ Hit Rate tab: FantasyPros GAME LOGS = BAR CHART (OVER green / UNDER red), cursor transparent
-//
-// ✅ MODAL STATS (FIXED + NON-REPETITIVE + CORRECT KEYS):
-//    - Uses canonical teams from public.events (NOT parsing matchup string)
-//    - Team logos/abbr from public.team_map by canonical
-//    - Stats ONLY from public.team_ratings:
-//        • Off Eff: engine_adj_off
-//        • Def Eff: engine_adj_def
-//        • Net Rating: engine_power
-//        • (Optional) Pace: engine_possessions (if exists)
-//        • (Optional) Power Rank: power_rank (if exists)
-//    - Displays ONE clean side-by-side comparison table (no duplicated stat blocks)
-//
-// ✅ Exports both named + default to avoid import mismatch.
+// 🔧 IMPORTANT FIXES vs your pasted version:
+//    - PostgREST errors if you select columns that don’t exist. Optional cols are NOT “harmless”.
+//      This rewrite uses “try select w/ optional → fallback to minimal select” for team_map/team_ratings.
+//    - team_map column naming can differ (Abbreviation vs abbreviation, "Logo URL" vs logo_url). We retry safely.
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -71,7 +51,7 @@ const MAX_EV_PCT = 15; // games + props
 const MIN_EV_PCT_PROPS = 2; // props only
 
 /* =========================================================
-   Steam settings (annotation only; no UI)
+   Steam settings (annotation only)
 ========================================================= */
 
 const STEAM_LOOKBACK_HOURS = 48;
@@ -163,7 +143,7 @@ type BookOffer = {
   odds: number;
   ev_pct: number;
   bet_fraction: number;
-  line?: number | null; // needed for steam fallback + display
+  line?: number | null; // for steam fallback + display
 };
 
 type AggregatedPlay = {
@@ -208,7 +188,7 @@ type AggregatedPlay = {
 };
 
 /* =========================================================
-   Modal: canonical teams come from public.events (NO matchup parsing)
+   Modal: canonical teams from public.events
 ========================================================= */
 
 type EventRow = {
@@ -382,7 +362,6 @@ function fmtMu(mu: number | null | undefined) {
   return v.toFixed(1);
 }
 
-// Soft book normalize for OFFER rows (not history)
 function normalizeSoftBookKey(bookmaker: string): SoftOfferKey | "other" {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings" || b === "dk") return "draftkings";
@@ -391,7 +370,6 @@ function normalizeSoftBookKey(bookmaker: string): SoftOfferKey | "other" {
   return "other";
 }
 
-// History normalize (includes pinnacle)
 function normalizeHistoryBookKey(bookmaker: string): AnyBookHistory | "other" {
   const b = (bookmaker || "").toLowerCase();
   if (b === "draftkings" || b === "dk") return "draftkings";
@@ -448,13 +426,11 @@ function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | 
   const m = (marketRaw || "").trim().toLowerCase();
   if (!m) return null;
 
-  // ✅ canonical keys used in your player_props_history table
   if (m === "player_points") return "player_points";
   if (m === "player_rebounds") return "player_rebounds";
   if (m === "player_assists") return "player_assists";
   if (m === "player_threes") return "player_threes";
 
-  // friendly inputs
   if (m === "points" || m === "pts") return "player_points";
   if (m === "rebounds" || m === "reb") return "player_rebounds";
   if (m === "assists" || m === "ast") return "player_assists";
@@ -503,7 +479,7 @@ function scoreTone(score: number) {
 }
 
 /* =========================================================
-   Gates helpers (same as Overview)
+   Gates helpers
 ========================================================= */
 
 function withinOddsGate(odds: number) {
@@ -528,7 +504,7 @@ function movedWorsePrice(prevOdds: number, curOdds: number) {
   return Number.isFinite(prevOdds) && Number.isFinite(curOdds) && curOdds < prevOdds;
 }
 
-// Spread line "worse for bettor" when numeric value decreases (because higher is always better for bettor on that side):
+// Spread line "worse for bettor" when numeric value decreases (higher is always better for bettor on that side):
 // +4 > +3, -3 > -4, so decreasing is worse.
 function movedWorseSpreadLine(prevLine: number, curLine: number) {
   return Number.isFinite(prevLine) && Number.isFinite(curLine) && curLine < prevLine;
@@ -565,11 +541,11 @@ function softBetterThanPin(args: {
     const pL = pinLine;
 
     if (Number.isFinite(sL as number) && Number.isFinite(pL as number)) {
-      if ((sL as number) > (pL as number)) return true; // better line
+      if ((sL as number) > (pL as number)) return true;
       if ((sL as number) < (pL as number)) return false;
-      return softOdds > pinOdds; // same line -> better price
+      return softOdds > pinOdds;
     }
-    return softOdds > pinOdds; // fallback
+    return softOdds > pinOdds;
   }
 
   // Totals:
@@ -607,7 +583,6 @@ function pinSteamMoved(args: {
   const curHasLine = Number.isFinite(curLine as number);
   const sameLine = !prevHasLine || !curHasLine ? true : (prevLine as number) === (curLine as number);
 
-  // Price steam: only apply when same line (or line unknown)
   const priceSteam =
     prevOdds != null &&
     curOdds != null &&
@@ -616,7 +591,6 @@ function pinSteamMoved(args: {
     sameLine &&
     movedWorsePrice(prevOdds as number, curOdds as number);
 
-  // Line steam:
   let lineSteam = false;
   if (market === "spreads" && prevHasLine && curHasLine) lineSteam = movedWorseSpreadLine(prevLine as number, curLine as number);
   if (market === "totals" && prevHasLine && curHasLine) lineSteam = movedWorseTotalLine(side, prevLine as number, curLine as number);
@@ -762,11 +736,7 @@ type Quote = { line: number | null; odds: number };
 type SteamInfo = {
   pinPrev: Quote;
   pinCur: Quote;
-
-  // soft books that are better than pin right now (by line or price)
   lagging: Partial<Record<SoftOfferKey, Quote>>;
-
-  // why pin moved (for tooltip/label)
   pinMove: "line" | "price" | "both";
 };
 
@@ -775,11 +745,42 @@ function steamKey(sport_key: string | null | undefined, event_id: string, market
 }
 
 /* =========================================================
+   Supabase “safe select” helpers (optional cols)
+========================================================= */
+
+function isMissingColumnError(err: any) {
+  const msg = String(err?.message ?? "");
+  const code = String(err?.code ?? "");
+  // PostgREST missing column is commonly PGRST204
+  return code === "PGRST204" || msg.toLowerCase().includes("could not find the");
+}
+
+async function safeSelect<T>(args: {
+  table: string;
+  selectPrimary: string;
+  selectFallback: string;
+  whereInCol: string;
+  values: string[];
+}): Promise<{ data: T[]; warning?: string }> {
+  const { table, selectPrimary, selectFallback, whereInCol, values } = args;
+  const primary = await supabase.from(table).select(selectPrimary).in(whereInCol, values);
+  if (!primary.error) return { data: (primary.data ?? []) as T[] };
+
+  if (!isMissingColumnError(primary.error)) {
+    return { data: [], warning: `${table} error: ${primary.error.message}` };
+  }
+
+  const fallback = await supabase.from(table).select(selectFallback).in(whereInCol, values);
+  if (fallback.error) return { data: [], warning: `${table} fallback error: ${fallback.error.message}` };
+  return { data: (fallback.data ?? []) as T[], warning: `${table}: optional columns missing; used fallback select.` };
+}
+
+/* =========================================================
    Screen
 ========================================================= */
 
 export const ModelScreen = () => {
-  // Steam annotation (no toggle, no filters)
+  // Steam annotation
   const [steamEligible, setSteamEligible] = useState<Record<string, SteamInfo>>({});
   const [steamLoading, setSteamLoading] = useState(false);
 
@@ -917,7 +918,6 @@ export const ModelScreen = () => {
       const odds = safeNum(r.book_odds, NaN);
       const ev = safeNum(r.ev_pct, NaN);
 
-      // Games: odds gate AND EV cap
       if (!withinOddsGate(odds)) continue;
       if (!withinMaxEvGate(ev)) continue;
 
@@ -976,7 +976,6 @@ export const ModelScreen = () => {
       const odds = safeNum(r.odds, NaN);
       const ev = safeNum(r.ev_pct, NaN);
 
-      // Props: odds gate AND EV range
       if (!withinOddsGate(odds)) continue;
       if (!withinPropEvRange(ev)) continue;
 
@@ -1036,12 +1035,12 @@ export const ModelScreen = () => {
       base.bestScore = Math.max(safeNum(base.bestScore, 0), clamp(safeNum(r.score, 0), 0, 100));
       base.created_at = [base.created_at, r.created_at ?? null].filter(Boolean).sort().slice(-1)[0] ?? base.created_at;
 
+      // fill missing mu/line if any offer has it
       if (base.propMeta) {
         const nextMu = (r.mu ?? null) as number | null;
         if (nextMu != null && Number.isFinite(nextMu) && (base.propMeta.mu == null || !Number.isFinite(base.propMeta.mu))) {
           base.propMeta.mu = nextMu;
         }
-
         const nextLine = (r.line ?? null) as number | null;
         if (nextLine != null && Number.isFinite(nextLine) && (base.propMeta.line == null || !Number.isFinite(base.propMeta.line))) {
           base.propMeta.line = nextLine;
@@ -1051,7 +1050,7 @@ export const ModelScreen = () => {
       map.set(key, base);
     }
 
-    // finalize: compute best book from remaining gated offers
+    // finalize: compute best book
     const plays = Array.from(map.values())
       .map((p) => {
         const { bestBook, bestEvPct, bestBetFraction } = chooseBestOffer(p.offers);
@@ -1063,8 +1062,7 @@ export const ModelScreen = () => {
   }, [games, props]);
 
   /* =========================================================
-     Steam computation (games only) — LINE + PRICE aware, no line in key
-     (annotation only; never filters plays)
+     Steam computation (games only)
   ========================================================= */
 
   useEffect(() => {
@@ -1085,8 +1083,8 @@ export const ModelScreen = () => {
         const sportKeys = Array.from(new Set(gamePlays.map((p) => (p.sport_key ?? "").trim()).filter(Boolean)));
 
         const lookbackIso = new Date(Date.now() - STEAM_LOOKBACK_HOURS * 3600 * 1000).toISOString();
-
         const books = ["pinnacle", "draftkings", "fanduel", "betmgm"];
+
         const chunkSize = 150;
         const chunks: string[][] = [];
         for (let i = 0; i < eventIds.length; i += chunkSize) chunks.push(eventIds.slice(i, i + chunkSize));
@@ -1177,12 +1175,10 @@ export const ModelScreen = () => {
             const soft = last2.get(`${k}|${sb}`);
             const softCur = soft?.cur;
 
-            // if no soft history rows, fall back to current offer (from aggregation)
+            // fallback to current offer
             const offer = p.offers[sb];
             const fallbackCur: Quote | null =
-              offer && Number.isFinite(offer.odds)
-                ? { line: offer.line ?? null, odds: offer.odds }
-                : null;
+              offer && Number.isFinite(offer.odds) ? { line: offer.line ?? null, odds: offer.odds } : null;
 
             const curQuote = softCur ?? fallbackCur;
             if (!curQuote) return;
@@ -1205,12 +1201,7 @@ export const ModelScreen = () => {
 
           if (!Object.keys(lagging).length) continue;
 
-          eligible[k] = {
-            pinPrev,
-            pinCur,
-            lagging,
-            pinMove,
-          };
+          eligible[k] = { pinPrev, pinCur, lagging, pinMove };
         }
 
         if (mounted) setSteamEligible(eligible);
@@ -1224,10 +1215,6 @@ export const ModelScreen = () => {
       mounted = false;
     };
   }, [aggregated]);
-
-  /* =========================================================
-     Filtering (NONE) — all current +EV plays show after gates
-  ========================================================= */
 
   const filtered = useMemo(() => aggregated, [aggregated]);
 
@@ -1423,11 +1410,11 @@ function PlayRow({
     play.kind === "game" && steamInfo ? (
       <div
         className="mt-1 inline-flex items-center gap-2 rounded-md border border-[#a855f7]/30 bg-[#a855f7]/10 px-2 py-0.5 text-[10px] text-[#d8b4fe]"
-        title={`PIN moved (${steamInfo.pinMove}). PIN: ${steamInfo.pinPrev.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinPrev.line) + " " : ""}${american(
-          steamInfo.pinPrev.odds
-        )} → ${steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}${american(steamInfo.pinCur.odds)} | Soft better now: ${Object.keys(
-          steamInfo.lagging
-        ).join(", ")}`}
+        title={`PIN moved (${steamInfo.pinMove}). PIN: ${
+          steamInfo.pinPrev.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinPrev.line) + " " : ""
+        }${american(steamInfo.pinPrev.odds)} → ${
+          steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""
+        }${american(steamInfo.pinCur.odds)} | Soft better now: ${Object.keys(steamInfo.lagging).join(", ")}`}
       >
         <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR.pinnacle }} />
         <span>Steam</span>
@@ -1694,8 +1681,6 @@ function PlayCard({
 
 /* =========================================================
    Details Modal (tabs; safe-area; no scroll-to-footer)
-   + FIXED canonical team lookup via events
-   + FIXED non-repetitive stat presentation
 ========================================================= */
 
 type ModalTab = "line" | "hit";
@@ -1723,7 +1708,7 @@ function PlayDetailsModal({
   const [eventErr, setEventErr] = useState<string>("");
   const [eventRow, setEventRow] = useState<EventRow | null>(null);
 
-  // team_map + team_ratings resolved into 2 clean teams
+  // team_map + team_ratings
   const [teamsLoading, setTeamsLoading] = useState(false);
   const [teamsErr, setTeamsErr] = useState<string>("");
   const [modalTeams, setModalTeams] = useState<{ away: ModalTeam | null; home: ModalTeam | null }>({ away: null, home: null });
@@ -1732,7 +1717,7 @@ function PlayDetailsModal({
     if (open) setTab("line");
   }, [open, play?.playKey]);
 
-  // Load event row (canonical teams) when modal opens for GAME plays
+  // Load event row (canonical teams) for GAME plays
   useEffect(() => {
     let mounted = true;
 
@@ -1750,7 +1735,6 @@ function PlayDetailsModal({
       setEventRow(null);
 
       try {
-        // ✅ Use events table to get canonical home/away (NO matchup parsing)
         const { data, error } = await supabase
           .from("events")
           .select("event_id,sport_key,commence_time,home_team,away_team")
@@ -1794,7 +1778,7 @@ function PlayDetailsModal({
     };
   }, [open, play?.playKey]);
 
-  // Load team_map + team_ratings for those canonical teams (ONE clean comparison set)
+  // Load team_map + team_ratings for those canonical teams (safe selects)
   useEffect(() => {
     let mounted = true;
 
@@ -1824,43 +1808,38 @@ function PlayDetailsModal({
       try {
         const canonicals = Array.from(new Set([away, home]));
 
-        // team_map: canonical + abbreviation + Abbreviation2 + logo
-        // NOTE: adjust select names if your columns differ. This matches your prior conventions.
-        const tmQ = supabase
-          .from("team_map")
-          .select('canonical,Abbreviation,Abbreviation2,"Logo URL"')
-          .in("canonical", canonicals);
+        // team_map: try legacy (Title Case + "Logo URL") then fallback (snake_case)
+        const tmRes = await safeSelect<any>({
+          table: "team_map",
+          selectPrimary: 'canonical,Abbreviation,Abbreviation2,"Logo URL"',
+          selectFallback: "canonical,abbreviation,abbreviation2,logo_url",
+          whereInCol: "canonical",
+          values: canonicals,
+        });
 
-        // team_ratings: ONLY the stats we actually show (no repeats)
-        // Optional fields are harmless if they exist; if they don't exist, remove them from select.
-        const trQ = supabase
-          .from("team_ratings")
-          .select("canonical,engine_adj_off,engine_adj_def,engine_power,engine_possessions,power_rank")
-          .in("canonical", canonicals);
-
-        const [tmRes, trRes] = await Promise.all([tmQ, trQ]);
+        // team_ratings: try optional cols then fallback to required only
+        const trRes = await safeSelect<any>({
+          table: "team_ratings",
+          selectPrimary: "canonical,engine_adj_off,engine_adj_def,engine_power,engine_possessions,power_rank",
+          selectFallback: "canonical,engine_adj_off,engine_adj_def,engine_power",
+          whereInCol: "canonical",
+          values: canonicals,
+        });
 
         if (!mounted) return;
 
-        if (tmRes.error) {
-          setTeamsErr(`team_map error: ${tmRes.error.message}`);
-          setTeamsLoading(false);
-          return;
-        }
-        if (trRes.error) {
-          setTeamsErr(`team_ratings error: ${trRes.error.message}`);
-          setTeamsLoading(false);
-          return;
-        }
+        const warnings: string[] = [];
+        if (tmRes.warning) warnings.push(tmRes.warning);
+        if (trRes.warning) warnings.push(trRes.warning);
 
         const mapTeam: Record<string, TeamMapRow> = {};
         (tmRes.data ?? []).forEach((r: any) => {
           if (!r?.canonical) return;
           mapTeam[String(r.canonical)] = {
             canonical: String(r.canonical),
-            abbreviation: r.Abbreviation ?? null,
-            abbreviation2: r.Abbreviation2 ?? null,
-            logo_url: r["Logo URL"] ?? null,
+            abbreviation: r.Abbreviation ?? r.abbreviation ?? null,
+            abbreviation2: r.Abbreviation2 ?? r.abbreviation2 ?? null,
+            logo_url: r["Logo URL"] ?? r.logo_url ?? null,
           };
         });
 
@@ -1882,8 +1861,14 @@ function PlayDetailsModal({
           const abbr =
             (tm?.abbreviation && String(tm.abbreviation).trim()) ||
             (tm?.abbreviation2 && String(tm.abbreviation2).trim()) ||
-            canonical.split(" ").slice(0, 3).map((w) => w[0]).join("").toUpperCase() ||
+            canonical
+              .split(" ")
+              .slice(0, 3)
+              .map((w) => w[0])
+              .join("")
+              .toUpperCase() ||
             canonical;
+
           const logo_url = (tm?.logo_url ?? null) as string | null;
           const ratings = mapRatings[canonical] ?? null;
           return { canonical, abbr, logo_url, ratings };
@@ -1891,15 +1876,15 @@ function PlayDetailsModal({
 
         setModalTeams({ away: build(away), home: build(home) });
 
-        // helpful error if ratings missing
         const missingRatings = canonicals.filter((c) => !mapRatings[c]);
         const missingMap = canonicals.filter((c) => !mapTeam[c]);
-        if (missingRatings.length || missingMap.length) {
-          const parts: string[] = [];
-          if (missingMap.length) parts.push(`team_map missing: ${missingMap.join(", ")}`);
-          if (missingRatings.length) parts.push(`team_ratings missing: ${missingRatings.join(", ")}`);
-          setTeamsErr(parts.join(" · "));
-        }
+
+        const parts: string[] = [];
+        if (missingMap.length) parts.push(`team_map missing: ${missingMap.join(", ")}`);
+        if (missingRatings.length) parts.push(`team_ratings missing: ${missingRatings.join(", ")}`);
+        if (warnings.length) parts.push(warnings.join(" · "));
+
+        setTeamsErr(parts.join(" · "));
       } catch (e: any) {
         if (!mounted) return;
         setTeamsErr(e?.message ?? String(e));
@@ -1966,7 +1951,7 @@ function PlayDetailsModal({
                   </div>
                 ) : null}
 
-                {/* ✅ ONE CLEAN TEAM STATS SECTION (no repeats) */}
+                {/* TEAM STATS (single clean comparison) */}
                 {play.kind === "game" ? (
                   <div className="mt-3">
                     <div className="text-[10px] text-[#606060] mb-2">Model Team Stats (team_ratings)</div>
@@ -2010,9 +1995,7 @@ function PlayDetailsModal({
           </div>
 
           {/* Body */}
-          <div className="flex-1 min-h-0 p-4">
-            {tab === "line" ? <OddsHistoryPanel play={play} /> : <HitRatePanel play={play} />}
-          </div>
+          <div className="flex-1 min-h-0 p-4">{tab === "line" ? <OddsHistoryPanel play={play} /> : <HitRatePanel play={play} />}</div>
 
           {/* Footer */}
           <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a]">
@@ -2034,7 +2017,6 @@ function TeamCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam }) 
   const a = away.ratings;
   const h = home.ratings;
 
-  // We only show these stats ONCE in a single comparison table (no duplicated cards)
   const rows: { label: string; a: string; h: string; accent?: boolean }[] = [
     {
       label: "Off Eff",
@@ -2076,13 +2058,11 @@ function TeamCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam }) 
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
-      {/* Team header row */}
       <div className="grid grid-cols-2 gap-0 border-b border-[#1f1f1f]">
         <TeamHeaderCell team={away} sideLabel="AWAY" />
         <TeamHeaderCell team={home} sideLabel="HOME" />
       </div>
 
-      {/* Comparison rows */}
       <div className="p-3">
         <div className="grid grid-cols-3 gap-2 text-[11px]">
           <div className="text-[#606060]">Stat</div>
@@ -2143,7 +2123,11 @@ function TabButton({ active, onClick, label, disabled }: { active: boolean; onCl
       disabled={!!disabled}
       className={[
         "px-3 py-2 text-xs transition-colors",
-        disabled ? "text-[#4a4a4a] cursor-not-allowed" : active ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+        disabled
+          ? "text-[#4a4a4a] cursor-not-allowed"
+          : active
+          ? "bg-[#141414] text-white"
+          : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
       ].join(" ")}
       title={disabled ? "Hit Rate available for props only" : label}
     >
@@ -2153,7 +2137,7 @@ function TabButton({ active, onClick, label, disabled }: { active: boolean; onCl
 }
 
 /* =========================================================
-   Line History Panel — games show ALL lines (tooltip includes line)
+   Line History Panel
 ========================================================= */
 
 function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
@@ -2370,10 +2354,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
               />
 
               <Tooltip content={TooltipContent} />
-              <Legend
-                wrapperStyle={{ fontSize: 11, color: "#808080" }}
-                formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
-              />
+              <Legend wrapperStyle={{ fontSize: 11, color: "#808080" }} formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>} />
 
               {hasAny("draftkings") ? <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
               {hasAny("fanduel") ? <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
