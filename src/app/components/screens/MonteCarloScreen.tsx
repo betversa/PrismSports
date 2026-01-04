@@ -1,14 +1,20 @@
-// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (adds Power Rank + removes Event ID display + game separators)
+// src/app/components/screens/MonteCarloScreen.tsx
+// FULL REWRITE — keeps your current MonteCarloScreen layout + adds per-game MODEL button + side-by-side stats panel
 // -----------------------------------------------------------------------------------------------------
 // ✅ Visual layout matches ModelScreen (hero gradient + badge + chips + dark sticky table)
-// ✅ Mobile: cards + Details collapsible (unchanged behavior pattern)
-// ✅ Desktop: inline columns:
-//    Proj Score | Win% | Proj Margin | Proj Total | Cons Spread | Cons Total
+// ✅ Mobile: cards + Details collapsible (kept) + NEW Model button
+// ✅ Desktop: inline columns (Proj Score | Win% | Proj Margin | Proj Total | Cons Spread | Cons Total) + NEW Model toggle
 // ✅ Logos + abbreviations via team_map (canonical, "Logo URL", Abbreviation)
-// ✅ NEW: Power Rank via team_ratings (canonical -> power_rank), shown next to team name
+// ✅ Power Rank via team_ratings (canonical -> power_rank)
+// ✅ Uses engine_power (and other engine fields) from team_ratings in the MODEL panel (side-by-side)
+// ✅ Pace pulled from team_possessions (best-effort from whatever columns exist) in the MODEL panel
 // ✅ Consensus via odds_snapshot (spreads/totals) median across books, latest ts per event
 // ✅ Removes redundant Event ID display — only shows Date + Time for each matchup
 // ✅ Adds a subtle divider row between games on desktop
+//
+// NOTE: This file is written to be schema-tolerant:
+// - team_ratings: selects * and picks fields if present (engine_power, engine_adj_off, engine_adj_def, true_hca, etc.)
+// - team_possessions: selects * and derives a "best pace" from common column names if present
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -56,10 +62,13 @@ type TeamMapRow = {
   "Logo URL": string | null;
 };
 
-type TeamRatingsRow = {
-  canonical: string;
-  power_rank: number | null;
-  // NOTE: If your table has sport_key, we filter by it (recommended).
+type TeamRatingsAny = Record<string, any> & {
+  canonical?: string;
+  sport_key?: string | null;
+};
+
+type TeamPossAny = Record<string, any> & {
+  canonical?: string;
   sport_key?: string | null;
 };
 
@@ -97,19 +106,20 @@ type TeamRow = {
   teamName: string;
   teamAbbr: string;
   logoUrl: string | null;
+
+  // quick badge
   powerRank: number | null;
 
+  // projection row
   projPoints: number;
-
   projMarginTeam: number; // away = -marginHome
   coverProbTeam: number | null;
-
   projTotal: number;
   overProb: number | null;
   underProb: number | null;
-
   winProbTeam: number | null;
 
+  // market row
   consSpreadLineTeam: number | null; // away = -spread_home_line
   consSpreadOddsTeam: number | null;
 
@@ -118,6 +128,15 @@ type TeamRow = {
   consTotalUnderOdds: number | null;
 
   isProjectedWinner: boolean;
+
+  // model panel (from team_ratings / team_possessions)
+  enginePower: number | null; // ✅ yes, this uses your engine_power
+  engineAdjOff: number | null;
+  engineAdjDef: number | null;
+  engineNet: number | null;
+
+  trueHca: number | null; // useful for HOME team
+  paceTeam: number | null; // team pace best-effort
 };
 
 type EventBundle = {
@@ -232,6 +251,45 @@ function medianOrNull(nums: number[]): number | null {
 }
 
 /* =========================================================
+   Pace derivation (schema-tolerant)
+========================================================= */
+
+function pickFirstFinite(obj: any, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = Number(obj?.[k]);
+    if (Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+function derivePace(poss: TeamPossAny | null): number | null {
+  if (!poss) return null;
+
+  // Common-ish candidates across models / tables
+  // (We avoid selecting specific columns in SQL; we select * and then pull best match here.)
+  const candidates = [
+    "pace",
+    "pace_team",
+    "pace_adj",
+    "adj_pace",
+    "tempo",
+    "tempo_adj",
+    "possessions_per_game",
+    "poss_per_game",
+    "poss_pg",
+    "pace_last3",
+    "pace_last5",
+    "pace_last10",
+    "pace_season",
+    "season_pace",
+    "home_pace",
+    "away_pace",
+  ];
+
+  return pickFirstFinite(poss, candidates);
+}
+
+/* =========================================================
    UI atoms (copied style from ModelScreen)
 ========================================================= */
 
@@ -280,8 +338,33 @@ function RankBadge({ rank }: { rank: number | null }) {
   );
 }
 
+function MiniButton({
+  label,
+  onClick,
+  active,
+}: {
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "shrink-0 px-3 py-2 rounded-lg border text-[11px] font-extrabold tracking-wide",
+        active
+          ? "bg-[#141414] border-[#3a3a3a] text-white"
+          : "bg-[#0b0b0b] border-[#2a2a2a] text-[#d0d0d0] hover:bg-[#141414]",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
 /* =========================================================
-   Mobile details block (same behavior as earlier)
+   Mobile details block (unchanged behavior)
 ========================================================= */
 
 function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
@@ -356,6 +439,129 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /* =========================================================
+   MODEL panel (side-by-side, expandable)
+========================================================= */
+
+function ModelPanel({ away, home }: { away: TeamRow; home: TeamRow }) {
+  const Section = ({ title }: { title: string }) => (
+    <div className="mt-4 first:mt-0 text-[10px] font-extrabold tracking-widest uppercase text-[#8a8a8a]">
+      {title}
+    </div>
+  );
+
+  const Header = () => (
+    <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#1a1a1a]">
+      <div />
+      <div className="text-right text-[11px] text-white font-extrabold">{away.teamAbbr}</div>
+      <div className="text-right text-[11px] text-white font-extrabold">{home.teamAbbr}</div>
+    </div>
+  );
+
+  const Row = ({
+    label,
+    a,
+    h,
+    hint,
+  }: {
+    label: string;
+    a: React.ReactNode;
+    h: React.ReactNode;
+    hint?: string;
+  }) => (
+    <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#1a1a1a] last:border-b-0">
+      <div className="min-w-0">
+        <div className="text-[11px] text-[#b0b0b0] font-semibold">{label}</div>
+        {hint ? <div className="text-[10px] text-[#606060]">{hint}</div> : null}
+      </div>
+      <div className="text-right text-[12px] text-white font-bold tabular-nums">{a}</div>
+      <div className="text-right text-[12px] text-white font-bold tabular-nums">{h}</div>
+    </div>
+  );
+
+  const netAway =
+    away.engineAdjOff != null && away.engineAdjDef != null ? away.engineAdjOff - away.engineAdjDef : null;
+  const netHome =
+    home.engineAdjOff != null && home.engineAdjDef != null ? home.engineAdjOff - home.engineAdjDef : null;
+
+  return (
+    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="text-sm font-extrabold text-white">Model View</div>
+        <div className="text-[11px] text-[#808080] font-semibold">
+          {away.teamAbbr} vs {home.teamAbbr}
+        </div>
+      </div>
+
+      <Header />
+
+      <Section title="Model Core" />
+      <Row label="Engine Power" hint="team_ratings.engine_power" a={num2(away.enginePower)} h={num2(home.enginePower)} />
+      <Row label="Power Rank" hint="team_ratings.power_rank" a={valOrDash(away.powerRank)} h={valOrDash(home.powerRank)} />
+      <Row label="Proj Points" hint="monte_carlo_results projected points" a={num1(away.projPoints)} h={num1(home.projPoints)} />
+      <Row label="Win %" hint="monte_carlo_results win prob" a={pct01(away.winProbTeam)} h={pct01(home.winProbTeam)} />
+      <Row label="Proj Margin" hint="team-relative (away = -home margin)" a={fmtSigned1(away.projMarginTeam)} h={fmtSigned1(home.projMarginTeam)} />
+      <Row label="Cover %" hint="cover probability" a={pct01(away.coverProbTeam)} h={pct01(home.coverProbTeam)} />
+      <Row
+        label="Pace"
+        hint="team_possessions (best available pace column)"
+        a={num1OrDash(away.paceTeam)}
+        h={num1OrDash(home.paceTeam)}
+      />
+
+      <Section title="Efficiency Context" />
+      <Row label="Adj Off Eff" hint="team_ratings.engine_adj_off" a={num1OrDash(away.engineAdjOff)} h={num1OrDash(home.engineAdjOff)} />
+      <Row label="Adj Def Eff" hint="team_ratings.engine_adj_def" a={num1OrDash(away.engineAdjDef)} h={num1OrDash(home.engineAdjDef)} />
+      <Row label="Net Rating" hint="Adj Off - Adj Def" a={fmtSigned1(netAway)} h={fmtSigned1(netHome)} />
+
+      <Section title="Market Context" />
+      <Row
+        label="Consensus Spread"
+        hint="odds_snapshot median across books"
+        a={
+          away.consSpreadLineTeam == null
+            ? "—"
+            : `${fmtSigned1(away.consSpreadLineTeam)} (${american(away.consSpreadOddsTeam)})`
+        }
+        h={
+          home.consSpreadLineTeam == null
+            ? "—"
+            : `${fmtSigned1(home.consSpreadLineTeam)} (${american(home.consSpreadOddsTeam)})`
+        }
+      />
+      <Row
+        label="Consensus Total"
+        hint="odds_snapshot median across books"
+        a={away.consTotalLine == null ? "—" : `${fmtOU(away.consTotalLine, "o")} (${american(away.consTotalOverOdds)})`}
+        h={home.consTotalLine == null ? "—" : `${fmtOU(home.consTotalLine, "u")} (${american(home.consTotalUnderOdds)})`}
+      />
+
+      <Section title="Home Court" />
+      <Row label="True HCA" hint="team_ratings.true_hca (home only)" a="—" h={num2OrDash(home.trueHca)} />
+    </div>
+  );
+}
+
+function valOrDash(x: any) {
+  const n = Number(x);
+  return Number.isFinite(n) ? String(Math.round(n)) : "—";
+}
+function num1(x: number) {
+  return (Math.round(x * 10) / 10).toFixed(1);
+}
+function num2(x: number | null) {
+  if (x == null || !Number.isFinite(x)) return "—";
+  return (Math.round(x * 100) / 100).toFixed(2);
+}
+function num1OrDash(x: number | null) {
+  if (x == null || !Number.isFinite(x)) return "—";
+  return (Math.round(x * 10) / 10).toFixed(1);
+}
+function num2OrDash(x: number | null) {
+  if (x == null || !Number.isFinite(x)) return "—";
+  return (Math.round(x * 100) / 100).toFixed(2);
+}
+
+/* =========================================================
    Screen
 ========================================================= */
 
@@ -366,10 +572,14 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
-  const [powerRankMap, setPowerRankMap] = useState<Map<string, number>>(new Map());
+
+  const [ratingsMap, setRatingsMap] = useState<Map<string, TeamRatingsAny>>(new Map());
+  const [possMap, setPossMap] = useState<Map<string, TeamPossAny>>(new Map());
 
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
-  const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
+
+  const [openDetailsMap, setOpenDetailsMap] = useState<Record<string, boolean>>({});
+  const [openModelMap, setOpenModelMap] = useState<Record<string, boolean>>({});
 
   const [loadingRun, setLoadingRun] = useState(true);
   const [loadingResults, setLoadingResults] = useState(false);
@@ -414,39 +624,82 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, []);
 
-  /* 0b) team_ratings power_rank (canonical -> power_rank), filtered by sport_key when available */
+  /* 0b) team_ratings (engine_power + power_rank + engine fields) */
   useEffect(() => {
     let mounted = true;
 
-    async function loadPowerRanks() {
-      // If your team_ratings is large, consider adding .eq("sport_key", sportKey) + an index.
-      const { data, error } = await supabase
-        .from("team_ratings")
-        .select("canonical,power_rank,sport_key")
-        .eq("sport_key", sportKey);
+    async function loadTeamRatings() {
+      // schema-tolerant: select *
+      // Attempt filter by sport_key first; if sport_key column doesn't exist, retry without filter.
+      let data: any[] | null = null;
+
+      const first = await supabase.from("team_ratings").select("*").eq("sport_key", sportKey);
+      if (!first.error) {
+        data = first.data ?? [];
+      } else {
+        const retry = await supabase.from("team_ratings").select("*");
+        if (retry.error) {
+          console.warn("[MonteCarloScreen] team_ratings error:", retry.error.message);
+          if (mounted) setRatingsMap(new Map());
+          return;
+        }
+        data = retry.data ?? [];
+      }
 
       if (!mounted) return;
 
-      if (error) {
-        // If your team_ratings table does NOT have sport_key, change select() to "canonical,power_rank"
-        // and remove the .eq("sport_key", sportKey).
-        console.warn("[MonteCarloScreen] team_ratings error:", error.message);
-        setPowerRankMap(new Map());
-        return;
-      }
-
-      const pm = new Map<string, number>();
-      for (const r of (data ?? []) as TeamRatingsRow[]) {
-        const k = normKey(r.canonical);
-        const pr = r.power_rank == null ? null : Number(r.power_rank);
+      const m = new Map<string, TeamRatingsAny>();
+      for (const r of data ?? []) {
+        const canon = (r?.canonical ?? "").toString();
+        const k = normKey(canon);
         if (!k) continue;
-        if (pr != null && Number.isFinite(pr)) pm.set(k, pr);
+        m.set(k, r as TeamRatingsAny);
       }
 
-      setPowerRankMap(pm);
+      setRatingsMap(m);
     }
 
-    loadPowerRanks();
+    loadTeamRatings();
+    return () => {
+      mounted = false;
+    };
+  }, [sportKey]);
+
+  /* 0c) team_possessions pace (best-effort) */
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadPossessions() {
+      // schema-tolerant: select *
+      let data: any[] | null = null;
+
+      const first = await supabase.from("team_possessions").select("*").eq("sport_key", sportKey);
+      if (!first.error) {
+        data = first.data ?? [];
+      } else {
+        const retry = await supabase.from("team_possessions").select("*");
+        if (retry.error) {
+          console.warn("[MonteCarloScreen] team_possessions error:", retry.error.message);
+          if (mounted) setPossMap(new Map());
+          return;
+        }
+        data = retry.data ?? [];
+      }
+
+      if (!mounted) return;
+
+      const m = new Map<string, TeamPossAny>();
+      for (const r of data ?? []) {
+        const canon = (r?.canonical ?? "").toString();
+        const k = normKey(canon);
+        if (!k) continue;
+        m.set(k, r as TeamPossAny);
+      }
+
+      setPossMap(m);
+    }
+
+    loadPossessions();
     return () => {
       mounted = false;
     };
@@ -696,6 +949,26 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const awayIsWinner = awayPts > homePts;
       const homeIsWinner = homePts > awayPts;
 
+      const homeRating = ratingsMap.get(homeKey) ?? null;
+      const awayRating = ratingsMap.get(awayKey) ?? null;
+
+      const homePoss = possMap.get(homeKey) ?? null;
+      const awayPoss = possMap.get(awayKey) ?? null;
+
+      const homePowerRank = Number(homeRating?.power_rank);
+      const awayPowerRank = Number(awayRating?.power_rank);
+
+      const homeEnginePower = Number(homeRating?.engine_power);
+      const awayEnginePower = Number(awayRating?.engine_power);
+
+      const homeAdjOff = Number(homeRating?.engine_adj_off);
+      const homeAdjDef = Number(homeRating?.engine_adj_def);
+
+      const awayAdjOff = Number(awayRating?.engine_adj_off);
+      const awayAdjDef = Number(awayRating?.engine_adj_def);
+
+      const homeTrueHca = Number(homeRating?.true_hca);
+
       const awayRow: TeamRow = {
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
@@ -704,7 +977,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         teamName: awayRaw,
         teamAbbr: awayAbbr,
         logoUrl: logoMap.get(awayKey) ?? null,
-        powerRank: powerRankMap.get(awayKey) ?? null,
+        powerRank: Number.isFinite(awayPowerRank) ? awayPowerRank : null,
 
         projPoints: Math.round(awayPts * 10) / 10,
 
@@ -725,6 +998,15 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         consTotalUnderOdds: c?.total_under_odds ?? null,
 
         isProjectedWinner: awayIsWinner,
+
+        // ✅ model extras
+        enginePower: Number.isFinite(awayEnginePower) ? awayEnginePower : null,
+        engineAdjOff: Number.isFinite(awayAdjOff) ? awayAdjOff : null,
+        engineAdjDef: Number.isFinite(awayAdjDef) ? awayAdjDef : null,
+        engineNet:
+          Number.isFinite(awayAdjOff) && Number.isFinite(awayAdjDef) ? awayAdjOff - awayAdjDef : null,
+        trueHca: null,
+        paceTeam: derivePace(awayPoss),
       };
 
       const homeRow: TeamRow = {
@@ -735,7 +1017,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         teamName: homeRaw,
         teamAbbr: homeAbbr,
         logoUrl: logoMap.get(homeKey) ?? null,
-        powerRank: powerRankMap.get(homeKey) ?? null,
+        powerRank: Number.isFinite(homePowerRank) ? homePowerRank : null,
 
         projPoints: Math.round(homePts * 10) / 10,
 
@@ -756,6 +1038,15 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         consTotalUnderOdds: c?.total_under_odds ?? null,
 
         isProjectedWinner: homeIsWinner,
+
+        // ✅ model extras
+        enginePower: Number.isFinite(homeEnginePower) ? homeEnginePower : null,
+        engineAdjOff: Number.isFinite(homeAdjOff) ? homeAdjOff : null,
+        engineAdjDef: Number.isFinite(homeAdjDef) ? homeAdjDef : null,
+        engineNet:
+          Number.isFinite(homeAdjOff) && Number.isFinite(homeAdjDef) ? homeAdjOff - homeAdjDef : null,
+        trueHca: Number.isFinite(homeTrueHca) ? homeTrueHca : null,
+        paceTeam: derivePace(homePoss),
       };
 
       out.push({
@@ -767,11 +1058,16 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     }
 
     return out;
-  }, [results, abbrMap, logoMap, consensusMap, powerRankMap]);
+  }, [results, abbrMap, logoMap, consensusMap, ratingsMap, possMap]);
 
-  /* keep open state aligned */
+  /* keep open states aligned */
   useEffect(() => {
-    setOpenMap((prev) => {
+    setOpenDetailsMap((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false;
+      return next;
+    });
+    setOpenModelMap((prev) => {
       const next: Record<string, boolean> = {};
       for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false;
       return next;
@@ -799,7 +1095,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      {/* HERO / HEADER — same structure & styling as ModelScreen */}
+      {/* HERO / HEADER */}
       <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 md:p-5">
         <div
           className="pointer-events-none absolute inset-0 opacity-95"
@@ -819,7 +1115,8 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Monte Carlo</h2>
 
             <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
-              One block per matchup. Shows projected score, win%, and probabilities with consensus lines.
+              One block per matchup. Projected score + win% + probabilities with consensus lines. Use MODEL for side-by-side
+              team context (engine + pace + efficiency).
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -830,7 +1127,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             </div>
           </div>
 
-          {/* Right side (kept minimal like ModelScreen) */}
           <div className="w-full md:w-auto">
             {loading ? (
               <div className="relative mt-1 md:mt-0 text-xs text-[#808080] px-3 py-2 bg-[#0b0b0b] border border-[#2a2a2a] rounded-lg">
@@ -847,14 +1143,14 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         </div>
       </div>
 
-      {/* DESKTOP TABLE (matches ModelScreen table styling) */}
+      {/* DESKTOP TABLE */}
       <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
         <div className="max-h-[70vh] overflow-y-auto">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
                 <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">
+                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[380px]">
                     Matchup
                   </th>
                   <th className="text-center p-3 text-[#808080] min-w-[110px]">Proj Score</th>
@@ -868,7 +1164,15 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
               <tbody className="divide-y divide-[#141414]">
                 {events.map((ev, idx) => (
-                  <DesktopEventRows key={ev.eventId} ev={ev} showDivider={idx < events.length - 1} />
+                  <DesktopEventRows
+                    key={ev.eventId}
+                    ev={ev}
+                    showDivider={idx < events.length - 1}
+                    modelOpen={!!openModelMap[ev.eventId]}
+                    onToggleModel={() =>
+                      setOpenModelMap((p) => ({ ...p, [ev.eventId]: !(p?.[ev.eventId] ?? false) }))
+                    }
+                  />
                 ))}
 
                 {!loading && !events.length ? (
@@ -893,7 +1197,8 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         ) : null}
 
         {events.map((ev) => {
-          const open = !!openMap[ev.eventId];
+          const detailsOpen = !!openDetailsMap[ev.eventId];
+          const modelOpen = !!openModelMap[ev.eventId];
 
           return (
             <div key={ev.eventId} className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
@@ -907,13 +1212,18 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                  className="shrink-0 px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
-                >
-                  {open ? "Hide" : "Details"}
-                </button>
+                <div className="flex items-center gap-2">
+                  <MiniButton
+                    label={detailsOpen ? "Hide" : "Details"}
+                    active={detailsOpen}
+                    onClick={() => setOpenDetailsMap((p) => ({ ...p, [ev.eventId]: !detailsOpen }))}
+                  />
+                  <MiniButton
+                    label={modelOpen ? "Model" : "Model"}
+                    active={modelOpen}
+                    onClick={() => setOpenModelMap((p) => ({ ...p, [ev.eventId]: !modelOpen }))}
+                  />
+                </div>
               </div>
 
               {/* Away */}
@@ -962,9 +1272,15 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 </div>
               </div>
 
-              {open ? (
+              {detailsOpen ? (
                 <div className="mt-3">
                   <MobileDetailsBlock away={ev.away} home={ev.home} />
+                </div>
+              ) : null}
+
+              {modelOpen ? (
+                <div className="mt-3">
+                  <ModelPanel away={ev.away} home={ev.home} />
                 </div>
               ) : null}
             </div>
@@ -976,15 +1292,25 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 };
 
 /* =========================================================
-   Desktop rows (2 rows per event, but visually one "block")
+   Desktop rows (2 rows per event, plus optional Model row)
 ========================================================= */
 
-function DesktopEventRows({ ev, showDivider }: { ev: EventBundle; showDivider: boolean }) {
+function DesktopEventRows({
+  ev,
+  showDivider,
+  modelOpen,
+  onToggleModel,
+}: {
+  ev: EventBundle;
+  showDivider: boolean;
+  modelOpen: boolean;
+  onToggleModel: () => void;
+}) {
   const away = ev.away;
   const home = ev.home;
 
   const matchupLine = (
-    <div className="flex items-start justify-between gap-2">
+    <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="text-white truncate">
           {away.teamName} vs {home.teamName}
@@ -993,8 +1319,9 @@ function DesktopEventRows({ ev, showDivider }: { ev: EventBundle; showDivider: b
           <span className="text-[#404040]"> </span>
           <span className="text-[#b0b0b0]">{fmtTimeCentral(ev.commenceTime)}</span>
         </div>
-        {/* Removed: Event ID line (redundant noise) */}
       </div>
+
+      <MiniButton label="MODEL" active={modelOpen} onClick={onToggleModel} />
     </div>
   );
 
@@ -1062,7 +1389,7 @@ function DesktopEventRows({ ev, showDivider }: { ev: EventBundle; showDivider: b
     <>
       {/* Away row */}
       <tr className="transition-colors hover:bg-white/[0.02]">
-        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[360px]">
+        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[380px]">
           {matchupLine}
           <div className="mt-3">
             <TeamBlock row={away} />
@@ -1103,7 +1430,7 @@ function DesktopEventRows({ ev, showDivider }: { ev: EventBundle; showDivider: b
 
       {/* Home row */}
       <tr className="transition-colors hover:bg-white/[0.02]">
-        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[360px]">
+        <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[380px]">
           <TeamBlock row={home} />
         </td>
 
@@ -1139,7 +1466,16 @@ function DesktopEventRows({ ev, showDivider }: { ev: EventBundle; showDivider: b
         </td>
       </tr>
 
-      {/* Divider between games (desktop only) */}
+      {/* MODEL panel row (desktop) */}
+      {modelOpen ? (
+        <tr>
+          <td colSpan={7} className="p-3 bg-[#0a0a0a] border-t border-[#141414]">
+            <ModelPanel away={away} home={home} />
+          </td>
+        </tr>
+      ) : null}
+
+      {/* Divider between games */}
       {showDivider ? (
         <tr>
           <td colSpan={7} className="p-0">
