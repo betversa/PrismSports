@@ -3,7 +3,6 @@ name: Load NCAAB Stats (TeamRankings → Supabase)
 on:
   workflow_dispatch:
   schedule:
-    # Daily at 7:15 AM Chicago-ish (UTC shifts with DST).
     - cron: "15 13 * * *"
 
 concurrency:
@@ -35,4 +34,4 @@ jobs:
           SEASON: "2025-26"
         run: |
           node --version
-          npx ts-node scripts/teamRankingsStatsLoader.ts
+          node --loader ts-node/esm ./scripts/teamRankingsStatsLoader.ts
