@@ -1,4 +1,4 @@
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.0.0)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -30,13 +30,16 @@
 // ✅ Line History: LINE CHART (DK/FD/MGM/PIN) — tooltip shows DATE+TIME (CT) + LINE + ODDS per book
 // ✅ Hit Rate tab: FantasyPros GAME LOGS = BAR CHART (OVER green / UNDER red), cursor transparent
 //
-// ✅ MODAL STATS (FIXED):
-//    - Uses ONLY model efficiency + net rating from public.team_ratings
-//      • Off Eff: engine_adj_off
-//      • Def Eff: engine_adj_def
-//      • Net Rating: engine_power
-//    - DOES NOT use ncaab_stats or TeamRankings for modal stats
-//    - Percent stats formatting helper included (0.456 -> 45.6%)
+// ✅ MODAL STATS (FIXED + NON-REPETITIVE + CORRECT KEYS):
+//    - Uses canonical teams from public.events (NOT parsing matchup string)
+//    - Team logos/abbr from public.team_map by canonical
+//    - Stats ONLY from public.team_ratings:
+//        • Off Eff: engine_adj_off
+//        • Def Eff: engine_adj_def
+//        • Net Rating: engine_power
+//        • (Optional) Pace: engine_possessions (if exists)
+//        • (Optional) Power Rank: power_rank (if exists)
+//    - Displays ONE clean side-by-side comparison table (no duplicated stat blocks)
 //
 // ✅ Exports both named + default to avoid import mismatch.
 
@@ -205,15 +208,31 @@ type AggregatedPlay = {
 };
 
 /* =========================================================
-   Team Ratings (MODEL STATS SOURCE for modal)
+   Modal: canonical teams come from public.events (NO matchup parsing)
 ========================================================= */
+
+type EventRow = {
+  event_id: string;
+  sport_key: string | null;
+  commence_time: string | null;
+  home_team: string | null; // canonical
+  away_team: string | null; // canonical
+};
+
+type TeamMapRow = {
+  canonical: string;
+  abbreviation?: string | null;
+  abbreviation2?: string | null;
+  logo_url?: string | null;
+};
 
 type TeamRatingsRow = {
   canonical: string;
-  engine_adj_off: number | null; // efficiency
-  engine_adj_def: number | null; // efficiency
+  engine_adj_off: number | null;
+  engine_adj_def: number | null;
   engine_power: number | null; // net rating
-  engine_possessions?: number | null; // optional if present
+  engine_possessions?: number | null; // optional
+  power_rank?: number | null; // optional
 };
 
 /* =========================================================
@@ -294,12 +313,6 @@ function american(odds: number) {
 function pct(n: number, digits = 1) {
   const x = safeNum(n, 0);
   return `${x > 0 ? "+" : ""}${x.toFixed(digits)}%`;
-}
-
-// Percent stored as 0.456 -> 45.6%
-function fmtPct(v: number | null, digits = 1) {
-  if (v == null || !Number.isFinite(v)) return "—";
-  return `${(v * 100).toFixed(digits)}%`;
 }
 
 function fmtSigned(n: number | null, digits = 1) {
@@ -435,11 +448,13 @@ function historyPropMarketKey(marketRaw: string | null): PropHistoryMarketKey | 
   const m = (marketRaw || "").trim().toLowerCase();
   if (!m) return null;
 
+  // ✅ canonical keys used in your player_props_history table
   if (m === "player_points") return "player_points";
   if (m === "player_rebounds") return "player_rebounds";
   if (m === "player_assists") return "player_assists";
   if (m === "player_threes") return "player_threes";
 
+  // friendly inputs
   if (m === "points" || m === "pts") return "player_points";
   if (m === "rebounds" || m === "reb") return "player_rebounds";
   if (m === "assists" || m === "ast") return "player_assists";
@@ -549,7 +564,7 @@ function softBetterThanPin(args: {
     const sL = softLine;
     const pL = pinLine;
 
-    if (Number.isFinite(sL) && Number.isFinite(pL)) {
+    if (Number.isFinite(sL as number) && Number.isFinite(pL as number)) {
       if ((sL as number) > (pL as number)) return true; // better line
       if ((sL as number) < (pL as number)) return false;
       return softOdds > pinOdds; // same line -> better price
@@ -561,14 +576,14 @@ function softBetterThanPin(args: {
   const sL = softLine;
   const pL = pinLine;
 
-  if (Number.isFinite(sL) && Number.isFinite(pL)) {
+  if (Number.isFinite(sL as number) && Number.isFinite(pL as number)) {
     if (side === "over") {
-      if ((sL as number) < (pL as number)) return true; // lower total is better for over
+      if ((sL as number) < (pL as number)) return true; // lower total better for over
       if ((sL as number) > (pL as number)) return false;
       return softOdds > pinOdds;
     }
     if (side === "under") {
-      if ((sL as number) > (pL as number)) return true; // higher total is better for under
+      if ((sL as number) > (pL as number)) return true; // higher total better for under
       if ((sL as number) < (pL as number)) return false;
       return softOdds > pinOdds;
     }
@@ -614,7 +629,6 @@ function pinSteamMoved(args: {
 ========================================================= */
 
 function gamePlayKey(r: EvPlayRow) {
-  // Keep line in key for normal aggregation (best EV by line).
   const team = (r.team || "").trim().toLowerCase();
   const line = r.line == null ? "x" : String(r.line);
   return `g|${r.event_id}|${r.market}|${r.side}|${line}|${team}`;
@@ -758,50 +772,6 @@ type SteamInfo = {
 
 function steamKey(sport_key: string | null | undefined, event_id: string, market: GameMarketKey, side: GameSideKey) {
   return `${String(sport_key ?? "").trim()}|${event_id}|${market}|${side}`;
-}
-
-/* =========================================================
-   Matchup parsing (for modal team_ratings lookup)
-========================================================= */
-
-function parseTeamsFromMatchup(matchup: string | null): { a: string | null; b: string | null } {
-  const raw = (matchup ?? "").trim();
-  if (!raw) return { a: null, b: null };
-
-  // common separators
-  const candidates = [
-    " vs ",
-    " VS ",
-    " Vs ",
-    " @ ",
-    " at ",
-    " AT ",
-    " At ",
-    "·", // in case someone embeds, we will ignore if no split
-  ];
-
-  // normalize a bit
-  const cleaned = raw.replace(/\s+/g, " ").trim();
-
-  // prefer explicit vs / @ / at
-  const re = /\s(vs\.?|@|at)\s/i;
-  if (re.test(cleaned)) {
-    const parts = cleaned.split(re).map((s) => s.trim()).filter(Boolean);
-    // split yields [team1, sep, team2] or more; we want first and last
-    const a = parts[0] ?? null;
-    const b = parts[parts.length - 1] ?? null;
-    return { a: a || null, b: b || null };
-  }
-
-  // fallback: try " vs " literal
-  for (const sep of candidates) {
-    if (cleaned.includes(sep)) {
-      const [a, b] = cleaned.split(sep).map((s) => s.trim());
-      return { a: a || null, b: b || null };
-    }
-  }
-
-  return { a: null, b: null };
 }
 
 /* =========================================================
@@ -1189,7 +1159,6 @@ export const ModelScreen = () => {
 
           if (!pinMoved) continue;
 
-          // Why moved?
           const prevHasLine = Number.isFinite(pinPrev.line as number);
           const curHasLine = Number.isFinite(pinCur.line as number);
           const sameLine = !prevHasLine || !curHasLine ? true : (pinPrev.line as number) === (pinCur.line as number);
@@ -1218,10 +1187,8 @@ export const ModelScreen = () => {
             const curQuote = softCur ?? fallbackCur;
             if (!curQuote) return;
 
-            // Must be within odds gate right now
             if (!withinOddsGate(curQuote.odds)) return;
 
-            // Soft must currently be BETTER than Pinnacle now — by line or price
             const better = softBetterThanPin({
               market,
               side,
@@ -1236,7 +1203,6 @@ export const ModelScreen = () => {
             lagging[sb] = curQuote;
           });
 
-          // keep original definition: requires at least 1 lagging soft book
           if (!Object.keys(lagging).length) continue;
 
           eligible[k] = {
@@ -1424,11 +1390,7 @@ export const ModelScreen = () => {
         })}
       </div>
 
-      <PlayDetailsModal
-        open={detailsOpen}
-        play={selected}
-        onClose={closeDetails}
-      />
+      <PlayDetailsModal open={detailsOpen} play={selected} onClose={closeDetails} />
     </div>
   );
 };
@@ -1536,7 +1498,6 @@ function PlayRow({
                 {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
               </div>
 
-              {/* Steam annotation */}
               {steamInfo ? (
                 <div className="text-[10px] text-[#808080] mt-1 truncate">
                   PIN now:{" "}
@@ -1733,10 +1694,18 @@ function PlayCard({
 
 /* =========================================================
    Details Modal (tabs; safe-area; no scroll-to-footer)
-   + FIXED model stats from team_ratings
+   + FIXED canonical team lookup via events
+   + FIXED non-repetitive stat presentation
 ========================================================= */
 
 type ModalTab = "line" | "hit";
+
+type ModalTeam = {
+  canonical: string;
+  abbr: string;
+  logo_url: string | null;
+  ratings: TeamRatingsRow | null;
+};
 
 function PlayDetailsModal({
   open,
@@ -1749,91 +1718,201 @@ function PlayDetailsModal({
 }) {
   const [tab, setTab] = useState<ModalTab>("line");
 
-  // MODEL STATS state (team_ratings)
-  const [teamStatsLoading, setTeamStatsLoading] = useState(false);
-  const [teamStatsErr, setTeamStatsErr] = useState<string>("");
-  const [teamStats, setTeamStats] = useState<Record<string, TeamRatingsRow>>({});
+  // event + teams (canonical)
+  const [eventLoading, setEventLoading] = useState(false);
+  const [eventErr, setEventErr] = useState<string>("");
+  const [eventRow, setEventRow] = useState<EventRow | null>(null);
+
+  // team_map + team_ratings resolved into 2 clean teams
+  const [teamsLoading, setTeamsLoading] = useState(false);
+  const [teamsErr, setTeamsErr] = useState<string>("");
+  const [modalTeams, setModalTeams] = useState<{ away: ModalTeam | null; home: ModalTeam | null }>({ away: null, home: null });
 
   useEffect(() => {
     if (open) setTab("line");
   }, [open, play?.playKey]);
 
-  // fetch team_ratings only for GAME plays when modal opens
+  // Load event row (canonical teams) when modal opens for GAME plays
   useEffect(() => {
     let mounted = true;
 
-    async function loadTeamRatings() {
+    async function loadEvent() {
       if (!open || !play || play.kind !== "game") {
-        if (mounted) {
-          setTeamStats({});
-          setTeamStatsErr("");
-          setTeamStatsLoading(false);
-        }
+        if (!mounted) return;
+        setEventRow(null);
+        setEventErr("");
+        setEventLoading(false);
         return;
       }
 
-      const { a, b } = parseTeamsFromMatchup(play.matchup);
-      const teams = [a, b].filter(Boolean) as string[];
-
-      if (!teams.length) {
-        if (mounted) {
-          setTeamStats({});
-          setTeamStatsErr("Could not parse teams from matchup for team_ratings lookup.");
-          setTeamStatsLoading(false);
-        }
-        return;
-      }
-
-      setTeamStatsLoading(true);
-      setTeamStatsErr("");
-      setTeamStats({});
+      setEventLoading(true);
+      setEventErr("");
+      setEventRow(null);
 
       try {
-        // Note: engine_possessions is optional; if your table doesn't have it, Supabase will ignore it if not selected.
+        // ✅ Use events table to get canonical home/away (NO matchup parsing)
         const { data, error } = await supabase
-          .from("team_ratings")
-          .select("canonical,engine_adj_off,engine_adj_def,engine_power,engine_possessions")
-          .in("canonical", teams);
+          .from("events")
+          .select("event_id,sport_key,commence_time,home_team,away_team")
+          .eq("event_id", play.event_id)
+          .limit(1);
 
         if (!mounted) return;
 
         if (error) {
-          setTeamStatsErr(error.message);
-          setTeamStats({});
+          setEventErr(error.message);
+          setEventRow(null);
           return;
         }
 
-        const map: Record<string, TeamRatingsRow> = {};
-        (data ?? []).forEach((r: any) => {
+        const r = (data?.[0] ?? null) as any;
+        if (!r?.event_id) {
+          setEventErr(`No events row found for event_id=${play.event_id}`);
+          setEventRow(null);
+          return;
+        }
+
+        setEventRow({
+          event_id: String(r.event_id),
+          sport_key: r.sport_key ?? null,
+          commence_time: r.commence_time ?? null,
+          home_team: r.home_team ?? null,
+          away_team: r.away_team ?? null,
+        });
+      } catch (e: any) {
+        if (!mounted) return;
+        setEventErr(e?.message ?? String(e));
+        setEventRow(null);
+      } finally {
+        if (mounted) setEventLoading(false);
+      }
+    }
+
+    loadEvent();
+    return () => {
+      mounted = false;
+    };
+  }, [open, play?.playKey]);
+
+  // Load team_map + team_ratings for those canonical teams (ONE clean comparison set)
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadTeams() {
+      if (!open || !play || play.kind !== "game") {
+        if (!mounted) return;
+        setModalTeams({ away: null, home: null });
+        setTeamsErr("");
+        setTeamsLoading(false);
+        return;
+      }
+
+      const away = (eventRow?.away_team ?? "").trim();
+      const home = (eventRow?.home_team ?? "").trim();
+
+      if (!away || !home) {
+        if (!mounted) return;
+        setTeamsErr(eventLoading ? "" : "Missing home_team/away_team on events row.");
+        setModalTeams({ away: null, home: null });
+        return;
+      }
+
+      setTeamsLoading(true);
+      setTeamsErr("");
+      setModalTeams({ away: null, home: null });
+
+      try {
+        const canonicals = Array.from(new Set([away, home]));
+
+        // team_map: canonical + abbreviation + Abbreviation2 + logo
+        // NOTE: adjust select names if your columns differ. This matches your prior conventions.
+        const tmQ = supabase
+          .from("team_map")
+          .select('canonical,Abbreviation,Abbreviation2,"Logo URL"')
+          .in("canonical", canonicals);
+
+        // team_ratings: ONLY the stats we actually show (no repeats)
+        // Optional fields are harmless if they exist; if they don't exist, remove them from select.
+        const trQ = supabase
+          .from("team_ratings")
+          .select("canonical,engine_adj_off,engine_adj_def,engine_power,engine_possessions,power_rank")
+          .in("canonical", canonicals);
+
+        const [tmRes, trRes] = await Promise.all([tmQ, trQ]);
+
+        if (!mounted) return;
+
+        if (tmRes.error) {
+          setTeamsErr(`team_map error: ${tmRes.error.message}`);
+          setTeamsLoading(false);
+          return;
+        }
+        if (trRes.error) {
+          setTeamsErr(`team_ratings error: ${trRes.error.message}`);
+          setTeamsLoading(false);
+          return;
+        }
+
+        const mapTeam: Record<string, TeamMapRow> = {};
+        (tmRes.data ?? []).forEach((r: any) => {
           if (!r?.canonical) return;
-          map[String(r.canonical)] = {
+          mapTeam[String(r.canonical)] = {
+            canonical: String(r.canonical),
+            abbreviation: r.Abbreviation ?? null,
+            abbreviation2: r.Abbreviation2 ?? null,
+            logo_url: r["Logo URL"] ?? null,
+          };
+        });
+
+        const mapRatings: Record<string, TeamRatingsRow> = {};
+        (trRes.data ?? []).forEach((r: any) => {
+          if (!r?.canonical) return;
+          mapRatings[String(r.canonical)] = {
             canonical: String(r.canonical),
             engine_adj_off: r.engine_adj_off == null ? null : Number(r.engine_adj_off),
             engine_adj_def: r.engine_adj_def == null ? null : Number(r.engine_adj_def),
             engine_power: r.engine_power == null ? null : Number(r.engine_power),
             engine_possessions: r.engine_possessions == null ? null : Number(r.engine_possessions),
+            power_rank: r.power_rank == null ? null : Number(r.power_rank),
           };
         });
 
-        setTeamStats(map);
+        const build = (canonical: string): ModalTeam => {
+          const tm = mapTeam[canonical];
+          const abbr =
+            (tm?.abbreviation && String(tm.abbreviation).trim()) ||
+            (tm?.abbreviation2 && String(tm.abbreviation2).trim()) ||
+            canonical.split(" ").slice(0, 3).map((w) => w[0]).join("").toUpperCase() ||
+            canonical;
+          const logo_url = (tm?.logo_url ?? null) as string | null;
+          const ratings = mapRatings[canonical] ?? null;
+          return { canonical, abbr, logo_url, ratings };
+        };
 
-        if (!Object.keys(map).length) {
-          setTeamStatsErr(`No team_ratings rows found for: ${teams.join(", ")}`);
+        setModalTeams({ away: build(away), home: build(home) });
+
+        // helpful error if ratings missing
+        const missingRatings = canonicals.filter((c) => !mapRatings[c]);
+        const missingMap = canonicals.filter((c) => !mapTeam[c]);
+        if (missingRatings.length || missingMap.length) {
+          const parts: string[] = [];
+          if (missingMap.length) parts.push(`team_map missing: ${missingMap.join(", ")}`);
+          if (missingRatings.length) parts.push(`team_ratings missing: ${missingRatings.join(", ")}`);
+          setTeamsErr(parts.join(" · "));
         }
       } catch (e: any) {
         if (!mounted) return;
-        setTeamStatsErr(e?.message ?? String(e));
-        setTeamStats({});
+        setTeamsErr(e?.message ?? String(e));
       } finally {
-        if (mounted) setTeamStatsLoading(false);
+        if (mounted) setTeamsLoading(false);
       }
     }
 
-    loadTeamRatings();
+    loadTeams();
     return () => {
       mounted = false;
     };
-  }, [open, play?.playKey]);
+  }, [open, play?.playKey, eventRow?.home_team, eventRow?.away_team, eventLoading]);
 
   if (!open || !play) return null;
 
@@ -1857,7 +1936,7 @@ function PlayDetailsModal({
           {/* Header */}
           <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
+              <div className="min-w-0 w-full">
                 <div className="text-white text-sm md:text-base truncate">
                   {play.matchup ?? "—"}{" "}
                   {play.kind === "prop" ? (
@@ -1866,6 +1945,7 @@ function PlayDetailsModal({
                     </span>
                   ) : null}
                 </div>
+
                 <div className="text-[11px] text-[#808080] mt-1">
                   {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)} ·{" "}
                   <span className="text-[#606060]">{play.event_id}</span>
@@ -1886,54 +1966,25 @@ function PlayDetailsModal({
                   </div>
                 ) : null}
 
-                {/* ✅ MODEL TEAM STATS (games only) */}
+                {/* ✅ ONE CLEAN TEAM STATS SECTION (no repeats) */}
                 {play.kind === "game" ? (
                   <div className="mt-3">
                     <div className="text-[10px] text-[#606060] mb-2">Model Team Stats (team_ratings)</div>
 
-                    {teamStatsLoading ? (
+                    {eventLoading || teamsLoading ? (
                       <div className="text-xs text-[#808080] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
-                        Loading team_ratings…
+                        Loading teams + ratings…
                       </div>
                     ) : null}
 
-                    {!teamStatsLoading && teamStatsErr ? (
+                    {!eventLoading && !teamsLoading && (eventErr || teamsErr) ? (
                       <div className="text-xs text-[#a0a0a0] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
-                        {teamStatsErr}
+                        {eventErr || teamsErr}
                       </div>
                     ) : null}
 
-                    {!teamStatsLoading && Object.keys(teamStats).length ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {Object.values(teamStats).map((r) => (
-                          <div key={r.canonical} className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] p-3">
-                            <div className="text-xs text-white font-medium truncate">{r.canonical}</div>
-
-                            <div className="mt-2 grid grid-cols-2 gap-y-1 text-[11px]">
-                              <span className="text-[#808080]">Off Eff</span>
-                              <span className="text-white tabular-nums">
-                                {r.engine_adj_off != null && Number.isFinite(r.engine_adj_off) ? r.engine_adj_off.toFixed(1) : "—"}
-                              </span>
-
-                              <span className="text-[#808080]">Def Eff</span>
-                              <span className="text-white tabular-nums">
-                                {r.engine_adj_def != null && Number.isFinite(r.engine_adj_def) ? r.engine_adj_def.toFixed(1) : "—"}
-                              </span>
-
-                              <span className="text-[#808080]">Net Rating</span>
-                              <span className="text-[#d4af37] tabular-nums">{fmtSigned(r.engine_power, 1)}</span>
-
-                              {/* optional pace */}
-                              {r.engine_possessions != null && Number.isFinite(r.engine_possessions) ? (
-                                <>
-                                  <span className="text-[#808080]">Pace</span>
-                                  <span className="text-white tabular-nums">{r.engine_possessions.toFixed(1)}</span>
-                                </>
-                              ) : null}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                    {!eventLoading && !teamsLoading && modalTeams.away && modalTeams.home ? (
+                      <TeamCompareBlock away={modalTeams.away} home={modalTeams.home} />
                     ) : null}
                   </div>
                 ) : null}
@@ -1976,6 +2027,111 @@ function PlayDetailsModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function TeamCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam }) {
+  const a = away.ratings;
+  const h = home.ratings;
+
+  // We only show these stats ONCE in a single comparison table (no duplicated cards)
+  const rows: { label: string; a: string; h: string; accent?: boolean }[] = [
+    {
+      label: "Off Eff",
+      a: a?.engine_adj_off != null && Number.isFinite(a.engine_adj_off) ? a.engine_adj_off.toFixed(1) : "—",
+      h: h?.engine_adj_off != null && Number.isFinite(h.engine_adj_off) ? h.engine_adj_off.toFixed(1) : "—",
+    },
+    {
+      label: "Def Eff",
+      a: a?.engine_adj_def != null && Number.isFinite(a.engine_adj_def) ? a.engine_adj_def.toFixed(1) : "—",
+      h: h?.engine_adj_def != null && Number.isFinite(h.engine_adj_def) ? h.engine_adj_def.toFixed(1) : "—",
+    },
+    {
+      label: "Net Rating",
+      a: a?.engine_power != null && Number.isFinite(a.engine_power) ? fmtSigned(a.engine_power, 1) : "—",
+      h: h?.engine_power != null && Number.isFinite(h.engine_power) ? fmtSigned(h.engine_power, 1) : "—",
+      accent: true,
+    },
+  ];
+
+  const paceA = a?.engine_possessions;
+  const paceH = h?.engine_possessions;
+  if (paceA != null || paceH != null) {
+    rows.push({
+      label: "Pace",
+      a: paceA != null && Number.isFinite(paceA) ? paceA.toFixed(1) : "—",
+      h: paceH != null && Number.isFinite(paceH) ? paceH.toFixed(1) : "—",
+    });
+  }
+
+  const prA = a?.power_rank;
+  const prH = h?.power_rank;
+  if (prA != null || prH != null) {
+    rows.push({
+      label: "Power Rank",
+      a: prA != null && Number.isFinite(prA) ? String(Math.round(prA)) : "—",
+      h: prH != null && Number.isFinite(prH) ? String(Math.round(prH)) : "—",
+    });
+  }
+
+  return (
+    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+      {/* Team header row */}
+      <div className="grid grid-cols-2 gap-0 border-b border-[#1f1f1f]">
+        <TeamHeaderCell team={away} sideLabel="AWAY" />
+        <TeamHeaderCell team={home} sideLabel="HOME" />
+      </div>
+
+      {/* Comparison rows */}
+      <div className="p-3">
+        <div className="grid grid-cols-3 gap-2 text-[11px]">
+          <div className="text-[#606060]">Stat</div>
+          <div className="text-center text-[#808080]">{away.abbr}</div>
+          <div className="text-center text-[#808080]">{home.abbr}</div>
+
+          {rows.map((r) => (
+            <Row3 key={r.label} label={r.label} a={r.a} h={r.h} accent={r.accent} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeamHeaderCell({ team, sideLabel }: { team: ModalTeam; sideLabel: string }) {
+  return (
+    <div className="p-3">
+      <div className="text-[10px] text-[#606060]">{sideLabel}</div>
+      <div className="mt-1 flex items-center gap-2 min-w-0">
+        {team.logo_url ? (
+          <img
+            src={team.logo_url}
+            alt={team.canonical}
+            className="h-7 w-7 rounded-md object-contain bg-[#0a0a0a] border border-[#1f1f1f] p-0.5 shrink-0"
+            draggable={false}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+          />
+        ) : (
+          <div className="h-7 w-7 rounded-md bg-[#0a0a0a] border border-[#1f1f1f] shrink-0" />
+        )}
+        <div className="min-w-0">
+          <div className="text-white text-xs font-medium truncate">{team.canonical}</div>
+          <div className="text-[10px] text-[#808080]">{team.abbr}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row3({ label, a, h, accent }: { label: string; a: string; h: string; accent?: boolean }) {
+  return (
+    <>
+      <div className="text-[#808080]">{label}</div>
+      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>{a}</div>
+      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>{h}</div>
+    </>
   );
 }
 
