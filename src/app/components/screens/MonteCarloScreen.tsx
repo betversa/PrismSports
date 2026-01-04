@@ -1,21 +1,15 @@
-// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE
+// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (Single “Model” button per event + Pro modal w/ logos + NCAAB stats via stat_key)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Visual layout matches ModelScreen (hero gradient + badge + chips + dark sticky table)
-// ✅ Mobile: cards + Details collapsible
-// ✅ Desktop: inline columns: Proj Score | Win% | Proj Margin | Proj Total | Cons Spread | Cons Total
-// ✅ Logos + abbreviations via team_map (canonical, "Logo URL", Abbreviation)
-// ✅ Power Rank via team_ratings (canonical -> power_rank), shown next to team name
-// ✅ Consensus via odds_snapshot (spreads/totals) median across books, latest ts per event
-// ✅ Removes redundant Event ID display — only shows Date + Time
-// ✅ Adds subtle divider row between games on desktop
-//
-// ✅ NEW: “Model” buttons next to team names
-// ✅ NEW: Modal shows side-by-side stats using CANONICAL team names:
-//     - public.team_ratings (latest row per canonical)
-//     - public.ncaab_stats using stat_key + home_score/away_score (composite stat rows)
-//
-// IMPORTANT: We DO NOT use columns like v_2025/last_3/... as "stats" anymore.
-// We use `stat_key` to identify the stat and `home_score`/`away_score` for values.
+// ✅ Desktop: 2 rows per event (away/home) + subtle divider between games
+// ✅ Mobile: matchup cards + Details collapsible
+// ✅ ONE modal button per event (placed by matchup/team names)
+// ✅ Modal: ultra-polished “Model View” w/ logos + tabs:
+//      1) Team Ratings (from public.team_ratings; uses canonical lookup; shows engine_power + key fields)
+//      2) NCAAB Stats (from public.ncaab_stats; row-based via stat_key; values via away_score/home_score)
+// ✅ Canonical names used for ALL stat lookups (no abbreviations in queries)
+// ✅ Fix: does NOT reference nonexistent columns (e.g., ha_2025, v_2025, last_3, etc.)
+// ✅ Defensive: renders “—” when a stat is missing; never crashes
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -63,35 +57,6 @@ type TeamMapRow = {
   "Logo URL": string | null;
 };
 
-type TeamRatingsRow = {
-  canonical: string;
-  sport_key?: string | null;
-  updated_at?: string | null;
-
-  // fields shown in modal
-  power_rank?: number | null;
-  engine_power?: number | null;
-  engine_adj_off?: number | null;
-  engine_adj_def?: number | null;
-  true_hca?: number | null;
-  fun_factor?: number | null;
-  sigma_total_100?: number | null;
-  sigma_margin_100?: number | null;
-  avg_total_points?: number | null;
-  avg_margin_points?: number | null;
-  games_played?: number | null;
-};
-
-type NcaabCompositeRow = {
-  canonical: string;
-  stat_key: string;
-  home_score: number | null;
-  away_score: number | null;
-  // optional extras if you have them:
-  updated_at?: string | null;
-  season?: string | null;
-};
-
 type OddsSnapshotRow = {
   ts: string;
   event_id: string;
@@ -105,10 +70,12 @@ type OddsSnapshotRow = {
 type Consensus = {
   ts: string | null;
 
+  // spreads: store HOME line; away is opposite sign
   spread_home_line: number | null;
   spread_home_odds: number | null;
   spread_away_odds: number | null;
 
+  // totals
   total_line: number | null;
   total_over_odds: number | null;
   total_under_odds: number | null;
@@ -121,15 +88,12 @@ type TeamRow = {
   commenceTime: string | null;
 
   side: SideKey;
-  teamName: string; // CANONICAL
+  teamName: string; // canonical
   teamAbbr: string;
   logoUrl: string | null;
 
-  powerRank: number | null;
-
   projPoints: number;
-
-  projMarginTeam: number;
+  projMarginTeam: number; // away = -marginHome
   coverProbTeam: number | null;
 
   projTotal: number;
@@ -138,7 +102,7 @@ type TeamRow = {
 
   winProbTeam: number | null;
 
-  consSpreadLineTeam: number | null;
+  consSpreadLineTeam: number | null; // away = -spread_home_line
   consSpreadOddsTeam: number | null;
 
   consTotalLine: number | null;
@@ -154,6 +118,15 @@ type EventBundle = {
   away: TeamRow;
   home: TeamRow;
 };
+
+type NcaabStatRow = {
+  canonical: string;
+  stat_key: string;
+  home_score: number | null;
+  away_score: number | null;
+};
+
+type TeamRatingsAny = Record<string, any> & { canonical?: string | null };
 
 /* =========================================================
    Helpers
@@ -179,16 +152,6 @@ function fmtSigned1(x: number | null) {
   if (x == null || !Number.isFinite(x)) return "—";
   const v = Math.round(x * 10) / 10;
   return `${v > 0 ? "+" : ""}${v.toFixed(1)}`;
-}
-
-function fmt1(x: number | null) {
-  if (x == null || !Number.isFinite(x)) return "—";
-  return (Math.round(x * 10) / 10).toFixed(1);
-}
-
-function fmt2(x: number | null) {
-  if (x == null || !Number.isFinite(x)) return "—";
-  return (Math.round(x * 100) / 100).toFixed(2);
 }
 
 function fmtOU(line: number | null, kind: "o" | "u") {
@@ -269,6 +232,22 @@ function medianOrNull(nums: number[]): number | null {
   return (arr[mid - 1] + arr[mid]) / 2;
 }
 
+function fmtMaybeNumber(v: any, digits = 2) {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return "—";
+  return x.toFixed(digits);
+}
+
+function fmtMaybeInt(v: any) {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return "—";
+  return String(Math.round(x));
+}
+
+function cx(...parts: Array<string | false | null | undefined>) {
+  return parts.filter(Boolean).join(" ");
+}
+
 /* =========================================================
    UI atoms
 ========================================================= */
@@ -287,7 +266,11 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
 
   if (!url || !ok) {
     return (
-      <div style={{ width: size, height: size }} className="rounded-md bg-white border border-[#e5e5e5]" />
+      <div
+        style={{ width: size, height: size }}
+        className="rounded-md bg-white border border-[#e5e5e5]"
+        aria-label={`${team} logo placeholder`}
+      />
     );
   }
 
@@ -305,21 +288,12 @@ function LogoBox({ team, url, size }: { team: string; url: string | null; size: 
   );
 }
 
-function RankBadge({ rank }: { rank: number | null }) {
-  if (rank == null || !Number.isFinite(rank)) return null;
-  return (
-    <span className="ml-2 inline-flex items-center rounded-md border border-[#2a2a2a] bg-[#0b0b0b] px-1.5 py-0.5 text-[10px] font-extrabold text-[#d4af37] tabular-nums">
-      #{Math.round(rank)}
-    </span>
-  );
-}
-
-function MiniButton({
-  label,
+function SoftButton({
+  children,
   onClick,
   title,
 }: {
-  label: string;
+  children: React.ReactNode;
   onClick: () => void;
   title?: string;
 }) {
@@ -328,384 +302,18 @@ function MiniButton({
       type="button"
       onClick={onClick}
       title={title}
-      className="ml-2 inline-flex items-center rounded-md border border-[#2a2a2a] bg-[#0b0b0b] px-2 py-1 text-[10px] font-extrabold text-[#d0d0d0] hover:bg-[#141414]"
+      className="inline-flex items-center gap-2 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-[11px] font-extrabold text-white hover:bg-[#121212] active:scale-[0.99] transition"
     >
-      {label}
+      {children}
     </button>
   );
 }
 
-/* =========================================================
-   Modal (Team Ratings + Composite Stats by stat_key)
-========================================================= */
-
-type ModelModalState = {
-  open: boolean;
-  awayCanonical: string | null;
-  homeCanonical: string | null;
-  awayAbbr: string | null;
-  homeAbbr: string | null;
-  commenceTime: string | null;
-};
-
-function StatRow({
-  label,
-  away,
-  home,
-  mono = true,
-}: {
-  label: string;
-  away: React.ReactNode;
-  home: React.ReactNode;
-  mono?: boolean;
-}) {
+function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#141414] last:border-b-0">
-      <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{label}</div>
-      <div className={["text-[11px] text-white font-bold text-right", mono ? "tabular-nums" : ""].join(" ")}>
-        {away}
-      </div>
-      <div className={["text-[11px] text-white font-bold text-right", mono ? "tabular-nums" : ""].join(" ")}>
-        {home}
-      </div>
-    </div>
-  );
-}
-
-function prettyStatKey(key: string) {
-  const k = (key ?? "").trim();
-  if (!k) return "—";
-  return k
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (m) => m.toUpperCase());
-}
-
-function ModelModal({
-  state,
-  onClose,
-  sportKey,
-}: {
-  state: ModelModalState;
-  onClose: () => void;
-  sportKey: SportKey;
-}) {
-  const isNcaab = String(sportKey) === "basketball_ncaab";
-  const [tab, setTab] = useState<"ratings" | "composite">("ratings");
-
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const [ratingsByTeam, setRatingsByTeam] = useState<Map<string, TeamRatingsRow>>(new Map());
-
-  // stat_key -> { away, home }
-  const [compositeByKey, setCompositeByKey] = useState<
-    Map<string, { away: number | null; home: number | null }>
-  >(new Map());
-
-  useEffect(() => {
-    if (!state.open) return;
-    setTab(isNcaab ? "composite" : "ratings");
-  }, [state.open, isNcaab]);
-
-  useEffect(() => {
-    if (!state.open) return;
-
-    const away = (state.awayCanonical ?? "").trim();
-    const home = (state.homeCanonical ?? "").trim();
-    if (!away || !home) return;
-
-    let mounted = true;
-
-    async function load() {
-      setLoading(true);
-      setErr(null);
-      setRatingsByTeam(new Map());
-      setCompositeByKey(new Map());
-
-      try {
-        // ---- TEAM RATINGS (latest per canonical)
-        const ratingsCols = [
-          "canonical",
-          "sport_key",
-          "updated_at",
-          "power_rank",
-          "engine_power",
-          "engine_adj_off",
-          "engine_adj_def",
-          "true_hca",
-          "fun_factor",
-          "sigma_total_100",
-          "sigma_margin_100",
-          "avg_total_points",
-          "avg_margin_points",
-          "games_played",
-        ].join(",");
-
-        const { data: rData, error: rErr } = await supabase
-          .from("team_ratings")
-          .select(ratingsCols)
-          .in("canonical", [away, home])
-          .eq("sport_key", sportKey as any)
-          .order("updated_at", { ascending: false })
-          .limit(50);
-
-        if (!mounted) return;
-        if (rErr) throw new Error(`Failed to load team_ratings: ${rErr.message}`);
-
-        const rm = new Map<string, TeamRatingsRow>();
-        for (const row of (rData ?? []) as TeamRatingsRow[]) {
-          const k = normKey(row.canonical);
-          if (!k) continue;
-          if (!rm.has(k)) rm.set(k, row); // first is latest due to order
-        }
-        setRatingsByTeam(rm);
-
-        // ---- NCAAB COMPOSITE STATS (stat_key based) — only for NCAAB
-        if (isNcaab) {
-          // IMPORTANT: we only read stat_key + home_score/away_score (composite values)
-          const nCols = ["canonical", "stat_key", "home_score", "away_score"].join(",");
-
-          const { data: nData, error: nErr } = await supabase
-            .from("ncaab_stats")
-            .select(nCols)
-            .in("canonical", [away, home])
-            .limit(5000);
-
-          if (!mounted) return;
-          if (nErr) throw new Error(`Failed to load ncaab_stats: ${nErr.message}`);
-
-          // Build per-team stat maps first
-          const awayStats = new Map<string, number | null>();
-          const homeStats = new Map<string, number | null>();
-
-          for (const row of (nData ?? []) as NcaabCompositeRow[]) {
-            const team = (row.canonical ?? "").trim();
-            const key = (row.stat_key ?? "").trim();
-            if (!team || !key) continue;
-
-            // For each TEAM row:
-            // - use away_score as the "team value" for Away team
-            // - use home_score as the "team value" for Home team
-            // (matches your instruction for composite rows)
-            if (team === away) {
-              awayStats.set(key, row.away_score == null ? null : Number(row.away_score));
-            } else if (team === home) {
-              homeStats.set(key, row.home_score == null ? null : Number(row.home_score));
-            }
-          }
-
-          // Union keys
-          const allKeys = new Set<string>([...awayStats.keys(), ...homeStats.keys()]);
-          const merged = new Map<string, { away: number | null; home: number | null }>();
-          Array.from(allKeys)
-            .sort((a, b) => a.localeCompare(b))
-            .forEach((k) => merged.set(k, { away: awayStats.get(k) ?? null, home: homeStats.get(k) ?? null }));
-
-          setCompositeByKey(merged);
-        }
-      } catch (e: any) {
-        setErr(e?.message ?? "Failed to load model data.");
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      mounted = false;
-    };
-  }, [state.open, state.awayCanonical, state.homeCanonical, sportKey, isNcaab]);
-
-  const awayKey = normKey(state.awayCanonical ?? "");
-  const homeKey = normKey(state.homeCanonical ?? "");
-  const awayR = ratingsByTeam.get(awayKey) ?? null;
-  const homeR = ratingsByTeam.get(homeKey) ?? null;
-
-  if (!state.open) return null;
-
-  return (
-    <div className="fixed inset-0 z-[80]">
-      <button type="button" onClick={onClose} className="absolute inset-0 bg-black/70" />
-
-      <div className="absolute inset-x-0 bottom-0 md:inset-0 md:flex md:items-center md:justify-center p-2 md:p-6">
-        <div className="w-full md:max-w-5xl rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] overflow-hidden shadow-2xl">
-          {/* header */}
-          <div
-            className="relative px-4 md:px-5 py-4 border-b border-[#141414]"
-            style={{
-              background:
-                "radial-gradient(900px 260px at 18% 0%, rgba(212,175,55,0.18), transparent 62%), radial-gradient(700px 240px at 85% 12%, rgba(255,255,255,0.05), transparent 60%)",
-            }}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1 text-[11px] text-[#b0b0b0]">
-                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
-                  Model View
-                </div>
-                <div className="text-white mt-2 font-extrabold text-[14px] md:text-[16px] truncate">
-                  {state.awayCanonical ?? "—"} vs {state.homeCanonical ?? "—"}
-                </div>
-                <div className="text-[11px] text-[#a8a8a8] mt-1">
-                  {fmtDateCentral(state.commenceTime)} · {fmtTimeCentral(state.commenceTime)}
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="shrink-0 px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] font-extrabold text-[#d0d0d0] hover:bg-[#141414]"
-              >
-                Done
-              </button>
-            </div>
-
-            {/* tabs */}
-            <div className="mt-3 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setTab("ratings")}
-                className={[
-                  "px-3 py-2 rounded-lg border text-[11px] font-extrabold",
-                  tab === "ratings"
-                    ? "bg-[#0b0b0b] border-[#2a2a2a] text-white"
-                    : "bg-transparent border-[#1f1f1f] text-[#bdbdbd] hover:bg-white/[0.03]",
-                ].join(" ")}
-              >
-                Team Ratings
-              </button>
-
-              {isNcaab ? (
-                <button
-                  type="button"
-                  onClick={() => setTab("composite")}
-                  className={[
-                    "px-3 py-2 rounded-lg border text-[11px] font-extrabold",
-                    tab === "composite"
-                      ? "bg-[#0b0b0b] border-[#2a2a2a] text-white"
-                      : "bg-transparent border-[#1f1f1f] text-[#bdbdbd] hover:bg-white/[0.03]",
-                  ].join(" ")}
-                >
-                  Composite Stats
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          {/* body */}
-          <div className="px-4 md:px-5 py-4 max-h-[70vh] overflow-y-auto">
-            {loading ? (
-              <div className="text-xs text-[#808080] px-3 py-10 text-center border border-[#2a2a2a] rounded-xl bg-[#0b0b0b]">
-                Loading model…
-              </div>
-            ) : err ? (
-              <div className="text-xs text-red-400 px-3 py-4 border border-red-900/50 rounded-xl bg-[#0b0b0b]">
-                {err}
-              </div>
-            ) : tab === "ratings" ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {/* Away */}
-                <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-[#141414]">
-                    <div className="text-[12px] font-extrabold text-white">
-                      {state.awayCanonical ?? "Away"}
-                      {state.awayAbbr ? <span className="text-[#808080]"> · {state.awayAbbr}</span> : null}
-                    </div>
-                    <div className="text-[10px] text-[#7a7a7a] font-semibold">AWAY</div>
-                  </div>
-                  <div className="px-4">
-                    <StatRow label="Power Rank" away={fmt1(awayR?.power_rank ?? null)} home={"—"} />
-                    <StatRow label="Engine Power" away={fmt2(awayR?.engine_power ?? null)} home={"—"} />
-                    <StatRow label="Adj Off" away={fmt2(awayR?.engine_adj_off ?? null)} home={"—"} />
-                    <StatRow label="Adj Def" away={fmt2(awayR?.engine_adj_def ?? null)} home={"—"} />
-                    <StatRow label="True HCA" away={fmt2(awayR?.true_hca ?? null)} home={"—"} />
-                    <StatRow label="Fun Factor" away={fmt2(awayR?.fun_factor ?? null)} home={"—"} />
-                    <StatRow label="σ Total/100" away={fmt2(awayR?.sigma_total_100 ?? null)} home={"—"} />
-                    <StatRow label="σ Margin/100" away={fmt2(awayR?.sigma_margin_100 ?? null)} home={"—"} />
-                    <StatRow label="Avg Total" away={fmt2(awayR?.avg_total_points ?? null)} home={"—"} />
-                    <StatRow label="Avg Margin" away={fmt2(awayR?.avg_margin_points ?? null)} home={"—"} />
-                  </div>
-                </div>
-
-                {/* Home */}
-                <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-[#141414]">
-                    <div className="text-[12px] font-extrabold text-white">
-                      {state.homeCanonical ?? "Home"}
-                      {state.homeAbbr ? <span className="text-[#808080]"> · {state.homeAbbr}</span> : null}
-                    </div>
-                    <div className="text-[10px] text-[#7a7a7a] font-semibold">HOME</div>
-                  </div>
-                  <div className="px-4">
-                    <StatRow label="Power Rank" away={"—"} home={fmt1(homeR?.power_rank ?? null)} />
-                    <StatRow label="Engine Power" away={"—"} home={fmt2(homeR?.engine_power ?? null)} />
-                    <StatRow label="Adj Off" away={"—"} home={fmt2(homeR?.engine_adj_off ?? null)} />
-                    <StatRow label="Adj Def" away={"—"} home={fmt2(homeR?.engine_adj_def ?? null)} />
-                    <StatRow label="True HCA" away={"—"} home={fmt2(homeR?.true_hca ?? null)} />
-                    <StatRow label="Fun Factor" away={"—"} home={fmt2(homeR?.fun_factor ?? null)} />
-                    <StatRow label="σ Total/100" away={"—"} home={fmt2(homeR?.sigma_total_100 ?? null)} />
-                    <StatRow label="σ Margin/100" away={"—"} home={fmt2(homeR?.sigma_margin_100 ?? null)} />
-                    <StatRow label="Avg Total" away={"—"} home={fmt2(homeR?.avg_total_points ?? null)} />
-                    <StatRow label="Avg Margin" away={"—"} home={fmt2(homeR?.avg_margin_points ?? null)} />
-                  </div>
-                </div>
-              </div>
-            ) : (
-              // Composite stats view: ONE list, side-by-side away/home per stat_key
-              <div className="rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
-                <div className="px-4 py-3 border-b border-[#141414] flex items-center justify-between">
-                  <div className="text-[12px] font-extrabold text-white">Composite Stats</div>
-                  <div className="text-[10px] text-[#7a7a7a] font-semibold">
-                    {state.awayAbbr ?? "AWAY"} vs {state.homeAbbr ?? "HOME"}
-                  </div>
-                </div>
-
-                <div className="px-4">
-                  {/* header row */}
-                  <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#141414]">
-                    <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">Stat</div>
-                    <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
-                      {state.awayAbbr ?? "AWAY"}
-                    </div>
-                    <div className="text-[9px] text-[#8a8a8a] font-extrabold uppercase tracking-wide text-right">
-                      {state.homeAbbr ?? "HOME"}
-                    </div>
-                  </div>
-
-                  {compositeByKey.size === 0 ? (
-                    <div className="py-10 text-center text-xs text-[#808080]">
-                      No composite stat rows found for these teams.
-                    </div>
-                  ) : (
-                    Array.from(compositeByKey.entries()).map(([k, v]) => (
-                      <StatRow
-                        key={k}
-                        label={prettyStatKey(k)}
-                        away={fmt2(v.away)}
-                        home={fmt2(v.home)}
-                      />
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="px-4 md:px-5 py-3 border-t border-[#141414] flex items-center justify-between">
-            <div className="text-[10px] text-[#808080]">
-              Composite stats are matched by <span className="text-white font-semibold">stat_key</span> using canonical team names.
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] font-extrabold text-[#d0d0d0] hover:bg-[#141414]"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <span className="inline-flex items-center rounded-full border border-[#2a2a2a] bg-black/20 px-2.5 py-1 text-[10px] font-extrabold text-[#cfcfcf]">
+      {children}
+    </span>
   );
 }
 
@@ -785,9 +393,526 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /* =========================================================
-   Screen (rest of file unchanged from your last version)
-   - Includes Model buttons by team names
-   - Uses canonical teamName for modal lookups
+   Model Modal (professional)
+========================================================= */
+
+type ModelModalProps = {
+  open: boolean;
+  onClose: () => void;
+  sportKey: SportKey;
+  event: EventBundle | null;
+
+  // maps
+  logoMap: Map<string, string>;
+  abbrMap: Map<string, string>;
+};
+
+type ModelModalState = {
+  loading: boolean;
+  error: string | null;
+
+  awayRatings: TeamRatingsAny | null;
+  homeRatings: TeamRatingsAny | null;
+
+  // stat_key -> value
+  awayStats: Map<string, number>;
+  homeStats: Map<string, number>;
+
+  fetchedAt: string | null;
+};
+
+const NCAAB_STAT_DEFS: Array<{
+  key: string;
+  label: string;
+  hint?: string;
+  fmt?: (v: number) => string;
+}> = [
+  { key: "off_eff", label: "Off Efficiency", hint: "Points per 100", fmt: (v) => v.toFixed(1) },
+  { key: "def_eff", label: "Def Efficiency", hint: "Allowed per 100", fmt: (v) => v.toFixed(1) },
+  { key: "net_rating", label: "Net Rating", hint: "Off − Def", fmt: (v) => v.toFixed(1) },
+  { key: "pace", label: "Pace", hint: "Possessions / 40", fmt: (v) => v.toFixed(1) },
+
+  { key: "efg_pct", label: "eFG%", hint: "Effective FG%", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "tov_pct", label: "TO%", hint: "Turnover rate", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "orb_pct", label: "ORB%", hint: "Off reb rate", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "ft_rate", label: "FT Rate", hint: "FTA/FGA", fmt: (v) => v.toFixed(3) },
+
+  { key: "three_rate", label: "3PA Rate", hint: "3PA/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%` },
+  { key: "three_pct", label: "3P%", hint: "3PT%", fmt: (v) => `${v.toFixed(1)}%` },
+
+  { key: "two_pct", label: "2P%", hint: "2PT%", fmt: (v) => `${v.toFixed(1)}%` },
+  { key: "rim_rate", label: "Rim Rate", hint: "Rim/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%` },
+];
+
+const TEAM_RATINGS_FIELDS: Array<{ key: string; label: string; fmt?: (v: any) => string }> = [
+  { key: "power_rank", label: "Power Rank", fmt: (v) => fmtMaybeInt(v) },
+  { key: "engine_power", label: "Engine Power", fmt: (v) => fmtMaybeNumber(v, 2) },
+  { key: "engine_adj_off", label: "Adj Off", fmt: (v) => fmtMaybeNumber(v, 2) },
+  { key: "engine_adj_def", label: "Adj Def", fmt: (v) => fmtMaybeNumber(v, 2) },
+  { key: "true_hca", label: "True HCA", fmt: (v) => fmtMaybeNumber(v, 2) },
+  { key: "pace", label: "Pace", fmt: (v) => fmtMaybeNumber(v, 2) },
+  { key: "sigma_margin_100", label: "Sigma Margin (100)", fmt: (v) => fmtMaybeNumber(v, 2) },
+  { key: "sigma_total_100", label: "Sigma Total (100)", fmt: (v) => fmtMaybeNumber(v, 2) },
+];
+
+function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelModalProps) {
+  const [tab, setTab] = useState<"ratings" | "ncaab">("ratings");
+  const [st, setSt] = useState<ModelModalState>({
+    loading: false,
+    error: null,
+    awayRatings: null,
+    homeRatings: null,
+    awayStats: new Map(),
+    homeStats: new Map(),
+    fetchedAt: null,
+  });
+
+  // Close on ESC
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  // Fetch on open/event change
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      if (!open || !event) return;
+
+      const awayCanonical = event.away.teamName; // canonical
+      const homeCanonical = event.home.teamName; // canonical
+
+      setSt((p) => ({
+        ...p,
+        loading: true,
+        error: null,
+        awayRatings: null,
+        homeRatings: null,
+        awayStats: new Map(),
+        homeStats: new Map(),
+        fetchedAt: null,
+      }));
+
+      try {
+        // TEAM RATINGS (use canonical; try to filter by sport_key if column exists, otherwise client filter)
+        const ratingsRes = await supabase
+          .from("team_ratings")
+          .select("*")
+          .in("canonical", [awayCanonical, homeCanonical]);
+
+        if (ratingsRes.error) throw new Error(`Failed to load team_ratings: ${ratingsRes.error.message}`);
+
+        const rawRatings = (ratingsRes.data ?? []) as TeamRatingsAny[];
+        // Optional sport filter (only if the row has sport_key and matches)
+        const ratings = rawRatings.filter((r) => {
+          const rk = (r as any)?.sport_key;
+          if (rk == null) return true; // table might be single-sport
+          return String(rk) === String(sportKey);
+        });
+
+        const awayRatings = ratings.find((r) => normKey(String(r.canonical ?? "")) === normKey(awayCanonical)) ?? null;
+        const homeRatings = ratings.find((r) => normKey(String(r.canonical ?? "")) === normKey(homeCanonical)) ?? null;
+
+        // NCAAB STATS (row-based via stat_key; canonical lookup; values via away_score/home_score)
+        // Only load for NCAAB sport key, but we keep it safe if user opens in other sports.
+        let awayStats = new Map<string, number>();
+        let homeStats = new Map<string, number>();
+
+        if (String(sportKey).toLowerCase() === "basketball_ncaab") {
+          const statsRes = await supabase
+            .from("ncaab_stats")
+            .select("canonical,stat_key,home_score,away_score")
+            .in("canonical", [awayCanonical, homeCanonical]);
+
+          if (statsRes.error) throw new Error(`Failed to load ncaab_stats: ${statsRes.error.message}`);
+
+          const rows = (statsRes.data ?? []) as NcaabStatRow[];
+
+          // Build maps: for each team canonical, choose side-appropriate value:
+          //   - away team uses away_score
+          //   - home team uses home_score
+          for (const r of rows) {
+            const canon = String(r.canonical ?? "");
+            const key = String(r.stat_key ?? "").trim();
+            if (!key) continue;
+
+            if (normKey(canon) === normKey(awayCanonical)) {
+              const v = Number(r.away_score);
+              if (Number.isFinite(v)) awayStats.set(key, v);
+            } else if (normKey(canon) === normKey(homeCanonical)) {
+              const v = Number(r.home_score);
+              if (Number.isFinite(v)) homeStats.set(key, v);
+            }
+          }
+        }
+
+        if (!mounted) return;
+        setSt({
+          loading: false,
+          error: null,
+          awayRatings,
+          homeRatings,
+          awayStats,
+          homeStats,
+          fetchedAt: new Date().toLocaleString(),
+        });
+      } catch (e: any) {
+        if (!mounted) return;
+        setSt((p) => ({
+          ...p,
+          loading: false,
+          error: String(e?.message ?? e),
+        }));
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, [open, event?.eventId, sportKey]);
+
+  const awayKey = event ? normKey(event.away.teamName) : "";
+  const homeKey = event ? normKey(event.home.teamName) : "";
+
+  const awayLogo = event ? logoMap.get(awayKey) ?? null : null;
+  const homeLogo = event ? logoMap.get(homeKey) ?? null : null;
+
+  const awayAbbr = event ? abbrMap.get(awayKey) ?? event.away.teamAbbr : "";
+  const homeAbbr = event ? abbrMap.get(homeKey) ?? event.home.teamAbbr : "";
+
+  const overlay = cx(
+    "fixed inset-0 z-[80]",
+    open ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
+  );
+
+  const modal = cx(
+    "fixed left-1/2 top-1/2 z-[90] w-[min(980px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2",
+    "rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl",
+    "max-h-[calc(100vh-24px)] overflow-hidden",
+    open ? "opacity-100 scale-100" : "opacity-0 scale-[0.98] pointer-events-none"
+  );
+
+  if (!open || !event) return null;
+
+  const HeaderTeam = ({
+    side,
+    name,
+    abbr,
+    logo,
+  }: {
+    side: "AWAY" | "HOME";
+    name: string;
+    abbr: string;
+    logo: string | null;
+  }) => (
+    <div className="flex items-center gap-3 min-w-0">
+      <LogoBox team={name} url={logo} size={38} />
+      <div className="min-w-0">
+        <div className="text-white font-extrabold text-[13px] truncate">{name}</div>
+        <div className="text-[10px] text-[#8a8a8a] font-bold uppercase tracking-wide">
+          {side} · {abbr}
+        </div>
+      </div>
+    </div>
+  );
+
+  const ValueCell = ({ v, emph }: { v: string; emph?: boolean }) => (
+    <div className={cx("text-right tabular-nums", emph ? "text-white font-extrabold" : "text-[#d6d6d6] font-bold")}>
+      {v}
+    </div>
+  );
+
+  // Compare helper (optional subtle emphasis)
+  const compare = (a: number | undefined, h: number | undefined, higherIsBetter: boolean) => {
+    if (!Number.isFinite(a as any) || !Number.isFinite(h as any)) return { aGood: false, hGood: false };
+    if (a === h) return { aGood: false, hGood: false };
+    if (higherIsBetter) return { aGood: (a as number) > (h as number), hGood: (h as number) > (a as number) };
+    return { aGood: (a as number) < (h as number), hGood: (h as number) < (a as number) };
+  };
+
+  const RatingsPanel = () => {
+    const a = st.awayRatings ?? {};
+    const h = st.homeRatings ?? {};
+
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {/* Away */}
+        <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#141414]">
+            <HeaderTeam side="AWAY" name={event.away.teamName} abbr={awayAbbr} logo={awayLogo} />
+          </div>
+
+          <div className="px-4 py-2">
+            {TEAM_RATINGS_FIELDS.map((f) => {
+              const v = a?.[f.key];
+              const txt = f.fmt ? f.fmt(v) : String(v ?? "—");
+              return (
+                <div key={f.key} className="grid grid-cols-2 gap-3 py-2 border-b border-[#141414] last:border-b-0">
+                  <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{f.label}</div>
+                  <ValueCell v={txt} emph />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Home */}
+        <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#141414]">
+            <HeaderTeam side="HOME" name={event.home.teamName} abbr={homeAbbr} logo={homeLogo} />
+          </div>
+
+          <div className="px-4 py-2">
+            {TEAM_RATINGS_FIELDS.map((f) => {
+              const v = h?.[f.key];
+              const txt = f.fmt ? f.fmt(v) : String(v ?? "—");
+              return (
+                <div key={f.key} className="grid grid-cols-2 gap-3 py-2 border-b border-[#141414] last:border-b-0">
+                  <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">{f.label}</div>
+                  <ValueCell v={txt} emph />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const NcaabStatsPanel = () => {
+    const aMap = st.awayStats;
+    const hMap = st.homeStats;
+
+    return (
+      <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
+        {/* Header row */}
+        <div className="px-4 py-3 border-b border-[#141414]">
+          <div className="grid grid-cols-12 gap-3 items-center">
+            <div className="col-span-5 text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">
+              NCAAB Stats (stat_key)
+            </div>
+
+            <div className="col-span-3 flex items-center gap-2 justify-end min-w-0">
+              <LogoBox team={event.away.teamName} url={awayLogo} size={26} />
+              <div className="text-[10px] text-white font-extrabold truncate">{awayAbbr}</div>
+            </div>
+
+            <div className="col-span-3 flex items-center gap-2 justify-end min-w-0">
+              <LogoBox team={event.home.teamName} url={homeLogo} size={26} />
+              <div className="text-[10px] text-white font-extrabold truncate">{homeAbbr}</div>
+            </div>
+
+            <div className="col-span-1 text-right text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">
+              Δ
+            </div>
+          </div>
+        </div>
+
+        <div className="px-4 py-2">
+          {NCAAB_STAT_DEFS.map((d) => {
+            const a = aMap.get(d.key);
+            const h = hMap.get(d.key);
+
+            const aTxt = Number.isFinite(a as any) ? (d.fmt ? d.fmt(a as number) : String(a)) : "—";
+            const hTxt = Number.isFinite(h as any) ? (d.fmt ? d.fmt(h as number) : String(h)) : "—";
+
+            // heuristics for emphasis
+            const higherIsBetter = !["def_eff", "tov_pct"].includes(d.key); // simplistic but sensible
+            const { aGood, hGood } = compare(a as any, h as any, higherIsBetter);
+
+            let deltaTxt = "—";
+            if (Number.isFinite(a as any) && Number.isFinite(h as any)) {
+              const dv = (a as number) - (h as number);
+              deltaTxt = `${dv > 0 ? "+" : ""}${dv.toFixed(2)}`;
+            }
+
+            return (
+              <div key={d.key} className="grid grid-cols-12 gap-3 items-center py-2 border-b border-[#141414] last:border-b-0">
+                <div className="col-span-5 min-w-0">
+                  <div className="text-[11px] text-white font-extrabold truncate">{d.label}</div>
+                  <div className="text-[10px] text-[#808080] font-semibold truncate">
+                    <span className="text-[#5c5c5c]">{d.key}</span>
+                    {d.hint ? <span className="text-[#404040]"> · </span> : null}
+                    {d.hint ? <span>{d.hint}</span> : null}
+                  </div>
+                </div>
+
+                <div className="col-span-3">
+                  <div className={cx("text-right tabular-nums", aGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold")}>
+                    {aTxt}
+                  </div>
+                </div>
+
+                <div className="col-span-3">
+                  <div className={cx("text-right tabular-nums", hGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold")}>
+                    {hTxt}
+                  </div>
+                </div>
+
+                <div className="col-span-1">
+                  <div className="text-right tabular-nums text-[#a8a8a8] font-bold">{deltaTxt}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="px-4 py-3 border-t border-[#141414] text-[10px] text-[#7a7a7a]">
+          Uses canonical names for lookups ({String(sportKey).toUpperCase()}). Values pulled via away_score/home_score per team side.
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <>
+      {/* Overlay */}
+      <div
+        className={overlay}
+        onClick={onClose}
+        style={{
+          background:
+            "radial-gradient(1000px 400px at 20% 0%, rgba(212,175,55,0.16), transparent 60%), rgba(0,0,0,0.72)",
+          transition: "opacity 160ms ease",
+        }}
+      />
+
+      {/* Modal */}
+      <div className={modal} style={{ transition: "opacity 160ms ease, transform 160ms ease" }}>
+        {/* Header */}
+        <div className="relative px-5 pt-5 pb-4 border-b border-[#141414]">
+          <div
+            className="pointer-events-none absolute inset-0 opacity-95"
+            style={{
+              background:
+                "radial-gradient(900px 240px at 18% 0%, rgba(212,175,55,0.14), transparent 62%), radial-gradient(700px 220px at 85% 12%, rgba(255,255,255,0.05), transparent 60%)",
+            }}
+          />
+
+          <div className="relative flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-1 text-[11px] text-[#b0b0b0]">
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
+                  Model View
+                </span>
+
+                <div className="hidden sm:flex items-center gap-2">
+                  <Chip>{String(sportKey).toUpperCase()}</Chip>
+                  <Chip>
+                    {fmtDateCentral(event.commenceTime)} · {fmtTimeCentral(event.commenceTime)}
+                  </Chip>
+                </div>
+              </div>
+
+              <div className="mt-3 text-white font-extrabold text-[18px] leading-tight truncate">
+                {event.away.teamName} vs {event.home.teamName}
+              </div>
+
+              <div className="mt-1 text-[11px] text-[#9a9a9a]">
+                Proj:{" "}
+                <span className="text-white font-extrabold tabular-nums">
+                  {event.away.teamAbbr} {event.away.projPoints.toFixed(1)}
+                </span>
+                <span className="text-[#404040]"> · </span>
+                <span className="text-white font-extrabold tabular-nums">
+                  {event.home.teamAbbr} {event.home.projPoints.toFixed(1)}
+                </span>
+                <span className="text-[#404040]"> · </span>
+                <span className="text-[#d6d6d6] font-bold tabular-nums">Total {event.home.projTotal.toFixed(1)}</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-[11px] font-extrabold text-white hover:bg-[#121212]"
+            >
+              Done
+            </button>
+          </div>
+
+          {/* Tabs */}
+          <div className="relative mt-4 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setTab("ratings")}
+              className={cx(
+                "rounded-lg border px-3 py-2 text-[11px] font-extrabold transition",
+                tab === "ratings"
+                  ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
+                  : "border-[#2a2a2a] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
+              )}
+            >
+              Team Ratings
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTab("ncaab")}
+              className={cx(
+                "rounded-lg border px-3 py-2 text-[11px] font-extrabold transition",
+                tab === "ncaab"
+                  ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
+                  : "border-[#2a2a2a] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
+              )}
+            >
+              NCAAB Stats
+            </button>
+
+            <div className="ml-auto text-[10px] text-[#808080] hidden sm:block">
+              {st.loading ? "Loading…" : st.error ? "Stats unavailable" : st.fetchedAt ? `Updated ${st.fetchedAt}` : ""}
+            </div>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="bg-[#070707]">
+          {/* Status row */}
+          {st.loading ? (
+            <div className="px-5 py-4 border-b border-[#141414] text-[11px] text-[#b0b0b0]">
+              Loading stats & ratings…
+            </div>
+          ) : null}
+
+          {st.error ? (
+            <div className="px-5 py-4 border-b border-[#141414] text-[11px] text-red-400">
+              {st.error}
+            </div>
+          ) : null}
+
+          <div className="px-5 py-5 max-h-[calc(100vh-220px)] overflow-y-auto">
+            {tab === "ratings" ? <RatingsPanel /> : <NcaabStatsPanel />}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-[#141414] bg-[#0b0b0b] flex items-center justify-between">
+          <div className="text-[10px] text-[#7a7a7a]">
+            Canonical matching enforced · One modal per event · Logos from team_map
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-4 py-2 text-[11px] font-extrabold text-white hover:bg-[#121212]"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* =========================================================
+   Screen
 ========================================================= */
 
 export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
@@ -797,7 +922,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
-  const [powerRankMap, setPowerRankMap] = useState<Map<string, number>>(new Map());
 
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
   const [openMap, setOpenMap] = useState<Record<string, boolean>>({});
@@ -806,29 +930,14 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
   const [loadingResults, setLoadingResults] = useState(false);
   const [loadingConsensus, setLoadingConsensus] = useState(false);
 
-  const [modal, setModal] = useState<ModelModalState>({
-    open: false,
-    awayCanonical: null,
-    homeCanonical: null,
-    awayAbbr: null,
-    homeAbbr: null,
-    commenceTime: null,
-  });
+  // Modal state (single per event)
+  const [modelOpen, setModelOpen] = useState(false);
+  const [modelEvent, setModelEvent] = useState<EventBundle | null>(null);
 
-  function openModel(away: TeamRow, home: TeamRow, commenceTime: string | null) {
-    setModal({
-      open: true,
-      awayCanonical: away.teamName,
-      homeCanonical: home.teamName,
-      awayAbbr: away.teamAbbr,
-      homeAbbr: home.teamAbbr,
-      commenceTime,
-    });
-  }
-
-  // --- team_map
+  /* 0) team_map logos + abbrev */
   useEffect(() => {
     let mounted = true;
+
     async function loadTeamMap() {
       const { data, error } = await supabase.from("team_map").select('canonical,"Logo URL","Abbreviation"');
       if (!mounted) return;
@@ -864,44 +973,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, []);
 
-  // --- power_rank map
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadPowerRanks() {
-      const { data, error } = await supabase
-        .from("team_ratings")
-        .select("canonical,power_rank,sport_key,updated_at")
-        .eq("sport_key", sportKey as any)
-        .order("updated_at", { ascending: false })
-        .limit(2000);
-
-      if (!mounted) return;
-
-      if (error) {
-        console.warn("[MonteCarloScreen] team_ratings error:", error.message);
-        setPowerRankMap(new Map());
-        return;
-      }
-
-      const pm = new Map<string, number>();
-      for (const r of (data ?? []) as TeamRatingsRow[]) {
-        const k = normKey(r.canonical);
-        const pr = r.power_rank == null ? null : Number(r.power_rank);
-        if (!k) continue;
-        if (!pm.has(k) && pr != null && Number.isFinite(pr)) pm.set(k, pr);
-      }
-
-      setPowerRankMap(pm);
-    }
-
-    loadPowerRanks();
-    return () => {
-      mounted = false;
-    };
-  }, [sportKey]);
-
-  // --- latest run
+  /* 1) latest run for sportKey */
   useEffect(() => {
     let mounted = true;
 
@@ -915,7 +987,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const { data, error } = await supabase
         .from("monte_carlo_runs")
         .select("id,created_at,sport_key")
-        .eq("sport_key", sportKey as any)
+        .eq("sport_key", sportKey)
         .order("created_at", { ascending: false })
         .limit(1);
 
@@ -938,7 +1010,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [sportKey]);
 
-  // --- results for run
+  /* 2) results for run */
   useEffect(() => {
     let mounted = true;
 
@@ -969,7 +1041,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         .from("monte_carlo_results")
         .select(cols)
         .eq("run_id", runId)
-        .eq("sport_key", sportKey as any)
+        .eq("sport_key", sportKey)
         .order("commence_time", { ascending: true });
 
       if (!mounted) return;
@@ -991,7 +1063,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [run?.id, sportKey]);
 
-  // --- consensus
+  /* 3) consensus from odds_snapshot */
   useEffect(() => {
     let mounted = true;
 
@@ -1022,6 +1094,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
       const rows = (data ?? []) as OddsSnapshotRow[];
 
+      // de-dupe per (event, market, book, side) and collect medians
       const seen = new Set<string>();
 
       const spreadHomeLines = new Map<string, number[]>();
@@ -1101,7 +1174,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [results]);
 
-  // --- bundle events
+  /* 4) bundle event rows */
   const events: EventBundle[] = useMemo(() => {
     const out: EventBundle[] = [];
 
@@ -1149,10 +1222,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         commenceTime: r.commence_time ?? null,
 
         side: "AWAY",
-        teamName: awayRaw,
+        teamName: awayRaw, // canonical
         teamAbbr: awayAbbr,
         logoUrl: logoMap.get(awayKey) ?? null,
-        powerRank: powerRankMap.get(awayKey) ?? null,
 
         projPoints: Math.round(awayPts * 10) / 10,
 
@@ -1180,10 +1252,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         commenceTime: r.commence_time ?? null,
 
         side: "HOME",
-        teamName: homeRaw,
+        teamName: homeRaw, // canonical
         teamAbbr: homeAbbr,
         logoUrl: logoMap.get(homeKey) ?? null,
-        powerRank: powerRankMap.get(homeKey) ?? null,
 
         projPoints: Math.round(homePts * 10) / 10,
 
@@ -1215,8 +1286,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     }
 
     return out;
-  }, [results, abbrMap, logoMap, consensusMap, powerRankMap]);
+  }, [results, abbrMap, logoMap, consensusMap]);
 
+  /* keep open state aligned */
   useEffect(() => {
     setOpenMap((prev) => {
       const next: Record<string, boolean> = {};
@@ -1240,28 +1312,28 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     return new Date(Math.max(...stamps)).toLocaleString();
   }, [events, consensusMap]);
 
+  const openModel = (ev: EventBundle) => {
+    setModelEvent(ev);
+    setModelOpen(true);
+  };
+
   /* =========================================================
      Render
   ========================================================= */
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
+      {/* Modal */}
       <ModelModal
-        state={modal}
-        onClose={() =>
-          setModal({
-            open: false,
-            awayCanonical: null,
-            homeCanonical: null,
-            awayAbbr: null,
-            homeAbbr: null,
-            commenceTime: null,
-          })
-        }
+        open={modelOpen}
+        onClose={() => setModelOpen(false)}
         sportKey={sportKey}
+        event={modelEvent}
+        logoMap={logoMap}
+        abbrMap={abbrMap}
       />
 
-      {/* HERO */}
+      {/* HERO / HEADER */}
       <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f] p-4 md:p-5">
         <div
           className="pointer-events-none absolute inset-0 opacity-95"
@@ -1281,7 +1353,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Monte Carlo</h2>
 
             <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
-              One block per matchup. Projected score, win%, probabilities, and consensus lines.
+              One block per matchup. Tap <span className="text-white font-extrabold">Model</span> for a pro side-by-side view.
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -1333,7 +1405,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                     key={ev.eventId}
                     ev={ev}
                     showDivider={idx < events.length - 1}
-                    onOpenModel={() => openModel(ev.away, ev.home, ev.commenceTime)}
+                    onOpenModel={() => openModel(ev)}
                   />
                 ))}
 
@@ -1365,31 +1437,29 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             <div key={ev.eventId} className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-white text-sm truncate">
-                    {ev.away.teamAbbr} @ {ev.home.teamAbbr}
+                  <div className="flex items-center gap-2">
+                    <div className="text-white text-sm truncate">
+                      {ev.away.teamAbbr} @ {ev.home.teamAbbr}
+                    </div>
+
+                    {/* ONE Model button per event */}
+                    <SoftButton onClick={() => openModel(ev)} title="Open Model View">
+                      Model
+                    </SoftButton>
                   </div>
+
                   <div className="text-[11px] text-[#808080] mt-1">
                     {fmtDateCentral(ev.commenceTime)} · {fmtTimeCentral(ev.commenceTime)}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => openModel(ev.away, ev.home, ev.commenceTime)}
-                    className="px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] font-extrabold text-[#d0d0d0] hover:bg-[#141414]"
-                  >
-                    Model
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                    className="px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] font-extrabold text-[#d0d0d0] hover:bg-[#141414]"
-                  >
-                    {open ? "Hide" : "Details"}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
+                  className="shrink-0 px-3 py-2 rounded-lg bg-[#111] border border-[#2a2a2a] text-[11px] text-[#d0d0d0] hover:bg-[#141414]"
+                >
+                  {open ? "Hide" : "Details"}
+                </button>
               </div>
 
               {/* Away */}
@@ -1398,12 +1468,13 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 <div className="min-w-0 leading-tight">
                   <div className="text-[11px] text-white font-extrabold truncate" title={ev.away.teamName}>
                     {ev.away.teamName}
-                    <RankBadge rank={ev.away.powerRank} />
                   </div>
                   <div className="text-[9px] text-[#7a7a7a] font-semibold">AWAY · {ev.away.teamAbbr}</div>
                 </div>
                 <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
-                  <div className={["font-extrabold text-[13px]", ev.away.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+                  <div
+                    className={cx("font-extrabold text-[13px]", ev.away.isProjectedWinner ? "text-green-400" : "text-white")}
+                  >
                     {ev.away.projPoints.toFixed(1)}
                   </div>
                   <div className="font-bold text-[10px] text-[#bdbdbd]">{pct01(ev.away.winProbTeam)}</div>
@@ -1416,12 +1487,13 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 <div className="min-w-0 leading-tight">
                   <div className="text-[11px] text-white font-extrabold truncate" title={ev.home.teamName}>
                     {ev.home.teamName}
-                    <RankBadge rank={ev.home.powerRank} />
                   </div>
                   <div className="text-[9px] text-[#7a7a7a] font-semibold">HOME · {ev.home.teamAbbr}</div>
                 </div>
                 <div className="ml-auto flex items-baseline tabular-nums gap-2 shrink-0">
-                  <div className={["font-extrabold text-[13px]", ev.home.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+                  <div
+                    className={cx("font-extrabold text-[13px]", ev.home.isProjectedWinner ? "text-green-400" : "text-white")}
+                  >
                     {ev.home.projPoints.toFixed(1)}
                   </div>
                   <div className="font-bold text-[10px] text-[#bdbdbd]">{pct01(ev.home.winProbTeam)}</div>
@@ -1442,7 +1514,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 };
 
 /* =========================================================
-   Desktop rows
+   Desktop rows (2 rows per event)
 ========================================================= */
 
 function DesktopEventRows({
@@ -1458,14 +1530,21 @@ function DesktopEventRows({
   const home = ev.home;
 
   const matchupLine = (
-    <div className="flex items-start justify-between gap-2">
+    <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <div className="text-white truncate">
-          {away.teamName} vs {home.teamName}
-          <span className="text-[#404040]"> · </span>
-          <span className="text-[#b0b0b0]">{fmtDateCentral(ev.commenceTime)}</span>
-          <span className="text-[#404040]"> </span>
-          <span className="text-[#b0b0b0]">{fmtTimeCentral(ev.commenceTime)}</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="text-white truncate">
+            {away.teamName} vs {home.teamName}
+            <span className="text-[#404040]"> · </span>
+            <span className="text-[#b0b0b0]">{fmtDateCentral(ev.commenceTime)}</span>
+            <span className="text-[#404040]"> </span>
+            <span className="text-[#b0b0b0]">{fmtTimeCentral(ev.commenceTime)}</span>
+          </div>
+
+          {/* ONE Model button per event (by team names) */}
+          <SoftButton onClick={onOpenModel} title="Open Model View">
+            Model
+          </SoftButton>
         </div>
       </div>
     </div>
@@ -1522,8 +1601,6 @@ function DesktopEventRows({
       <div className="min-w-0">
         <div className="text-white truncate font-semibold" title={row.teamName}>
           {row.teamName}
-          <RankBadge rank={row.powerRank} />
-          <MiniButton label="Model" title="Open model stats" onClick={onOpenModel} />
         </div>
         <div className="text-[10px] text-[#606060] mt-0.5">
           {row.side} · {row.teamAbbr}
@@ -1534,6 +1611,7 @@ function DesktopEventRows({
 
   return (
     <>
+      {/* Away row */}
       <tr className="transition-colors hover:bg-white/[0.02]">
         <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[420px]">
           {matchupLine}
@@ -1543,7 +1621,7 @@ function DesktopEventRows({
         </td>
 
         <td className="p-3 text-center">
-          <div className={["font-extrabold tabular-nums", away.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+          <div className={cx("font-extrabold tabular-nums", away.isProjectedWinner ? "text-green-400" : "text-white")}>
             {away.projPoints.toFixed(1)}
           </div>
         </td>
@@ -1569,13 +1647,14 @@ function DesktopEventRows({
         </td>
       </tr>
 
+      {/* Home row */}
       <tr className="transition-colors hover:bg-white/[0.02]">
         <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[420px]">
           <TeamBlock row={home} />
         </td>
 
         <td className="p-3 text-center">
-          <div className={["font-extrabold tabular-nums", home.isProjectedWinner ? "text-green-400" : "text-white"].join(" ")}>
+          <div className={cx("font-extrabold tabular-nums", home.isProjectedWinner ? "text-green-400" : "text-white")}>
             {home.projPoints.toFixed(1)}
           </div>
         </td>
@@ -1601,6 +1680,7 @@ function DesktopEventRows({
         </td>
       </tr>
 
+      {/* Divider between games */}
       {showDivider ? (
         <tr>
           <td colSpan={7} className="p-0">
@@ -1612,5 +1692,6 @@ function DesktopEventRows({
   );
 }
 
+/* ✅ Default export optional */
 export default MonteCarloScreen;
 
