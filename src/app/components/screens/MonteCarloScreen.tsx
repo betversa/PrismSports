@@ -1,20 +1,24 @@
 // src/app/components/screens/MonteCarloScreen.tsx
-// FULL REWRITE — keeps your current MonteCarloScreen layout + adds per-game MODEL button + side-by-side stats panel
+// FULL REWRITE — adds polished side-by-side STATS panel using public.ncaab_stats (canonical -> stats)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Visual layout matches ModelScreen (hero gradient + badge + chips + dark sticky table)
-// ✅ Mobile: cards + Details collapsible (kept) + NEW Model button
-// ✅ Desktop: inline columns (Proj Score | Win% | Proj Margin | Proj Total | Cons Spread | Cons Total) + NEW Model toggle
+// ✅ Keeps your current MonteCarloScreen visual parity (hero gradient + badge + chips + dark sticky table)
+// ✅ Desktop: 2 rows per event + subtle divider between games
+// ✅ Mobile: cards + Details collapsible (unchanged pattern)
 // ✅ Logos + abbreviations via team_map (canonical, "Logo URL", Abbreviation)
-// ✅ Power Rank via team_ratings (canonical -> power_rank)
-// ✅ Uses engine_power (and other engine fields) from team_ratings in the MODEL panel (side-by-side)
-// ✅ Pace pulled from team_possessions (best-effort from whatever columns exist) in the MODEL panel
-// ✅ Consensus via odds_snapshot (spreads/totals) median across books, latest ts per event
-// ✅ Removes redundant Event ID display — only shows Date + Time for each matchup
-// ✅ Adds a subtle divider row between games on desktop
+// ✅ Power Rank via team_ratings (canonical -> power_rank), shown next to team name (in list + cards)
+// ✅ Consensus via odds_snapshot median across books, latest ts per event
+// ✅ Removes Event ID display — shows Date + Time only
 //
-// NOTE: This file is written to be schema-tolerant:
-// - team_ratings: selects * and picks fields if present (engine_power, engine_adj_off, engine_adj_def, true_hca, etc.)
-// - team_possessions: selects * and derives a "best pace" from common column names if present
+// ✅ NEW (your ask): "STATS" panel (side-by-side) built from public.ncaab_stats
+//    - Desktop: STATS button shows an inline panel row (below the matchup block)
+//    - Mobile: STATS button expands a panel inside the card
+//    - The panel is schema-tolerant: selects * and displays rows only when columns exist
+//    - Rows are grouped into sections (Efficiency / Shooting / Four Factors / Rebounding / Pace)
+//    - Highlights the better side per stat (green tint) with direction-aware logic (higher-better vs lower-better)
+//
+// Notes:
+// - Assumes ncaab_stats has at least a `canonical` column matching team_map/team_ratings canonical naming.
+// - If ncaab_stats also has season/date fields, this still works (we just take the first row per canonical).
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -62,14 +66,15 @@ type TeamMapRow = {
   "Logo URL": string | null;
 };
 
-type TeamRatingsAny = Record<string, any> & {
-  canonical?: string;
+type TeamRatingsRow = {
+  canonical: string;
+  power_rank: number | null;
   sport_key?: string | null;
 };
 
-type TeamPossAny = Record<string, any> & {
+type NcaabStatsRow = Record<string, any> & {
   canonical?: string;
-  sport_key?: string | null;
+  updated_at?: string | null;
 };
 
 type OddsSnapshotRow = {
@@ -85,12 +90,10 @@ type OddsSnapshotRow = {
 type Consensus = {
   ts: string | null;
 
-  // spreads: store HOME line; away is opposite sign
   spread_home_line: number | null;
   spread_home_odds: number | null;
   spread_away_odds: number | null;
 
-  // totals
   total_line: number | null;
   total_over_odds: number | null;
   total_under_odds: number | null;
@@ -106,20 +109,19 @@ type TeamRow = {
   teamName: string;
   teamAbbr: string;
   logoUrl: string | null;
-
-  // quick badge
   powerRank: number | null;
 
-  // projection row
   projPoints: number;
+
   projMarginTeam: number; // away = -marginHome
   coverProbTeam: number | null;
+
   projTotal: number;
   overProb: number | null;
   underProb: number | null;
+
   winProbTeam: number | null;
 
-  // market row
   consSpreadLineTeam: number | null; // away = -spread_home_line
   consSpreadOddsTeam: number | null;
 
@@ -129,14 +131,8 @@ type TeamRow = {
 
   isProjectedWinner: boolean;
 
-  // model panel (from team_ratings / team_possessions)
-  enginePower: number | null; // ✅ yes, this uses your engine_power
-  engineAdjOff: number | null;
-  engineAdjDef: number | null;
-  engineNet: number | null;
-
-  trueHca: number | null; // useful for HOME team
-  paceTeam: number | null; // team pace best-effort
+  // NEW: ncaab_stats row (schema-tolerant)
+  stats: NcaabStatsRow | null;
 };
 
 type EventBundle = {
@@ -147,7 +143,7 @@ type EventBundle = {
 };
 
 /* =========================================================
-   Helpers (mirrors ModelScreen style)
+   Helpers
 ========================================================= */
 
 function safeNum(n: any, fallback = 0) {
@@ -251,10 +247,22 @@ function medianOrNull(nums: number[]): number | null {
 }
 
 /* =========================================================
-   Pace derivation (schema-tolerant)
+   ncaab_stats schema-tolerant helpers
 ========================================================= */
 
-function pickFirstFinite(obj: any, keys: string[]): number | null {
+type StatKind = "number" | "percent" | "signed" | "pace" | "rank";
+type BetterDirection = "higher" | "lower";
+
+type StatDef = {
+  label: string;
+  keys: string[]; // try in order
+  kind: StatKind;
+  better: BetterDirection;
+  digits?: number;
+  hint?: string;
+};
+
+function firstFiniteFromKeys(obj: any, keys: string[]): number | null {
   for (const k of keys) {
     const v = Number(obj?.[k]);
     if (Number.isFinite(v)) return v;
@@ -262,35 +270,27 @@ function pickFirstFinite(obj: any, keys: string[]): number | null {
   return null;
 }
 
-function derivePace(poss: TeamPossAny | null): number | null {
-  if (!poss) return null;
+function fmtStat(v: number | null, kind: StatKind, digits = 2) {
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (kind === "percent") return `${(v * 100).toFixed(1)}%`; // assumes 0-1 for percent fields; if your table stores 0-100, swap to v.toFixed(1)
+  if (kind === "signed") {
+    const x = Math.round(v * 10) / 10;
+    return `${x > 0 ? "+" : ""}${x.toFixed(1)}`;
+  }
+  if (kind === "pace") return (Math.round(v * 10) / 10).toFixed(1);
+  if (kind === "rank") return Math.round(v).toString();
+  return (Math.round(v * Math.pow(10, digits)) / Math.pow(10, digits)).toFixed(digits);
+}
 
-  // Common-ish candidates across models / tables
-  // (We avoid selecting specific columns in SQL; we select * and then pull best match here.)
-  const candidates = [
-    "pace",
-    "pace_team",
-    "pace_adj",
-    "adj_pace",
-    "tempo",
-    "tempo_adj",
-    "possessions_per_game",
-    "poss_per_game",
-    "poss_pg",
-    "pace_last3",
-    "pace_last5",
-    "pace_last10",
-    "pace_season",
-    "season_pace",
-    "home_pace",
-    "away_pace",
-  ];
-
-  return pickFirstFinite(poss, candidates);
+function compareBetter(a: number | null, b: number | null, better: BetterDirection) {
+  if (a == null || !Number.isFinite(a) || b == null || !Number.isFinite(b)) return { aBetter: false, bBetter: false };
+  if (a === b) return { aBetter: false, bBetter: false };
+  if (better === "higher") return { aBetter: a > b, bBetter: b > a };
+  return { aBetter: a < b, bBetter: b < a };
 }
 
 /* =========================================================
-   UI atoms (copied style from ModelScreen)
+   UI atoms
 ========================================================= */
 
 function Pill({ label, value }: { label: string; value: string }) {
@@ -364,7 +364,7 @@ function MiniButton({
 }
 
 /* =========================================================
-   Mobile details block (unchanged behavior)
+   Mobile "Details" block (kept)
 ========================================================= */
 
 function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
@@ -439,126 +439,253 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /* =========================================================
-   MODEL panel (side-by-side, expandable)
+   NEW: STATS panel (side-by-side, from ncaab_stats)
 ========================================================= */
 
-function ModelPanel({ away, home }: { away: TeamRow; home: TeamRow }) {
-  const Section = ({ title }: { title: string }) => (
-    <div className="mt-4 first:mt-0 text-[10px] font-extrabold tracking-widest uppercase text-[#8a8a8a]">
-      {title}
-    </div>
-  );
+const STATS_SECTIONS: { title: string; rows: StatDef[] }[] = [
+  {
+    title: "Efficiency",
+    rows: [
+      {
+        label: "Adj Off (per 100)",
+        keys: ["adj_off", "adj_o", "adj_offense", "off_eff", "offense_eff", "engine_adj_off"],
+        kind: "number",
+        better: "higher",
+      },
+      {
+        label: "Adj Def (per 100)",
+        keys: ["adj_def", "adj_d", "adj_defense", "def_eff", "defense_eff", "engine_adj_def"],
+        kind: "number",
+        better: "lower",
+      },
+      {
+        label: "Net Rating",
+        keys: ["net_rating", "adj_net", "net_eff", "engine_net", "net"],
+        kind: "signed",
+        better: "higher",
+      },
+      {
+        label: "Power",
+        keys: ["engine_power", "power", "power_rating", "team_power"],
+        kind: "number",
+        better: "higher",
+        digits: 2,
+      },
+      {
+        label: "Power Rank",
+        keys: ["power_rank", "rank", "rating_rank"],
+        kind: "rank",
+        better: "lower",
+      },
+    ],
+  },
+  {
+    title: "Pace",
+    rows: [
+      {
+        label: "Tempo",
+        keys: ["tempo", "adj_tempo", "pace", "poss_per_game", "possessions_per_game"],
+        kind: "pace",
+        better: "higher",
+      },
+    ],
+  },
+  {
+    title: "Four Factors",
+    rows: [
+      {
+        label: "eFG%",
+        keys: ["efg", "efg_pct", "efg_percent", "off_efg", "off_efg_pct"],
+        kind: "percent",
+        better: "higher",
+      },
+      {
+        label: "TOV%",
+        keys: ["tov_pct", "to_pct", "tov", "turnover_pct", "off_tov_pct"],
+        kind: "percent",
+        better: "lower",
+      },
+      {
+        label: "ORB%",
+        keys: ["orb_pct", "off_reb_pct", "o_reb_pct", "off_orb_pct"],
+        kind: "percent",
+        better: "higher",
+      },
+      {
+        label: "FTR",
+        keys: ["ftr", "ft_rate", "free_throw_rate", "ft_fga"],
+        kind: "number",
+        better: "higher",
+        digits: 3,
+      },
+    ],
+  },
+  {
+    title: "Shooting",
+    rows: [
+      {
+        label: "3P%",
+        keys: ["tp_pct", "3p_pct", "three_pct", "three_pt_pct", "three_point_pct"],
+        kind: "percent",
+        better: "higher",
+      },
+      {
+        label: "2P%",
+        keys: ["twop_pct", "2p_pct", "two_pct", "two_pt_pct", "two_point_pct"],
+        kind: "percent",
+        better: "higher",
+      },
+      {
+        label: "FT%",
+        keys: ["ft_pct", "free_throw_pct"],
+        kind: "percent",
+        better: "higher",
+      },
+      {
+        label: "3P Rate (3PA/FGA)",
+        keys: ["tpar", "3par", "three_rate", "three_pa_rate", "threepa_fga"],
+        kind: "number",
+        better: "higher",
+        digits: 3,
+      },
+    ],
+  },
+  {
+    title: "Rebounding",
+    rows: [
+      {
+        label: "TRB%",
+        keys: ["trb_pct", "reb_pct", "total_reb_pct"],
+        kind: "percent",
+        better: "higher",
+      },
+      {
+        label: "DRB%",
+        keys: ["drb_pct", "def_reb_pct", "d_reb_pct"],
+        kind: "percent",
+        better: "higher",
+      },
+    ],
+  },
+];
 
-  const Header = () => (
-    <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#1a1a1a]">
-      <div />
+function StatsPanel({ away, home }: { away: TeamRow; home: TeamRow }) {
+  const awayStats = away.stats;
+  const homeStats = home.stats;
+
+  const header = (
+    <div className="grid grid-cols-3 gap-3 items-center pb-2 border-b border-[#1a1a1a]">
+      <div className="text-[10px] font-extrabold tracking-widest uppercase text-[#8a8a8a]">Team Stats</div>
       <div className="text-right text-[11px] text-white font-extrabold">{away.teamAbbr}</div>
       <div className="text-right text-[11px] text-white font-extrabold">{home.teamAbbr}</div>
     </div>
   );
 
-  const Row = ({
-    label,
-    a,
-    h,
-    hint,
-  }: {
-    label: string;
-    a: React.ReactNode;
-    h: React.ReactNode;
-    hint?: string;
-  }) => (
-    <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#1a1a1a] last:border-b-0">
-      <div className="min-w-0">
-        <div className="text-[11px] text-[#b0b0b0] font-semibold">{label}</div>
-        {hint ? <div className="text-[10px] text-[#606060]">{hint}</div> : null}
-      </div>
-      <div className="text-right text-[12px] text-white font-bold tabular-nums">{a}</div>
-      <div className="text-right text-[12px] text-white font-bold tabular-nums">{h}</div>
-    </div>
-  );
+  const Row = ({ def }: { def: StatDef }) => {
+    const a = firstFiniteFromKeys(awayStats, def.keys);
+    const h = firstFiniteFromKeys(homeStats, def.keys);
 
-  const netAway =
-    away.engineAdjOff != null && away.engineAdjDef != null ? away.engineAdjOff - away.engineAdjDef : null;
-  const netHome =
-    home.engineAdjOff != null && home.engineAdjDef != null ? home.engineAdjOff - home.engineAdjDef : null;
+    // Special-case: if "percent" looks like 0-100 in your table, you can normalize here.
+    const aNorm = def.kind === "percent" && a != null && a > 1.5 ? a / 100 : a;
+    const hNorm = def.kind === "percent" && h != null && h > 1.5 ? h / 100 : h;
+
+    const cmp = compareBetter(aNorm, hNorm, def.better);
+
+    const aText = fmtStat(aNorm, def.kind, def.digits ?? 2);
+    const hText = fmtStat(hNorm, def.kind, def.digits ?? 2);
+
+    const baseCell = "text-right text-[12px] font-extrabold tabular-nums rounded-md px-2 py-1";
+    const betterCell = "bg-emerald-500/10 text-emerald-200 border border-emerald-900/40";
+    const worseCell = "bg-rose-500/10 text-rose-200 border border-rose-900/40";
+    const neutralCell = "bg-white/[0.03] text-white border border-[#222]";
+
+    return (
+      <div className="grid grid-cols-3 gap-3 items-center py-2 border-b border-[#1a1a1a] last:border-b-0">
+        <div className="min-w-0">
+          <div className="text-[11px] text-[#b0b0b0] font-semibold">{def.label}</div>
+          {def.hint ? <div className="text-[10px] text-[#606060]">{def.hint}</div> : null}
+        </div>
+
+        <div
+          className={[
+            baseCell,
+            cmp.aBetter ? betterCell : cmp.bBetter ? worseCell : neutralCell,
+          ].join(" ")}
+        >
+          {aText}
+        </div>
+
+        <div
+          className={[
+            baseCell,
+            cmp.bBetter ? betterCell : cmp.aBetter ? worseCell : neutralCell,
+          ].join(" ")}
+        >
+          {hText}
+        </div>
+      </div>
+    );
+  };
+
+  // Only show sections that have at least one stat present on either side
+  const visibleSections = STATS_SECTIONS.map((sec) => {
+    const rows = sec.rows.filter((r) => {
+      const a = firstFiniteFromKeys(awayStats, r.keys);
+      const h = firstFiniteFromKeys(homeStats, r.keys);
+      return Number.isFinite(a) || Number.isFinite(h);
+    });
+    return { ...sec, rows };
+  }).filter((sec) => sec.rows.length > 0);
+
+  const metaStamp =
+    (awayStats?.updated_at || homeStats?.updated_at) ? (
+      <div className="mt-2 text-[10px] text-[#606060]">
+        Stats updated:{" "}
+        <span className="text-[#8a8a8a] font-semibold tabular-nums">
+          {formatTs((awayStats?.updated_at ?? homeStats?.updated_at) as any)}
+        </span>
+      </div>
+    ) : null;
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
-      <div className="flex items-center justify-between gap-3 mb-2">
-        <div className="text-sm font-extrabold text-white">Model View</div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-sm font-extrabold text-white">NCAAB Stats</div>
         <div className="text-[11px] text-[#808080] font-semibold">
           {away.teamAbbr} vs {home.teamAbbr}
         </div>
       </div>
 
-      <Header />
+      <div className="mt-3">{header}</div>
 
-      <Section title="Model Core" />
-      <Row label="Engine Power" hint="team_ratings.engine_power" a={num2(away.enginePower)} h={num2(home.enginePower)} />
-      <Row label="Power Rank" hint="team_ratings.power_rank" a={valOrDash(away.powerRank)} h={valOrDash(home.powerRank)} />
-      <Row label="Proj Points" hint="monte_carlo_results projected points" a={num1(away.projPoints)} h={num1(home.projPoints)} />
-      <Row label="Win %" hint="monte_carlo_results win prob" a={pct01(away.winProbTeam)} h={pct01(home.winProbTeam)} />
-      <Row label="Proj Margin" hint="team-relative (away = -home margin)" a={fmtSigned1(away.projMarginTeam)} h={fmtSigned1(home.projMarginTeam)} />
-      <Row label="Cover %" hint="cover probability" a={pct01(away.coverProbTeam)} h={pct01(home.coverProbTeam)} />
-      <Row
-        label="Pace"
-        hint="team_possessions (best available pace column)"
-        a={num1OrDash(away.paceTeam)}
-        h={num1OrDash(home.paceTeam)}
-      />
-
-      <Section title="Efficiency Context" />
-      <Row label="Adj Off Eff" hint="team_ratings.engine_adj_off" a={num1OrDash(away.engineAdjOff)} h={num1OrDash(home.engineAdjOff)} />
-      <Row label="Adj Def Eff" hint="team_ratings.engine_adj_def" a={num1OrDash(away.engineAdjDef)} h={num1OrDash(home.engineAdjDef)} />
-      <Row label="Net Rating" hint="Adj Off - Adj Def" a={fmtSigned1(netAway)} h={fmtSigned1(netHome)} />
-
-      <Section title="Market Context" />
-      <Row
-        label="Consensus Spread"
-        hint="odds_snapshot median across books"
-        a={
-          away.consSpreadLineTeam == null
-            ? "—"
-            : `${fmtSigned1(away.consSpreadLineTeam)} (${american(away.consSpreadOddsTeam)})`
-        }
-        h={
-          home.consSpreadLineTeam == null
-            ? "—"
-            : `${fmtSigned1(home.consSpreadLineTeam)} (${american(home.consSpreadOddsTeam)})`
-        }
-      />
-      <Row
-        label="Consensus Total"
-        hint="odds_snapshot median across books"
-        a={away.consTotalLine == null ? "—" : `${fmtOU(away.consTotalLine, "o")} (${american(away.consTotalOverOdds)})`}
-        h={home.consTotalLine == null ? "—" : `${fmtOU(home.consTotalLine, "u")} (${american(home.consTotalUnderOdds)})`}
-      />
-
-      <Section title="Home Court" />
-      <Row label="True HCA" hint="team_ratings.true_hca (home only)" a="—" h={num2OrDash(home.trueHca)} />
+      {!visibleSections.length ? (
+        <div className="mt-4 text-[12px] text-[#808080]">
+          No matching columns found in <span className="text-white font-semibold">ncaab_stats</span> for these teams.
+        </div>
+      ) : (
+        <div className="mt-2 space-y-4">
+          {visibleSections.map((sec) => (
+            <div key={sec.title}>
+              <div className="text-[10px] font-extrabold tracking-widest uppercase text-[#8a8a8a] mt-3">
+                {sec.title}
+              </div>
+              <div className="mt-2 rounded-lg border border-[#1f1f1f] overflow-hidden">
+                <div className="px-3 py-2 bg-white/[0.02] border-b border-[#1f1f1f] text-[10px] text-[#808080] font-extrabold tracking-widest uppercase">
+                  {sec.title}
+                </div>
+                <div className="px-3 py-1">
+                  {sec.rows.map((def) => (
+                    <Row key={def.label} def={def} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+          {metaStamp}
+        </div>
+      )}
     </div>
   );
-}
-
-function valOrDash(x: any) {
-  const n = Number(x);
-  return Number.isFinite(n) ? String(Math.round(n)) : "—";
-}
-function num1(x: number) {
-  return (Math.round(x * 10) / 10).toFixed(1);
-}
-function num2(x: number | null) {
-  if (x == null || !Number.isFinite(x)) return "—";
-  return (Math.round(x * 100) / 100).toFixed(2);
-}
-function num1OrDash(x: number | null) {
-  if (x == null || !Number.isFinite(x)) return "—";
-  return (Math.round(x * 10) / 10).toFixed(1);
-}
-function num2OrDash(x: number | null) {
-  if (x == null || !Number.isFinite(x)) return "—";
-  return (Math.round(x * 100) / 100).toFixed(2);
 }
 
 /* =========================================================
@@ -572,18 +699,18 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
   const [logoMap, setLogoMap] = useState<Map<string, string>>(new Map());
   const [abbrMap, setAbbrMap] = useState<Map<string, string>>(new Map());
+  const [powerRankMap, setPowerRankMap] = useState<Map<string, number>>(new Map());
 
-  const [ratingsMap, setRatingsMap] = useState<Map<string, TeamRatingsAny>>(new Map());
-  const [possMap, setPossMap] = useState<Map<string, TeamPossAny>>(new Map());
+  const [statsMap, setStatsMap] = useState<Map<string, NcaabStatsRow>>(new Map());
 
   const [consensusMap, setConsensusMap] = useState<Map<string, Consensus>>(new Map());
-
   const [openDetailsMap, setOpenDetailsMap] = useState<Record<string, boolean>>({});
-  const [openModelMap, setOpenModelMap] = useState<Record<string, boolean>>({});
+  const [openStatsMap, setOpenStatsMap] = useState<Record<string, boolean>>({});
 
   const [loadingRun, setLoadingRun] = useState(true);
   const [loadingResults, setLoadingResults] = useState(false);
   const [loadingConsensus, setLoadingConsensus] = useState(false);
+  const [loadingStats, setLoadingStats] = useState(false);
 
   /* 0) team_map logos + abbrev */
   useEffect(() => {
@@ -624,82 +751,36 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, []);
 
-  /* 0b) team_ratings (engine_power + power_rank + engine fields) */
+  /* 0b) team_ratings power_rank (canonical -> power_rank) */
   useEffect(() => {
     let mounted = true;
 
-    async function loadTeamRatings() {
-      // schema-tolerant: select *
-      // Attempt filter by sport_key first; if sport_key column doesn't exist, retry without filter.
-      let data: any[] | null = null;
-
-      const first = await supabase.from("team_ratings").select("*").eq("sport_key", sportKey);
-      if (!first.error) {
-        data = first.data ?? [];
-      } else {
-        const retry = await supabase.from("team_ratings").select("*");
-        if (retry.error) {
-          console.warn("[MonteCarloScreen] team_ratings error:", retry.error.message);
-          if (mounted) setRatingsMap(new Map());
-          return;
-        }
-        data = retry.data ?? [];
-      }
+    async function loadPowerRanks() {
+      const { data, error } = await supabase
+        .from("team_ratings")
+        .select("canonical,power_rank,sport_key")
+        .eq("sport_key", sportKey);
 
       if (!mounted) return;
 
-      const m = new Map<string, TeamRatingsAny>();
-      for (const r of data ?? []) {
-        const canon = (r?.canonical ?? "").toString();
-        const k = normKey(canon);
-        if (!k) continue;
-        m.set(k, r as TeamRatingsAny);
+      if (error) {
+        console.warn("[MonteCarloScreen] team_ratings error:", error.message);
+        setPowerRankMap(new Map());
+        return;
       }
 
-      setRatingsMap(m);
+      const pm = new Map<string, number>();
+      for (const r of (data ?? []) as TeamRatingsRow[]) {
+        const k = normKey(r.canonical);
+        const pr = r.power_rank == null ? null : Number(r.power_rank);
+        if (!k) continue;
+        if (pr != null && Number.isFinite(pr)) pm.set(k, pr);
+      }
+
+      setPowerRankMap(pm);
     }
 
-    loadTeamRatings();
-    return () => {
-      mounted = false;
-    };
-  }, [sportKey]);
-
-  /* 0c) team_possessions pace (best-effort) */
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadPossessions() {
-      // schema-tolerant: select *
-      let data: any[] | null = null;
-
-      const first = await supabase.from("team_possessions").select("*").eq("sport_key", sportKey);
-      if (!first.error) {
-        data = first.data ?? [];
-      } else {
-        const retry = await supabase.from("team_possessions").select("*");
-        if (retry.error) {
-          console.warn("[MonteCarloScreen] team_possessions error:", retry.error.message);
-          if (mounted) setPossMap(new Map());
-          return;
-        }
-        data = retry.data ?? [];
-      }
-
-      if (!mounted) return;
-
-      const m = new Map<string, TeamPossAny>();
-      for (const r of data ?? []) {
-        const canon = (r?.canonical ?? "").toString();
-        const k = normKey(canon);
-        if (!k) continue;
-        m.set(k, r as TeamPossAny);
-      }
-
-      setPossMap(m);
-    }
-
-    loadPossessions();
+    loadPowerRanks();
     return () => {
       mounted = false;
     };
@@ -715,6 +796,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       setRun(null);
       setResults([]);
       setConsensusMap(new Map());
+      setStatsMap(new Map());
 
       const { data, error } = await supabase
         .from("monte_carlo_runs")
@@ -795,6 +877,73 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [run?.id, sportKey]);
 
+  /* 2b) load ncaab_stats only for teams in this slate */
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadStatsForSlate(teamCanonicals: string[]) {
+      if (!teamCanonicals.length) {
+        setStatsMap(new Map());
+        return;
+      }
+
+      setLoadingStats(true);
+
+      // schema-tolerant: select *
+      const { data, error } = await supabase.from("ncaab_stats").select("*").in("canonical", teamCanonicals);
+
+      if (!mounted) return;
+
+      if (error) {
+        console.warn("[MonteCarloScreen] ncaab_stats error:", error.message);
+        setStatsMap(new Map());
+        setLoadingStats(false);
+        return;
+      }
+
+      // If multiple rows per team exist, keep the one with latest updated_at if present; else first.
+      const pickBest = (a: any, b: any) => {
+        const ta = a?.updated_at ? new Date(a.updated_at).getTime() : -Infinity;
+        const tb = b?.updated_at ? new Date(b.updated_at).getTime() : -Infinity;
+        if (Number.isFinite(tb) && Number.isFinite(ta)) return tb > ta ? b : a;
+        if (Number.isFinite(tb) && !Number.isFinite(ta)) return b;
+        return a;
+      };
+
+      const m = new Map<string, NcaabStatsRow>();
+      for (const r of (data ?? []) as NcaabStatsRow[]) {
+        const k = normKey(r?.canonical ?? "");
+        if (!k) continue;
+        const prev = m.get(k);
+        m.set(k, prev ? (pickBest(prev, r) as any) : r);
+      }
+
+      setStatsMap(m);
+      setLoadingStats(false);
+    }
+
+    const canonicals = Array.from(
+      new Set(
+        results
+          .flatMap((r) => [r.home_team, r.away_team])
+          .map((x) => (x ?? "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    // Only load stats for NCAAB
+    if (sportKey !== "basketball_ncaab") {
+      setStatsMap(new Map());
+      return;
+    }
+
+    loadStatsForSlate(canonicals);
+
+    return () => {
+      mounted = false;
+    };
+  }, [results, sportKey]);
+
   /* 3) consensus from odds_snapshot */
   useEffect(() => {
     let mounted = true;
@@ -826,7 +975,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
       const rows = (data ?? []) as OddsSnapshotRow[];
 
-      // de-dupe per (event, market, book, side) and collect medians
       const seen = new Set<string>();
 
       const spreadHomeLines = new Map<string, number[]>();
@@ -860,21 +1008,21 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
         if (market === "spreads") {
           if (side === "home") {
-            if (Number.isFinite(line)) pushMap(spreadHomeLines, eventId, line);
-            if (Number.isFinite(odds)) pushMap(spreadHomeOdds, eventId, odds);
+            if (Number.isFinite(line)) spreadHomeLines.set(eventId, [...(spreadHomeLines.get(eventId) ?? []), line]);
+            if (Number.isFinite(odds)) spreadHomeOdds.set(eventId, [...(spreadHomeOdds.get(eventId) ?? []), odds]);
           }
           if (side === "away") {
-            if (Number.isFinite(odds)) pushMap(spreadAwayOdds, eventId, odds);
+            if (Number.isFinite(odds)) spreadAwayOdds.set(eventId, [...(spreadAwayOdds.get(eventId) ?? []), odds]);
           }
         }
 
         if (market === "totals") {
           if (side === "over") {
-            if (Number.isFinite(line)) pushMap(totalLines, eventId, line);
-            if (Number.isFinite(odds)) pushMap(totalOverOdds, eventId, odds);
+            if (Number.isFinite(line)) totalLines.set(eventId, [...(totalLines.get(eventId) ?? []), line]);
+            if (Number.isFinite(odds)) totalOverOdds.set(eventId, [...(totalOverOdds.get(eventId) ?? []), odds]);
           }
           if (side === "under") {
-            if (Number.isFinite(odds)) pushMap(totalUnderOdds, eventId, odds);
+            if (Number.isFinite(odds)) totalUnderOdds.set(eventId, [...(totalUnderOdds.get(eventId) ?? []), odds]);
           }
         }
       }
@@ -949,26 +1097,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const awayIsWinner = awayPts > homePts;
       const homeIsWinner = homePts > awayPts;
 
-      const homeRating = ratingsMap.get(homeKey) ?? null;
-      const awayRating = ratingsMap.get(awayKey) ?? null;
-
-      const homePoss = possMap.get(homeKey) ?? null;
-      const awayPoss = possMap.get(awayKey) ?? null;
-
-      const homePowerRank = Number(homeRating?.power_rank);
-      const awayPowerRank = Number(awayRating?.power_rank);
-
-      const homeEnginePower = Number(homeRating?.engine_power);
-      const awayEnginePower = Number(awayRating?.engine_power);
-
-      const homeAdjOff = Number(homeRating?.engine_adj_off);
-      const homeAdjDef = Number(homeRating?.engine_adj_def);
-
-      const awayAdjOff = Number(awayRating?.engine_adj_off);
-      const awayAdjDef = Number(awayRating?.engine_adj_def);
-
-      const homeTrueHca = Number(homeRating?.true_hca);
-
       const awayRow: TeamRow = {
         eventId: r.event_id,
         commenceTime: r.commence_time ?? null,
@@ -977,7 +1105,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         teamName: awayRaw,
         teamAbbr: awayAbbr,
         logoUrl: logoMap.get(awayKey) ?? null,
-        powerRank: Number.isFinite(awayPowerRank) ? awayPowerRank : null,
+        powerRank: powerRankMap.get(awayKey) ?? null,
 
         projPoints: Math.round(awayPts * 10) / 10,
 
@@ -999,14 +1127,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
         isProjectedWinner: awayIsWinner,
 
-        // ✅ model extras
-        enginePower: Number.isFinite(awayEnginePower) ? awayEnginePower : null,
-        engineAdjOff: Number.isFinite(awayAdjOff) ? awayAdjOff : null,
-        engineAdjDef: Number.isFinite(awayAdjDef) ? awayAdjDef : null,
-        engineNet:
-          Number.isFinite(awayAdjOff) && Number.isFinite(awayAdjDef) ? awayAdjOff - awayAdjDef : null,
-        trueHca: null,
-        paceTeam: derivePace(awayPoss),
+        stats: statsMap.get(awayKey) ?? null,
       };
 
       const homeRow: TeamRow = {
@@ -1017,7 +1138,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         teamName: homeRaw,
         teamAbbr: homeAbbr,
         logoUrl: logoMap.get(homeKey) ?? null,
-        powerRank: Number.isFinite(homePowerRank) ? homePowerRank : null,
+        powerRank: powerRankMap.get(homeKey) ?? null,
 
         projPoints: Math.round(homePts * 10) / 10,
 
@@ -1039,14 +1160,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
         isProjectedWinner: homeIsWinner,
 
-        // ✅ model extras
-        enginePower: Number.isFinite(homeEnginePower) ? homeEnginePower : null,
-        engineAdjOff: Number.isFinite(homeAdjOff) ? homeAdjOff : null,
-        engineAdjDef: Number.isFinite(homeAdjDef) ? homeAdjDef : null,
-        engineNet:
-          Number.isFinite(homeAdjOff) && Number.isFinite(homeAdjDef) ? homeAdjOff - homeAdjDef : null,
-        trueHca: Number.isFinite(homeTrueHca) ? homeTrueHca : null,
-        paceTeam: derivePace(homePoss),
+        stats: statsMap.get(homeKey) ?? null,
       };
 
       out.push({
@@ -1058,7 +1172,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     }
 
     return out;
-  }, [results, abbrMap, logoMap, consensusMap, ratingsMap, possMap]);
+  }, [results, abbrMap, logoMap, consensusMap, powerRankMap, statsMap]);
 
   /* keep open states aligned */
   useEffect(() => {
@@ -1067,7 +1181,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false;
       return next;
     });
-    setOpenModelMap((prev) => {
+    setOpenStatsMap((prev) => {
       const next: Record<string, boolean> = {};
       for (const ev of events) next[ev.eventId] = prev[ev.eventId] ?? false;
       return next;
@@ -1115,8 +1229,8 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Monte Carlo</h2>
 
             <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
-              One block per matchup. Projected score + win% + probabilities with consensus lines. Use MODEL for side-by-side
-              team context (engine + pace + efficiency).
+              One block per matchup. Use <span className="text-white font-semibold">STATS</span> for side-by-side NCAAB
+              team metrics from <span className="text-white font-semibold">ncaab_stats</span>.
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -1124,6 +1238,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
               <Pill label="Games" value={loading ? "…" : String(events.length)} />
               <Pill label="Latest Run" value={run?.created_at ? formatTs(run.created_at) : "—"} />
               <Pill label="Consensus" value={loadingConsensus ? "…" : consensusStamp ?? "—"} />
+              {sportKey === "basketball_ncaab" ? (
+                <Pill label="Stats" value={loadingStats ? "…" : statsMap.size ? "Loaded" : "—"} />
+              ) : null}
             </div>
           </div>
 
@@ -1168,10 +1285,11 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                     key={ev.eventId}
                     ev={ev}
                     showDivider={idx < events.length - 1}
-                    modelOpen={!!openModelMap[ev.eventId]}
-                    onToggleModel={() =>
-                      setOpenModelMap((p) => ({ ...p, [ev.eventId]: !(p?.[ev.eventId] ?? false) }))
+                    statsOpen={!!openStatsMap[ev.eventId]}
+                    onToggleStats={() =>
+                      setOpenStatsMap((p) => ({ ...p, [ev.eventId]: !(p?.[ev.eventId] ?? false) }))
                     }
+                    showStatsButton={sportKey === "basketball_ncaab"}
                   />
                 ))}
 
@@ -1198,7 +1316,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
         {events.map((ev) => {
           const detailsOpen = !!openDetailsMap[ev.eventId];
-          const modelOpen = !!openModelMap[ev.eventId];
+          const statsOpen = !!openStatsMap[ev.eventId];
 
           return (
             <div key={ev.eventId} className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
@@ -1218,11 +1336,13 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                     active={detailsOpen}
                     onClick={() => setOpenDetailsMap((p) => ({ ...p, [ev.eventId]: !detailsOpen }))}
                   />
-                  <MiniButton
-                    label={modelOpen ? "Model" : "Model"}
-                    active={modelOpen}
-                    onClick={() => setOpenModelMap((p) => ({ ...p, [ev.eventId]: !modelOpen }))}
-                  />
+                  {sportKey === "basketball_ncaab" ? (
+                    <MiniButton
+                      label="Stats"
+                      active={statsOpen}
+                      onClick={() => setOpenStatsMap((p) => ({ ...p, [ev.eventId]: !statsOpen }))}
+                    />
+                  ) : null}
                 </div>
               </div>
 
@@ -1278,9 +1398,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 </div>
               ) : null}
 
-              {modelOpen ? (
+              {statsOpen && sportKey === "basketball_ncaab" ? (
                 <div className="mt-3">
-                  <ModelPanel away={ev.away} home={ev.home} />
+                  <StatsPanel away={ev.away} home={ev.home} />
                 </div>
               ) : null}
             </div>
@@ -1292,19 +1412,21 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 };
 
 /* =========================================================
-   Desktop rows (2 rows per event, plus optional Model row)
+   Desktop rows (2 rows per event + optional Stats panel row)
 ========================================================= */
 
 function DesktopEventRows({
   ev,
   showDivider,
-  modelOpen,
-  onToggleModel,
+  statsOpen,
+  onToggleStats,
+  showStatsButton,
 }: {
   ev: EventBundle;
   showDivider: boolean;
-  modelOpen: boolean;
-  onToggleModel: () => void;
+  statsOpen: boolean;
+  onToggleStats: () => void;
+  showStatsButton: boolean;
 }) {
   const away = ev.away;
   const home = ev.home;
@@ -1321,7 +1443,7 @@ function DesktopEventRows({
         </div>
       </div>
 
-      <MiniButton label="MODEL" active={modelOpen} onClick={onToggleModel} />
+      {showStatsButton ? <MiniButton label="STATS" active={statsOpen} onClick={onToggleStats} /> : null}
     </div>
   );
 
@@ -1466,11 +1588,11 @@ function DesktopEventRows({
         </td>
       </tr>
 
-      {/* MODEL panel row (desktop) */}
-      {modelOpen ? (
+      {/* STATS panel row (desktop) */}
+      {showStatsButton && statsOpen ? (
         <tr>
           <td colSpan={7} className="p-3 bg-[#0a0a0a] border-t border-[#141414]">
-            <ModelPanel away={away} home={home} />
+            <StatsPanel away={away} home={home} />
           </td>
         </tr>
       ) : null}
@@ -1489,3 +1611,4 @@ function DesktopEventRows({
 
 /* ✅ Default export optional (matches your ModelScreen pattern) */
 export default MonteCarloScreen;
+
