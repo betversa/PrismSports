@@ -46,10 +46,7 @@
     "@radix-ui/react-toggle-group": "1.1.2",
     "@radix-ui/react-tooltip": "1.1.8",
     "@supabase/supabase-js": "^2.89.0",
-<<<<<<< HEAD
-=======
     "cheerio": "1.1.2",
->>>>>>> 340eaa6 (Add ts-node/typescript for loaders)
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
@@ -78,11 +75,8 @@
     "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
     "tailwindcss": "4.1.12",
-<<<<<<< HEAD
     "cheerio": "^1.1.2",
-=======
     "ts-node": "^10.9.2",
->>>>>>> 340eaa6 (Add ts-node/typescript for loaders)
     "tsx": "4.21.0",
     "typescript": "^5.9.3",
     "vite": "6.3.5"
