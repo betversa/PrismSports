@@ -1,15 +1,17 @@
-// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (Single “Model” button per event + Pro modal w/ logos + NCAAB stats via stat_key)
+// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (Modal update: single NCAAB tab + Off/Def toggle)
 // -----------------------------------------------------------------------------------------------------
 // ✅ Visual layout matches ModelScreen (hero gradient + badge + chips + dark sticky table)
 // ✅ Desktop: 2 rows per event (away/home) + subtle divider between games
 // ✅ Mobile: matchup cards + Details collapsible
 // ✅ ONE modal button per event (placed by matchup/team names)
 // ✅ Modal: ultra-polished “Model View” w/ logos + tabs:
-//      1) Team Ratings (from public.team_ratings; uses canonical lookup; shows engine_power + key fields)
+//      1) Team Ratings (from public.team_ratings; canonical lookup; shows engine_power + key fields)
 //      2) NCAAB Stats (from public.ncaab_stats; row-based via stat_key; values via away_score/home_score)
+//         - SINGLE tab, with Offense / Defense buttons that switch the stat set
 // ✅ Canonical names used for ALL stat lookups (no abbreviations in queries)
 // ✅ Fix: does NOT reference nonexistent columns (e.g., ha_2025, v_2025, last_3, etc.)
 // ✅ Defensive: renders “—” when a stat is missing; never crashes
+// ✅ Percent stats: if stored as 0.456, renders 45.6%
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -244,6 +246,20 @@ function fmtMaybeInt(v: any) {
   return String(Math.round(x));
 }
 
+/** Percent formatter that handles both 45.6 and 0.456 inputs */
+function fmtPctAuto(v: number, digits = 1) {
+  if (!Number.isFinite(v)) return "—";
+  const asPct = Math.abs(v) <= 1.5 ? v * 100 : v; // heuristic: 0.456 -> 45.6
+  return `${asPct.toFixed(digits)}%`;
+}
+
+/** Rate formatter that handles 0.32 -> 32.0% */
+function fmtRateAuto(v: number, digits = 1) {
+  if (!Number.isFinite(v)) return "—";
+  const asPct = v * 100;
+  return `${asPct.toFixed(digits)}%`;
+}
+
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -421,27 +437,42 @@ type ModelModalState = {
   fetchedAt: string | null;
 };
 
-const NCAAB_STAT_DEFS: Array<{
+type StatDef = {
   key: string;
   label: string;
   hint?: string;
+  higherIsBetter?: boolean;
   fmt?: (v: number) => string;
-}> = [
-  { key: "offensive-efficiency", label: "Off Efficiency", hint: "Points per 100", fmt: (v) => v.toFixed(1) },
-  { key: "defensive-efficiency", label: "Def Efficiency", hint: "Allowed per 100", fmt: (v) => v.toFixed(1) },
-  { key: "average-scoring-margin", label: "Net Rating", hint: "Off − Def", fmt: (v) => v.toFixed(1) },
-  { key: "possessions-per-game", label: "Pace", hint: "Possessions / 40", fmt: (v) => v.toFixed(1) },
+};
 
-  { key: "effective-field-goal-pct", label: "eFG%", hint: "Effective FG%", fmt: (v) => `${v.toFixed(1)}%` },
-  { key: "turnovers-per-game", label: "TO%", hint: "Turnover rate", fmt: (v) => `${v.toFixed(1)}%` },
-  { key: "offensive-rebounds-per-game", label: "ORB/G", hint: "Off reb rate", fmt: (v) => `${v.toFixed(1)}%` },
-  { key: "free-throw-rate", label: "FT Rate", hint: "FTA/FGA", fmt: (v) => v.toFixed(3) },
+// OFFENSE set (single tab, toggled view)
+const NCAAB_OFFENSE_DEFS: StatDef[] = [
+  { key: "offensive-efficiency", label: "Off Efficiency", hint: "Points / 100", higherIsBetter: true, fmt: (v) => v.toFixed(1) },
+  { key: "possessions-per-game", label: "Pace", hint: "Poss / 40", higherIsBetter: true, fmt: (v) => v.toFixed(1) },
+  { key: "effective-field-goal-pct", label: "eFG%", hint: "Shooting quality", higherIsBetter: true, fmt: (v) => fmtPctAuto(v, 1) },
+  // If your table uses a different key for TO%, keep this one too; missing renders "—"
+  { key: "turnover-pct", label: "TO%", hint: "Turnover rate", higherIsBetter: false, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "turnovers-per-game", label: "TO%", hint: "Turnover rate", higherIsBetter: false, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "offensive-rebounding-pct", label: "ORB%", hint: "Off reb rate", higherIsBetter: true, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "offensive-rebounds-per-game", label: "ORB%", hint: "Off reb rate", higherIsBetter: true, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "free-throw-rate", label: "FT Rate", hint: "FTA / FGA", higherIsBetter: true, fmt: (v) => (Math.abs(v) <= 1.5 ? v.toFixed(3) : (v / 100).toFixed(3)) },
+  { key: "three_rate", label: "3PA Rate", hint: "3PA / FGA", higherIsBetter: true, fmt: (v) => fmtRateAuto(v, 1) },
+  { key: "three-point-pct", label: "3P%", hint: "3PT%", higherIsBetter: true, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "two_point_pct", label: "2P%", hint: "2PT%", higherIsBetter: true, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "rim_rate", label: "Rim Rate", hint: "Rim / FGA", higherIsBetter: true, fmt: (v) => fmtRateAuto(v, 1) },
+];
 
-  { key: "three_rate", label: "3PA Rate", hint: "3PA/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%` },
-  { key: "three-point-pct", label: "3P%", hint: "3PT%", fmt: (v) => `${v.toFixed(1)}%` },
-
-  { key: "two_point_pct", label: "2P%", hint: "2PT%", fmt: (v) => `${v.toFixed(1)}%` },
-  { key: "rim_rate", label: "Rim Rate", hint: "Rim/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%` },
+// DEFENSE set (single tab, toggled view)
+const NCAAB_DEFENSE_DEFS: StatDef[] = [
+  { key: "defensive-efficiency", label: "Def Efficiency", hint: "Allowed / 100", higherIsBetter: false, fmt: (v) => v.toFixed(1) },
+  { key: "opponent-effective-field-goal-pct", label: "Opp eFG%", hint: "Allowed eFG%", higherIsBetter: false, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "opponent-turnover-pct", label: "Opp TO%", hint: "Forced TO rate", higherIsBetter: true, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "defensive-rebounding-pct", label: "DRB%", hint: "Def reb rate", higherIsBetter: true, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "opponent-free-throw-rate", label: "Opp FT Rate", hint: "Allowed FTA/FGA", higherIsBetter: false, fmt: (v) => (Math.abs(v) <= 1.5 ? v.toFixed(3) : (v / 100).toFixed(3)) },
+  { key: "opponent-three_rate", label: "Opp 3PA Rate", hint: "Allowed 3PA/FGA", higherIsBetter: false, fmt: (v) => fmtRateAuto(v, 1) },
+  { key: "opponent-three-point-pct", label: "Opp 3P%", hint: "Allowed 3PT%", higherIsBetter: false, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "opponent-two_point_pct", label: "Opp 2P%", hint: "Allowed 2PT%", higherIsBetter: false, fmt: (v) => fmtPctAuto(v, 1) },
+  { key: "opponent-rim_rate", label: "Opp Rim Rate", hint: "Allowed rim share", higherIsBetter: false, fmt: (v) => fmtRateAuto(v, 1) },
 ];
 
 const TEAM_RATINGS_FIELDS: Array<{ key: string; label: string; fmt?: (v: any) => string }> = [
@@ -457,6 +488,8 @@ const TEAM_RATINGS_FIELDS: Array<{ key: string; label: string; fmt?: (v: any) =>
 
 function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelModalProps) {
   const [tab, setTab] = useState<"ratings" | "ncaab">("ratings");
+  const [statsView, setStatsView] = useState<"off" | "def">("off");
+
   const [st, setSt] = useState<ModelModalState>({
     loading: false,
     error: null,
@@ -499,7 +532,7 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
       }));
 
       try {
-        // TEAM RATINGS (use canonical; try to filter by sport_key if column exists, otherwise client filter)
+        // TEAM RATINGS (canonical; optional sport_key filter client-side)
         const ratingsRes = await supabase
           .from("team_ratings")
           .select("*")
@@ -508,10 +541,9 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
         if (ratingsRes.error) throw new Error(`Failed to load team_ratings: ${ratingsRes.error.message}`);
 
         const rawRatings = (ratingsRes.data ?? []) as TeamRatingsAny[];
-        // Optional sport filter (only if the row has sport_key and matches)
         const ratings = rawRatings.filter((r) => {
           const rk = (r as any)?.sport_key;
-          if (rk == null) return true; // table might be single-sport
+          if (rk == null) return true;
           return String(rk) === String(sportKey);
         });
 
@@ -519,7 +551,6 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
         const homeRatings = ratings.find((r) => normKey(String(r.canonical ?? "")) === normKey(homeCanonical)) ?? null;
 
         // NCAAB STATS (row-based via stat_key; canonical lookup; values via away_score/home_score)
-        // Only load for NCAAB sport key, but we keep it safe if user opens in other sports.
         let awayStats = new Map<string, number>();
         let homeStats = new Map<string, number>();
 
@@ -532,10 +563,6 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
           if (statsRes.error) throw new Error(`Failed to load ncaab_stats: ${statsRes.error.message}`);
 
           const rows = (statsRes.data ?? []) as NcaabStatRow[];
-
-          // Build maps: for each team canonical, choose side-appropriate value:
-          //   - away team uses away_score
-          //   - home team uses home_score
           for (const r of rows) {
             const canon = String(r.canonical ?? "");
             const key = String(r.stat_key ?? "").trim();
@@ -628,7 +655,6 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
     </div>
   );
 
-  // Compare helper (optional subtle emphasis)
   const compare = (a: number | undefined, h: number | undefined, higherIsBetter: boolean) => {
     if (!Number.isFinite(a as any) || !Number.isFinite(h as any)) return { aGood: false, hGood: false };
     if (a === h) return { aGood: false, hGood: false };
@@ -642,12 +668,10 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
 
     return (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {/* Away */}
         <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
           <div className="px-4 py-3 border-b border-[#141414]">
             <HeaderTeam side="AWAY" name={event.away.teamName} abbr={awayAbbr} logo={awayLogo} />
           </div>
-
           <div className="px-4 py-2">
             {TEAM_RATINGS_FIELDS.map((f) => {
               const v = a?.[f.key];
@@ -662,12 +686,10 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
           </div>
         </div>
 
-        {/* Home */}
         <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
           <div className="px-4 py-3 border-b border-[#141414]">
             <HeaderTeam side="HOME" name={event.home.teamName} abbr={homeAbbr} logo={homeLogo} />
           </div>
-
           <div className="px-4 py-2">
             {TEAM_RATINGS_FIELDS.map((f) => {
               const v = h?.[f.key];
@@ -689,13 +711,51 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
     const aMap = st.awayStats;
     const hMap = st.homeStats;
 
+    const defs = statsView === "off" ? NCAAB_OFFENSE_DEFS : NCAAB_DEFENSE_DEFS;
+
+    const viewLabel = statsView === "off" ? "Offense" : "Defense";
+
     return (
       <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
-        {/* Header row */}
+        {/* Header row + Off/Def toggle */}
         <div className="px-4 py-3 border-b border-[#141414]">
-          <div className="grid grid-cols-12 gap-3 items-center">
+          <div className="flex items-center gap-2">
+            <div className="text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">
+              NCAAB Stats · {viewLabel}
+            </div>
+
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setStatsView("off")}
+                className={cx(
+                  "rounded-lg border px-3 py-2 text-[11px] font-extrabold transition",
+                  statsView === "off"
+                    ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
+                    : "border-[#2a2a2a] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
+                )}
+              >
+                Offense
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setStatsView("def")}
+                className={cx(
+                  "rounded-lg border px-3 py-2 text-[11px] font-extrabold transition",
+                  statsView === "def"
+                    ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
+                    : "border-[#2a2a2a] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
+                )}
+              >
+                Defense
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-12 gap-3 items-center">
             <div className="col-span-5 text-[10px] text-[#8a8a8a] font-extrabold uppercase tracking-wide">
-              NCAAB Stats (stat_key)
+              Stat (stat_key)
             </div>
 
             <div className="col-span-3 flex items-center gap-2 justify-end min-w-0">
@@ -715,16 +775,15 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
         </div>
 
         <div className="px-4 py-2">
-          {NCAAB_STAT_DEFS.map((d) => {
+          {defs.map((d) => {
             const a = aMap.get(d.key);
             const h = hMap.get(d.key);
 
             const aTxt = Number.isFinite(a as any) ? (d.fmt ? d.fmt(a as number) : String(a)) : "—";
             const hTxt = Number.isFinite(h as any) ? (d.fmt ? d.fmt(h as number) : String(h)) : "—";
 
-            // heuristics for emphasis
-            const higherIsBetter = !["def_eff", "tov_pct"].includes(d.key); // simplistic but sensible
-            const { aGood, hGood } = compare(a as any, h as any, higherIsBetter);
+            const hib = d.higherIsBetter ?? true;
+            const { aGood, hGood } = compare(a as any, h as any, hib);
 
             let deltaTxt = "—";
             if (Number.isFinite(a as any) && Number.isFinite(h as any)) {
@@ -744,13 +803,23 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
                 </div>
 
                 <div className="col-span-3">
-                  <div className={cx("text-right tabular-nums", aGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold")}>
+                  <div
+                    className={cx(
+                      "text-right tabular-nums",
+                      aGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold"
+                    )}
+                  >
                     {aTxt}
                   </div>
                 </div>
 
                 <div className="col-span-3">
-                  <div className={cx("text-right tabular-nums", hGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold")}>
+                  <div
+                    className={cx(
+                      "text-right tabular-nums",
+                      hGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold"
+                    )}
+                  >
                     {hTxt}
                   </div>
                 </div>
@@ -874,7 +943,6 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
 
         {/* Body */}
         <div className="bg-[#070707]">
-          {/* Status row */}
           {st.loading ? (
             <div className="px-5 py-4 border-b border-[#141414] text-[11px] text-[#b0b0b0]">
               Loading stats & ratings…
@@ -895,7 +963,7 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
         {/* Footer */}
         <div className="px-5 py-4 border-t border-[#141414] bg-[#0b0b0b] flex items-center justify-between">
           <div className="text-[10px] text-[#7a7a7a]">
-            Canonical matching enforced · One modal per event · Logos from team_map
+            Canonical matching enforced · One modal per event · Logos from team_map · Off/Def toggle inside NCAAB Stats
           </div>
 
           <button
@@ -1222,7 +1290,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         commenceTime: r.commence_time ?? null,
 
         side: "AWAY",
-        teamName: awayRaw, // canonical
+        teamName: awayRaw,
         teamAbbr: awayAbbr,
         logoUrl: logoMap.get(awayKey) ?? null,
 
@@ -1252,7 +1320,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         commenceTime: r.commence_time ?? null,
 
         side: "HOME",
-        teamName: homeRaw, // canonical
+        teamName: homeRaw,
         teamAbbr: homeAbbr,
         logoUrl: logoMap.get(homeKey) ?? null,
 
@@ -1694,4 +1762,3 @@ function DesktopEventRows({
 
 /* ✅ Default export optional */
 export default MonteCarloScreen;
-
