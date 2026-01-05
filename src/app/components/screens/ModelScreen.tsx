@@ -1,6 +1,6 @@
 "use client";
 
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.0.1)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.1.0)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -16,12 +16,19 @@
 // ✅ Bet $ uses app_settings.bankroll + app_settings.kelly_factor (best book fraction)
 // ✅ ONLY Pick column (desktop) / Pick block (mobile) opens modal
 // ✅ Modal: header/footer fixed, safe-area aware, tabs (Line History / Hit Rate)
-// ✅ Modal GAME stats: canonical teams from public.events + stats ONLY from public.team_ratings
 //
-// 🔧 IMPORTANT FIXES vs your pasted version:
-//    - PostgREST errors if you select columns that don’t exist. Optional cols are NOT “harmless”.
-//      This rewrite uses “try select w/ optional → fallback to minimal select” for team_map/team_ratings.
-//    - team_map column naming can differ (Abbreviation vs abbreviation, "Logo URL" vs logo_url). We retry safely.
+// ✅ MODAL UPDATE (your request):
+//    - NO separate “team ratings vs stats” sections
+//    - One condensed TEAM panel for GAME plays:
+//        • Team header w/ logos
+//        • Ratings from team_ratings: engine_adj_off (Adj Off), engine_adj_def (Adj Def), engine_power (Net Rating)
+//        • Stats from ncaab_stats by stat_key + home_score/away_score (event-based)
+//        • Offense / Defense toggle for the stats list
+//    - Percent-style stats stored as decimals (e.g., .456) render as 45.6%
+//
+// 🔧 IMPORTANT FIXES kept:
+//    - PostgREST missing-column safeSelect pattern for team_map/team_ratings
+//    - Pinnacle is not an offer filter (history only)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -215,6 +222,13 @@ type TeamRatingsRow = {
   power_rank?: number | null; // optional
 };
 
+type NcaabStatRow = {
+  event_id: string;
+  stat_key: string;
+  home_score: number | null;
+  away_score: number | null;
+};
+
 /* =========================================================
    FantasyPros logs (API response type)
 ========================================================= */
@@ -271,6 +285,85 @@ const BOOK_COLOR: Record<AnyBookHistory, string> = {
 
 const OVER_GREEN = "#22c55e";
 const UNDER_RED = "#ef4444";
+
+/* =========================================================
+   NCAAB stats keys (event-based)
+   (stored in ncaab_stats.stat_key with away_score/home_score)
+========================================================= */
+
+const STAT_KEYS_ALL = [
+  "possessions-per-game",
+  "offensive-efficiency",
+  "defensive-efficiency",
+  "points-per-game",
+  "opponent-points-per-game",
+  "average-scoring-margin",
+  "effective-field-goal-pct",
+  "opponent-effective-field-goal-pct",
+  "three-point-rate",
+  "two-point-rate",
+  "opponent-three-point-rate",
+  "opponent-two-point-rate",
+  "three-point-pct",
+  "two-point-pct",
+  "opponent-three-point-pct",
+  "opponent-two-point-pct",
+  "fta-per-fga",
+  "opponent-fta-per-fga",
+  "free-throw-pct",
+  "opponent-free-throw-pct",
+  "turnover-pct",
+  "opponent-turnover-pct",
+  "offensive-rebounding-pct",
+  "defensive-rebounding-pct",
+  "opponent-offensive-rebounding-pct",
+  "opponent-defensive-rebounding-pct",
+  "steals-perpossession",
+  "opponent-steals-perpossession",
+  "block-pct",
+  "opponent-block-pct",
+  "personal-fouls-per-possession",
+  "opponent-personal-fouls-per-possession",
+  "effective-possession-ratio",
+  "opponent-effective-possession-ratio",
+] as const;
+
+type StatKey = (typeof STAT_KEYS_ALL)[number];
+
+const STAT_KEYS_OFFENSE: StatKey[] = [
+  "possessions-per-game",
+  "offensive-efficiency",
+  "points-per-game",
+  "average-scoring-margin",
+  "effective-field-goal-pct",
+  "three-point-rate",
+  "two-point-rate",
+  "three-point-pct",
+  "two-point-pct",
+  "fta-per-fga",
+  "free-throw-pct",
+  "turnover-pct",
+  "offensive-rebounding-pct",
+  "effective-possession-ratio",
+];
+
+const STAT_KEYS_DEFENSE: StatKey[] = [
+  "defensive-efficiency",
+  "opponent-points-per-game",
+  "opponent-effective-field-goal-pct",
+  "opponent-three-point-rate",
+  "opponent-two-point-rate",
+  "opponent-three-point-pct",
+  "opponent-two-point-pct",
+  "opponent-fta-per-fga",
+  "opponent-free-throw-pct",
+  "opponent-turnover-pct",
+  "defensive-rebounding-pct",
+  "steals-perpossession",
+  "block-pct",
+  "personal-fouls-per-possession",
+  "opponent-effective-possession-ratio",
+];
 
 /* =========================================================
    Helpers
@@ -476,6 +569,74 @@ function scoreTone(score: number) {
   if (score >= 90) return { bg: "bg-[#d4af37]/15", border: "border-[#d4af37]/35", text: "text-[#d4af37]" };
   if (score >= 75) return { bg: "bg-white/5", border: "border-white/10", text: "text-white" };
   return { bg: "bg-white/0", border: "border-white/0", text: "text-[#a0a0a0]" };
+}
+
+/* =========================================================
+   NCAAB stats formatting
+========================================================= */
+
+const STAT_LABEL: Record<string, string> = {
+  "possessions-per-game": "Poss/G",
+  "offensive-efficiency": "Off Eff",
+  "defensive-efficiency": "Def Eff",
+  "points-per-game": "Pts/G",
+  "opponent-points-per-game": "Opp Pts/G",
+  "average-scoring-margin": "Avg Margin",
+  "effective-field-goal-pct": "eFG%",
+  "opponent-effective-field-goal-pct": "Opp eFG%",
+  "three-point-rate": "3PA Rate",
+  "two-point-rate": "2PA Rate",
+  "opponent-three-point-rate": "Opp 3PA Rate",
+  "opponent-two-point-rate": "Opp 2PA Rate",
+  "three-point-pct": "3P%",
+  "two-point-pct": "2P%",
+  "opponent-three-point-pct": "Opp 3P%",
+  "opponent-two-point-pct": "Opp 2P%",
+  "fta-per-fga": "FTA/FGA",
+  "opponent-fta-per-fga": "Opp FTA/FGA",
+  "free-throw-pct": "FT%",
+  "opponent-free-throw-pct": "Opp FT%",
+  "turnover-pct": "TO%",
+  "opponent-turnover-pct": "Opp TO%",
+  "offensive-rebounding-pct": "ORB%",
+  "defensive-rebounding-pct": "DRB%",
+  "opponent-offensive-rebounding-pct": "Opp ORB%",
+  "opponent-defensive-rebounding-pct": "Opp DRB%",
+  "steals-perpossession": "Stl/Pos",
+  "opponent-steals-perpossession": "Opp Stl/Pos",
+  "block-pct": "Blk%",
+  "opponent-block-pct": "Opp Blk%",
+  "personal-fouls-per-possession": "PF/Pos",
+  "opponent-personal-fouls-per-possession": "Opp PF/Pos",
+  "effective-possession-ratio": "EPR",
+  "opponent-effective-possession-ratio": "Opp EPR",
+};
+
+function isPctKey(stat_key: string) {
+  return stat_key.includes("pct") || stat_key.includes("eFG%") || stat_key.endsWith("-pct");
+}
+
+function fmtStatValue(stat_key: string, raw: any) {
+  const v = Number(raw);
+  if (!Number.isFinite(v)) return "—";
+
+  // Percent-like stats stored as decimals (e.g. .456)
+  if (stat_key.includes("pct") || stat_key.includes("effective-field-goal-pct")) {
+    return `${(v * 100).toFixed(1)}%`;
+  }
+
+  // Rates / ratios
+  if (stat_key.includes("rate") || stat_key.includes("fta-per-fga") || stat_key.includes("effective-possession-ratio")) {
+    return v.toFixed(3);
+  }
+
+  // Per-possession
+  if (stat_key.includes("perpossession") || stat_key.includes("per-possession")) {
+    return v.toFixed(3);
+  }
+
+  // Eff / per-game
+  return v.toFixed(1);
 }
 
 /* =========================================================
@@ -1692,6 +1853,8 @@ type ModalTeam = {
   ratings: TeamRatingsRow | null;
 };
 
+type TeamPanelMode = "offense" | "defense";
+
 function PlayDetailsModal({
   open,
   play,
@@ -1713,8 +1876,17 @@ function PlayDetailsModal({
   const [teamsErr, setTeamsErr] = useState<string>("");
   const [modalTeams, setModalTeams] = useState<{ away: ModalTeam | null; home: ModalTeam | null }>({ away: null, home: null });
 
+  // ncaab_stats (event-based)
+  const [statsMode, setStatsMode] = useState<TeamPanelMode>("offense");
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsErr, setStatsErr] = useState<string>("");
+  const [statsMap, setStatsMap] = useState<Record<string, { home: number | null; away: number | null }>>({});
+
   useEffect(() => {
-    if (open) setTab("line");
+    if (open) {
+      setTab("line");
+      setStatsMode("offense");
+    }
   }, [open, play?.playKey]);
 
   // Load event row (canonical teams) for GAME plays
@@ -1778,7 +1950,7 @@ function PlayDetailsModal({
     };
   }, [open, play?.playKey]);
 
-  // Load team_map + team_ratings for those canonical teams (safe selects)
+  // Load team_map + team_ratings for canonical teams (safe selects)
   useEffect(() => {
     let mounted = true;
 
@@ -1808,7 +1980,6 @@ function PlayDetailsModal({
       try {
         const canonicals = Array.from(new Set([away, home]));
 
-        // team_map: try legacy (Title Case + "Logo URL") then fallback (snake_case)
         const tmRes = await safeSelect<any>({
           table: "team_map",
           selectPrimary: 'canonical,Abbreviation,Abbreviation2,"Logo URL"',
@@ -1817,7 +1988,6 @@ function PlayDetailsModal({
           values: canonicals,
         });
 
-        // team_ratings: try optional cols then fallback to required only
         const trRes = await safeSelect<any>({
           table: "team_ratings",
           selectPrimary: "canonical,engine_adj_off,engine_adj_def,engine_power,engine_possessions,power_rank",
@@ -1899,6 +2069,73 @@ function PlayDetailsModal({
     };
   }, [open, play?.playKey, eventRow?.home_team, eventRow?.away_team, eventLoading]);
 
+  // Load ncaab_stats (event_id + stat_key -> home_score/away_score)
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadStats() {
+      if (!open || !play || play.kind !== "game") {
+        if (!mounted) return;
+        setStatsLoading(false);
+        setStatsErr("");
+        setStatsMap({});
+        return;
+      }
+
+      setStatsLoading(true);
+      setStatsErr("");
+      setStatsMap({});
+
+      try {
+        const { data, error } = await supabase
+          .from("ncaab_stats")
+          .select("event_id,stat_key,home_score,away_score")
+          .eq("event_id", play.event_id)
+          .in("stat_key", [...STAT_KEYS_ALL]);
+
+        if (!mounted) return;
+
+        if (error) {
+          setStatsErr(error.message);
+          setStatsMap({});
+          return;
+        }
+
+        const rows = (data ?? []) as any[];
+        const next: Record<string, { home: number | null; away: number | null }> = {};
+
+        rows.forEach((r) => {
+          const k = String(r?.stat_key ?? "").trim();
+          if (!k) return;
+          const home = r?.home_score == null ? null : Number(r.home_score);
+          const away = r?.away_score == null ? null : Number(r.away_score);
+          next[k] = {
+            home: Number.isFinite(home as number) ? (home as number) : null,
+            away: Number.isFinite(away as number) ? (away as number) : null,
+          };
+        });
+
+        setStatsMap(next);
+
+        // Helpful debug if nothing returned
+        if (!rows.length) {
+          setStatsErr(`No ncaab_stats rows found for event_id=${play.event_id} (stat_key in list).`);
+        }
+      } catch (e: any) {
+        if (!mounted) return;
+        setStatsErr(e?.message ?? String(e));
+        setStatsMap({});
+      } finally {
+        if (mounted) setStatsLoading(false);
+      }
+    }
+
+    loadStats();
+    return () => {
+      mounted = false;
+    };
+  }, [open, play?.playKey]);
+
   if (!open || !play) return null;
 
   const canShowHitRate = play.kind === "prop";
@@ -1915,8 +2152,8 @@ function PlayDetailsModal({
         }}
       >
         <div
-          className="relative w-full md:max-w-4xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col"
-          style={{ maxHeight: "min(92vh, 920px)" }}
+          className="relative w-full md:max-w-5xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col"
+          style={{ maxHeight: "min(92vh, 960px)" }}
         >
           {/* Header */}
           <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
@@ -1951,25 +2188,37 @@ function PlayDetailsModal({
                   </div>
                 ) : null}
 
-                {/* TEAM STATS (single clean comparison) */}
+                {/* ✅ CONDENSED TEAM PANEL (ratings + stats together) */}
                 {play.kind === "game" ? (
                   <div className="mt-3">
-                    <div className="text-[10px] text-[#606060] mb-2">Model Team Stats (team_ratings)</div>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="text-[10px] text-[#606060]">Team Ratings + Stats</div>
 
-                    {eventLoading || teamsLoading ? (
+                      <div className="inline-flex items-center rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+                        <MiniToggleButton active={statsMode === "offense"} onClick={() => setStatsMode("offense")} label="Offense" />
+                        <MiniToggleButton active={statsMode === "defense"} onClick={() => setStatsMode("defense")} label="Defense" />
+                      </div>
+                    </div>
+
+                    {eventLoading || teamsLoading || statsLoading ? (
                       <div className="text-xs text-[#808080] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
-                        Loading teams + ratings…
+                        Loading teams + ratings + stats…
                       </div>
                     ) : null}
 
-                    {!eventLoading && !teamsLoading && (eventErr || teamsErr) ? (
+                    {!eventLoading && !teamsLoading && !statsLoading && (eventErr || teamsErr || statsErr) ? (
                       <div className="text-xs text-[#a0a0a0] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
-                        {eventErr || teamsErr}
+                        {[eventErr, teamsErr, statsErr].filter(Boolean).join(" · ")}
                       </div>
                     ) : null}
 
                     {!eventLoading && !teamsLoading && modalTeams.away && modalTeams.home ? (
-                      <TeamCompareBlock away={modalTeams.away} home={modalTeams.home} />
+                      <TeamPanelCombined
+                        away={modalTeams.away}
+                        home={modalTeams.home}
+                        mode={statsMode}
+                        statsMap={statsMap}
+                      />
                     ) : null}
                   </div>
                 ) : null}
@@ -2013,18 +2262,32 @@ function PlayDetailsModal({
   );
 }
 
-function TeamCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam }) {
+/* =========================================================
+   ✅ Combined Team Panel (ratings + stats in one card)
+========================================================= */
+
+function TeamPanelCombined({
+  away,
+  home,
+  mode,
+  statsMap,
+}: {
+  away: ModalTeam;
+  home: ModalTeam;
+  mode: TeamPanelMode;
+  statsMap: Record<string, { home: number | null; away: number | null }>;
+}) {
   const a = away.ratings;
   const h = home.ratings;
 
-  const rows: { label: string; a: string; h: string; accent?: boolean }[] = [
+  const ratingRows: { label: string; a: string; h: string; accent?: boolean }[] = [
     {
-      label: "Off Eff",
+      label: "Adj Off",
       a: a?.engine_adj_off != null && Number.isFinite(a.engine_adj_off) ? a.engine_adj_off.toFixed(1) : "—",
       h: h?.engine_adj_off != null && Number.isFinite(h.engine_adj_off) ? h.engine_adj_off.toFixed(1) : "—",
     },
     {
-      label: "Def Eff",
+      label: "Adj Def",
       a: a?.engine_adj_def != null && Number.isFinite(a.engine_adj_def) ? a.engine_adj_def.toFixed(1) : "—",
       h: h?.engine_adj_def != null && Number.isFinite(h.engine_adj_def) ? h.engine_adj_def.toFixed(1) : "—",
     },
@@ -2036,25 +2299,7 @@ function TeamCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam }) 
     },
   ];
 
-  const paceA = a?.engine_possessions;
-  const paceH = h?.engine_possessions;
-  if (paceA != null || paceH != null) {
-    rows.push({
-      label: "Pace",
-      a: paceA != null && Number.isFinite(paceA) ? paceA.toFixed(1) : "—",
-      h: paceH != null && Number.isFinite(paceH) ? paceH.toFixed(1) : "—",
-    });
-  }
-
-  const prA = a?.power_rank;
-  const prH = h?.power_rank;
-  if (prA != null || prH != null) {
-    rows.push({
-      label: "Power Rank",
-      a: prA != null && Number.isFinite(prA) ? String(Math.round(prA)) : "—",
-      h: prH != null && Number.isFinite(prH) ? String(Math.round(prH)) : "—",
-    });
-  }
+  const statKeys = mode === "offense" ? STAT_KEYS_OFFENSE : STAT_KEYS_DEFENSE;
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
@@ -2063,18 +2308,69 @@ function TeamCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam }) 
         <TeamHeaderCell team={home} sideLabel="HOME" />
       </div>
 
+      {/* Ratings strip */}
+      <div className="p-3 border-b border-[#1f1f1f]">
+        <div className="text-[10px] text-[#606060] mb-2">Team Ratings (team_ratings)</div>
+        <div className="grid grid-cols-3 gap-2 text-[11px]">
+          <div className="text-[#606060]">Metric</div>
+          <div className="text-center text-[#808080]">{away.abbr}</div>
+          <div className="text-center text-[#808080]">{home.abbr}</div>
+
+          {ratingRows.map((r) => (
+            <Row3 key={r.label} label={r.label} a={r.a} h={r.h} accent={r.accent} />
+          ))}
+        </div>
+      </div>
+
+      {/* Stats table */}
       <div className="p-3">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="text-[10px] text-[#606060]">
+            {mode === "offense" ? "Team Offense (ncaab_stats)" : "Team Defense (ncaab_stats)"}
+          </div>
+          <div className="text-[10px] text-[#404040]">Uses stat_key + away_score/home_score</div>
+        </div>
+
         <div className="grid grid-cols-3 gap-2 text-[11px]">
           <div className="text-[#606060]">Stat</div>
           <div className="text-center text-[#808080]">{away.abbr}</div>
           <div className="text-center text-[#808080]">{home.abbr}</div>
 
-          {rows.map((r) => (
-            <Row3 key={r.label} label={r.label} a={r.a} h={r.h} accent={r.accent} />
-          ))}
+          {statKeys.map((k) => {
+            const pair = statsMap[k];
+            const awayVal = pair?.away ?? null;
+            const homeVal = pair?.home ?? null;
+
+            const label = STAT_LABEL[k] ?? k;
+
+            return (
+              <Row3
+                key={k}
+                label={label}
+                a={awayVal == null ? "—" : fmtStatValue(k, awayVal)}
+                h={homeVal == null ? "—" : fmtStatValue(k, homeVal)}
+              />
+            );
+          })}
         </div>
       </div>
     </div>
+  );
+}
+
+function MiniToggleButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-2 text-xs transition-colors",
+        active ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+      ].join(" ")}
+      title={label}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -2714,3 +3010,4 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
 export default ModelScreen;
+
