@@ -432,32 +432,26 @@ const TEAM_RATINGS_FIELDS: Array<{ key: string; label: string; fmt?: (v: any) =>
   // ✅ We keep ONLY these for efficiency (your note)
   { key: "engine_adj_off", label: "Adj Off", fmt: (v) => fmtMaybeNumber(v, 2) },
   { key: "engine_adj_def", label: "Adj Def", fmt: (v) => fmtMaybeNumber(v, 2) },
-
-  { key: "true_hca", label: "True HCA", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "pace", label: "Pace", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "sigma_margin_100", label: "Sigma Margin (100)", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "sigma_total_100", label: "Sigma Total (100)", fmt: (v) => fmtMaybeNumber(v, 2) },
 ];
 
 // ✅ NCAAB stat_key list you provided (minus offensive-efficiency/defensive-efficiency)
 const NCAAB_STATS_OFF: StatDef[] = [
   { key: "possessions-per-game", label: "Pace", hint: "Possessions / 40", fmt: (v) => v.toFixed(1) },
   { key: "points-per-game", label: "Points / Game", fmt: (v) => v.toFixed(1) },
-  { key: "average-scoring-margin", label: "Avg Margin", fmt: (v) => v.toFixed(1), higherIsBetter: true },
 
   { key: "effective-field-goal-pct", label: "eFG%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
-  { key: "three-point-rate", label: "3PA Rate", hint: "3PA/FGA", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
-  { key: "two-point-rate", label: "2PA Rate", hint: "2PA/FGA", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
+  { key: "three-point-rate", label: "3PA Rate", hint: "3PA/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
+  { key: "two-point-rate", label: "2PA Rate", hint: "2PA/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
 
-  { key: "three-point-pct", label: "3P%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
-  { key: "two-point-pct", label: "2P%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
+  { key: "three-point-pct", label: "3P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
+  { key: "two-point-pct", label: "2P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
 
   { key: "fta-per-fga", label: "FT Rate", hint: "FTA/FGA", fmt: (v) => v.toFixed(3), higherIsBetter: true },
-  { key: "free-throw-pct", label: "FT%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
+  { key: "free-throw-pct", label: "FT%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
 
-  { key: "turnover-pct", label: "TO%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
-  { key: "offensive-rebounding-pct", label: "ORB%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
-  { key: "defensive-rebounding-pct", label: "DRB%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
+  { key: "turnover-pct", label: "TO%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
+  { key: "offensive-rebounding-pct", label: "ORB%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
+  { key: "defensive-rebounding-pct", label: "DRB%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
 
   { key: "steals-perpossession", label: "Stl / Poss", fmt: (v) => v.toFixed(3), higherIsBetter: true },
 
@@ -468,21 +462,21 @@ const NCAAB_STATS_OFF: StatDef[] = [
 
 const NCAAB_STATS_DEF: StatDef[] = [
   { key: "opponent-points-per-game", label: "Opp Points / Game", fmt: (v) => v.toFixed(1), higherIsBetter: false },
-  { key: "opponent-effective-field-goal-pct", label: "Opp eFG%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-effective-field-goal-pct", label: "Opp eFG%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
 
-  { key: "opponent-three-point-rate", label: "Opp 3PA Rate", hint: "3PA/FGA", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
-  { key: "opponent-two-point-rate", label: "Opp 2PA Rate", hint: "2PA/FGA", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-three-point-rate", label: "Opp 3PA Rate", hint: "3PA/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-two-point-rate", label: "Opp 2PA Rate", hint: "2PA/FGA", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
 
-  { key: "opponent-three-point-pct", label: "Opp 3P%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
-  { key: "opponent-two-point-pct", label: "Opp 2P%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-three-point-pct", label: "Opp 3P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-two-point-pct", label: "Opp 2P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
 
   { key: "opponent-fta-per-fga", label: "Opp FT Rate", hint: "FTA/FGA", fmt: (v) => v.toFixed(3), higherIsBetter: false },
-  { key: "opponent-free-throw-pct", label: "Opp FT%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-free-throw-pct", label: "Opp FT%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
 
-  { key: "opponent-turnover-pct", label: "Opp TO%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
+  { key: "opponent-turnover-pct", label: "Opp TO%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
 
-  { key: "opponent-offensive-rebounding-pct", label: "Opp ORB%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
-  { key: "opponent-defensive-rebounding-pct", label: "Opp DRB%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-offensive-rebounding-pct", label: "Opp ORB%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
+  { key: "opponent-defensive-rebounding-pct", label: "Opp DRB%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
 
   { key: "opponent-steals-perpossession", label: "Opp Stl / Poss", fmt: (v) => v.toFixed(3), higherIsBetter: false },
 
