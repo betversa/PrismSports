@@ -445,7 +445,7 @@ const NCAAB_STATS_OFF: StatDef[] = [
   { key: "points-per-game", label: "Points / Game", fmt: (v) => v.toFixed(1) },
   { key: "average-scoring-margin", label: "Avg Margin", fmt: (v) => v.toFixed(1), higherIsBetter: true },
 
-  { key: "effective-field-goal-pct", label: "eFG%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
+  { key: "effective-field-goal-pct", label: "eFG%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
   { key: "three-point-rate", label: "3PA Rate", hint: "3PA/FGA", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
   { key: "two-point-rate", label: "2PA Rate", hint: "2PA/FGA", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
 
@@ -460,7 +460,6 @@ const NCAAB_STATS_OFF: StatDef[] = [
   { key: "defensive-rebounding-pct", label: "DRB%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
 
   { key: "steals-perpossession", label: "Stl / Poss", fmt: (v) => v.toFixed(3), higherIsBetter: true },
-  { key: "block-pct", label: "Blk%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: true },
 
   { key: "personal-fouls-per-possession", label: "Fouls / Poss", fmt: (v) => v.toFixed(3), higherIsBetter: false },
 
@@ -486,7 +485,6 @@ const NCAAB_STATS_DEF: StatDef[] = [
   { key: "opponent-defensive-rebounding-pct", label: "Opp DRB%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
 
   { key: "opponent-steals-perpossession", label: "Opp Stl / Poss", fmt: (v) => v.toFixed(3), higherIsBetter: false },
-  { key: "opponent-block-pct", label: "Opp Blk%", fmt: (v) => `${v.toFixed(1)}%`, higherIsBetter: false },
 
   { key: "opponent-personal-fouls-per-possession", label: "Opp Fouls / Poss", fmt: (v) => v.toFixed(3), higherIsBetter: true },
 
