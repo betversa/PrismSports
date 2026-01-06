@@ -1,6 +1,6 @@
 "use client";
 
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.1.0)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.1.1 — premium bump)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -23,6 +23,10 @@
 //    - Ratings pulled from public.team_ratings: engine_adj_off, engine_adj_def, engine_power (net rating)
 //    - Stats pulled from public.ncaab_stats using stat_key + home_score/away_score
 //      (tries canonical_home/canonical_away first; falls back to home_team/away_team; auto-handles swapped order)
+//
+// ✅ Premium bump:
+//    - Subtle divider row between games on desktop
+//    - Removes Event ID display in modal header (keeps clean UI)
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -340,9 +344,7 @@ const DEFENSE_KEYS = new Set<NcaabStatKey>([
   "opponent-effective-possession-ratio",
 ]);
 
-const OFFENSE_KEYS = new Set<NcaabStatKey>(
-  NCAAB_STAT_KEYS_ALL.filter((k) => !DEFENSE_KEYS.has(k))
-);
+const OFFENSE_KEYS = new Set<NcaabStatKey>(NCAAB_STAT_KEYS_ALL.filter((k) => !DEFENSE_KEYS.has(k)));
 
 /* =========================================================
    Helpers
@@ -1248,8 +1250,7 @@ export const ModelScreen = () => {
 
             // fallback to current offer
             const offer = p.offers[sb];
-            const fallbackCur: Quote | null =
-              offer && Number.isFinite(offer.odds) ? { line: offer.line ?? null, odds: offer.odds } : null;
+            const fallbackCur: Quote | null = offer && Number.isFinite(offer.odds) ? { line: offer.line ?? null, odds: offer.odds } : null;
 
             const curQuote = softCur ?? fallbackCur;
             if (!curQuote) return;
@@ -1330,7 +1331,8 @@ export const ModelScreen = () => {
             </div>
 
             <div className="text-[11px] text-[#9a9a9a] mt-2 leading-relaxed">
-              Gates: Odds {ODDS_MIN} to +{ODDS_MAX} • Games EV ≤ {MAX_EV_PCT}% • Props EV {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}% • Steam lookback {STEAM_LOOKBACK_HOURS}h
+              Gates: Odds {ODDS_MIN} to +{ODDS_MAX} • Games EV ≤ {MAX_EV_PCT}% • Props EV {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}% • Steam lookback{" "}
+              {STEAM_LOOKBACK_HOURS}h
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -1385,22 +1387,32 @@ export const ModelScreen = () => {
               </thead>
 
               <tbody className="divide-y divide-[#141414]">
-                {filtered.map((p) => {
+                {filtered.map((p, idx) => {
+                  const prev = idx > 0 ? filtered[idx - 1] : null;
+                  const showDivider = !!prev && prev.event_id !== p.event_id;
+
                   const sInfo =
                     p.kind === "game"
                       ? steamEligible[steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side)]
                       : undefined;
 
                   return (
-                    <PlayRow
+                    <FragmentRow
                       key={p.playKey}
-                      play={p}
-                      bankroll={bankroll}
-                      kellyFactor={kellyFactor}
-                      settingsReady={settingsReady}
-                      onOpenDetails={() => openDetails(p)}
-                      steamInfo={sInfo}
-                    />
+                      showDivider={showDivider}
+                      dividerColSpan={11}
+                      dividerLabel={p.matchup ?? "—"}
+                      dividerTime={fmtDateTimeCT(p.commence_time ?? "")}
+                    >
+                      <PlayRow
+                        play={p}
+                        bankroll={bankroll}
+                        kellyFactor={kellyFactor}
+                        settingsReady={settingsReady}
+                        onOpenDetails={() => openDetails(p)}
+                        steamInfo={sInfo}
+                      />
+                    </FragmentRow>
                   );
                 })}
 
@@ -1452,6 +1464,41 @@ export const ModelScreen = () => {
     </div>
   );
 };
+
+/* =========================================================
+   Premium divider fragment (desktop grouping)
+========================================================= */
+
+function FragmentRow({
+  showDivider,
+  dividerColSpan,
+  dividerLabel,
+  dividerTime,
+  children,
+}: {
+  showDivider: boolean;
+  dividerColSpan: number;
+  dividerLabel: string;
+  dividerTime: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      {showDivider ? (
+        <tr>
+          <td colSpan={dividerColSpan} className="p-0">
+            <div className="h-[1px] bg-gradient-to-r from-transparent via-[#2a2a2a] to-transparent" />
+            <div className="px-3 py-2 bg-[#0a0a0a] border-y border-[#141414] text-[10px] text-[#707070] flex items-center justify-between">
+              <span className="truncate">{dividerLabel}</span>
+              <span className="shrink-0 text-[#505050]">{dividerTime}</span>
+            </div>
+          </td>
+        </tr>
+      ) : null}
+      {children}
+    </>
+  );
+}
 
 /* =========================================================
    Desktop Row (ONLY pick column opens modal)
@@ -1525,9 +1572,7 @@ function PlayRow({
               title={`Best book: ${bestOffer.book.toUpperCase()} (${pct(bestOffer.ev_pct, 1)})`}
             >
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[bestOffer.book as AnyBookHistory] }} />
-              <span className="text-[10px] text-[#b0b0b0]">
-                {bestOffer.book === "betmgm" ? "MGM" : bestOffer.book === "fanduel" ? "FD" : "DK"}
-              </span>
+              <span className="text-[10px] text-[#b0b0b0]">{bestOffer.book === "betmgm" ? "MGM" : bestOffer.book === "fanduel" ? "FD" : "DK"}</span>
             </div>
           ) : null}
         </div>
@@ -2071,7 +2116,6 @@ function PlayDetailsModal({
           rows = a1.data;
           swapped = false;
         } else if (a1.error && !isMissingColumnError(a1.error)) {
-          // real error
           if (!mounted) return;
           setStatsErr(a1.error.message);
           return;
@@ -2173,10 +2217,7 @@ function PlayDetailsModal({
           paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
         }}
       >
-        <div
-          className="relative w-full md:max-w-5xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col"
-          style={{ maxHeight: "min(92vh, 940px)" }}
-        >
+        <div className="relative w-full md:max-w-5xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col" style={{ maxHeight: "min(92vh, 940px)" }}>
           {/* Header */}
           <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
@@ -2190,9 +2231,9 @@ function PlayDetailsModal({
                   ) : null}
                 </div>
 
+                {/* ✅ Event ID removed */}
                 <div className="text-[11px] text-[#808080] mt-1">
-                  {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)} ·{" "}
-                  <span className="text-[#606060]">{play.event_id}</span>
+                  {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)}
                 </div>
 
                 <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -2248,9 +2289,7 @@ function PlayDetailsModal({
                 />
               ) : (
                 <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
-                  <div className="text-xs text-[#808080]">
-                    Game team stats are available for game plays only. Use Line History / Hit Rate for props.
-                  </div>
+                  <div className="text-xs text-[#808080]">Game team stats are available for game plays only. Use Line History / Hit Rate for props.</div>
                 </div>
               )
             ) : tab === "line" ? (
@@ -2310,27 +2349,17 @@ function GameDetailsPanel({
   return (
     <div className="space-y-3">
       {loading ? (
-        <div className="text-xs text-[#808080] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
-          Loading teams, ratings, and matchup stats…
-        </div>
+        <div className="text-xs text-[#808080] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">Loading teams, ratings, and matchup stats…</div>
       ) : null}
 
       {!loading && (eventErr || teamsErr || statsErr) ? (
-        <div className="text-xs text-[#a0a0a0] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
-          {eventErr || teamsErr || statsErr}
-        </div>
+        <div className="text-xs text-[#a0a0a0] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">{eventErr || teamsErr || statsErr}</div>
       ) : null}
 
       {!loading && away && home ? (
         <>
           <RatingsCompareBlock away={away} home={home} />
-          <StatsCompareBlock
-            away={away}
-            home={home}
-            statsBundle={statsBundle}
-            statsMode={statsMode}
-            onSetStatsMode={onSetStatsMode}
-          />
+          <StatsCompareBlock away={away} home={home} statsBundle={statsBundle} statsMode={statsMode} onSetStatsMode={onSetStatsMode} />
         </>
       ) : null}
     </div>
@@ -2452,12 +2481,7 @@ function StatsCompareBlock({
           <div className="text-center text-[#808080]">{home.abbr}</div>
 
           {rows.map((r) => (
-            <Row3
-              key={r.stat_key}
-              label={prettyStatLabel(r.stat_key)}
-              a={formatStatValue(r.stat_key, r.away)}
-              h={formatStatValue(r.stat_key, r.home)}
-            />
+            <Row3 key={r.stat_key} label={prettyStatLabel(r.stat_key)} a={formatStatValue(r.stat_key, r.away)} h={formatStatValue(r.stat_key, r.home)} />
           ))}
         </div>
       </div>
@@ -2511,10 +2535,11 @@ function formatStatValue(stat_key: string, v: number | null) {
 
   const k = stat_key.toLowerCase();
 
-  // percent-like metrics stored as decimals (.456) -> show 45.6%
-  if (k.includes("pct")) return `${(v * 100).toFixed(1)}%`;
+  // ✅ percent-like metrics stored as decimals (.456) -> show 45.6%
+  // also treat "-rate" as percent-like (3P Rate / 2P Rate)
+  if (k.includes("pct") || k.endsWith("-rate")) return `${(v * 100).toFixed(1)}%`;
 
-  // some are ratios/rates; keep 3 decimals if small, else 2
+  // ratios/rates (non-%)
   if (k.includes("perpossession") || k.includes("ratio") || k.includes("per-fga")) {
     if (Math.abs(v) < 10) return v.toFixed(3);
     return v.toFixed(2);
@@ -2800,7 +2825,10 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
               />
 
               <Tooltip content={TooltipContent} />
-              <Legend wrapperStyle={{ fontSize: 11, color: "#808080" }} formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>} />
+              <Legend
+                wrapperStyle={{ fontSize: 11, color: "#808080" }}
+                formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
+              />
 
               {hasAny("draftkings") ? <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
               {hasAny("fanduel") ? <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
@@ -3059,17 +3087,11 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   return (
     <div className={["inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
       <div className="inline-flex items-center justify-center gap-2">
-        {logo ? (
-          <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
-        ) : (
-          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>
-        )}
+        {logo ? <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} /> : <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
-      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
-        {pct(offer.ev_pct, 1)}
-      </div>
+      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
     </div>
   );
 }
@@ -3093,9 +3115,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         {logo ? <img src={logo} alt={offer.book} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
-        {pct(offer.ev_pct, 1)}
-      </div>
+      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
     </div>
   );
 }
@@ -3131,7 +3151,19 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
   );
 }
 
-function PropPickInline({ name, position, picture_url, sub, mu }: { name: string; position: string | null; picture_url: string | null; sub?: string; mu?: number | null }) {
+function PropPickInline({
+  name,
+  position,
+  picture_url,
+  sub,
+  mu,
+}: {
+  name: string;
+  position: string | null;
+  picture_url: string | null;
+  sub?: string;
+  mu?: number | null;
+}) {
   return (
     <div className="flex items-center gap-2 min-w-0">
       <PropAvatar url={picture_url} name={name} />
