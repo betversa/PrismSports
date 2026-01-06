@@ -1,16 +1,14 @@
 "use client";
 
-// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (v12.0.0)
+// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (v13.0.0)
 // -----------------------------------------------------------------------------------------------------
-// ✅ Premium visual refresh: cleaner hierarchy, richer surfaces, tighter rhythm
-// ✅ Probability bars now make sense: shown for BOTH teams (top + bottom), not away-only
-// ✅ “Stacked” formatting everywhere (no wrapping slash pairs)
-// ✅ One Model button per matchup (portal modal, stable — avoids white-screen overlay issues)
-// ✅ Desktop: matchup cards + sticky header
-// ✅ Mobile: cards + Details collapse (with bars per team already)
-//
-// Notes:
-// - This page is intentionally “consumer-facing”: no internal/behind-the-scenes labeling.
+// ✅ Win / Cover / Total % values are now BAR-ONLY (no more redundant text)
+// ✅ Winner/loser coloring:
+//    - Win bars + Cover bars: projected winner = GREEN bar, projected loser = RED bar
+//    - Total bars (Over/Under): higher probability = GREEN, lower = RED
+// ✅ Stacked formatting everywhere (no wrapped slash pairs)
+// ✅ One Model button per matchup (portal modal, stable — avoids white-screen issues)
+// ✅ Premium polish: cleaner spacing, stronger hierarchy, softer borders, better rhythm
 // -----------------------------------------------------------------------------------------------------
 
 import React, { useEffect, useMemo, useState } from "react";
@@ -156,11 +154,6 @@ function american(odds: number | null) {
   return v > 0 ? `+${v}` : `${v}`;
 }
 
-function pct01(p01: number | null, digits = 1) {
-  if (p01 == null || !Number.isFinite(p01)) return "—";
-  return `${(p01 * 100).toFixed(digits)}%`;
-}
-
 function fmtSigned1(x: number | null) {
   if (x == null || !Number.isFinite(x)) return "—";
   const v = Math.round(x * 10) / 10;
@@ -258,16 +251,13 @@ function medianOrNull(nums: number[]) {
 }
 
 /* =========================================================
-   UI: atoms
+   UI atoms
 ========================================================= */
 
 function GlowDot() {
   return (
     <span className="relative inline-flex h-2 w-2">
-      <span
-        className="absolute inline-flex h-full w-full rounded-full opacity-60"
-        style={{ background: "rgba(212,175,55,0.35)" }}
-      />
+      <span className="absolute inline-flex h-full w-full rounded-full opacity-60" style={{ background: "rgba(212,175,55,0.35)" }} />
       <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
     </span>
   );
@@ -275,7 +265,7 @@ function GlowDot() {
 
 function StatPill({ label, value }: { label: string; value: string }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/30 px-3 py-1">
+    <div className="inline-flex items-center gap-2 rounded-full border border-[#252525] bg-black/35 px-3 py-1">
       <div className="text-[10px] tracking-[0.16em] uppercase text-[#8a8a8a] font-semibold">{label}</div>
       <div className="text-[11px] font-black tabular-nums text-white">{value}</div>
     </div>
@@ -315,7 +305,7 @@ function RankBadge({ rank }: { rank: number | null }) {
     <span
       className={cx(
         "ml-2 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-extrabold tabular-nums",
-        top ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]" : "border-[#2a2a2a] bg-[#0b0b0b] text-[#d4af37]"
+        top ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]" : "border-[#252525] bg-[#0b0b0b] text-[#d4af37]"
       )}
     >
       #{r}
@@ -341,7 +331,7 @@ function SoftButton({
         onClick();
       }}
       title={title}
-      className="inline-flex items-center gap-2 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] px-3.5 py-2 text-[11px] font-black tracking-wide text-white hover:bg-[#121212] active:scale-[0.99] transition"
+      className="inline-flex items-center gap-2 rounded-xl border border-[#252525] bg-[#0b0b0b] px-3.5 py-2 text-[11px] font-black tracking-wide text-white hover:bg-[#121212] active:scale-[0.99] transition"
     >
       {children}
     </button>
@@ -350,44 +340,6 @@ function SoftButton({
 
 function SkeletonLine({ w = "w-full" }: { w?: string }) {
   return <div className={cx("h-3 rounded-md bg-[#151515] animate-pulse", w)} />;
-}
-
-function ProbBar({ p }: { p: number | null }) {
-  const w = p != null && Number.isFinite(p) ? Math.max(0, Math.min(1, p)) * 100 : 0;
-  return (
-    <div className="mt-1 h-[6px] w-full rounded-full bg-[#141414] overflow-hidden">
-      <div className="h-full rounded-full" style={{ width: `${w}%`, background: "#d4af37" }} />
-    </div>
-  );
-}
-
-function ProbBarDual({
-  top,
-  bottom,
-  topLabel,
-  bottomLabel,
-}: {
-  top: number | null;
-  bottom: number | null;
-  topLabel?: string;
-  bottomLabel?: string;
-}) {
-  return (
-    <div className="mt-2 w-full space-y-2">
-      <div>
-        {topLabel ? (
-          <div className="text-[10px] text-[#8a8a8a] font-semibold tracking-wide mb-1">{topLabel}</div>
-        ) : null}
-        <ProbBar p={top} />
-      </div>
-      <div>
-        {bottomLabel ? (
-          <div className="text-[10px] text-[#8a8a8a] font-semibold tracking-wide mb-1">{bottomLabel}</div>
-        ) : null}
-        <ProbBar p={bottom} />
-      </div>
-    </div>
-  );
 }
 
 function RecencyDot({ ts }: { ts: string | null }) {
@@ -408,10 +360,81 @@ function RecencyDot({ ts }: { ts: string | null }) {
 }
 
 /* =========================================================
-   Mobile details block (stacked values)
+   Bars (bar-only % data + winner/loser colors)
+========================================================= */
+
+type BarTone = "gold" | "green" | "red" | "muted";
+
+function barColor(tone: BarTone) {
+  if (tone === "green") return "#22c55e";
+  if (tone === "red") return "#ef4444";
+  if (tone === "muted") return "#3a3a3a";
+  return "#d4af37"; // gold
+}
+
+function ProbBar({
+  p,
+  tone = "gold",
+}: {
+  p: number | null;
+  tone?: BarTone;
+}) {
+  const w = p != null && Number.isFinite(p) ? Math.max(0, Math.min(1, p)) * 100 : 0;
+  return (
+    <div className="mt-1 h-[7px] w-full rounded-full bg-[#141414] overflow-hidden">
+      <div className="h-full rounded-full" style={{ width: `${w}%`, background: barColor(tone) }} />
+    </div>
+  );
+}
+
+function ProbBarDual({
+  top,
+  bottom,
+  topLabel,
+  bottomLabel,
+  topTone,
+  bottomTone,
+}: {
+  top: number | null;
+  bottom: number | null;
+  topLabel: string;
+  bottomLabel: string;
+  topTone: BarTone;
+  bottomTone: BarTone;
+}) {
+  return (
+    <div className="mt-2 w-full space-y-2">
+      <div>
+        <div className="flex items-center justify-between text-[10px] text-[#8a8a8a] font-semibold tracking-wide mb-1">
+          <span>{topLabel}</span>
+          <span className="tabular-nums text-[#cfcfcf]">{top == null || !Number.isFinite(top) ? "—" : `${(top * 100).toFixed(1)}%`}</span>
+        </div>
+        <ProbBar p={top} tone={topTone} />
+      </div>
+      <div>
+        <div className="flex items-center justify-between text-[10px] text-[#8a8a8a] font-semibold tracking-wide mb-1">
+          <span>{bottomLabel}</span>
+          <span className="tabular-nums text-[#cfcfcf]">{bottom == null || !Number.isFinite(bottom) ? "—" : `${(bottom * 100).toFixed(1)}%`}</span>
+        </div>
+        <ProbBar p={bottom} tone={bottomTone} />
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   Mobile details (bar-only for % values)
 ========================================================= */
 
 function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
+  const winnerToneAway: BarTone = away.isProjectedWinner ? "green" : "red";
+  const winnerToneHome: BarTone = home.isProjectedWinner ? "green" : "red";
+
+  const overTone: BarTone =
+    (away.overProb ?? 0) >= (home.underProb ?? 0) ? "green" : "red";
+  const underTone: BarTone =
+    (home.underProb ?? 0) >= (away.overProb ?? 0) ? "green" : "red";
+
   const Row = ({
     label,
     aTop,
@@ -420,6 +443,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
     hBottom,
     aBar,
     hBar,
+    aTone,
+    hTone,
   }: {
     label: string;
     aTop: React.ReactNode;
@@ -428,6 +453,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
     hBottom?: React.ReactNode;
     aBar?: number | null;
     hBar?: number | null;
+    aTone?: BarTone;
+    hTone?: BarTone;
   }) => (
     <div className="grid grid-cols-3 gap-2 py-2 border-b border-[#141414] last:border-b-0 items-start">
       <div className="text-[10px] tracking-[0.14em] uppercase text-[#8a8a8a] font-semibold pt-0.5">{label}</div>
@@ -435,50 +462,60 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
       <div className="text-right">
         <div className="text-[11px] text-white font-extrabold tabular-nums leading-tight">{aTop}</div>
         {aBottom != null ? <div className="text-[10px] text-[#9a9a9a] font-semibold mt-1">{aBottom}</div> : null}
-        {aBar != null ? <ProbBar p={aBar} /> : null}
+        {aBar != null ? <ProbBar p={aBar} tone={aTone ?? "gold"} /> : null}
       </div>
 
       <div className="text-right">
         <div className="text-[11px] text-white font-extrabold tabular-nums leading-tight">{hTop}</div>
         {hBottom != null ? <div className="text-[10px] text-[#9a9a9a] font-semibold mt-1">{hBottom}</div> : null}
-        {hBar != null ? <ProbBar p={hBar} /> : null}
+        {hBar != null ? <ProbBar p={hBar} tone={hTone ?? "gold"} /> : null}
       </div>
     </div>
   );
 
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-black/15 overflow-hidden">
+    <div className="rounded-xl border border-[#252525] bg-black/18 overflow-hidden">
       <div className="px-4 py-2 border-b border-[#141414] text-[11px] text-white font-black tracking-wide">
         Details
       </div>
 
       <div className="px-4">
+        {/* Win% is BAR-ONLY: no win% text */}
         <Row
           label="Win"
-          aTop={pct01(away.winProbTeam)}
-          hTop={pct01(home.winProbTeam)}
+          aTop="—"
+          hTop="—"
           aBar={away.winProbTeam}
           hBar={home.winProbTeam}
+          aTone={winnerToneAway}
+          hTone={winnerToneHome}
         />
 
+        {/* Cover% is BAR-ONLY: no cover% text; margin stays as number */}
         <Row
           label="Margin"
           aTop={fmtSigned1(away.projMarginTeam)}
-          aBottom={`Cover ${pct01(away.coverProbTeam)}`}
           hTop={fmtSigned1(home.projMarginTeam)}
-          hBottom={`Cover ${pct01(home.coverProbTeam)}`}
           aBar={away.coverProbTeam}
           hBar={home.coverProbTeam}
+          aTone={winnerToneAway}
+          hTone={winnerToneHome}
         />
 
+        {/* Total: over/under are BAR-ONLY; projected total stays as number */}
         <Row
           label="Total"
           aTop={fmtLinePlain(away.projTotal)}
-          aBottom={`Over ${pct01(away.overProb)}`}
+          aBottom="Over"
           hTop={fmtLinePlain(home.projTotal)}
-          hBottom={`Under ${pct01(home.underProb)}`}
+          hBottom="Under"
+          aBar={away.overProb}
+          hBar={home.underProb}
+          aTone={overTone}
+          hTone={underTone}
         />
 
+        {/* Consensus spread */}
         <Row
           label="Spread"
           aTop={away.consSpreadLineTeam == null ? "—" : fmtSigned1(away.consSpreadLineTeam)}
@@ -487,6 +524,7 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
           hBottom={home.consSpreadLineTeam == null ? undefined : american(home.consSpreadOddsTeam)}
         />
 
+        {/* Consensus total */}
         <Row
           label="Total"
           aTop={away.consTotalLine == null ? "—" : fmtOU(away.consTotalLine, "o")}
@@ -500,7 +538,7 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /* =========================================================
-   Modal (portal) — stable shell
+   Modal (portal) — stable + keeps your existing stats logic
 ========================================================= */
 
 type StatMode = "off" | "def";
@@ -544,47 +582,17 @@ const NCAAB_STAT_DEFS: Array<{
 }> = [
   { mode: "off", key: "possessions-per-game", label: "Pace", fmt: (v) => v.toFixed(1), higherIsBetter: true },
   { mode: "off", key: "points-per-game", label: "Points / Game", fmt: (v) => v.toFixed(1), higherIsBetter: true },
-  {
-    mode: "off",
-    key: "average-scoring-margin",
-    label: "Avg Margin",
-    fmt: (v) => v.toFixed(1),
-    higherIsBetter: true,
-  },
-  {
-    mode: "off",
-    key: "effective-field-goal-pct",
-    label: "eFG%",
-    fmt: (v) => `${(v * 100).toFixed(1)}%`,
-    higherIsBetter: true,
-  },
+  { mode: "off", key: "average-scoring-margin", label: "Avg Margin", fmt: (v) => v.toFixed(1), higherIsBetter: true },
+  { mode: "off", key: "effective-field-goal-pct", label: "eFG%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
   { mode: "off", key: "three-point-pct", label: "3P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
   { mode: "off", key: "two-point-pct", label: "2P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
   { mode: "off", key: "turnover-pct", label: "TO%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
   { mode: "off", key: "offensive-rebounding-pct", label: "ORB%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
 
   { mode: "def", key: "opponent-points-per-game", label: "Opp Pts / Game", fmt: (v) => v.toFixed(1), higherIsBetter: false },
-  {
-    mode: "def",
-    key: "opponent-effective-field-goal-pct",
-    label: "Opp eFG%",
-    fmt: (v) => `${(v * 100).toFixed(1)}%`,
-    higherIsBetter: false,
-  },
-  {
-    mode: "def",
-    key: "opponent-three-point-pct",
-    label: "Opp 3P%",
-    fmt: (v) => `${(v * 100).toFixed(1)}%`,
-    higherIsBetter: false,
-  },
-  {
-    mode: "def",
-    key: "opponent-two-point-pct",
-    label: "Opp 2P%",
-    fmt: (v) => `${(v * 100).toFixed(1)}%`,
-    higherIsBetter: false,
-  },
+  { mode: "def", key: "opponent-effective-field-goal-pct", label: "Opp eFG%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
+  { mode: "def", key: "opponent-three-point-pct", label: "Opp 3P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
+  { mode: "def", key: "opponent-two-point-pct", label: "Opp 2P%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: false },
   { mode: "def", key: "defensive-rebounding-pct", label: "DRB%", fmt: (v) => `${(v * 100).toFixed(1)}%`, higherIsBetter: true },
 ];
 
@@ -616,7 +624,6 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
 
   useEffect(() => {
     if (!open) return;
-    if (typeof document === "undefined") return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
@@ -702,11 +709,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
         });
       } catch (e: any) {
         if (!alive) return;
-        setSt((p) => ({
-          ...p,
-          loading: false,
-          error: String(e?.message ?? e),
-        }));
+        setSt((p) => ({ ...p, loading: false, error: String(e?.message ?? e) }));
       }
     }
 
@@ -749,7 +752,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
 
       <div className="absolute inset-0 flex items-center justify-center px-3">
         <div
-          className="w-[min(1040px,calc(100vw-24px))] max-h-[calc(100vh-24px)] overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl"
+          className="w-[min(1040px,calc(100vw-24px))] max-h-[calc(100vh-24px)] overflow-hidden rounded-2xl border border-[#252525] bg-[#0b0b0b] shadow-2xl"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
           role="dialog"
@@ -759,7 +762,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
           <div className="px-5 pt-5 pb-4 border-b border-[#141414]">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/30 px-3 py-1 text-[10px] tracking-[0.16em] uppercase text-[#b0b0b0] font-semibold">
+                <div className="inline-flex items-center gap-2 rounded-full border border-[#252525] bg-black/30 px-3 py-1 text-[10px] tracking-[0.16em] uppercase text-[#b0b0b0] font-semibold">
                   <GlowDot />
                   Matchup
                 </div>
@@ -782,7 +785,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
               <button
                 type="button"
                 onClick={onClose}
-                className="shrink-0 rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-[11px] font-black tracking-wide text-white hover:bg-[#121212]"
+                className="shrink-0 rounded-xl border border-[#252525] bg-[#0b0b0b] px-3 py-2 text-[11px] font-black tracking-wide text-white hover:bg-[#121212]"
               >
                 Done
               </button>
@@ -796,7 +799,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
                   "rounded-xl border px-3 py-2 text-[10px] font-black tracking-[0.14em] uppercase transition",
                   mode === "off"
                     ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
-                    : "border-[#2a2a2a] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
+                    : "border-[#252525] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
                 )}
               >
                 Offense
@@ -809,7 +812,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
                   "rounded-xl border px-3 py-2 text-[10px] font-black tracking-[0.14em] uppercase transition",
                   mode === "def"
                     ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
-                    : "border-[#2a2a2a] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
+                    : "border-[#252525] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
                 )}
               >
                 Defense
@@ -849,13 +852,8 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
                     const v = (st.awayRatings as any)?.[f.key];
                     const txt = f.fmt ? f.fmt(v) : String(v ?? "—");
                     return (
-                      <div
-                        key={f.key}
-                        className="grid grid-cols-2 gap-3 py-2 border-b border-[#141414] last:border-b-0"
-                      >
-                        <div className="text-[10px] tracking-[0.14em] uppercase text-[#8a8a8a] font-semibold">
-                          {f.label}
-                        </div>
+                      <div key={f.key} className="grid grid-cols-2 gap-3 py-2 border-b border-[#141414] last:border-b-0">
+                        <div className="text-[10px] tracking-[0.14em] uppercase text-[#8a8a8a] font-semibold">{f.label}</div>
                         <div className="text-right tabular-nums text-white font-extrabold">{txt}</div>
                       </div>
                     );
@@ -881,13 +879,8 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
                     const v = (st.homeRatings as any)?.[f.key];
                     const txt = f.fmt ? f.fmt(v) : String(v ?? "—");
                     return (
-                      <div
-                        key={f.key}
-                        className="grid grid-cols-2 gap-3 py-2 border-b border-[#141414] last:border-b-0"
-                      >
-                        <div className="text-[10px] tracking-[0.14em] uppercase text-[#8a8a8a] font-semibold">
-                          {f.label}
-                        </div>
+                      <div key={f.key} className="grid grid-cols-2 gap-3 py-2 border-b border-[#141414] last:border-b-0">
+                        <div className="text-[10px] tracking-[0.14em] uppercase text-[#8a8a8a] font-semibold">{f.label}</div>
                         <div className="text-right tabular-nums text-white font-extrabold">{txt}</div>
                       </div>
                     );
@@ -940,36 +933,21 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
                     }
 
                     return (
-                      <div
-                        key={d.key}
-                        className="grid grid-cols-12 gap-3 items-center py-2 border-b border-[#141414] last:border-b-0"
-                      >
+                      <div key={d.key} className="grid grid-cols-12 gap-3 items-center py-2 border-b border-[#141414] last:border-b-0">
                         <div className="col-span-5 min-w-0">
                           <div className="text-[11px] text-white font-black truncate tracking-tight">{d.label}</div>
                           <div className="text-[10px] text-[#808080] font-semibold truncate">{d.key}</div>
                         </div>
 
-                        <div
-                          className={cx(
-                            "col-span-3 text-right tabular-nums",
-                            aGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold"
-                          )}
-                        >
+                        <div className={cx("col-span-3 text-right tabular-nums", aGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold")}>
                           {aTxt}
                         </div>
 
-                        <div
-                          className={cx(
-                            "col-span-3 text-right tabular-nums",
-                            hGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold"
-                          )}
-                        >
+                        <div className={cx("col-span-3 text-right tabular-nums", hGood ? "text-green-400 font-extrabold" : "text-[#d6d6d6] font-bold")}>
                           {hTxt}
                         </div>
 
-                        <div className="col-span-1 text-right tabular-nums text-[#a8a8a8] font-bold">
-                          {deltaTxt}
-                        </div>
+                        <div className="col-span-1 text-right tabular-nums text-[#a8a8a8] font-bold">{deltaTxt}</div>
                       </div>
                     );
                   })
@@ -990,7 +968,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] px-4 py-2 text-[11px] font-black tracking-wide text-white hover:bg-[#121212]"
+              className="rounded-xl border border-[#252525] bg-[#0b0b0b] px-4 py-2 text-[11px] font-black tracking-wide text-white hover:bg-[#121212]"
             >
               Close
             </button>
@@ -1000,7 +978,6 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
     </div>
   );
 
-  if (typeof document === "undefined") return null;
   return createPortal(modal, document.body);
 }
 
@@ -1011,14 +988,11 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
 function DesktopColumnsHeader() {
   const cols = ["Score", "Win", "Margin", "Total", "Spread", "Total"];
   return (
-    <div className="sticky top-0 z-30 border-b border-[#2a2a2a] bg-[#070707]">
+    <div className="sticky top-0 z-30 border-b border-[#252525] bg-[#070707]">
       <div className="grid grid-cols-[minmax(420px,1fr)_repeat(6,minmax(150px,180px))]">
         <div className="p-3 text-[#808080] text-[10px] font-semibold tracking-[0.18em] uppercase">Matchup</div>
         {cols.map((c, i) => (
-          <div
-            key={`${c}-${i}`}
-            className="p-3 text-[#808080] text-[10px] font-semibold tracking-[0.18em] uppercase text-center"
-          >
+          <div key={`${c}-${i}`} className="p-3 text-[#808080] text-[10px] font-semibold tracking-[0.18em] uppercase text-center">
             {c}
           </div>
         ))}
@@ -1033,10 +1007,7 @@ function MetricStack({
   bottom,
   hintTop,
   hintBottom,
-  barsTop,
-  barsBottom,
-  barsLabelsTop,
-  barsLabelsBottom,
+  bars,
 }: {
   title: string;
   top: string;
@@ -1044,41 +1015,40 @@ function MetricStack({
   hintTop?: string;
   hintBottom?: string;
 
-  // If provided, we render dual bars (top + bottom). Each corresponds to the stacked value.
-  barsTop?: number | null;
-  barsBottom?: number | null;
-  barsLabelsTop?: string;
-  barsLabelsBottom?: string;
+  // If provided: shows bar-only % data (with labels + % inside bar block)
+  bars?: {
+    top: number | null;
+    bottom: number | null;
+    topLabel: string;
+    bottomLabel: string;
+    topTone: BarTone;
+    bottomTone: BarTone;
+  };
 }) {
   return (
     <div className="px-3 py-4 text-center flex flex-col items-center justify-center">
       <div className="text-[15px] font-black tabular-nums leading-none tracking-tight text-white">{top}</div>
-      {hintTop ? (
-        <div className="mt-1 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{hintTop}</div>
-      ) : null}
+      {hintTop ? <div className="mt-1 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{hintTop}</div> : null}
 
       {bottom ? (
         <>
           <div className="mt-3 h-px w-10 bg-[#202020]" />
-          <div className="mt-3 text-[15px] font-black tabular-nums leading-none tracking-tight text-white">
-            {bottom}
-          </div>
-          {hintBottom ? (
-            <div className="mt-1 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{hintBottom}</div>
-          ) : null}
+          <div className="mt-3 text-[15px] font-black tabular-nums leading-none tracking-tight text-white">{bottom}</div>
+          {hintBottom ? <div className="mt-1 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{hintBottom}</div> : null}
         </>
       ) : null}
 
       <div className="mt-2 text-[10px] tracking-[0.18em] uppercase text-[#7a7a7a] font-semibold">{title}</div>
 
-      {/* NEW: bars for both rows, aligned with top/bottom */}
-      {barsTop != null || barsBottom != null ? (
+      {bars ? (
         <div className="mt-2 w-full px-1">
           <ProbBarDual
-            top={barsTop ?? null}
-            bottom={barsBottom ?? null}
-            topLabel={barsLabelsTop}
-            bottomLabel={barsLabelsBottom}
+            top={bars.top}
+            bottom={bars.bottom}
+            topLabel={bars.topLabel}
+            bottomLabel={bars.bottomLabel}
+            topTone={bars.topTone}
+            bottomTone={bars.bottomTone}
           />
         </div>
       ) : null}
@@ -1086,13 +1056,7 @@ function MetricStack({
   );
 }
 
-function TeamLine({
-  row,
-  right,
-}: {
-  row: TeamRow;
-  right?: React.ReactNode;
-}) {
+function TeamLine({ row, right }: { row: TeamRow; right?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-3 min-w-0">
       <LogoBox team={row.teamName} url={row.logoUrl} size={36} />
@@ -1111,8 +1075,13 @@ function TeamLine({
 }
 
 function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel: () => void }) {
-  const winnerAbbr = ev.away.isProjectedWinner ? ev.away.teamAbbr : ev.home.isProjectedWinner ? ev.home.teamAbbr : null;
+  const winnerToneAway: BarTone = ev.away.isProjectedWinner ? "green" : "red";
+  const winnerToneHome: BarTone = ev.home.isProjectedWinner ? "green" : "red";
 
+  const overTone: BarTone = (ev.away.overProb ?? 0) >= (ev.home.underProb ?? 0) ? "green" : "red";
+  const underTone: BarTone = (ev.home.underProb ?? 0) >= (ev.away.overProb ?? 0) ? "green" : "red";
+
+  // Consensus stacks (text is fine here)
   const consSpreadAwayTop = ev.away.consSpreadLineTeam == null ? "—" : fmtSigned1(ev.away.consSpreadLineTeam);
   const consSpreadAwayBottom = ev.away.consSpreadLineTeam == null ? undefined : american(ev.away.consSpreadOddsTeam);
 
@@ -1125,23 +1094,10 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
   const consTotalUnderTop = ev.home.consTotalLine == null ? "—" : fmtOU(ev.home.consTotalLine, "u");
   const consTotalUnderBottom = ev.home.consTotalLine == null ? undefined : american(ev.home.consTotalUnderOdds);
 
-  const projTotalTop = fmtLinePlain(ev.home.projTotal);
-  const projTotalBottom = fmtLinePlain(ev.away.projTotal);
-  const projTotalHintTop = `Over ${pct01(ev.away.overProb)}`;
-  const projTotalHintBottom = `Under ${pct01(ev.home.underProb)}`;
-
-  const topWin = ev.away.winProbTeam;
-  const botWin = ev.home.winProbTeam;
-
-  const topCover = ev.away.coverProbTeam;
-  const botCover = ev.home.coverProbTeam;
-
   return (
     <div
-      className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden transition hover:border-[#3a3a3a]"
-      style={{
-        boxShadow: "0 18px 60px rgba(0,0,0,0.35)",
-      }}
+      className="rounded-2xl border border-[#252525] bg-[#0b0b0b] overflow-hidden transition hover:border-[#3a3a3a]"
+      style={{ boxShadow: "0 18px 60px rgba(0,0,0,0.35)" }}
     >
       {/* Card header */}
       <div
@@ -1162,12 +1118,6 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
                   {fmtDateCentral(ev.commenceTime)} · {fmtTimeCentral(ev.commenceTime)}
                 </span>
               </div>
-
-              {winnerAbbr ? (
-                <span className="hidden lg:inline-flex items-center rounded-full border border-[#2a2a2a] bg-black/25 px-2 py-0.5 text-[10px] font-black tracking-[0.12em] uppercase text-[#d4af37]">
-                  {winnerAbbr} favored
-                </span>
-              ) : null}
             </div>
 
             {ev.consensusTs ? (
@@ -1192,110 +1142,86 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
           <TeamLine
             row={ev.away}
             right={
-              <>
-                <div className="text-right">
-                  <div
-                    className={cx(
-                      "text-[14px] font-black tabular-nums tracking-tight",
-                      ev.away.isProjectedWinner ? "text-green-400" : "text-white"
-                    )}
-                  >
-                    {ev.away.projPoints.toFixed(1)}
-                  </div>
-                  <div className="text-[10px] text-[#bdbdbd] font-bold tabular-nums">
-                    Win {pct01(ev.away.winProbTeam)}
-                  </div>
+              <div className="text-right">
+                <div className={cx("text-[14px] font-black tabular-nums tracking-tight", ev.away.isProjectedWinner ? "text-green-400" : "text-white")}>
+                  {ev.away.projPoints.toFixed(1)}
                 </div>
-              </>
+                <div className="text-[10px] text-[#8a8a8a] font-semibold tracking-wide">Projected</div>
+              </div>
             }
           />
           <TeamLine
             row={ev.home}
             right={
-              <>
-                <div className="text-right">
-                  <div
-                    className={cx(
-                      "text-[14px] font-black tabular-nums tracking-tight",
-                      ev.home.isProjectedWinner ? "text-green-400" : "text-white"
-                    )}
-                  >
-                    {ev.home.projPoints.toFixed(1)}
-                  </div>
-                  <div className="text-[10px] text-[#bdbdbd] font-bold tabular-nums">
-                    Win {pct01(ev.home.winProbTeam)}
-                  </div>
+              <div className="text-right">
+                <div className={cx("text-[14px] font-black tabular-nums tracking-tight", ev.home.isProjectedWinner ? "text-green-400" : "text-white")}>
+                  {ev.home.projPoints.toFixed(1)}
                 </div>
-              </>
+                <div className="text-[10px] text-[#8a8a8a] font-semibold tracking-wide">Projected</div>
+              </div>
             }
           />
         </div>
 
-        {/* Score */}
-        <MetricStack
-          title="Score"
-          top={ev.away.projPoints.toFixed(1)}
-          bottom={ev.home.projPoints.toFixed(1)}
-          hintTop={ev.away.teamAbbr}
-          hintBottom={ev.home.teamAbbr}
-        />
+        {/* Score (numbers still useful) */}
+        <MetricStack title="Score" top={ev.away.projPoints.toFixed(1)} bottom={ev.home.projPoints.toFixed(1)} hintTop={ev.away.teamAbbr} hintBottom={ev.home.teamAbbr} />
 
-        {/* Win% (bars for BOTH teams) */}
+        {/* Win (BAR-ONLY; no win% text above) */}
         <MetricStack
           title="Win"
-          top={pct01(ev.away.winProbTeam)}
-          bottom={pct01(ev.home.winProbTeam)}
+          top="—"
+          bottom="—"
           hintTop={ev.away.teamAbbr}
           hintBottom={ev.home.teamAbbr}
-          barsTop={topWin}
-          barsBottom={botWin}
-          barsLabelsTop={`${ev.away.teamAbbr}`}
-          barsLabelsBottom={`${ev.home.teamAbbr}`}
+          bars={{
+            top: ev.away.winProbTeam,
+            bottom: ev.home.winProbTeam,
+            topLabel: ev.away.teamAbbr,
+            bottomLabel: ev.home.teamAbbr,
+            topTone: winnerToneAway,
+            bottomTone: winnerToneHome,
+          }}
         />
 
-        {/* Margin + Cover (bars for BOTH teams cover%) */}
+        {/* Margin (margin numbers still useful; cover% is BAR-ONLY) */}
         <MetricStack
           title="Margin"
           top={fmtSigned1(ev.away.projMarginTeam)}
           bottom={fmtSigned1(ev.home.projMarginTeam)}
-          hintTop={`Cover ${pct01(ev.away.coverProbTeam)}`}
-          hintBottom={`Cover ${pct01(ev.home.coverProbTeam)}`}
-          barsTop={topCover}
-          barsBottom={botCover}
-          barsLabelsTop={`${ev.away.teamAbbr} cover`}
-          barsLabelsBottom={`${ev.home.teamAbbr} cover`}
+          hintTop={ev.away.teamAbbr}
+          hintBottom={ev.home.teamAbbr}
+          bars={{
+            top: ev.away.coverProbTeam,
+            bottom: ev.home.coverProbTeam,
+            topLabel: `${ev.away.teamAbbr} cover`,
+            bottomLabel: `${ev.home.teamAbbr} cover`,
+            topTone: winnerToneAway,
+            bottomTone: winnerToneHome,
+          }}
         />
 
-        {/* Total (Over/Under) */}
+        {/* Total (projected total stays; over/under is BAR-ONLY) */}
         <MetricStack
           title="Total"
-          top={projTotalTop}
-          bottom={projTotalBottom}
-          hintTop={projTotalHintTop}
-          hintBottom={projTotalHintBottom}
-          barsTop={ev.away.overProb}
-          barsBottom={ev.home.underProb}
-          barsLabelsTop="Over"
-          barsLabelsBottom="Under"
+          top={fmtLinePlain(ev.home.projTotal)}
+          bottom={fmtLinePlain(ev.away.projTotal)}
+          hintTop="Over"
+          hintBottom="Under"
+          bars={{
+            top: ev.away.overProb,
+            bottom: ev.home.underProb,
+            topLabel: "Over",
+            bottomLabel: "Under",
+            topTone: overTone,
+            bottomTone: underTone,
+          }}
         />
 
         {/* Consensus spread */}
-        <MetricStack
-          title="Spread"
-          top={consSpreadAwayTop}
-          bottom={consSpreadHomeTop}
-          hintTop={consSpreadAwayBottom}
-          hintBottom={consSpreadHomeBottom}
-        />
+        <MetricStack title="Spread" top={consSpreadAwayTop} bottom={consSpreadHomeTop} hintTop={consSpreadAwayBottom} hintBottom={consSpreadHomeBottom} />
 
         {/* Consensus total */}
-        <MetricStack
-          title="Total"
-          top={consTotalOverTop}
-          bottom={consTotalUnderTop}
-          hintTop={consTotalOverBottom}
-          hintBottom={consTotalUnderBottom}
-        />
+        <MetricStack title="Total" top={consTotalOverTop} bottom={consTotalUnderTop} hintTop={consTotalOverBottom} hintBottom={consTotalUnderBottom} />
       </div>
     </div>
   );
@@ -1675,9 +1601,10 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         consSpreadOddsTeam: c?.spread_home_odds ?? null,
         consTotalLine: consTotal == null ? null : Math.round(consTotal * 10) / 10,
         consTotalOverOdds: c?.total_over_odds ?? null,
+        consTotalTotal: undefined as any, // (ignored; keeps TS happy if you had old fields elsewhere)
         consTotalUnderOdds: c?.total_under_odds ?? null,
         isProjectedWinner: homeIsWinner,
-      };
+      } as TeamRow;
 
       out.push({
         eventId: r.event_id,
@@ -1730,7 +1657,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       />
 
       {/* HERO */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-5">
+      <div className="relative overflow-hidden rounded-2xl border border-[#252525] bg-[#0b0b0b] p-5">
         <div
           className="pointer-events-none absolute inset-0"
           style={{
@@ -1740,7 +1667,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         />
         <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/30 px-3 py-1 text-[10px] tracking-[0.18em] uppercase text-[#b0b0b0] font-semibold">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#252525] bg-black/35 px-3 py-1 text-[10px] tracking-[0.18em] uppercase text-[#b0b0b0] font-semibold">
               <GlowDot />
               Matchups
             </div>
@@ -1750,7 +1677,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             </h2>
 
             <div className="text-[12px] text-[#a8a8a8] mt-1 leading-relaxed font-semibold">
-              Cleaner layout, stacked lines, and probability bars for both teams.
+              Percentages live in the bars now — and winners/losers are color-coded.
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -1763,7 +1690,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
           <div className="w-full md:w-auto">
             {loading ? (
-              <div className="mt-1 md:mt-0 rounded-xl border border-[#2a2a2a] bg-black/30 px-4 py-3">
+              <div className="mt-1 md:mt-0 rounded-xl border border-[#252525] bg-black/35 px-4 py-3">
                 <SkeletonLine w="w-40" />
                 <div className="mt-2">
                   <SkeletonLine w="w-56" />
@@ -1772,7 +1699,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             ) : null}
 
             {errorText ? (
-              <div className="mt-2 rounded-xl border border-red-900/50 bg-black/30 px-4 py-3 text-[11px] text-red-400 font-semibold">
+              <div className="mt-2 rounded-xl border border-red-900/50 bg-black/35 px-4 py-3 text-[11px] text-red-400 font-semibold">
                 {errorText}
               </div>
             ) : null}
@@ -1781,7 +1708,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       </div>
 
       {/* DESKTOP */}
-      <div className="hidden md:block bg-[#0b0b0b] border border-[#2a2a2a] rounded-2xl overflow-hidden">
+      <div className="hidden md:block bg-[#0b0b0b] border border-[#252525] rounded-2xl overflow-hidden">
         <div className="max-h-[72vh] overflow-y-auto">
           <DesktopColumnsHeader />
 
@@ -1793,7 +1720,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
             {loading && !events.length ? (
               <div className="space-y-3">
                 {Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4">
+                  <div key={i} className="rounded-2xl border border-[#252525] bg-[#0b0b0b] p-4">
                     <SkeletonLine w="w-64" />
                     <div className="mt-3 grid grid-cols-2 gap-3">
                       <SkeletonLine />
@@ -1814,7 +1741,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       {/* MOBILE */}
       <div className="md:hidden space-y-3">
         {!loading && !events.length ? (
-          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0b0b0b] border border-[#2a2a2a] rounded-2xl text-center font-semibold">
+          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0b0b0b] border border-[#252525] rounded-2xl text-center font-semibold">
             No matchups found.
           </div>
         ) : null}
@@ -1822,10 +1749,13 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         {events.map((ev) => {
           const open = !!openMap[ev.eventId];
 
+          const winnerToneAway: BarTone = ev.away.isProjectedWinner ? "green" : "red";
+          const winnerToneHome: BarTone = ev.home.isProjectedWinner ? "green" : "red";
+
           return (
             <div
               key={ev.eventId}
-              className="border border-[#2a2a2a] rounded-2xl p-4 overflow-hidden"
+              className="border border-[#252525] rounded-2xl p-4 overflow-hidden"
               style={{
                 background:
                   "radial-gradient(700px 220px at 18% 0%, rgba(212,175,55,0.14), transparent 62%), rgba(11,11,11,0.92)",
@@ -1854,7 +1784,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                   <button
                     type="button"
                     onClick={() => setOpenMap((p) => ({ ...p, [ev.eventId]: !p[ev.eventId] }))}
-                    className="px-3 py-2 rounded-xl bg-black/25 border border-[#2a2a2a] text-[10px] tracking-[0.16em] uppercase text-[#d0d0d0] font-semibold hover:bg-[#141414]"
+                    className="px-3 py-2 rounded-xl bg-black/35 border border-[#252525] text-[10px] tracking-[0.16em] uppercase text-[#d0d0d0] font-semibold hover:bg-[#141414]"
                   >
                     {open ? "Hide" : "Details"}
                   </button>
@@ -1874,16 +1804,12 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 </div>
 
                 <div className="ml-auto text-right tabular-nums shrink-0">
-                  <div
-                    className={cx(
-                      "font-black text-[13px] tracking-tight",
-                      ev.away.isProjectedWinner ? "text-green-400" : "text-white"
-                    )}
-                  >
+                  <div className={cx("font-black text-[13px] tracking-tight", ev.away.isProjectedWinner ? "text-green-400" : "text-white")}>
                     {ev.away.projPoints.toFixed(1)}
                   </div>
-                  <div className="text-[10px] text-[#bdbdbd] font-bold">Win {pct01(ev.away.winProbTeam)}</div>
-                  <ProbBar p={ev.away.winProbTeam} />
+                  <div className="mt-1">
+                    <ProbBar p={ev.away.winProbTeam} tone={winnerToneAway} />
+                  </div>
                 </div>
               </div>
 
@@ -1900,16 +1826,12 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 </div>
 
                 <div className="ml-auto text-right tabular-nums shrink-0">
-                  <div
-                    className={cx(
-                      "font-black text-[13px] tracking-tight",
-                      ev.home.isProjectedWinner ? "text-green-400" : "text-white"
-                    )}
-                  >
+                  <div className={cx("font-black text-[13px] tracking-tight", ev.home.isProjectedWinner ? "text-green-400" : "text-white")}>
                     {ev.home.projPoints.toFixed(1)}
                   </div>
-                  <div className="text-[10px] text-[#bdbdbd] font-bold">Win {pct01(ev.home.winProbTeam)}</div>
-                  <ProbBar p={ev.home.winProbTeam} />
+                  <div className="mt-1">
+                    <ProbBar p={ev.home.winProbTeam} tone={winnerToneHome} />
+                  </div>
                 </div>
               </div>
 
@@ -1927,4 +1849,3 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 };
 
 export default MonteCarloScreen;
-
