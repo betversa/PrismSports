@@ -1,14 +1,14 @@
-// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (v9.0.0 — Premium Card Layout)
+"use client";
+
+// src/app/components/screens/MonteCarloScreen.tsx — FULL REWRITE (v9.1.0 — Premium Card Layout + Modal White-Screen Fix)
 // -----------------------------------------------------------------------------------------------------
-// ✅ PREMIUM BUMP: Desktop no longer uses <table> for matchup blocks
-//    - Uses true “matchup cards” with a sticky column header bar (inside the scroll container)
-//    - Perfect rounded corners, hover glow, and cleaner hierarchy
-//    - Still keeps “columns” visual parity: Proj Score | Win% | Proj Margin | Proj Total | Cons Spread | Cons Total
+// ✅ PREMIUM BUMP: Desktop uses true matchup cards (no <table>) + sticky column header inside scroll container
+// ✅ FIX: Model modal no longer “white screens” (no click-through close / no propagation issues)
+// ✅ FIX: Vertically centers metric text inside desktop cards
+// ✅ Mobile: matchup cards + Details collapsible (same pattern)
+// ✅ ONE "Model" button per event — opens Pro modal
 //
-// ✅ Mobile: matchup cards + Details collapsible (same as before)
-// ✅ ONE "Model" button per event (by matchup/team names) — opens Pro modal
-//
-// ✅ Pro Modal (COMBINED as requested):
+// ✅ Pro Modal (COMBINED):
 //    - Single view
 //    - Toggle: Offense / Defense (switches NCAAB stat list)
 //    - Shows ONLY team_ratings Adj Off / Adj Def (does NOT repeat off/def efficiency from ncaab_stats)
@@ -158,6 +158,10 @@ type EventBundle = {
    Helpers
 ========================================================= */
 
+function cx(...parts: Array<string | false | null | undefined>) {
+  return parts.filter(Boolean).join(" ");
+}
+
 function safeNum(n: any, fallback = 0) {
   const x = Number(n);
   return Number.isFinite(x) ? x : fallback;
@@ -268,10 +272,6 @@ function medianOrNull(nums: number[]) {
   const mid = Math.floor(arr.length / 2);
   if (arr.length % 2 === 1) return arr[mid];
   return (arr[mid - 1] + arr[mid]) / 2;
-}
-
-function cx(...parts: Array<string | false | null | undefined>) {
-  return parts.filter(Boolean).join(" ");
 }
 
 /* =========================================================
@@ -449,7 +449,7 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
 }
 
 /* =========================================================
-   Pro Model Modal (Combined)
+   Pro Model Modal (Combined) — FULL FIX (no click-through)
 ========================================================= */
 
 type StatMode = "off" | "def";
@@ -487,7 +487,7 @@ const TEAM_RATINGS_FIELDS: Array<{ key: string; label: string; fmt?: (v: any) =>
   { key: "sigma_total_100", label: "Sigma Total (100)", fmt: (v) => fmtMaybeNumber(v, 2) },
 ];
 
-// NCAAB stat_key list (your exact keys). % stats are stored as .456 => render 45.6%
+// NCAAB stat_key list (% stats stored as .456 => render 45.6%)
 const NCAAB_STAT_DEFS: Array<{
   mode: StatMode;
   key: string;
@@ -558,15 +558,30 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
     fetchedAt: null,
   });
 
+  // Escape closes
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  // Optional body scroll lock (prevents weird scroll jump)
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  // Load ratings + stats on open/event change
   useEffect(() => {
     let mounted = true;
 
@@ -587,7 +602,12 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
       });
 
       try {
-        const ratingsRes = await supabase.from("team_ratings").select("*").in("canonical", [awayCanonical, homeCanonical]);
+        // team_ratings (canonical match; sport filter)
+        const ratingsRes = await supabase
+          .from("team_ratings")
+          .select("*")
+          .in("canonical", [awayCanonical, homeCanonical]);
+
         if (ratingsRes.error) throw new Error(`Failed to load team_ratings: ${ratingsRes.error.message}`);
 
         const rawRatings = (ratingsRes.data ?? []) as TeamRatingsAny[];
@@ -663,12 +683,10 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
   const awayAbbr = abbrMap.get(awayKey) ?? event.away.teamAbbr;
   const homeAbbr = abbrMap.get(homeKey) ?? event.home.teamAbbr;
 
-  const compare = (a: number | undefined, h: number | undefined, higherIsBetter: boolean) => {
-    if (!Number.isFinite(a as any) || !Number.isFinite(h as any)) return { aGood: false, hGood: false };
-    if (a === h) return { aGood: false, hGood: false };
-    if (higherIsBetter) return { aGood: (a as number) > (h as number), hGood: (h as number) > (a as number) };
-    return { aGood: (a as number) < (h as number), hGood: (h as number) < (a as number) };
-  };
+  const ratingsAway = st.awayRatings ?? {};
+  const ratingsHome = st.homeRatings ?? {};
+
+  const statDefs = useMemo(() => NCAAB_STAT_DEFS.filter((d) => d.mode === mode), [mode]);
 
   const StatRow = ({
     label,
@@ -717,9 +735,6 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
     </div>
   );
 
-  const ratingsAway = st.awayRatings ?? {};
-  const ratingsHome = st.homeRatings ?? {};
-
   const HeaderTeam = ({
     side,
     name,
@@ -747,27 +762,34 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
     </div>
   );
 
-  const statDefs = useMemo(() => NCAAB_STAT_DEFS.filter((d) => d.mode === mode), [mode]);
-
-  const overlayCls = "fixed inset-0 z-[80]";
-
+  // click-outside closes; click-inside blocked (fixes “white screen” click-through)
   return (
-    <>
+    <div className="fixed inset-0 z-[90] flex items-center justify-center px-3">
+      {/* Overlay */}
       <div
-        className={overlayCls}
-        onClick={onClose}
+        className="absolute inset-0"
         style={{
           background:
             "radial-gradient(1000px 400px at 20% 0%, rgba(212,175,55,0.16), transparent 60%), rgba(0,0,0,0.72)",
         }}
+        onMouseDown={(e) => {
+          // only close if they truly pressed on the overlay (not inside modal)
+          if (e.target === e.currentTarget) onClose();
+        }}
+        aria-hidden
       />
 
+      {/* Modal shell */}
       <div
         className={cx(
-          "fixed left-1/2 top-1/2 z-[90] w-[min(1040px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2",
+          "relative z-[95] w-[min(1040px,calc(100vw-24px))]",
           "rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] shadow-2xl",
           "max-h-[calc(100vh-24px)] overflow-hidden"
         )}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
       >
         {/* Header */}
         <div className="relative px-5 pt-5 pb-4 border-b border-[#141414]">
@@ -868,7 +890,7 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
           ) : null}
 
           <div className="px-5 py-5 max-h-[calc(100vh-240px)] overflow-y-auto space-y-3">
-            {/* Ratings (side-by-side) */}
+            {/* Ratings */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
                 <div className="px-4 py-3 border-b border-[#141414]">
@@ -919,7 +941,7 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
               </div>
             </div>
 
-            {/* NCAAB stats (combined; side-by-side) */}
+            {/* NCAAB stats */}
             <div className="rounded-xl border border-[#1f1f1f] bg-black/20 overflow-hidden">
               <div className="px-4 py-3 border-b border-[#141414]">
                 <div className="grid grid-cols-12 gap-3 items-center">
@@ -955,12 +977,18 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
                     const hTxt = Number.isFinite(h as any) ? (d.fmt ? d.fmt(h as number) : String(h)) : "—";
 
                     const hib = d.higherIsBetter ?? true;
-                    const { aGood, hGood } = (() => {
-                      if (!Number.isFinite(a as any) || !Number.isFinite(h as any)) return { aGood: false, hGood: false };
-                      if (a === h) return { aGood: false, hGood: false };
-                      if (hib) return { aGood: (a as number) > (h as number), hGood: (h as number) > (a as number) };
-                      return { aGood: (a as number) < (h as number), hGood: (h as number) < (a as number) };
-                    })();
+
+                    let aGood = false;
+                    let hGood = false;
+                    if (Number.isFinite(a as any) && Number.isFinite(h as any) && a !== h) {
+                      if (hib) {
+                        aGood = (a as number) > (h as number);
+                        hGood = (h as number) > (a as number);
+                      } else {
+                        aGood = (a as number) < (h as number);
+                        hGood = (h as number) < (a as number);
+                      }
+                    }
 
                     let deltaTxt = "—";
                     if (Number.isFinite(a as any) && Number.isFinite(h as any)) {
@@ -1005,7 +1033,7 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
           </button>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1015,12 +1043,12 @@ function ModelModal({ open, onClose, sportKey, event, logoMap, abbrMap }: ModelM
 
 function DesktopColumnsHeader() {
   const cols = [
-    { label: "Proj Score", w: "min-w-[140px]" },
-    { label: "Win%", w: "min-w-[140px]" },
-    { label: "Proj Margin", w: "min-w-[180px]" },
-    { label: "Proj Total", w: "min-w-[180px]" },
-    { label: "Cons Spread", w: "min-w-[180px]" },
-    { label: "Cons Total", w: "min-w-[180px]" },
+    { label: "Proj Score" },
+    { label: "Win%" },
+    { label: "Proj Margin" },
+    { label: "Proj Total" },
+    { label: "Cons Spread" },
+    { label: "Cons Total" },
   ];
 
   return (
@@ -1028,7 +1056,7 @@ function DesktopColumnsHeader() {
       <div className="grid grid-cols-[minmax(380px,1fr)_repeat(6,minmax(140px,180px))] gap-0">
         <div className="p-3 text-[#808080] text-xs font-bold">Matchup</div>
         {cols.map((c) => (
-          <div key={c.label} className={cx("p-3 text-[#808080] text-xs font-bold text-center", c.w)}>
+          <div key={c.label} className="p-3 text-[#808080] text-xs font-bold text-center">
             {c.label}
           </div>
         ))}
@@ -1054,25 +1082,24 @@ function MetricCell({
   p?: number | null;
   good?: boolean;
 }) {
+  // ✅ Vertical centering fix: true flex column centered
   return (
-    <div className="p-3 text-center">
-      <div className={cx("text-[13px] font-extrabold tabular-nums", good ? "text-green-400" : "text-white")}>
+    <div className="px-3 py-4 text-center flex flex-col items-center justify-center">
+      <div className={cx("text-[14px] font-extrabold tabular-nums leading-none", good ? "text-green-400" : "text-white")}>
         {value}
       </div>
-      <div className="text-[10px] text-[#7a7a7a] font-semibold">{title}</div>
-      {sub ? <div className="mt-0.5 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{sub}</div> : null}
-      {p != null ? <ProbBar p={p} /> : null}
+      <div className="mt-1 text-[10px] text-[#7a7a7a] font-semibold uppercase tracking-wide">{title}</div>
+      {sub ? <div className="mt-1 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{sub}</div> : null}
+      {p != null ? (
+        <div className="mt-2 w-full">
+          <ProbBar p={p} />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function TeamRowLine({
-  row,
-  right,
-}: {
-  row: TeamRow;
-  right?: React.ReactNode;
-}) {
+function TeamRowLine({ row, right }: { row: TeamRow; right?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-3 min-w-0">
       <LogoBox team={row.teamName} url={row.logoUrl} size={36} />
@@ -1085,19 +1112,12 @@ function TeamRowLine({
           {row.side} · {row.teamAbbr}
         </div>
       </div>
-
       <div className="ml-auto flex items-center gap-2 shrink-0">{right}</div>
     </div>
   );
 }
 
-function DesktopMatchupCard({
-  ev,
-  onOpenModel,
-}: {
-  ev: EventBundle;
-  onOpenModel: () => void;
-}) {
+function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel: () => void }) {
   const winnerAbbr = ev.away.isProjectedWinner ? ev.away.teamAbbr : ev.home.isProjectedWinner ? ev.home.teamAbbr : null;
 
   const consSpreadAway =
@@ -1153,9 +1173,9 @@ function DesktopMatchupCard({
         </div>
       </div>
 
-      {/* Body grid: left matchup/teams, right metric columns */}
+      {/* Body grid */}
       <div className="grid grid-cols-[minmax(380px,1fr)_repeat(6,minmax(140px,180px))]">
-        {/* Left side (teams) */}
+        {/* Left */}
         <div className="p-4 border-r border-[#141414] space-y-3">
           <TeamRowLine
             row={ev.away}
@@ -1436,6 +1456,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
           if (!prev || new Date(r.ts).getTime() > new Date(prev).getTime()) bestTsByEvent.set(eventId, r.ts);
         }
 
+        // keep latest-per-book per (event, market, side)
         const k = `${eventId}|${market}|${book}|${side}`;
         if (seen.has(k)) continue;
         seen.add(k);
@@ -1616,10 +1637,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     setModelEvent(ev);
     setModelOpen(true);
   };
-
-  /* =========================================================
-     Render
-  ========================================================= */
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
