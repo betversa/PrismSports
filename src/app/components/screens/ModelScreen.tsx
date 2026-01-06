@@ -1,6 +1,6 @@
 "use client";
 
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.1.1 — premium bump)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.2.0 — logos + premium desktop bump)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -17,18 +17,23 @@
 // ✅ ONLY Pick column (desktop) / Pick block (mobile) opens modal
 // ✅ Modal: header/footer fixed, safe-area aware
 //
-// ✅ MODAL UPDATE (your request):
-//    - Team ratings + stats are combined into ONE “Details” tab
-//    - Inside Details tab: Offense / Defense buttons toggle the stats list
-//    - Ratings pulled from public.team_ratings: engine_adj_off, engine_adj_def, engine_power (net rating)
+// ✅ LOGOS (your request):
+//    - Props: keep player pictures (picture_url)
+//    - Moneyline + Spread: show TEAM LOGO from team_map "Logo URL" (by canonical = ev_plays.team)
+//    - Totals: show matchup only (no team logo required)
+//
+// ✅ MODAL (kept from v7.1.1):
+//    - Team ratings + stats combined into ONE “Details” tab
+//    - Details tab: Offense / Defense toggles
+//    - Ratings pulled from public.team_ratings: engine_adj_off, engine_adj_def, engine_power
 //    - Stats pulled from public.ncaab_stats using stat_key + home_score/away_score
-//      (tries canonical_home/canonical_away first; falls back to home_team/away_team; auto-handles swapped order)
 //
 // ✅ Premium bump:
 //    - Subtle divider row between games on desktop
-//    - Removes Event ID display in modal header (keeps clean UI)
+//    - Cleaner “Pick” cell with logo/avatar + stacked meta
+//    - Slightly tighter table + better sticky behavior
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   ResponsiveContainer,
@@ -86,7 +91,7 @@ type EvPlayRow = {
   commence_time: string | null;
   matchup: string | null;
 
-  team: string | null;
+  team: string | null; // canonical team for ML/spreads (null for totals sometimes)
 
   market: GameMarketKey;
   side: GameSideKey;
@@ -171,8 +176,12 @@ type AggregatedPlay = {
   quantum_odds: number;
   quantum_prob?: number | null;
 
-  // meta for history keys
-  gameMeta?: { market: GameMarketKey; side: GameSideKey };
+  // meta for history keys + UI
+  gameMeta?: {
+    market: GameMarketKey;
+    side: GameSideKey;
+    team: string | null; // canonical bet team for ML/spreads
+  };
   propMeta?: {
     player_name: string | null;
     market: string | null;
@@ -849,6 +858,24 @@ async function safeSelect<T>(args: {
 }
 
 /* =========================================================
+   Team logos for list rows (ML/Spread only)
+========================================================= */
+
+type TeamUi = { canonical: string; logo_url: string | null };
+
+function buildTeamUiIndex(rows: any[]): Record<string, TeamUi> {
+  const idx: Record<string, TeamUi> = {};
+  for (const r of rows) {
+    const canonical = String(r?.canonical ?? "").trim();
+    if (!canonical) continue;
+
+    const logo = (r?.["Logo URL"] ?? r?.logo_url ?? null) as string | null;
+    idx[canonical] = { canonical, logo_url: logo };
+  }
+  return idx;
+}
+
+/* =========================================================
    Screen
 ========================================================= */
 
@@ -862,6 +889,9 @@ export const ModelScreen = () => {
   const [props, setProps] = useState<PlayerPropEvLatestRow[]>([]);
   const [settings, setSettings] = useState<AppSettingsRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // ✅ Team logos for ML/Spread list rows
+  const [teamUi, setTeamUi] = useState<Record<string, TeamUi>>({});
 
   const [selected, setSelected] = useState<AggregatedPlay | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -980,6 +1010,51 @@ export const ModelScreen = () => {
     };
   }, []);
 
+  // ✅ Load team logos for ML/Spread list rows (by canonical team in ev_plays.team)
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadTeamUi() {
+      try {
+        const names = Array.from(
+          new Set(
+            (games ?? [])
+              .filter((g) => g.market === "h2h" || g.market === "spreads")
+              .map((g) => (g.team ?? "").trim())
+              .filter(Boolean)
+          )
+        );
+
+        if (!names.length) {
+          if (mounted) setTeamUi({});
+          return;
+        }
+
+        const tmRes = await safeSelect<any>({
+          table: "team_map",
+          selectPrimary: 'canonical,"Logo URL"',
+          selectFallback: "canonical,logo_url",
+          whereInCol: "canonical",
+          values: names,
+        });
+
+        if (!mounted) return;
+
+        const idx = buildTeamUiIndex(tmRes.data ?? []);
+
+        // Keep existing, but overwrite with fresh if present
+        setTeamUi((prev) => ({ ...prev, ...idx }));
+      } catch (e: any) {
+        console.warn("[ModelScreen] team_map logo load failed:", e?.message ?? String(e));
+      }
+    }
+
+    loadTeamUi();
+    return () => {
+      mounted = false;
+    };
+  }, [games]);
+
   const aggregated = useMemo(() => {
     const map = new Map<string, AggregatedPlay>();
 
@@ -997,6 +1072,8 @@ export const ModelScreen = () => {
       const key = gamePlayKey(r);
       const existing = map.get(key);
 
+      const isTotal = r.market === "totals";
+
       const base: AggregatedPlay =
         existing ??
         ({
@@ -1010,13 +1087,15 @@ export const ModelScreen = () => {
 
           marketLabel: marketLabelGame(r.market),
           sideLabel: sideLabelGame(r.market, r.side),
-          pickLabel: r.market === "totals" ? (r.matchup ?? "Total") : (r.team ?? "—"),
+
+          // ✅ Totals show matchup only
+          pickLabel: isTotal ? (r.matchup ?? "Total") : (r.team ?? "—"),
           lineLabel: fmtLineGame(r.market, r.line),
 
           quantum_odds: safeNum(r.quantum_odds, NaN),
           quantum_prob: safeNum(r.quantum_prob, NaN),
 
-          gameMeta: { market: r.market, side: r.side },
+          gameMeta: { market: r.market, side: r.side, team: isTotal ? null : (r.team ?? null) },
 
           offers: {},
           bestBook: null,
@@ -1367,22 +1446,22 @@ export const ModelScreen = () => {
 
       {/* Desktop table */}
       <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
-        <div className="max-h-[70vh] overflow-y-auto">
+        <div className="max-h-[72vh] overflow-y-auto">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
                 <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[360px]">Matchup</th>
+                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">Matchup</th>
                   <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[320px]">Pick</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[90px]">Line</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">Fair Odds</th>
+                  <th className="text-left p-3 text-[#808080] min-w-[360px]">Pick</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[84px]">Line</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[110px]">Fair</th>
                   <th className="text-center p-3 text-[#808080] min-w-[120px]">DK</th>
                   <th className="text-center p-3 text-[#808080] min-w-[120px]">FD</th>
                   <th className="text-center p-3 text-[#808080] min-w-[120px]">MGM</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">EV</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[90px]">Score</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">Bet $</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[100px]">EV</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[80px]">Score</th>
+                  <th className="text-center p-3 text-[#808080] min-w-[110px]">Bet $</th>
                 </tr>
               </thead>
 
@@ -1402,7 +1481,7 @@ export const ModelScreen = () => {
                       showDivider={showDivider}
                       dividerColSpan={11}
                       dividerLabel={p.matchup ?? "—"}
-                      dividerTime={fmtDateTimeCT(p.commence_time ?? "")}
+                      dividerTime={p.commence_time ? fmtDateTimeCT(p.commence_time) : "—"}
                     >
                       <PlayRow
                         play={p}
@@ -1411,6 +1490,7 @@ export const ModelScreen = () => {
                         settingsReady={settingsReady}
                         onOpenDetails={() => openDetails(p)}
                         steamInfo={sInfo}
+                        teamUi={teamUi}
                       />
                     </FragmentRow>
                   );
@@ -1455,6 +1535,7 @@ export const ModelScreen = () => {
               settingsReady={settingsReady}
               onOpenDetails={() => openDetails(p)}
               steamInfo={sInfo}
+              teamUi={teamUi}
             />
           );
         })}
@@ -1511,6 +1592,7 @@ function PlayRow({
   settingsReady,
   onOpenDetails,
   steamInfo,
+  teamUi,
 }: {
   play: AggregatedPlay;
   bankroll: number;
@@ -1518,11 +1600,18 @@ function PlayRow({
   settingsReady: boolean;
   onOpenDetails: () => void;
   steamInfo?: SteamInfo;
+  teamUi: Record<string, TeamUi>;
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : NaN;
   const score = Math.round(safeNum(play.bestScore, 0));
   const sTone = scoreTone(score);
   const bestOffer = play.bestBook ? play.offers[play.bestBook] : null;
+
+  const isGame = play.kind === "game";
+  const isTotal = isGame && play.gameMeta?.market === "totals";
+  const showTeamLogo = isGame && !isTotal && (play.gameMeta?.market === "h2h" || play.gameMeta?.market === "spreads");
+  const teamCanonical = showTeamLogo ? (play.gameMeta?.team ?? null) : null;
+  const teamLogoUrl = teamCanonical ? teamUi[teamCanonical]?.logo_url ?? null : null;
 
   const steamBadge =
     play.kind === "game" && steamInfo ? (
@@ -1546,7 +1635,7 @@ function PlayRow({
 
   return (
     <tr className="transition-colors hover:bg-white/[0.02]">
-      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[360px]">
+      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[340px]">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="text-white truncate">
@@ -1595,33 +1684,14 @@ function PlayRow({
               mu={play.propMeta?.mu ?? null}
             />
           ) : (
-            <div className="min-w-0">
-              <div className="text-white truncate">{play.pickLabel}</div>
-              <div className="text-[10px] text-[#606060] mt-0.5 truncate">
-                {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
-              </div>
-
-              {steamInfo ? (
-                <div className="text-[10px] text-[#808080] mt-1 truncate">
-                  PIN now:{" "}
-                  <span className="text-[#d8b4fe]">
-                    {steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}
-                    {american(steamInfo.pinCur.odds)}
-                  </span>
-                  <span className="text-[#404040]"> · </span>
-                  Soft better:{" "}
-                  <span className="text-white">
-                    {Object.entries(steamInfo.lagging)
-                      .map(([b, q]) => {
-                        const tag = b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM";
-                        const line = q?.line != null ? fmtLineGame(play.gameMeta!.market, q.line) + " " : "";
-                        return `${tag} ${line}${american(q!.odds)}`;
-                      })
-                      .join(" · ")}
-                  </span>
-                </div>
-              ) : null}
-            </div>
+            <GamePickInline
+              showLogo={!!teamLogoUrl}
+              logoUrl={teamLogoUrl}
+              title={play.pickLabel}
+              sub={`${play.marketLabel} · ${play.sideLabel}${play.lineLabel !== "—" ? ` ${play.lineLabel}` : ""}`}
+              steamInfo={steamInfo}
+              play={play}
+            />
           )}
         </button>
       </td>
@@ -1672,6 +1742,7 @@ function PlayCard({
   settingsReady,
   onOpenDetails,
   steamInfo,
+  teamUi,
 }: {
   play: AggregatedPlay;
   bankroll: number;
@@ -1679,11 +1750,18 @@ function PlayCard({
   settingsReady: boolean;
   onOpenDetails: () => void;
   steamInfo?: SteamInfo;
+  teamUi: Record<string, TeamUi>;
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
   const mu = play.propMeta?.mu ?? null;
   const score = Math.round(safeNum(play.bestScore, 0));
   const sTone = scoreTone(score);
+
+  const isGame = play.kind === "game";
+  const isTotal = isGame && play.gameMeta?.market === "totals";
+  const showTeamLogo = isGame && !isTotal && (play.gameMeta?.market === "h2h" || play.gameMeta?.market === "spreads");
+  const teamCanonical = showTeamLogo ? (play.gameMeta?.team ?? null) : null;
+  const teamLogoUrl = teamCanonical ? teamUi[teamCanonical]?.logo_url ?? null : null;
 
   const steamBadge =
     play.kind === "game" && steamInfo ? (
@@ -1749,28 +1827,30 @@ function PlayCard({
             </div>
           </div>
         ) : (
-          <div className="min-w-0">
-            <div className="text-white text-sm truncate">
-              {play.pickLabel}{" "}
-              <span className="text-[#808080] text-xs">
-                · {play.marketLabel} · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
-              </span>
-            </div>
-
-            {steamInfo ? (
-              <div className="text-[11px] text-[#808080] mt-1 truncate">
-                Soft better:{" "}
-                <span className="text-white">
-                  {Object.entries(steamInfo.lagging)
-                    .map(([b, q]) => {
-                      const tag = b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM";
-                      const line = q?.line != null ? fmtLineGame(play.gameMeta!.market, q.line) + " " : "";
-                      return `${tag} ${line}${american(q!.odds)}`;
-                    })
-                    .join(" · ")}
-                </span>
+          <div className="flex items-center gap-3">
+            {teamLogoUrl ? <TeamLogo url={teamLogoUrl} alt={teamCanonical ?? play.pickLabel} /> : <TeamLogoPlaceholder />}
+            <div className="min-w-0">
+              <div className="text-white text-sm truncate">{play.pickLabel}</div>
+              <div className="text-[11px] text-[#808080] mt-0.5 truncate">
+                {play.marketLabel} · {play.sideLabel}
+                {play.lineLabel !== "—" ? ` ${play.lineLabel}` : ""}
               </div>
-            ) : null}
+
+              {steamInfo ? (
+                <div className="text-[11px] text-[#808080] mt-1 truncate">
+                  Soft better:{" "}
+                  <span className="text-white">
+                    {Object.entries(steamInfo.lagging)
+                      .map(([b, q]) => {
+                        const tag = b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM";
+                        const line = q?.line != null ? fmtLineGame(play.gameMeta!.market, q.line) + " " : "";
+                        return `${tag} ${line}${american(q!.odds)}`;
+                      })
+                      .join(" · ")}
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
       </button>
@@ -1797,7 +1877,7 @@ function PlayCard({
 
 /* =========================================================
    Details Modal (tabs; safe-area; no scroll-to-footer)
-   ✅ Updated to have ONE “Details” tab with Offense/Defense toggles
+   ✅ ONE “Details” tab with Offense/Defense toggles
 ========================================================= */
 
 type ModalTab = "details" | "line" | "hit";
@@ -2110,7 +2190,6 @@ function PlayDetailsModal({
         let rows: any[] = [];
         let swapped = false;
 
-        // Try canonical schema first
         const a1 = await attemptCanonical();
         if (!a1.error && (a1.data?.length ?? 0) > 0) {
           rows = a1.data;
@@ -2120,7 +2199,6 @@ function PlayDetailsModal({
           setStatsErr(a1.error.message);
           return;
         } else {
-          // fallback to home_team/away_team
           const a2 = await attemptTeam();
           if (!a2.error && (a2.data?.length ?? 0) > 0) {
             rows = a2.data;
@@ -2130,7 +2208,6 @@ function PlayDetailsModal({
             setStatsErr(a2.error.message);
             return;
           } else {
-            // try swapped canonical
             const a3 = await attemptCanonicalSwapped();
             if (!a3.error && (a3.data?.length ?? 0) > 0) {
               rows = a3.data;
@@ -2140,7 +2217,6 @@ function PlayDetailsModal({
               setStatsErr(a3.error.message);
               return;
             } else {
-              // try swapped home_team/away_team
               const a4 = await attemptTeamSwapped();
               if (!a4.error && (a4.data?.length ?? 0) > 0) {
                 rows = a4.data;
@@ -2170,7 +2246,6 @@ function PlayDetailsModal({
               away: Number.isFinite(as as number) ? (as as number) : null,
             };
           } else {
-            // data is stored with teams swapped; reverse it back
             map[k] = {
               home: Number.isFinite(as as number) ? (as as number) : null,
               away: Number.isFinite(hs as number) ? (hs as number) : null,
@@ -2217,7 +2292,10 @@ function PlayDetailsModal({
           paddingBottom: "max(env(safe-area-inset-bottom), 12px)",
         }}
       >
-        <div className="relative w-full md:max-w-5xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col" style={{ maxHeight: "min(92vh, 940px)" }}>
+        <div
+          className="relative w-full md:max-w-5xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col"
+          style={{ maxHeight: "min(92vh, 940px)" }}
+        >
           {/* Header */}
           <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
@@ -2289,7 +2367,9 @@ function PlayDetailsModal({
                 />
               ) : (
                 <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-xl p-4">
-                  <div className="text-xs text-[#808080]">Game team stats are available for game plays only. Use Line History / Hit Rate for props.</div>
+                  <div className="text-xs text-[#808080]">
+                    Game team stats are available for game plays only. Use Line History / Hit Rate for props.
+                  </div>
                 </div>
               )
             ) : tab === "line" ? (
@@ -2349,11 +2429,15 @@ function GameDetailsPanel({
   return (
     <div className="space-y-3">
       {loading ? (
-        <div className="text-xs text-[#808080] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">Loading teams, ratings, and matchup stats…</div>
+        <div className="text-xs text-[#808080] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
+          Loading teams, ratings, and matchup stats…
+        </div>
       ) : null}
 
       {!loading && (eventErr || teamsErr || statsErr) ? (
-        <div className="text-xs text-[#a0a0a0] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">{eventErr || teamsErr || statsErr}</div>
+        <div className="text-xs text-[#a0a0a0] bg-black/40 border border-[#2a2a2a] rounded-lg px-3 py-2">
+          {eventErr || teamsErr || statsErr}
+        </div>
       ) : null}
 
       {!loading && away && home ? (
@@ -2481,7 +2565,12 @@ function StatsCompareBlock({
           <div className="text-center text-[#808080]">{home.abbr}</div>
 
           {rows.map((r) => (
-            <Row3 key={r.stat_key} label={prettyStatLabel(r.stat_key)} a={formatStatValue(r.stat_key, r.away)} h={formatStatValue(r.stat_key, r.home)} />
+            <Row3
+              key={r.stat_key}
+              label={prettyStatLabel(r.stat_key)}
+              a={formatStatValue(r.stat_key, r.away)}
+              h={formatStatValue(r.stat_key, r.home)}
+            />
           ))}
         </div>
       </div>
@@ -2535,8 +2624,7 @@ function formatStatValue(stat_key: string, v: number | null) {
 
   const k = stat_key.toLowerCase();
 
-  // ✅ percent-like metrics stored as decimals (.456) -> show 45.6%
-  // also treat "-rate" as percent-like (3P Rate / 2P Rate)
+  // percent-like metrics stored as decimals (.456) -> show 45.6%
   if (k.includes("pct") || k.endsWith("-rate")) return `${(v * 100).toFixed(1)}%`;
 
   // ratios/rates (non-%)
@@ -2545,7 +2633,6 @@ function formatStatValue(stat_key: string, v: number | null) {
     return v.toFixed(2);
   }
 
-  // efficiencies / possessions / ppg / margins
   return v.toFixed(1);
 }
 
@@ -2580,8 +2667,12 @@ function Row3({ label, a, h, accent }: { label: string; a: string; h: string; ac
   return (
     <>
       <div className="text-[#808080]">{label}</div>
-      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>{a}</div>
-      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>{h}</div>
+      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>
+        {a}
+      </div>
+      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>
+        {h}
+      </div>
     </>
   );
 }
@@ -3085,9 +3176,21 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book as AnyBookHistory]}]` : "shadow-none";
 
   return (
-    <div className={["inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
+    <div
+      className={[
+        "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border",
+        isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        ring,
+      ].join(" ")}
+    >
       <div className="inline-flex items-center justify-center gap-2">
-        {logo ? <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} /> : <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">—</div>}
+        {logo ? (
+          <img src={logo} alt={offer.book} className="h-5 w-5 opacity-95 shrink-0" draggable={false} />
+        ) : (
+          <div className="h-5 w-5 rounded bg-[#111] border border-[#2a2a2a] flex items-center justify-center text-[10px] text-[#808080]">
+            —
+          </div>
+        )}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
@@ -3118,6 +3221,26 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
       <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
     </div>
   );
+}
+
+function TeamLogo({ url, alt }: { url: string; alt: string }) {
+  return (
+    <img
+      src={url}
+      alt={alt}
+      className="h-9 w-9 rounded-md object-contain bg-[#0a0a0a] border border-[#2a2a2a] p-1 shrink-0"
+      draggable={false}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={(e) => {
+        (e.currentTarget as HTMLImageElement).style.display = "none";
+      }}
+    />
+  );
+}
+
+function TeamLogoPlaceholder() {
+  return <div className="h-9 w-9 rounded-md bg-[#0a0a0a] border border-[#2a2a2a] shrink-0" />;
 }
 
 function PropAvatar({ url, name }: { url: string | null; name: string }) {
@@ -3181,13 +3304,58 @@ function PropPickInline({
   );
 }
 
-function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
-  if (!ready || !Number.isFinite(amount) || amount <= 0) return <div className="text-[#404040]">—</div>;
+function GamePickInline({
+  showLogo,
+  logoUrl,
+  title,
+  sub,
+  steamInfo,
+  play,
+}: {
+  showLogo: boolean;
+  logoUrl: string | null;
+  title: string;
+  sub: string;
+  steamInfo?: SteamInfo;
+  play: AggregatedPlay;
+}) {
   return (
-    <div className="inline-flex items-center justify-center px-2 py-1 bg-[#d4af37]/15 border border-[#d4af37]/35 rounded-lg text-[#d4af37] tabular-nums">
-      {formatMoney(amount)}
+    <div className="flex items-center gap-2 min-w-0">
+      {showLogo && logoUrl ? <TeamLogo url={logoUrl} alt={title} /> : <TeamLogoPlaceholder />}
+      <div className="min-w-0">
+        <div className="text-white truncate">{title}</div>
+        <div className="text-[10px] text-[#606060] mt-0.5 truncate">{sub}</div>
+
+        {steamInfo && play.kind === "game" ? (
+          <div className="text-[10px] text-[#808080] mt-1 truncate">
+            PIN now:{" "}
+            <span className="text-[#d8b4fe]">
+              {steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}
+              {american(steamInfo.pinCur.odds)}
+            </span>
+            <span className="text-[#404040]"> · </span>
+            Soft better:{" "}
+            <span className="text-white">
+              {Object.entries(steamInfo.lagging)
+                .map(([b, q]) => {
+                  const tag = b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM";
+                  const line = q?.line != null ? fmtLineGame(play.gameMeta!.market, q.line) + " " : "";
+                  return `${tag} ${line}${american(q!.odds)}`;
+                })
+                .join(" · ")}
+            </span>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
+}
+
+function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
+  if (!ready || !Number.isFinite(amount) || amount <= 0) {
+    return <div className="text-[#404040]">—</div>;
+  }
+  return <div className="text-[#d4af37] font-semibold tabular-nums">{formatMoney(amount)}</div>;
 }
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
