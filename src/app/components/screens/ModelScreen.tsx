@@ -1,6 +1,6 @@
 "use client";
 
-// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.2.0 — logos + premium desktop bump)
+// src/app/components/screens/ModelScreen.tsx — FULL REWRITE (v7.3.0 — complete file + cleaned modal stats + optional power_rank)
 // -------------------------------------------------------------------------------------------------------------
 // ✅ Aggregated: 1 row per play, shows DK / FD / MGM strip, highlights best book
 // ✅ Game +EV plays from public.ev_plays
@@ -22,16 +22,17 @@
 //    - Moneyline + Spread: show TEAM LOGO from team_map "Logo URL" (by canonical = ev_plays.team)
 //    - Totals: show matchup only (no team logo required)
 //
-// ✅ MODAL (kept from v7.1.1):
-//    - Team ratings + stats combined into ONE “Details” tab
+// ✅ MODAL:
+//    - Team ratings + matchup stats combined into ONE “Details” tab
 //    - Details tab: Offense / Defense toggles
-//    - Ratings pulled from public.team_ratings: engine_adj_off, engine_adj_def, engine_power
+//    - Ratings pulled from public.team_ratings: engine_adj_off, engine_adj_def, engine_power (+ optional power_rank)
 //    - Stats pulled from public.ncaab_stats using stat_key + home_score/away_score
+//    - Removes repetitive/duplicative stat rows (curated offense/defense lists)
 //
 // ✅ Premium bump:
 //    - Subtle divider row between games on desktop
 //    - Cleaner “Pick” cell with logo/avatar + stacked meta
-//    - Slightly tighter table + better sticky behavior
+//    - Tighter table + improved sticky behavior
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -225,12 +226,7 @@ type TeamRatingsRow = {
   engine_adj_off: number | null;
   engine_adj_def: number | null;
   engine_power: number | null; // net rating
-};
-
-type NcaabStatRow = {
-  stat_key: string;
-  home_score: number | null;
-  away_score: number | null;
+  power_rank?: number | null; // optional
 };
 
 /* =========================================================
@@ -291,69 +287,53 @@ const OVER_GREEN = "#22c55e";
 const UNDER_RED = "#ef4444";
 
 /* =========================================================
-   NCAAB Stats Keys (your list)
+   NCAAB Stats Keys (curated, de-duplicated)
+   - still uses your stat_key schema (ncaab_stats.stat_key)
+   - removes “rate” duplicates where “pct” already exists
 ========================================================= */
 
-const NCAAB_STAT_KEYS_ALL = [
+const NCAAB_STATS_OFFENSE = [
   "possessions-per-game",
   "offensive-efficiency",
-  "defensive-efficiency",
   "points-per-game",
-  "opponent-points-per-game",
   "average-scoring-margin",
   "effective-field-goal-pct",
-  "opponent-effective-field-goal-pct",
   "three-point-rate",
-  "two-point-rate",
-  "opponent-three-point-rate",
-  "opponent-two-point-rate",
   "three-point-pct",
   "two-point-pct",
+  "fta-per-fga",
+  "free-throw-pct",
+  "turnover-pct",
+  "offensive-rebounding-pct",
+  "steals-perpossession",
+  "block-pct",
+  "personal-fouls-per-possession",
+  "effective-possession-ratio",
+] as const;
+
+const NCAAB_STATS_DEFENSE = [
+  "defensive-efficiency",
+  "opponent-points-per-game",
+  "opponent-effective-field-goal-pct",
+  "opponent-three-point-rate",
   "opponent-three-point-pct",
   "opponent-two-point-pct",
-  "fta-per-fga",
   "opponent-fta-per-fga",
-  "free-throw-pct",
   "opponent-free-throw-pct",
-  "turnover-pct",
   "opponent-turnover-pct",
-  "offensive-rebounding-pct",
   "defensive-rebounding-pct",
   "opponent-offensive-rebounding-pct",
-  "opponent-defensive-rebounding-pct",
-  "steals-perpossession",
   "opponent-steals-perpossession",
-  "block-pct",
   "opponent-block-pct",
-  "personal-fouls-per-possession",
   "opponent-personal-fouls-per-possession",
-  "effective-possession-ratio",
   "opponent-effective-possession-ratio",
 ] as const;
 
-type NcaabStatKey = (typeof NCAAB_STAT_KEYS_ALL)[number];
+type NcaabStatKey = (typeof NCAAB_STATS_OFFENSE | typeof NCAAB_STATS_DEFENSE)[number];
 
-const DEFENSE_KEYS = new Set<NcaabStatKey>([
-  "defensive-efficiency",
-  "opponent-points-per-game",
-  "opponent-effective-field-goal-pct",
-  "opponent-three-point-rate",
-  "opponent-two-point-rate",
-  "opponent-three-point-pct",
-  "opponent-two-point-pct",
-  "opponent-fta-per-fga",
-  "opponent-free-throw-pct",
-  "opponent-turnover-pct",
-  "defensive-rebounding-pct",
-  "opponent-offensive-rebounding-pct",
-  "opponent-defensive-rebounding-pct",
-  "opponent-steals-perpossession",
-  "opponent-block-pct",
-  "opponent-personal-fouls-per-possession",
-  "opponent-effective-possession-ratio",
-]);
-
-const OFFENSE_KEYS = new Set<NcaabStatKey>(NCAAB_STAT_KEYS_ALL.filter((k) => !DEFENSE_KEYS.has(k)));
+const NCAAB_STAT_KEYS_ALL: string[] = Array.from(
+  new Set<string>([...NCAAB_STATS_OFFENSE, ...NCAAB_STATS_DEFENSE])
+);
 
 /* =========================================================
    Helpers
@@ -974,7 +954,11 @@ export const ModelScreen = () => {
         .order("commence_time", { ascending: true })
         .order("ev_pct", { ascending: false });
 
-      const settingsQ = supabase.from("app_settings").select("id,bankroll,kelly_factor,updated_at").eq("id", 1).limit(1);
+      const settingsQ = supabase
+        .from("app_settings")
+        .select("id,bankroll,kelly_factor,updated_at")
+        .eq("id", 1)
+        .limit(1);
 
       const [evRes, prRes, sRes] = await Promise.all([evQ, propsQ, settingsQ]);
 
@@ -1661,7 +1645,9 @@ function PlayRow({
               title={`Best book: ${bestOffer.book.toUpperCase()} (${pct(bestOffer.ev_pct, 1)})`}
             >
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[bestOffer.book as AnyBookHistory] }} />
-              <span className="text-[10px] text-[#b0b0b0]">{bestOffer.book === "betmgm" ? "MGM" : bestOffer.book === "fanduel" ? "FD" : "DK"}</span>
+              <span className="text-[10px] text-[#b0b0b0]">
+                {bestOffer.book === "betmgm" ? "MGM" : bestOffer.book === "fanduel" ? "FD" : "DK"}
+              </span>
             </div>
           ) : null}
         </div>
@@ -1719,7 +1705,14 @@ function PlayRow({
       </td>
 
       <td className="p-3 text-center">
-        <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
+        <div
+          className={[
+            "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+            sTone.bg,
+            sTone.border,
+            sTone.text,
+          ].join(" ")}
+        >
           {score}
         </div>
       </td>
@@ -1797,12 +1790,21 @@ function PlayCard({
 
         <div className="shrink-0 text-right">
           <div className="inline-flex items-center gap-2">
-            <div className={["inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums", sTone.bg, sTone.border, sTone.text].join(" ")}>
+            <div
+              className={[
+                "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+                sTone.bg,
+                sTone.border,
+                sTone.text,
+              ].join(" ")}
+            >
               {score}
             </div>
             <div className="text-right">
               <div className="text-[10px] text-[#606060]">Bet</div>
-              <div className="text-[#d4af37] font-semibold tabular-nums">{settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}</div>
+              <div className="text-[#d4af37] font-semibold tabular-nums">
+                {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+              </div>
             </div>
           </div>
         </div>
@@ -2028,9 +2030,10 @@ function PlayDetailsModal({
           values: canonicals,
         });
 
+        // power_rank is optional (safeSelect primary may fail if column missing)
         const trRes = await safeSelect<any>({
           table: "team_ratings",
-          selectPrimary: "canonical,engine_adj_off,engine_adj_def,engine_power",
+          selectPrimary: "canonical,engine_adj_off,engine_adj_def,engine_power,power_rank",
           selectFallback: "canonical,engine_adj_off,engine_adj_def,engine_power",
           whereInCol: "canonical",
           values: canonicals,
@@ -2061,6 +2064,7 @@ function PlayDetailsModal({
             engine_adj_off: r.engine_adj_off == null ? null : Number(r.engine_adj_off),
             engine_adj_def: r.engine_adj_def == null ? null : Number(r.engine_adj_def),
             engine_power: r.engine_power == null ? null : Number(r.engine_power),
+            power_rank: r.power_rank == null ? null : Number(r.power_rank),
           };
         });
 
@@ -2471,6 +2475,11 @@ function RatingsCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam 
       h: h?.engine_power != null && Number.isFinite(h.engine_power) ? fmtSigned(h.engine_power, 1) : "—",
       accent: true,
     },
+    {
+      label: "Power Rank",
+      a: a?.power_rank != null && Number.isFinite(a.power_rank) ? String(Math.round(a.power_rank)) : "—",
+      h: h?.power_rank != null && Number.isFinite(h.power_rank) ? String(Math.round(h.power_rank)) : "—",
+    },
   ];
 
   return (
@@ -2509,8 +2518,7 @@ function StatsCompareBlock({
   onSetStatsMode: (m: StatsMode) => void;
 }) {
   const keys = useMemo(() => {
-    const base = statsMode === "offense" ? OFFENSE_KEYS : DEFENSE_KEYS;
-    return NCAAB_STAT_KEYS_ALL.filter((k) => base.has(k));
+    return statsMode === "offense" ? [...NCAAB_STATS_OFFENSE] : [...NCAAB_STATS_DEFENSE];
   }, [statsMode]);
 
   const rows = useMemo(() => {
@@ -2589,9 +2597,7 @@ function prettyStatLabel(k: string) {
     "effective-field-goal-pct": "eFG%",
     "opponent-effective-field-goal-pct": "Opp eFG%",
     "three-point-rate": "3P Rate",
-    "two-point-rate": "2P Rate",
     "opponent-three-point-rate": "Opp 3P Rate",
-    "opponent-two-point-rate": "Opp 2P Rate",
     "three-point-pct": "3P%",
     "two-point-pct": "2P%",
     "opponent-three-point-pct": "Opp 3P%",
@@ -2605,7 +2611,6 @@ function prettyStatLabel(k: string) {
     "offensive-rebounding-pct": "OR%",
     "defensive-rebounding-pct": "DR%",
     "opponent-offensive-rebounding-pct": "Opp OR%",
-    "opponent-defensive-rebounding-pct": "Opp DR%",
     "steals-perpossession": "STL / Poss",
     "opponent-steals-perpossession": "Opp STL / Poss",
     "block-pct": "BLK%",
@@ -2637,9 +2642,15 @@ function formatStatValue(stat_key: string, v: number | null) {
 }
 
 function TeamHeaderCell({ team, sideLabel }: { team: ModalTeam; sideLabel: string }) {
+  const rank = team.ratings?.power_rank;
+  const hasRank = rank != null && Number.isFinite(rank);
+
   return (
     <div className="p-3">
-      <div className="text-[10px] text-[#606060]">{sideLabel}</div>
+      <div className="text-[10px] text-[#606060] flex items-center justify-between gap-2">
+        <span>{sideLabel}</span>
+        {hasRank ? <span className="text-[#808080]">Rank #{Math.round(rank as number)}</span> : null}
+      </div>
       <div className="mt-1 flex items-center gap-2 min-w-0">
         {team.logo_url ? (
           <img
@@ -2921,10 +2932,18 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
                 formatter={(value: any) => <span style={{ color: "#b0b0b0" }}>{String(value)}</span>}
               />
 
-              {hasAny("draftkings") ? <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
-              {hasAny("fanduel") ? <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
-              {hasAny("betmgm") ? <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
-              {hasAny("pinnacle") ? <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} /> : null}
+              {hasAny("draftkings") ? (
+                <Line type="monotone" dataKey="draftkings" name="DK" stroke={BOOK_COLOR.draftkings} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+              {hasAny("fanduel") ? (
+                <Line type="monotone" dataKey="fanduel" name="FD" stroke={BOOK_COLOR.fanduel} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+              {hasAny("betmgm") ? (
+                <Line type="monotone" dataKey="betmgm" name="MGM" stroke={BOOK_COLOR.betmgm} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
+              {hasAny("pinnacle") ? (
+                <Line type="monotone" dataKey="pinnacle" name="PIN" stroke={BOOK_COLOR.pinnacle} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              ) : null}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -3101,7 +3120,13 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} barCategoryGap={12}>
                 <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} minTickGap={12} />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: "#808080" }}
+                  axisLine={{ stroke: "#2a2a2a" }}
+                  tickLine={{ stroke: "#2a2a2a" }}
+                  minTickGap={12}
+                />
                 <YAxis tick={{ fontSize: 10, fill: "#808080" }} axisLine={{ stroke: "#2a2a2a" }} tickLine={{ stroke: "#2a2a2a" }} width={36} />
 
                 <Tooltip content={LogsTooltip} cursor={{ fill: "rgba(0,0,0,0)" }} />
@@ -3139,7 +3164,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
 }
 
 /* =========================================================
-   UI atoms
+   UI atoms + Pick blocks
 ========================================================= */
 
 function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
@@ -3167,6 +3192,11 @@ function StatChip({ label, value, accent }: { label: string; value: string; acce
       <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
     </div>
   );
+}
+
+function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
+  if (!ready || !Number.isFinite(amount) || amount <= 0) return <div className="text-[#404040]">—</div>;
+  return <div className="text-[#d4af37] font-semibold tabular-nums">{formatMoney(amount)}</div>;
 }
 
 function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
@@ -3218,7 +3248,9 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         {logo ? <img src={logo} alt={offer.book} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
+      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
+        {pct(offer.ev_pct, 1)}
+      </div>
     </div>
   );
 }
@@ -3228,19 +3260,17 @@ function TeamLogo({ url, alt }: { url: string; alt: string }) {
     <img
       src={url}
       alt={alt}
-      className="h-9 w-9 rounded-md object-contain bg-[#0a0a0a] border border-[#2a2a2a] p-1 shrink-0"
+      className="h-10 w-10 rounded-lg object-contain bg-[#0a0a0a] border border-[#1f1f1f] p-1 shrink-0"
       draggable={false}
       loading="lazy"
       referrerPolicy="no-referrer"
-      onError={(e) => {
-        (e.currentTarget as HTMLImageElement).style.display = "none";
-      }}
+      onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
     />
   );
 }
 
 function TeamLogoPlaceholder() {
-  return <div className="h-9 w-9 rounded-md bg-[#0a0a0a] border border-[#2a2a2a] shrink-0" />;
+  return <div className="h-10 w-10 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] shrink-0" />;
 }
 
 function PropAvatar({ url, name }: { url: string | null; name: string }) {
@@ -3248,28 +3278,19 @@ function PropAvatar({ url, name }: { url: string | null; name: string }) {
     return (
       <img
         src={url}
-        alt={name || "Player"}
-        className="h-9 w-9 rounded-full object-cover border border-[#2a2a2a] bg-[#111] shrink-0"
+        alt={name}
+        className="h-10 w-10 rounded-lg object-cover bg-[#0a0a0a] border border-[#1f1f1f] shrink-0"
         draggable={false}
         loading="lazy"
         referrerPolicy="no-referrer"
-        onError={(e) => {
-          (e.currentTarget as HTMLImageElement).style.display = "none";
-        }}
+        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
       />
     );
   }
-
-  const initials = (name || "P")
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase())
-    .join("");
-
+  const initial = (name || "?").trim().slice(0, 1).toUpperCase();
   return (
-    <div className="h-9 w-9 rounded-full border border-[#2a2a2a] bg-[#111] text-[#808080] flex items-center justify-center text-[11px] shrink-0">
-      {initials || "P"}
+    <div className="h-10 w-10 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] shrink-0 flex items-center justify-center text-sm text-[#808080]">
+      {initial}
     </div>
   );
 }
@@ -3284,20 +3305,20 @@ function PropPickInline({
   name: string;
   position: string | null;
   picture_url: string | null;
-  sub?: string;
-  mu?: number | null;
+  sub: string;
+  mu: number | null;
 }) {
   return (
-    <div className="flex items-center gap-2 min-w-0">
+    <div className="flex items-center gap-3">
       <PropAvatar url={picture_url} name={name} />
       <div className="min-w-0">
-        <div className="text-white truncate">
+        <div className="text-white text-sm truncate">
           {name}
-          {position ? <span className="text-[#808080]"> · {String(position).toUpperCase()}</span> : null}
+          {position ? <span className="text-[#808080]"> · {position}</span> : null}
         </div>
-        {sub ? <div className="text-[10px] text-[#606060] mt-0.5 truncate">{sub}</div> : null}
-        <div className="text-[10px] text-[#b0b0b0] mt-0.5">
-          Projection: <span className="text-white tabular-nums">{fmtMu(mu ?? null)}</span>
+        <div className="text-[11px] text-[#808080] mt-0.5 truncate">{sub}</div>
+        <div className="text-[11px] text-[#b0b0b0] mt-0.5">
+          Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
         </div>
       </div>
     </div>
@@ -3320,20 +3341,14 @@ function GamePickInline({
   play: AggregatedPlay;
 }) {
   return (
-    <div className="flex items-center gap-2 min-w-0">
+    <div className="flex items-center gap-3">
       {showLogo && logoUrl ? <TeamLogo url={logoUrl} alt={title} /> : <TeamLogoPlaceholder />}
       <div className="min-w-0">
-        <div className="text-white truncate">{title}</div>
-        <div className="text-[10px] text-[#606060] mt-0.5 truncate">{sub}</div>
+        <div className="text-white text-sm truncate">{title}</div>
+        <div className="text-[11px] text-[#808080] mt-0.5 truncate">{sub}</div>
 
-        {steamInfo && play.kind === "game" ? (
-          <div className="text-[10px] text-[#808080] mt-1 truncate">
-            PIN now:{" "}
-            <span className="text-[#d8b4fe]">
-              {steamInfo.pinCur.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinCur.line) + " " : ""}
-              {american(steamInfo.pinCur.odds)}
-            </span>
-            <span className="text-[#404040]"> · </span>
+        {steamInfo && play.kind === "game" && play.gameMeta ? (
+          <div className="text-[11px] text-[#808080] mt-1 truncate">
             Soft better:{" "}
             <span className="text-white">
               {Object.entries(steamInfo.lagging)
@@ -3347,15 +3362,14 @@ function GamePickInline({
           </div>
         ) : null}
       </div>
+
+      <div className="ml-auto shrink-0">
+        <div className="inline-flex items-center gap-2 px-2 py-1 rounded-md border border-white/10 bg-white/5">
+          <span className="text-[10px] text-[#808080]">MODEL</span>
+        </div>
+      </div>
     </div>
   );
-}
-
-function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
-  if (!ready || !Number.isFinite(amount) || amount <= 0) {
-    return <div className="text-[#404040]">—</div>;
-  }
-  return <div className="text-[#d4af37] font-semibold tabular-nums">{formatMoney(amount)}</div>;
 }
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
