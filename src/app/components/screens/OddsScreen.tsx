@@ -1,15 +1,25 @@
 "use client";
 
-// src/app/components/screens/OddsScreen.tsx — FULL REWRITE (Premium bump + modal button kept)
+// src/app/components/screens/OddsScreen.tsx — FULL REWRITE (Premium Odds Board UI — matches reference layout + Prism black/gold theme)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ Player Props modal: headers (Points / “14 players” / Player Team Line Over Under) are STICKY while scrolling
-//    - FIX: no “blank gap” / jump by giving the props table its OWN vertical scroll container
-//      and using a real sticky <thead> (no offset-math / no cloned header / no horizontal-sync transforms)
-// ✅ Predictions “Key Lines”: remove Quantum ML block (consensus only; quantum ML already shown by team logos)
-// ✅ Mobile Predictions: smaller logos + team names in a compact row ABOVE the win% bar (both teams above the bar)
-// ✅ KEEP a button for the modal (Game Details) on both desktop + mobile
-// ✅ Premium visual bump (glass panels, better separators, improved stickies + shadows)
-// ✅ Build error fixed (GameDetailsModal correctly closed)
+// ✅ UI updated to match the reference odds-board layout:
+//    - Top sport tabs bar (visual only; uses your existing sportKey prop as the active tab)
+//    - Filters toolbar: Market / View / Date / Search / Odds Format / Sportsbooks / Refresh
+//    - Sticky book header row with logo “pills”
+//    - Date section separators like the reference board
+//    - Odds cells rendered as compact “chips” (line + price) inside gray rounded boxes
+//
+// ✅ KEEP: Game Details modal button (desktop + mobile)
+// ✅ KEEP: Predictions “Key Lines”: remove Quantum ML block (consensus only)
+// ✅ KEEP: Mobile Predictions: smaller logos + team names ABOVE the win% bar
+// ✅ KEEP: Player Props modal: sticky headers + its OWN scroll container (no blank gap jump)
+// ✅ Build-safe: GameDetailsModal correctly closed
+//
+// NOTE:
+// - Data source remains public.odds_wide_latest (your existing wide table).
+// - Optional history/projections/props tables are queried the same way as last version.
+// - The “Sportsbooks” dropdown is UI-only (we show all books you currently have: DK/FD/MGM/PIN/BOL).
+// - Odds format switch supports American + Decimal display for prices only.
 
 import React, {
   useEffect,
@@ -35,6 +45,8 @@ import {
 ========================================================= */
 
 type Market = "ml" | "spread" | "total";
+type OddsFormat = "american" | "decimal";
+type BoardView = "pregame" | "live";
 type BookKey = "dk" | "fd" | "mgm" | "pin" | "bol";
 
 type SpreadCell = { line: number | null; odds: number | null };
@@ -63,6 +75,16 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
+// Prism Theme (black / gold + subtle teal like reference separators)
+const PRISM_BG = "#070707";
+const PRISM_PANEL = "rgba(10,10,10,0.55)";
+const PRISM_BORDER = "rgba(255,255,255,0.08)";
+const PRISM_GOLD = "#d4af37";
+const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
+const PRISM_TEAL = "#18b7c6"; // subtle accent similar to reference lines
+const PRISM_TEXT = "#e8e8e8";
+const PRISM_MUTED = "rgba(232,232,232,0.60)";
+
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 const BOOK_LABEL: Record<BookKey, string> = {
   dk: "DraftKings",
@@ -88,44 +110,12 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   bol: "/books/bol.png",
 };
 
-const COL_MATCHUP = 420;
-const COL_CONSENSUS = 180;
+const COL_GAME = 360;
+const COL_TIME = 120;
 const COL_BOOK = 120;
 
-const PAGE_MAX_W = "max-w-[1320px]";
-const PAGE_X = "px-4 md:px-8";
-
-/** HERO + PANEL styles (premium bump) */
-const HERO_WRAP =
-  "rounded-2xl border border-[#2a2a2a] bg-[#0f0f0f]/70 overflow-hidden shadow-[0_20px_80px_rgba(0,0,0,0.45)] backdrop-blur-[3px]";
-const HERO_INNER = "p-5 md:p-6";
-const HERO_SUB = "text-sm text-[#9a9a9a] mt-2";
-
-const PILL =
-  "inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/35 px-3 py-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]";
-const PILL_DOT = "inline-block w-2 h-2 rounded-full bg-[#d4af37]";
-const PILL_TX = "text-[11px] font-extrabold text-[#d0d0d0] tracking-wide";
-
-const LIVE_BADGE =
-  "inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/35 px-3 py-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]";
-const LIVE_TX = "text-[11px] font-extrabold text-[#d0d0d0]";
-const LIVE_DOT = "inline-block w-2 h-2 rounded-full bg-emerald-500";
-
-const PANEL_INNER =
-  "border border-[#2a2a2a] bg-black/20 rounded-xl overflow-hidden backdrop-blur-[3px] shadow-[0_12px_55px_rgba(0,0,0,0.35)]";
-
-const BTN_BASE =
-  "px-3 py-1.5 rounded-lg text-xs font-extrabold border transition-colors whitespace-nowrap";
-const BTN_ON =
-  "bg-[#d4af37] text-black border-[#d4af37] hover:bg-[#e2c257] hover:border-[#e2c257]";
-const BTN_OFF =
-  "bg-black/20 text-[#d0d0d0] border-[#2a2a2a] hover:border-[#3a3a3a]";
-const BTN_GHOST =
-  "text-[11px] font-extrabold text-white/90 hover:text-white px-2.5 py-1 rounded-md border border-[#2a2a2a] hover:border-[#3a3a3a] bg-black/10 hover:bg-black/20";
-
-const HDR_LEFT_BG = "bg-[#0b0b0b]";
-const HDR_TEXT = "text-[#d0d0d0]";
-const HDR_BORDER = "border-[#232323]";
+const PAGE_MAX_W = "max-w-[1500px]";
+const PAGE_X = "px-3 md:px-6";
 
 /* =========================================================
    TIME HELPERS
@@ -208,7 +198,7 @@ function ctTodayYmd() {
 function fmtDateBtn(ymd: string) {
   const d = new Date(`${ymd}T12:00:00`);
   if (Number.isNaN(d.getTime())) return ymd;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
 function maxIso(a: string | null, b: string | null) {
@@ -222,104 +212,18 @@ function maxIso(a: string | null, b: string | null) {
 }
 
 /* =========================================================
-   FLEX COLUMN PICKERS
-========================================================= */
-
-function pickAny(row: any, keys: string[]) {
-  for (const k of keys) if (row?.[k] != null) return row[k];
-  return null;
-}
-
-function pickTs(row: any): string | null {
-  return normalizeIso(
-    pickAny(row, [
-      "ts",
-      "timestamp",
-      "snapshot_ts",
-      "inserted_at",
-      "created_at",
-      "time",
-      "date",
-    ])
-  );
-}
-
-function pickOdds(row: any): number | null {
-  const raw = pickAny(row, [
-    "odds",
-    "price",
-    "american_odds",
-    "odds_american",
-    "book_odds",
-  ]);
-  if (raw == null) return null;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : null;
-}
-
-function pickLine(row: any): number | null {
-  const raw = pickAny(row, [
-    "line",
-    "points",
-    "point",
-    "total",
-    "spread_line",
-    "total_line",
-    "prop_line",
-    "value",
-  ]);
-  if (raw == null) return null;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : null;
-}
-
-function pickBook(row: any): string | null {
-  const raw = pickAny(row, [
-    "bookmaker",
-    "book",
-    "sportsbook",
-    "provider",
-    "site",
-  ]);
-  return raw ? String(raw).toLowerCase() : null;
-}
-
-function bookKeyFromRaw(s: string | null): BookKey | null {
-  if (!s) return null;
-  const v = s.toLowerCase();
-  if (v.includes("draftkings") || v === "dk") return "dk";
-  if (v.includes("fanduel") || v === "fd") return "fd";
-  if (v.includes("betmgm") || v === "mgm") return "mgm";
-  if (v.includes("pinnacle") || v === "pin") return "pin";
-  if (v.includes("betonline") || v === "bol") return "bol";
-  return null;
-}
-
-function pickSide(row: any): string | null {
-  const raw = pickAny(row, ["side", "team_side", "home_away", "bet_side"]);
-  return raw ? String(raw).toLowerCase() : null;
-}
-
-function pickOU(row: any): string | null {
-  const raw = pickAny(row, ["over_under", "ou", "side_ou", "total_side"]);
-  return raw ? String(raw).toLowerCase() : null;
-}
-
-/* =========================================================
-   MAPPING HELPERS (odds wide)
+   PICKERS (wide table)
 ========================================================= */
 
 function pickLogoUrl(row: any): string | null {
   return row.logo_url ?? row.team_logo_url ?? row.logo ?? row.logoUrl ?? null;
 }
-
 function pickUpdatedAt(row: any): string | null {
   return (
     row.updated_at ??
     row.last_update ??
     row.last_updated ??
     row.updatedAt ??
-    row.last_updated_ct ??
     row.ts ??
     row.snapshot_ts ??
     row.inserted_at ??
@@ -327,7 +231,6 @@ function pickUpdatedAt(row: any): string | null {
     null
   );
 }
-
 function mapWideRowToSideOdds(row: any): SideOdds {
   return {
     side: row.side,
@@ -382,6 +285,23 @@ function mapWideRowToSideOdds(row: any): SideOdds {
 }
 
 /* =========================================================
+   ODDS FORMATTERS
+========================================================= */
+
+function americanToDecimal(american: number): number {
+  if (!Number.isFinite(american) || american === 0) return NaN;
+  if (american > 0) return 1 + american / 100;
+  return 1 + 100 / Math.abs(american);
+}
+function fmtPrice(odds: number | null, fmt: OddsFormat) {
+  if (odds == null) return "—";
+  if (fmt === "american") return String(odds);
+  const dec = americanToDecimal(odds);
+  if (!Number.isFinite(dec)) return "—";
+  return dec.toFixed(2);
+}
+
+/* =========================================================
    CONSENSUS HELPERS
 ========================================================= */
 
@@ -394,28 +314,19 @@ function median(nums: number[]) {
 
 type CellParts = { top: string; bottom?: string };
 
-function cellMl(odds: number | null): CellParts {
-  return { top: odds == null ? "—" : String(odds) };
+function cellMl(price: string): CellParts {
+  return { top: price };
 }
-function cellLineOdds(line: number | null, odds: number | null): CellParts {
+function cellLineOdds(line: number | null, price: string): CellParts {
   if (line == null) return { top: "—" };
-  return { top: String(line), bottom: odds == null ? "—" : `(${odds})` };
-}
-function renderCellParts(parts: CellParts) {
-  return (
-    <div className="flex flex-col items-center justify-center leading-tight">
-      <div className="tabular-nums">{parts.top}</div>
-      {parts.bottom != null ? (
-        <div className="tabular-nums opacity-95">{parts.bottom}</div>
-      ) : null}
-    </div>
-  );
+  return { top: String(line), bottom: price === "—" ? "—" : price };
 }
 
 function consensusPartsForRow(
   ev: EventOdds,
   market: Market,
-  side: "AWAY" | "HOME"
+  side: "AWAY" | "HOME",
+  oddsFormat: OddsFormat
 ): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
 
@@ -423,7 +334,7 @@ function consensusPartsForRow(
     const odds: number[] = [];
     if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
     const mOdds = median(odds);
-    return cellMl(mOdds == null ? null : mOdds);
+    return cellMl(fmtPrice(mOdds == null ? null : mOdds, oddsFormat));
   }
 
   if (market === "spread") {
@@ -439,7 +350,7 @@ function consensusPartsForRow(
     }
     const mLine = median(lines);
     const mOdds = median(odds);
-    return cellLineOdds(mLine == null ? null : mLine, mOdds == null ? null : mOdds);
+    return cellLineOdds(mLine == null ? null : mLine, fmtPrice(mOdds == null ? null : mOdds, oddsFormat));
   }
 
   // total: AWAY treated as Over, HOME treated as Under
@@ -466,47 +377,45 @@ function consensusPartsForRow(
   const mOver = median(overOdds);
   const mUnder = median(underOdds);
 
-  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
-  return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
+  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, fmtPrice(mOver == null ? null : mOver, oddsFormat));
+  return cellLineOdds(mLine == null ? null : mLine, fmtPrice(mUnder == null ? null : mUnder, oddsFormat));
 }
 
 function partsForBookSide(
   ev: EventOdds,
   market: Market,
   side: "AWAY" | "HOME",
-  book: BookKey
+  book: BookKey,
+  oddsFormat: OddsFormat
 ): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
   if (!src) return { top: "—" };
 
-  if (market === "ml") return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
+  if (market === "ml") return { top: fmtPrice(src.ml[book], oddsFormat) };
 
   if (market === "spread") {
     const c = src.spread[book];
     if (c?.line == null) return { top: "—" };
-    return { top: String(c.line), bottom: c?.odds == null ? "—" : `(${c.odds})` };
+    return { top: String(c.line), bottom: fmtPrice(c?.odds ?? null, oddsFormat) };
   }
 
   // total: AWAY is Over, HOME is Under
   const t = src.total[book];
   const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
   if (t?.line == null) return { top: "—" };
-  return { top: String(t.line), bottom: odds == null ? "—" : `(${odds})` };
+  return { top: String(t.line), bottom: fmtPrice(odds, oddsFormat) };
 }
 
 /* =========================================================
-   BOOK HEADER PILL
+   UI PRIMITIVES (board look)
 ========================================================= */
-
-const BOOK_LOGO_W = 86;
-const BOOK_LOGO_H = 22;
 
 function headerFallbackPillDataUri(label: string) {
   const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}">
-    <rect x="0" y="0" width="${BOOK_LOGO_W}" height="${BOOK_LOGO_H}" rx="13" ry="13" fill="#FFFFFF"/>
-    <rect x="0.5" y="0.5" width="${BOOK_LOGO_W - 1}" height="${BOOK_LOGO_H - 1}" rx="13" ry="13" fill="none" stroke="#E5E5E5"/>
-    <text x="${BOOK_LOGO_W / 2}" y="${Math.floor(BOOK_LOGO_H * 0.70)}"
+  <svg xmlns="http://www.w3.org/2000/svg" width="88" height="22">
+    <rect x="0" y="0" width="88" height="22" rx="11" ry="11" fill="#FFFFFF"/>
+    <rect x="0.5" y="0.5" width="87" height="21" rx="11" ry="11" fill="none" stroke="#E5E5E5"/>
+    <text x="44" y="15"
       font-family="Arial, sans-serif" font-size="12" font-weight="700"
       text-anchor="middle" fill="#111111">${label}</text>
   </svg>`;
@@ -517,431 +426,150 @@ function BookLogoPill({
   src,
   alt,
   fallbackLabel,
-  size = "md",
 }: {
   src: string;
   alt: string;
   fallbackLabel: string;
-  size?: "sm" | "md";
 }) {
-  const pillH = size === "sm" ? "h-7" : "h-8";
-  const imgH = size === "sm" ? "h-4" : "h-5";
-  const pillW = size === "sm" ? "w-[90px]" : "w-[92px]";
-
   return (
     <div
-      className={`${pillH} ${pillW} rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center shadow-[0_10px_35px_rgba(0,0,0,0.35)]`}
+      className="h-7 w-[92px] rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
       title={alt}
     >
       <img
         src={src}
         alt={alt}
-        className={`${imgH} w-auto object-contain`}
+        className="h-4 w-auto object-contain"
         loading="lazy"
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).src =
-            headerFallbackPillDataUri(fallbackLabel);
+          (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
         }}
       />
     </div>
   );
 }
 
-function BookHeader({
-  bookKey,
-  borderLeft,
-}: {
-  bookKey: BookKey;
-  borderLeft?: boolean;
-}) {
-  const fb =
-    bookKey === "dk"
-      ? "DK"
-      : bookKey === "fd"
-      ? "FD"
-      : bookKey === "mgm"
-      ? "MGM"
-      : bookKey === "pin"
-      ? "PIN"
-      : "BOL";
-  return (
-    <th
-      className={[
-        "text-center px-2 py-3",
-        "bg-[#171717]/90 backdrop-blur-[4px]",
-        "border-b",
-        HDR_BORDER,
-        borderLeft ? `border-l ${HDR_BORDER}` : "",
-      ].join(" ")}
-      style={{ width: COL_BOOK }}
-    >
-      <div className="flex items-center justify-center">
-        <BookLogoPill
-          src={BOOK_LOGOS[bookKey]}
-          alt={BOOK_LABEL[bookKey]}
-          fallbackLabel={fb}
-          size="md"
-        />
-      </div>
-    </th>
-  );
-}
-
-function ConsensusValue({ parts }: { parts: CellParts }) {
-  return (
-    <td
-      className={[
-        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
-        `border-r ${HDR_BORDER}`,
-      ].join(" ")}
-    >
-      {renderCellParts(parts)}
-    </td>
-  );
-}
-
-function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
-  return (
-    <td
-      className={[
-        "px-2 py-3 text-white text-center tabular-nums font-extrabold text-[13px]",
-        borderLeft ? `border-l ${HDR_BORDER}` : "",
-      ].join(" ")}
-    >
-      {renderCellParts(parts)}
-    </td>
-  );
-}
-
-function MiniTeamRow({
+function TeamCell({
   team,
   logoUrl,
-  side,
+  sub,
 }: {
   team: string;
   logoUrl: string | null;
-  side: "AWAY" | "HOME";
+  sub: string;
 }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 min-w-0">
       {logoUrl ? (
         <img
           src={logoUrl}
           alt={`${team} logo`}
-          className="w-10 h-10 md:w-11 md:h-11 rounded-md object-contain bg-white border border-[#e5e5e5] p-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
+          className="w-9 h-9 rounded-md object-contain bg-white border border-[#e5e5e5] p-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
           loading="lazy"
-          onError={(e) =>
-            ((e.currentTarget as HTMLImageElement).style.display = "none")
-          }
+          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
         />
       ) : (
-        <div className="w-10 h-10 md:w-11 md:h-11 rounded-md bg-white border border-[#e5e5e5]" />
+        <div className="w-9 h-9 rounded-md bg-white/5 border border-white/10" />
       )}
 
-      <div className="leading-tight min-w-0">
-        <div className="text-white font-extrabold text-[14px] md:text-[15px] truncate">
-          {team}
-        </div>
-        <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
+      <div className="min-w-0 leading-tight">
+        <div className="text-white font-extrabold text-[13px] truncate">{team}</div>
+        <div className="text-[11px] text-white/60 font-semibold">{sub}</div>
       </div>
     </div>
   );
 }
 
-/* =========================================================
-   SEGMENTED MARKET CONTROL (board)
-========================================================= */
-
-function SegButton({
-  active,
-  onClick,
-  children,
+function OddsChip({
+  parts,
 }: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
+  parts: CellParts;
+}) {
+  // chip like reference: gray box, two-line
+  return (
+    <div className="w-[104px] h-[44px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
+      <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
+        {parts.top}
+      </div>
+      <div className="text-white/70 font-semibold tabular-nums text-[11px] leading-none mt-1">
+        {parts.bottom ?? " "}
+      </div>
+    </div>
+  );
+}
+
+function SelectPill({
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+  label?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-1.5 text-xs font-extrabold transition-colors",
-        "border border-[#2a2a2a]",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
-      ].join(" ")}
-    >
+    <div className="flex items-center gap-2">
+      {label ? <div className="text-[11px] text-white/60 font-semibold">{label}</div> : null}
+      <select
+        className="h-9 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold px-3 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value} className="bg-[#0b0b0b]">
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <input
+      className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 outline-none focus:border-[rgba(212,175,55,0.55)]"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+    />
+  );
+}
+
+function Btn({
+  onClick,
+  children,
+  variant = "gold",
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+  variant?: "gold" | "ghost";
+}) {
+  const base =
+    "h-9 px-3 rounded-lg border text-sm font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
+  const gold =
+    "bg-[#d4af37] text-black border-[#d4af37] hover:bg-[#e2c257] hover:border-[#e2c257]";
+  const ghost =
+    "bg-black/30 text-white border-white/10 hover:border-white/20 hover:bg-black/40";
+  return (
+    <button className={`${base} ${variant === "gold" ? gold : ghost}`} onClick={onClick} type="button">
       {children}
     </button>
   );
 }
 
-function Segmented({
-  value,
-  onChange,
-}: {
-  value: Market;
-  onChange: (v: Market) => void;
-}) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20 shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
-      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>
-        Moneyline
-      </SegButton>
-      <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>
-        Spread
-      </SegButton>
-      <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "total"} onClick={() => onChange("total")}>
-        Total
-      </SegButton>
-    </div>
-  );
-}
-
 /* =========================================================
-   DESKTOP TABLE ROWS + MOBILE CARD
-========================================================= */
-
-function EventCardMobile({
-  ev,
-  market,
-  booksOpen,
-  onToggleBooks,
-  onOpenDetails,
-}: {
-  ev: EventOdds;
-  market: Market;
-  booksOpen: boolean;
-  onToggleBooks: () => void;
-  onOpenDetails: (ev: EventOdds) => void;
-}) {
-  const leftLabel = market === "total" ? "Over" : "Away";
-  const rightLabel = market === "total" ? "Under" : "Home";
-
-  const awayCons = consensusPartsForRow(ev, market, "AWAY");
-  const homeCons = consensusPartsForRow(ev, market, "HOME");
-
-  const metaFor = (book: BookKey) =>
-    book === "dk"
-      ? { alt: "DraftKings", fb: "DK" }
-      : book === "fd"
-      ? { alt: "FanDuel", fb: "FD" }
-      : book === "mgm"
-      ? { alt: "BetMGM", fb: "MGM" }
-      : book === "pin"
-      ? { alt: "Pinnacle", fb: "PIN" }
-      : { alt: "BetOnline", fb: "BOL" };
-
-  return (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden backdrop-blur-[3px] shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
-      <div className="px-3 py-2.5 border-b border-[#2a2a2a] flex items-center justify-between gap-3 bg-black/20">
-        <div className="text-[12px] text-[#cfcfcf] font-semibold">
-          {fmtCTTimeOnly(ev.commenceTime)} CT
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
-            {booksOpen ? "Hide Books" : "Show Books"}
-          </button>
-          {/* ✅ KEEP MODAL BUTTON */}
-          <button
-            type="button"
-            onClick={() => onOpenDetails(ev)}
-            className={[BTN_BASE, BTN_ON].join(" ")}
-          >
-            Game Details
-          </button>
-        </div>
-      </div>
-
-      <div className="px-3 py-3 space-y-2.5">
-        <MiniTeamRow
-          team={ev.away?.team ?? "Away"}
-          logoUrl={ev.away?.logoUrl ?? null}
-          side="AWAY"
-        />
-        <MiniTeamRow
-          team={ev.home?.team ?? "Home"}
-          logoUrl={ev.home?.logoUrl ?? null}
-          side="HOME"
-        />
-      </div>
-
-      <div className="px-3 pb-3">
-        <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b]/70 p-3 shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px] text-white font-extrabold">Consensus</div>
-            <div className="text-[11px] text-[#808080] font-semibold">
-              {market === "ml"
-                ? "Moneyline"
-                : market === "spread"
-                ? "Spread"
-                : "Total"}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
-                {leftLabel}
-              </div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(awayCons)}
-              </div>
-            </div>
-            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
-                {rightLabel}
-              </div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(homeCons)}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {booksOpen && (
-          <div className="mt-3 rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden shadow-[0_12px_55px_rgba(0,0,0,0.35)]">
-            <div className="px-3 py-2 border-b border-[#141414] bg-black/20">
-              <div className="text-[12px] text-white font-extrabold">Books</div>
-              <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
-                <div />
-                <div className="text-[10px] text-[#808080] font-semibold text-center">
-                  {leftLabel}
-                </div>
-                <div className="text-[10px] text-[#808080] font-semibold text-center">
-                  {rightLabel}
-                </div>
-              </div>
-            </div>
-
-            <div className="px-3">
-              {BOOKS.map((bk) => {
-                const meta = metaFor(bk);
-                return (
-                  <div
-                    key={bk}
-                    className="py-2 border-b border-[#141414] last:border-b-0"
-                  >
-                    <div className="grid grid-cols-[110px_1fr_1fr] items-center gap-3">
-                      <div className="flex justify-start">
-                        <BookLogoPill
-                          src={BOOK_LOGOS[bk]}
-                          alt={meta.alt}
-                          fallbackLabel={meta.fb}
-                          size="md"
-                        />
-                      </div>
-
-                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(partsForBookSide(ev, market, "AWAY", bk))}
-                      </div>
-                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(partsForBookSide(ev, market, "HOME", bk))}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function EventTwoRows({
-  ev,
-  market,
-  onOpenDetails,
-}: {
-  ev: EventOdds;
-  market: Market;
-  onOpenDetails: (ev: EventOdds) => void;
-}) {
-  const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
-  const homeConsensus = consensusPartsForRow(ev, market, "HOME");
-
-  return (
-    <>
-      <tr className="hover:bg-white/5 transition-colors">
-        <td
-          className={[
-            "p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle",
-            `border-r ${HDR_BORDER}`,
-          ].join(" ")}
-          rowSpan={2}
-        >
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[12px] text-[#cfcfcf] font-semibold">
-              {fmtCTTimeOnly(ev.commenceTime)} CT
-            </div>
-
-            {/* ✅ KEEP MODAL BUTTON */}
-            <button
-              type="button"
-              onClick={() => onOpenDetails(ev)}
-              className={[BTN_BASE, BTN_ON].join(" ")}
-            >
-              Game Details
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            <MiniTeamRow
-              team={ev.away?.team ?? "Away"}
-              logoUrl={ev.away?.logoUrl ?? null}
-              side="AWAY"
-            />
-            <MiniTeamRow
-              team={ev.home?.team ?? "Home"}
-              logoUrl={ev.home?.logoUrl ?? null}
-              side="HOME"
-            />
-          </div>
-        </td>
-
-        <ConsensusValue parts={awayConsensus} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "dk")} borderLeft />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "fd")} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "mgm")} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "pin")} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "bol")} />
-      </tr>
-
-      <tr
-        className={[
-          "hover:bg-white/5 transition-colors",
-          `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`,
-        ].join(" ")}
-      >
-        <ConsensusValue parts={homeConsensus} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "mgm")} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "pin")} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
-      </tr>
-
-      {/* Premium separator row (subtle glow line) */}
-      <tr>
-        <td colSpan={7} className="p-0">
-          <div className="h-3 bg-transparent" />
-          <div className="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-          <div className="h-3 bg-transparent" />
-        </td>
-      </tr>
-    </>
-  );
-}
-
-/* =========================================================
-   MODAL SHELL (premium glass + noise) + scroll jump fixes
+   MODAL SHELL (premium)
 ========================================================= */
 
 function ModalShell({
@@ -963,17 +591,6 @@ function ModalShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const noiseSvg = encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="180" height="180">
-      <filter id="n">
-        <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/>
-        <feColorMatrix type="matrix"
-          values="0 0 0 0 0.65  0 0 0 0 0.55  0 0 0 0 0.18  0 0 0 0.08 0"/>
-      </filter>
-      <rect width="100%" height="100%" filter="url(#n)"/>
-    </svg>
-  `);
-
   return (
     <div
       className="fixed inset-0 z-[999] flex items-center justify-center bg-black/70 p-2 sm:p-4"
@@ -982,35 +599,23 @@ function ModalShell({
       }}
     >
       <div
-        className="relative w-full max-w-7xl rounded-2xl border border-[#2a2a2a] overflow-hidden max-h-[92vh] flex flex-col shadow-[0_28px_90px_rgba(0,0,0,0.65)]"
+        className="relative w-full max-w-7xl rounded-2xl border border-white/10 overflow-hidden max-h-[92vh] flex flex-col shadow-[0_28px_90px_rgba(0,0,0,0.65)]"
         style={{
           background:
-            "radial-gradient(1200px 700px at 15% 10%, rgba(212,175,55,0.13), transparent 55%)," +
-            "radial-gradient(900px 600px at 80% 0%, rgba(16,185,129,0.08), transparent 55%)," +
-            "radial-gradient(900px 700px at 70% 95%, rgba(37,99,235,0.09), transparent 58%)," +
+            `radial-gradient(1200px 700px at 15% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
+            "radial-gradient(900px 700px at 70% 95%, rgba(24,183,198,0.10), transparent 58%)," +
             "linear-gradient(180deg, rgba(15,15,15,0.98), rgba(10,10,10,0.98))",
         }}
       >
-        <div
-          className="pointer-events-none absolute inset-0 opacity-[0.10]"
-          style={{
-            backgroundImage: `url("data:image/svg+xml,${noiseSvg}")`,
-            backgroundRepeat: "repeat",
-          }}
-        />
-
-        {/* Header (fixed within modal) */}
-        <div className="relative px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0 bg-black/20 backdrop-blur-[5px]">
+        <div className="px-4 py-3 border-b border-white/10 flex items-start justify-between gap-4 shrink-0 bg-black/30 backdrop-blur-[6px]">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && (
-              <div className="text-[11px] text-[#a0a0a0] mt-0.5 break-words">
-                {subtitle}
-              </div>
-            )}
+            {subtitle ? (
+              <div className="text-[11px] text-white/60 mt-0.5 break-words">{subtitle}</div>
+            ) : null}
           </div>
           <button
-            className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10 border border-transparent hover:border-white/10"
+            className="text-white/80 hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10 border border-transparent hover:border-white/10"
             onClick={onClose}
             type="button"
           >
@@ -1018,14 +623,7 @@ function ModalShell({
           </button>
         </div>
 
-        {/* Scroll area */}
-        <div
-          className="relative overflow-y-auto"
-          style={{
-            // ✅ prevents “focus scroll” from jumping content above sticky bars
-            scrollPaddingTop: 140,
-          }}
-        >
+        <div className="relative overflow-y-auto" style={{ scrollPaddingTop: 140 }}>
           <div className="relative p-3 sm:p-4">{children}</div>
         </div>
       </div>
@@ -1034,7 +632,7 @@ function ModalShell({
 }
 
 /* =========================================================
-   GAME DETAILS MODAL (tabs) + sticky tab bar
+   GAME DETAILS MODAL — (same behavior as your last rewrite)
 ========================================================= */
 
 type DetailsTab = "line" | "pred" | "props";
@@ -1051,17 +649,17 @@ function TabBtn({
   return (
     <button
       type="button"
-      // ✅ prevent focus-scroll jump with sticky bars
       onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => {
         onClick();
         (e.currentTarget as HTMLButtonElement).blur();
       }}
       className={[
-        "px-3 py-1.5 text-xs font-extrabold rounded-lg border transition-colors shadow-[0_10px_35px_rgba(0,0,0,0.35)]",
+        "px-3 py-1.5 text-xs font-extrabold rounded-lg border transition-colors",
+        "shadow-[0_10px_35px_rgba(0,0,0,0.35)]",
         active
           ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-black/20 text-white/90 border-[#2a2a2a] hover:border-[#3a3a3a]",
+          : "bg-black/30 text-white border-white/10 hover:border-white/20",
       ].join(" ")}
     >
       {children}
@@ -1069,9 +667,9 @@ function TabBtn({
   );
 }
 
-/* =========================================================
-   LINE MOVEMENT (side-by-side charts)
-========================================================= */
+/* -------------------------
+   Line Movement (history)
+------------------------- */
 
 type HistoryRow = { ts: string; book: BookKey; odds: number | null; line: number | null };
 type HistoryPoint = { ts: string; label: string; [key: string]: any };
@@ -1099,8 +697,8 @@ function HistoryTooltip({ active, payload, label, market }: any) {
   const tsLabel = label || base?.label || "—";
 
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 shadow-[0_16px_60px_rgba(0,0,0,0.55)]">
-      <div className="text-[11px] text-[#d0d0d0] font-extrabold">{tsLabel} CT</div>
+    <div className="rounded-xl border border-white/10 bg-[#0f0f0f] px-3 py-2 shadow-[0_16px_60px_rgba(0,0,0,0.55)]">
+      <div className="text-[11px] text-white font-extrabold">{tsLabel} CT</div>
 
       <div className="mt-1 space-y-1">
         {payload
@@ -1129,7 +727,7 @@ function HistoryTooltip({ active, payload, label, market }: any) {
           })}
       </div>
 
-      <div className="mt-2 text-[10px] text-[#808080] font-semibold">
+      <div className="mt-2 text-[10px] text-white/60 font-semibold">
         {market === "ml"
           ? "Moneyline Odds History"
           : market === "spread"
@@ -1138,6 +736,73 @@ function HistoryTooltip({ active, payload, label, market }: any) {
       </div>
     </div>
   );
+}
+
+function pickAny(row: any, keys: string[]) {
+  for (const k of keys) if (row?.[k] != null) return row[k];
+  return null;
+}
+function pickTs(row: any): string | null {
+  return normalizeIso(
+    pickAny(row, [
+      "ts",
+      "timestamp",
+      "snapshot_ts",
+      "inserted_at",
+      "created_at",
+      "time",
+      "date",
+    ])
+  );
+}
+function pickOdds(row: any): number | null {
+  const raw = pickAny(row, [
+    "odds",
+    "price",
+    "american_odds",
+    "odds_american",
+    "book_odds",
+  ]);
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+function pickLine(row: any): number | null {
+  const raw = pickAny(row, [
+    "line",
+    "points",
+    "point",
+    "total",
+    "spread_line",
+    "total_line",
+    "prop_line",
+    "value",
+  ]);
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+function pickBook(row: any): string | null {
+  const raw = pickAny(row, ["bookmaker", "book", "sportsbook", "provider", "site"]);
+  return raw ? String(raw).toLowerCase() : null;
+}
+function bookKeyFromRaw(s: string | null): BookKey | null {
+  if (!s) return null;
+  const v = s.toLowerCase();
+  if (v.includes("draftkings") || v === "dk") return "dk";
+  if (v.includes("fanduel") || v === "fd") return "fd";
+  if (v.includes("betmgm") || v === "mgm") return "mgm";
+  if (v.includes("pinnacle") || v === "pin") return "pin";
+  if (v.includes("betonline") || v === "bol") return "bol";
+  return null;
+}
+function pickSide(row: any): string | null {
+  const raw = pickAny(row, ["side", "team_side", "home_away", "bet_side"]);
+  return raw ? String(raw).toLowerCase() : null;
+}
+function pickOU(row: any): string | null {
+  const raw = pickAny(row, ["over_under", "ou", "side_ou", "total_side"]);
+  return raw ? String(raw).toLowerCase() : null;
 }
 
 async function fetchOddsHistoryAnyTable({
@@ -1229,25 +894,25 @@ function SideBySideLineCharts({
   market: Market;
 }) {
   const chart = (title: string, pts: HistoryPoint[]) => (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[3px] p-3 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
+    <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] p-3 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
       <div className="text-[12px] text-white font-extrabold mb-2">{title}</div>
 
       {!pts.length ? (
-        <div className="text-sm text-[#a0a0a0] p-4">No odds history available for this side.</div>
+        <div className="text-sm text-white/60 p-4">No odds history available for this side.</div>
       ) : (
         <div className="h-[280px]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={pts} margin={{ top: 10, right: 18, left: 0, bottom: 10 }}>
-              <CartesianGrid stroke="#222222" strokeDasharray="3 3" />
+              <CartesianGrid stroke="rgba(255,255,255,0.10)" strokeDasharray="3 3" />
               <XAxis
                 dataKey="label"
-                tick={{ fill: "#b0b0b0", fontSize: 10 }}
+                tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 10 }}
                 interval="preserveStartEnd"
                 minTickGap={18}
               />
-              <YAxis tick={{ fill: "#b0b0b0", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
+              <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
               <Tooltip content={<HistoryTooltip market={market} />} />
-              <Legend wrapperStyle={{ color: "#d0d0d0", fontSize: 11 }} />
+              <Legend wrapperStyle={{ color: "rgba(255,255,255,0.75)", fontSize: 11 }} />
               {BOOKS.map((bk) => (
                 <Line
                   key={bk}
@@ -1264,11 +929,6 @@ function SideBySideLineCharts({
           </ResponsiveContainer>
         </div>
       )}
-
-      <div className="mt-2 text-[11px] text-[#a0a0a0]">
-        Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>
-        {market === "ml" ? "." : <> and <span className="text-white font-extrabold">line + odds</span>.</>}
-      </div>
     </div>
   );
 
@@ -1280,9 +940,9 @@ function SideBySideLineCharts({
   );
 }
 
-/* =========================================================
-   PREDICTIONS (monte_carlo_results)
-========================================================= */
+/* -------------------------
+   Predictions
+------------------------- */
 
 type MonteCarloRow = {
   event_id: string;
@@ -1315,20 +975,16 @@ function toNum(v: any): number | null {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
-
 function toProb01(v: number | null | undefined): number | null {
   if (v == null) return null;
   const x = v > 1.5 ? v / 100 : v; // supports 0-100 or 0-1
   if (!Number.isFinite(x)) return null;
   return Math.max(0, Math.min(1, x));
 }
-
 function pct(v01: number | null | undefined) {
   if (v01 == null) return "—";
   return `${(v01 * 100).toFixed(1)}%`;
 }
-
-/** Convert a probability (0..1) to "quantum fair odds" (American) */
 function probToAmerican(p: number | null): string {
   if (p == null || p <= 0 || p >= 1) return "—";
   if (p >= 0.5) {
@@ -1339,19 +995,12 @@ function probToAmerican(p: number | null): string {
     return `+${a}`;
   }
 }
-
 function winColors(awayP: number | null, homeP: number | null) {
-  if (awayP == null || homeP == null) {
-    return { awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
-  }
+  if (awayP == null || homeP == null) return { awayHex: "rgba(255,255,255,0.85)", homeHex: "rgba(255,255,255,0.85)" };
   if (awayP > homeP) return { awayHex: "#34d399", homeHex: "#f87171" };
   if (homeP > awayP) return { awayHex: "#f87171", homeHex: "#34d399" };
-  return { awayHex: "#d0d0d0", homeHex: "#d0d0d0" };
+  return { awayHex: "rgba(255,255,255,0.85)", homeHex: "rgba(255,255,255,0.85)" };
 }
-
-/* =========================================================
-   WIN% METER (split bar + 50% tick)
-========================================================= */
 
 function WinSplitMeter({
   awayP,
@@ -1380,39 +1029,32 @@ function WinSplitMeter({
     <div className="w-full">
       <div className="flex items-center justify-between text-[11px] font-extrabold">
         <div className="truncate" style={{ color: awayColor }}>
-          {awayLabel} <span className="text-white/80 font-semibold">({pct(awayP)})</span>
+          {awayLabel} <span className="text-white/70 font-semibold">({pct(awayP)})</span>
         </div>
         <div className="truncate text-right" style={{ color: homeColor }}>
-          {homeLabel} <span className="text-white/80 font-semibold">({pct(homeP)})</span>
+          {homeLabel} <span className="text-white/70 font-semibold">({pct(homeP)})</span>
         </div>
       </div>
 
-      <div className="mt-2 relative h-4 rounded-full border border-[#2a2a2a] bg-black/30 overflow-hidden shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
-        <div
-          className="absolute inset-y-0 left-0"
-          style={{ width: `${aN * 100}%`, background: awayColor, opacity: 0.9 }}
-        />
-        <div
-          className="absolute inset-y-0 right-0"
-          style={{ width: `${hN * 100}%`, background: homeColor, opacity: 0.9 }}
-        />
+      <div className="mt-2 relative h-4 rounded-full border border-white/10 bg-black/35 overflow-hidden shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
+        <div className="absolute inset-y-0 left-0" style={{ width: `${aN * 100}%`, background: awayColor, opacity: 0.9 }} />
+        <div className="absolute inset-y-0 right-0" style={{ width: `${hN * 100}%`, background: homeColor, opacity: 0.9 }} />
 
-        {/* 50% tick */}
         <div className="absolute top-[-4px] bottom-[-4px] left-1/2 w-[2px] bg-white/85" />
         <div className="absolute top-[-2px] left-1/2 -translate-x-1/2 w-3 h-3 rounded-full border border-white/70 bg-[#0f0f0f]" />
       </div>
 
       <div className="mt-2 flex items-center justify-between">
-        <div className="text-[11px] text-[#b0b0b0] font-semibold">Projected Score</div>
+        <div className="text-[11px] text-white/60 font-semibold">Projected Score</div>
         <div className="text-white font-extrabold tabular-nums text-[14px]">{scoreText}</div>
       </div>
     </div>
   );
 }
 
-/* =========================================================
-   LAST 5 GAMES (NBA: basketballref_games_nba, NCAAB: kenpom_games)
-========================================================= */
+/* -------------------------
+   Last 5 (same as prior rewrite)
+------------------------- */
 
 type TeamGameRow = {
   dateIso: string;
@@ -1427,7 +1069,6 @@ function parseYmdToIso(ymdLike: any): string | null {
   if (ymdLike == null) return null;
   const s = String(ymdLike).trim();
   if (!s) return null;
-
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
 
   const d = new Date(s);
@@ -1437,7 +1078,6 @@ function parseYmdToIso(ymdLike: any): string | null {
     const day = String(d.getUTCDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
   }
-
   return null;
 }
 
@@ -1450,11 +1090,7 @@ function fmtGameDateShort(dateIso: string) {
 function isCompletedScore(a: any, b: any) {
   const x = Number(a);
   const y = Number(b);
-  return (
-    Number.isFinite(x) &&
-    Number.isFinite(y) &&
-    (x !== 0 || y !== 0)
-  );
+  return Number.isFinite(x) && Number.isFinite(y) && (x !== 0 || y !== 0);
 }
 
 function mapTeamGameRowsFromAny({
@@ -1470,19 +1106,15 @@ function mapTeamGameRowsFromAny({
 
   for (const r of raw) {
     const dateIso =
-      parseYmdToIso(
-        pickAny(r, ["date", "game_date", "Date", "dt", "gameDay", "day"])
-      ) ?? null;
+      parseYmdToIso(pickAny(r, ["date", "game_date", "Date", "dt", "gameDay", "day"])) ?? null;
     if (!dateIso) continue;
 
     const dateMs = new Date(`${dateIso}T12:00:00Z`).getTime();
     if (!Number.isFinite(dateMs)) continue;
     if (dateMs > nowMs) continue;
 
-    const away =
-      (pickAny(r, ["away_team", "away", "team1", "team1_away", "Team1 (Away)", "team1 (away)"]) ?? "") as any;
-    const home =
-      (pickAny(r, ["home_team", "home", "team2", "team2_home", "Team2 (Home)", "team2 (home)"]) ?? "") as any;
+    const away = pickAny(r, ["away_team", "away", "team1", "team1_away", "Team1 (Away)", "team1 (away)"]) ?? "";
+    const home = pickAny(r, ["home_team", "home", "team2", "team2_home", "Team2 (Home)", "team2 (home)"]) ?? "";
 
     const awayTeam = String(away ?? "").trim();
     const homeTeam = String(home ?? "").trim();
@@ -1495,7 +1127,6 @@ function mapTeamGameRowsFromAny({
 
     const awayPts = pickAny(r, ["away_pts", "away_points", "score1", "Score1", "pts_away", "points_away"]);
     const homePts = pickAny(r, ["home_pts", "home_points", "score2", "Score2", "pts_home", "points_home"]);
-
     if (!isCompletedScore(awayPts, homePts)) continue;
 
     const a = Number(awayPts);
@@ -1506,7 +1137,6 @@ function mapTeamGameRowsFromAny({
     const opponent = isAway ? homeTeam : awayTeam;
 
     const result: "W" | "L" = teamPts > oppPts ? "W" : "L";
-
     out.push({ dateIso, opponent, isHome, teamPts, oppPts, result });
   }
 
@@ -1580,23 +1210,21 @@ function Last5Panel({
   error: string;
 }) {
   return (
-    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[3px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
+    <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-white font-extrabold text-[13px]">{title}</div>
-          <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5 truncate">
-            {teamName}
-          </div>
+          <div className="text-[11px] text-white/60 font-semibold mt-0.5 truncate">{teamName}</div>
         </div>
-        <div className="text-[10px] text-[#808080] font-semibold">Last 5</div>
+        <div className="text-[10px] text-white/50 font-semibold">Last 5</div>
       </div>
 
       {loading ? (
-        <div className="mt-3 text-sm text-[#b0b0b0]">Loading recent games…</div>
+        <div className="mt-3 text-sm text-white/60">Loading recent games…</div>
       ) : error ? (
         <div className="mt-3 text-sm text-red-400">Couldn’t load: {error}</div>
       ) : !games.length ? (
-        <div className="mt-3 text-sm text-[#b0b0b0]">No completed games found.</div>
+        <div className="mt-3 text-sm text-white/60">No completed games found.</div>
       ) : (
         <div className="mt-3 space-y-2">
           {games.map((g) => {
@@ -1606,19 +1234,16 @@ function Last5Panel({
                 : "bg-red-500/15 text-red-300 border-red-500/30";
             const at = g.isHome ? "vs" : "@";
             return (
-              <div
-                key={`${g.dateIso}-${g.opponent}-${g.result}`}
-                className="flex items-center justify-between gap-3"
-              >
+              <div key={`${g.dateIso}-${g.opponent}-${g.result}`} className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[12px] text-white font-extrabold">
                     {fmtGameDateShort(g.dateIso)}{" "}
-                    <span className="text-[#808080] font-semibold">•</span>{" "}
-                    <span className="text-[#cfcfcf] font-semibold">
+                    <span className="text-white/40 font-semibold">•</span>{" "}
+                    <span className="text-white/75 font-semibold">
                       {at} {g.opponent}
                     </span>
                   </div>
-                  <div className="text-[11px] text-[#b0b0b0] font-semibold tabular-nums">
+                  <div className="text-[11px] text-white/60 font-semibold tabular-nums">
                     {g.teamPts}-{g.oppPts}
                   </div>
                 </div>
@@ -1635,9 +1260,9 @@ function Last5Panel({
   );
 }
 
-/* =========================================================
-   PLAYER PROPS (aggregate 1 row per player; all books in row)
-========================================================= */
+/* -------------------------
+   Player Props aggregation (same as prior rewrite)
+------------------------- */
 
 type PropMarket = "Points" | "Rebounds" | "Assists" | "3 Pointers";
 const PROP_MARKETS: PropMarket[] = ["Points", "Rebounds", "Assists", "3 Pointers"];
@@ -1648,7 +1273,6 @@ function canonPropMarket(m: PropMarket) {
   if (m === "Assists") return ["assists", "player_assists", "ast"];
   return ["threes", "3pm", "player_threes", "3_pointers", "3-pointers"];
 }
-
 function normalizeSideOU(s: string | null): "over" | "under" | null {
   if (!s) return null;
   const v = s.toLowerCase();
@@ -1674,15 +1298,8 @@ function emptyPropCell(): PropCell {
   return { odds: null, line: null, ts: null };
 }
 function emptyPropSide(): Record<BookKey, PropCell> {
-  return {
-    dk: emptyPropCell(),
-    fd: emptyPropCell(),
-    mgm: emptyPropCell(),
-    pin: emptyPropCell(),
-    bol: emptyPropCell(),
-  };
+  return { dk: emptyPropCell(), fd: emptyPropCell(), mgm: emptyPropCell(), pin: emptyPropCell(), bol: emptyPropCell() };
 }
-
 function bestCell(a: PropCell, b: PropCell): PropCell {
   const ta = a.ts ? new Date(a.ts).getTime() : 0;
   const tb = b.ts ? new Date(b.ts).getTime() : 0;
@@ -1691,28 +1308,29 @@ function bestCell(a: PropCell, b: PropCell): PropCell {
   if (b.odds != null && a.odds == null) return b;
   return a;
 }
-
-function fmtLineOdds(line: number | null, odds: number | null) {
+function fmtLineOdds(line: number | null, odds: number | null, fmt: OddsFormat) {
   if (line == null && odds == null) return "—";
-  if (line == null) return `(${odds == null ? "—" : odds})`;
-  if (odds == null) return String(line);
-  return `${line} (${odds})`;
+  const price = fmtPrice(odds, fmt);
+  if (line == null) return price === "—" ? "—" : price;
+  if (price === "—") return String(line);
+  return `${line} (${price})`;
 }
 
 /* =========================================================
-   GAME DETAILS MODAL
+   GAME DETAILS MODAL (tabs)
 ========================================================= */
 
 function GameDetailsModal({
   sportKey,
   ev,
+  oddsFormat,
   onClose,
 }: {
   sportKey: string;
   ev: EventOdds;
+  oddsFormat: OddsFormat;
   onClose: () => void;
 }) {
-  // ✅ Predictions tab opens first
   const [tab, setTab] = useState<DetailsTab>("pred");
 
   // line movement state
@@ -1741,13 +1359,9 @@ function GameDetailsModal({
   const [propsError, setPropsError] = useState("");
   const [propsAgg, setPropsAgg] = useState<PropAggRow[]>([]);
 
-  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(
-    ev.commenceTime
-  )} CT`;
+  const subtitle = `${ev.away?.team ?? "Away"} vs ${ev.home?.team ?? "Home"} • ${fmtCTDateTime(ev.commenceTime)} CT`;
 
-  /* =========================================================
-     ✅ Sticky stacking support for prop market bar
-  ========================================================= */
+  // sticky stacking support for prop market bar
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
   const [tabsBarH, setTabsBarH] = useState(0);
 
@@ -1756,16 +1370,13 @@ function GameDetailsModal({
       const tabsH = tabsBarRef.current?.getBoundingClientRect().height ?? 0;
       setTabsBarH(Math.ceil(tabsH));
     };
-
     measure();
     const ro = new ResizeObserver(measure);
     if (tabsBarRef.current) ro.observe(tabsBarRef.current);
     return () => ro.disconnect();
   }, []);
 
-  /* -------------------------
-     Line movement fetch
-  ------------------------- */
+  // Line movement fetch
   useEffect(() => {
     if (tab !== "line") return;
     let alive = true;
@@ -1774,10 +1385,7 @@ function GameDetailsModal({
     setLmError("");
 
     (async () => {
-      const res = await fetchOddsHistoryAnyTable({
-        sportKey,
-        eventId: ev.eventId,
-      });
+      const res = await fetchOddsHistoryAnyTable({ sportKey, eventId: ev.eventId });
       if (!alive) return;
 
       if (res.error || !res.table) {
@@ -1788,16 +1396,8 @@ function GameDetailsModal({
         return;
       }
 
-      const away = parseHistoryRows({
-        raw: res.rows,
-        market: lmMarket,
-        wantSide: "AWAY",
-      });
-      const home = parseHistoryRows({
-        raw: res.rows,
-        market: lmMarket,
-        wantSide: "HOME",
-      });
+      const away = parseHistoryRows({ raw: res.rows, market: lmMarket, wantSide: "AWAY" });
+      const home = parseHistoryRows({ raw: res.rows, market: lmMarket, wantSide: "HOME" });
 
       setLmAwayRows(away);
       setLmHomeRows(home);
@@ -1809,9 +1409,7 @@ function GameDetailsModal({
     };
   }, [tab, sportKey, ev.eventId, lmMarket]);
 
-  /* -------------------------
-     Predictions fetch (+ last 5)
-  ------------------------- */
+  // Predictions fetch (+ last 5)
   useEffect(() => {
     if (tab !== "pred") return;
     let alive = true;
@@ -1927,9 +1525,7 @@ function GameDetailsModal({
     };
   }, [tab, ev.eventId, sportKey, ev.away?.team, ev.home?.team]);
 
-  /* -------------------------
-     Props fetch
-  ------------------------- */
+  // Props fetch
   useEffect(() => {
     if (tab !== "props") return;
     let alive = true;
@@ -2065,10 +1661,6 @@ function GameDetailsModal({
     };
   }, [tab, sportKey, ev.eventId, propMarket]);
 
-  /* -------------------------
-     Derived UI values
-  ------------------------- */
-
   const awayTeam = ev.away?.team ?? predRow?.away_team ?? "Away";
   const homeTeam = ev.home?.team ?? predRow?.home_team ?? "Home";
   const awayLogo = ev.away?.logoUrl ?? null;
@@ -2086,23 +1678,21 @@ function GameDetailsModal({
   const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
   const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
 
-  // Key Lines derived from board consensus (always matches what user sees)
-  const consMlAway = consensusPartsForRow(ev, "ml", "AWAY");
-  const consMlHome = consensusPartsForRow(ev, "ml", "HOME");
-  const consSprAway = consensusPartsForRow(ev, "spread", "AWAY");
-  const consSprHome = consensusPartsForRow(ev, "spread", "HOME");
-  const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
-  const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
+  // Key Lines derived from board consensus (no Quantum ML block)
+  const consMlAway = consensusPartsForRow(ev, "ml", "AWAY", oddsFormat);
+  const consMlHome = consensusPartsForRow(ev, "ml", "HOME", oddsFormat);
+  const consSprAway = consensusPartsForRow(ev, "spread", "AWAY", oddsFormat);
+  const consSprHome = consensusPartsForRow(ev, "spread", "HOME", oddsFormat);
+  const consTotOver = consensusPartsForRow(ev, "total", "AWAY", oddsFormat);
+  const consTotUnder = consensusPartsForRow(ev, "total", "HOME", oddsFormat);
 
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      {/* ✅ Sticky tabs bar — premium shadow + blur */}
       <div
-        ref={tabsBarRef}
-        className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#232323]
-                   bg-[#0b0b0b]/92 backdrop-blur-[6px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
+        className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-white/10
+                   bg-black/70 backdrop-blur-[8px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
       >
-        <div className="flex flex-wrap items-center gap-2">
+        <div ref={tabsBarRef} className="flex flex-wrap items-center gap-2">
           <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
             Predictions
           </TabBtn>
@@ -2115,56 +1705,21 @@ function GameDetailsModal({
         </div>
       </div>
 
-      {/* LINE MOVEMENT TAB */}
+      {/* LINE MOVEMENT */}
       {tab === "line" && (
-        <div className="pt-0">
-          {/* single market selector ONLY here */}
+        <div className="pt-3">
           <div className="flex flex-wrap items-center gap-2 mb-3">
-            <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20 shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${
-                  lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"
-                }`}
-                onClick={(e) => {
-                  setLmMarket("ml");
-                  (e.currentTarget as HTMLButtonElement).blur();
-                }}
-              >
-                Moneyline
-              </button>
-              <div className="w-px bg-[#2a2a2a]" />
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${
-                  lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"
-                }`}
-                onClick={(e) => {
-                  setLmMarket("spread");
-                  (e.currentTarget as HTMLButtonElement).blur();
-                }}
-              >
-                Spread
-              </button>
-              <div className="w-px bg-[#2a2a2a]" />
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${
-                  lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"
-                }`}
-                onClick={(e) => {
-                  setLmMarket("total");
-                  (e.currentTarget as HTMLButtonElement).blur();
-                }}
-              >
-                Total
-              </button>
-            </div>
-
-            <div className="text-[11px] text-[#b0b0b0] font-semibold">
+            <SelectPill
+              value={lmMarket}
+              onChange={(v) => setLmMarket(v as Market)}
+              options={[
+                { value: "ml", label: "Moneyline" },
+                { value: "spread", label: "Spread" },
+                { value: "total", label: "Total" },
+              ]}
+              label="Market"
+            />
+            <div className="text-[11px] text-white/60 font-semibold">
               {lmMarket === "total" ? (
                 <>
                   Left = <span className="text-white font-extrabold">Over</span>, Right ={" "}
@@ -2180,7 +1735,7 @@ function GameDetailsModal({
           </div>
 
           {lmLoading ? (
-            <div className="text-sm text-[#b0b0b0] p-4">Loading odds history…</div>
+            <div className="text-sm text-white/60 p-4">Loading odds history…</div>
           ) : lmError ? (
             <div className="text-sm text-red-400 p-4">No odds history available: {lmError}</div>
           ) : (
@@ -2195,71 +1750,63 @@ function GameDetailsModal({
         </div>
       )}
 
-      {/* PREDICTIONS TAB */}
+      {/* PREDICTIONS */}
       {tab === "pred" && (
-        <div className="pt-3">
+        <div className="pt-3 space-y-3">
           {predLoading ? (
-            <div className="text-sm text-[#b0b0b0] p-4">Loading Monte Carlo predictions…</div>
+            <div className="text-sm text-white/60 p-4">Loading Monte Carlo predictions…</div>
           ) : predError ? (
             <div className="text-sm text-red-400 p-4">Supabase error: {predError}</div>
           ) : !predRow ? (
-            <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
+            <div className="text-sm text-white/60 p-4">No predictions available for this game.</div>
           ) : (
-            <div className="space-y-3">
-              {/* ✅ Key Lines: remove Quantum ML block; keep consensus lines only */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[3px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+            <>
+              {/* Key Lines (consensus only) */}
+              <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
+                <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-white font-extrabold text-[13px]">Key Lines</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
+                    <div className="text-[11px] text-white/60 font-semibold mt-0.5">
                       Consensus lines in one place
                     </div>
                   </div>
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus ML</div>
+                  <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+                    <div className="text-[11px] text-white/60 font-semibold">Consensus ML</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
                       {awayTeam}: {consMlAway.top} • {homeTeam}: {consMlHome.top}
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Spread</div>
+                  <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+                    <div className="text-[11px] text-white/60 font-semibold">Consensus Spread</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
                       {awayTeam}: {consSprAway.top}{" "}
-                      {consSprAway.bottom ? (
-                        <span className="text-[#b0b0b0]">{consSprAway.bottom}</span>
-                      ) : null}
-                      <span className="text-[#808080] mx-2">|</span>
+                      {consSprAway.bottom ? <span className="text-white/60">({consSprAway.bottom})</span> : null}
+                      <span className="text-white/30 mx-2">|</span>
                       {homeTeam}: {consSprHome.top}{" "}
-                      {consSprHome.bottom ? (
-                        <span className="text-[#b0b0b0]">{consSprHome.bottom}</span>
-                      ) : null}
+                      {consSprHome.bottom ? <span className="text-white/60">({consSprHome.bottom})</span> : null}
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#2a2a2a] bg-black/25 p-3">
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold">Consensus Total</div>
+                  <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+                    <div className="text-[11px] text-white/60 font-semibold">Consensus Total</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
                       Over: {consTotOver.top}{" "}
-                      {consTotOver.bottom ? (
-                        <span className="text-[#b0b0b0]">{consTotOver.bottom}</span>
-                      ) : null}
-                      <span className="text-[#808080] mx-2">|</span>
+                      {consTotOver.bottom ? <span className="text-white/60">({consTotOver.bottom})</span> : null}
+                      <span className="text-white/30 mx-2">|</span>
                       Under: {consTotUnder.top}{" "}
-                      {consTotUnder.bottom ? (
-                        <span className="text-[#b0b0b0]">{consTotUnder.bottom}</span>
-                      ) : null}
+                      {consTotUnder.bottom ? <span className="text-white/60">({consTotUnder.bottom})</span> : null}
                     </div>
                   </div>
                 </div>
               </div>
 
               {/* Win% meter */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[3px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
-                {/* ✅ MOBILE: small logos + names ABOVE bar (as discussed) */}
+              <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
+                {/* MOBILE: compact row above bar */}
                 <div className="lg:hidden">
                   <div className="grid grid-cols-2 gap-3 mb-3">
                     <div className="flex items-center gap-2 min-w-0">
@@ -2269,16 +1816,14 @@ function GameDetailsModal({
                           alt={`${awayTeam} logo`}
                           className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
                           loading="lazy"
-                          onError={(e) =>
-                            ((e.currentTarget as HTMLImageElement).style.display = "none")
-                          }
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                         />
                       ) : (
-                        <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
+                        <div className="w-8 h-8 rounded-md bg-white/5 border border-white/10" />
                       )}
                       <div className="min-w-0">
                         <div className="text-white font-extrabold text-[12px] truncate">{awayTeam}</div>
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">
+                        <div className="text-[10px] text-white/60 font-semibold">
                           QML:{" "}
                           <span className="font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
                             {probToAmerican(awayP)}
@@ -2290,7 +1835,7 @@ function GameDetailsModal({
                     <div className="flex items-center gap-2 justify-end min-w-0">
                       <div className="min-w-0 text-right">
                         <div className="text-white font-extrabold text-[12px] truncate">{homeTeam}</div>
-                        <div className="text-[10px] text-[#b0b0b0] font-semibold">
+                        <div className="text-[10px] text-white/60 font-semibold">
                           QML:{" "}
                           <span className="font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
                             {probToAmerican(homeP)}
@@ -2303,12 +1848,10 @@ function GameDetailsModal({
                           alt={`${homeTeam} logo`}
                           className="w-8 h-8 rounded-md object-contain bg-white border border-[#e5e5e5] p-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
                           loading="lazy"
-                          onError={(e) =>
-                            ((e.currentTarget as HTMLImageElement).style.display = "none")
-                          }
+                          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                         />
                       ) : (
-                        <div className="w-8 h-8 rounded-md bg-white border border-[#e5e5e5]" />
+                        <div className="w-8 h-8 rounded-md bg-white/5 border border-white/10" />
                       )}
                     </div>
                   </div>
@@ -2324,8 +1867,8 @@ function GameDetailsModal({
                   />
                 </div>
 
-                {/* ✅ DESKTOP: unchanged */}
-                <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
+                {/* DESKTOP */}
+                <div className="hidden lg:grid grid-cols-[1fr_520px_1fr] gap-4 items-center">
                   <div className="flex items-center gap-3">
                     {awayLogo ? (
                       <img
@@ -2333,16 +1876,14 @@ function GameDetailsModal({
                         alt={`${awayTeam} logo`}
                         className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
                         loading="lazy"
-                        onError={(e) =>
-                          ((e.currentTarget as HTMLImageElement).style.display = "none")
-                        }
+                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
-                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                      <div className="w-12 h-12 rounded-md bg-white/5 border border-white/10" />
                     )}
                     <div className="min-w-0">
                       <div className="text-white font-extrabold text-[14px] truncate">{awayTeam}</div>
-                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                      <div className="text-[11px] text-white/60 font-semibold">
                         Quantum ML:{" "}
                         <span className="text-white font-extrabold tabular-nums" style={{ color: colors.awayHex }}>
                           {probToAmerican(awayP)}
@@ -2351,22 +1892,20 @@ function GameDetailsModal({
                     </div>
                   </div>
 
-                  <div className="w-full">
-                    <WinSplitMeter
-                      awayP={awayP}
-                      homeP={homeP}
-                      awayLabel="Away"
-                      homeLabel="Home"
-                      awayColor={colors.awayHex}
-                      homeColor={colors.homeHex}
-                      scoreText={scoreText}
-                    />
-                  </div>
+                  <WinSplitMeter
+                    awayP={awayP}
+                    homeP={homeP}
+                    awayLabel="Away"
+                    homeLabel="Home"
+                    awayColor={colors.awayHex}
+                    homeColor={colors.homeHex}
+                    scoreText={scoreText}
+                  />
 
-                  <div className="flex items-center gap-3 justify-start lg:justify-end">
+                  <div className="flex items-center gap-3 justify-end">
                     <div className="min-w-0 text-right">
                       <div className="text-white font-extrabold text-[14px] truncate">{homeTeam}</div>
-                      <div className="text-[11px] text-[#b0b0b0] font-semibold">
+                      <div className="text-[11px] text-white/60 font-semibold">
                         Quantum ML:{" "}
                         <span className="text-white font-extrabold tabular-nums" style={{ color: colors.homeHex }}>
                           {probToAmerican(homeP)}
@@ -2379,117 +1918,75 @@ function GameDetailsModal({
                         alt={`${homeTeam} logo`}
                         className="w-12 h-12 rounded-md object-contain bg-white border border-[#e5e5e5] p-1 shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
                         loading="lazy"
-                        onError={(e) =>
-                          ((e.currentTarget as HTMLImageElement).style.display = "none")
-                        }
+                        onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                       />
                     ) : (
-                      <div className="w-12 h-12 rounded-md bg-white border border-[#e5e5e5]" />
+                      <div className="w-12 h-12 rounded-md bg-white/5 border border-white/10" />
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* ✅ Combined Spread + Total into one panel */}
-              <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[3px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-white font-extrabold text-[13px]">Model Probabilities</div>
-                </div>
+              {/* Spread + Total probabilities */}
+              <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] p-4 shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
+                <div className="text-white font-extrabold text-[13px]">Model Probabilities</div>
 
-                {/* SPREAD */}
                 <div className="mt-3">
                   <div className="flex items-center justify-between">
                     <div className="text-white font-extrabold text-[12px]">Spread</div>
-
-                    <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
-                      <span>
-                        Margin Line (H):{" "}
-                        <span className="text-white font-extrabold tabular-nums">
-                          {predRow.spread_line_home ?? "—"}
-                        </span>
-                      </span>
-
-                      <span className="mx-3 h-4 w-px bg-white/80" />
-
-                      <span>
-                        Proj Margin (H):{" "}
-                        <span className="text-white font-extrabold tabular-nums">
-                          {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
-                        </span>
+                    <div className="text-[11px] text-white/60 font-semibold">
+                      Line (H): <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                      <span className="mx-2 text-white/30">|</span>
+                      Proj Margin (H):{" "}
+                      <span className="text-white font-extrabold tabular-nums">
+                        {predRow.projected_margin_home == null ? "—" : predRow.projected_margin_home.toFixed(1)}
                       </span>
                     </div>
                   </div>
 
                   <div className="mt-2 grid grid-cols-3 gap-2">
-                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{homeTeam}</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {pct(toProb01(predRow.home_cover_prob))}
-                      </div>
+                    <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
+                      <div className="text-[10px] text-white/60 font-semibold">{homeTeam}</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.home_cover_prob))}</div>
                     </div>
-
-                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {pct(toProb01(predRow.cover_push_prob))}
-                      </div>
+                    <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
+                      <div className="text-[10px] text-white/60 font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.cover_push_prob))}</div>
                     </div>
-
-                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">{awayTeam}</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {pct(toProb01(predRow.away_cover_prob))}
-                      </div>
+                    <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
+                      <div className="text-[10px] text-white/60 font-semibold">{awayTeam}</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.away_cover_prob))}</div>
                     </div>
                   </div>
                 </div>
 
                 <div className="my-4 h-px bg-white/10" />
 
-                {/* TOTAL */}
                 <div>
                   <div className="flex items-center justify-between">
                     <div className="text-white font-extrabold text-[12px]">Total</div>
-
-                    <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
-                      <span>
-                        Total Line:{" "}
-                        <span className="text-white font-extrabold tabular-nums">
-                          {predRow.total_line ?? "—"}
-                        </span>
-                      </span>
-
-                      <span className="mx-3 h-4 w-px bg-white/80" />
-
-                      <span>
-                        Proj Total:{" "}
-                        <span className="text-white font-extrabold tabular-nums">
-                          {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
-                        </span>
+                    <div className="text-[11px] text-white/60 font-semibold">
+                      Line: <span className="text-white font-extrabold tabular-nums">{predRow.total_line ?? "—"}</span>
+                      <span className="mx-2 text-white/30">|</span>
+                      Proj:{" "}
+                      <span className="text-white font-extrabold tabular-nums">
+                        {predRow.projected_total == null ? "—" : predRow.projected_total.toFixed(1)}
                       </span>
                     </div>
                   </div>
 
                   <div className="mt-2 grid grid-cols-3 gap-2">
-                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Over</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {pct(toProb01(predRow.over_prob))}
-                      </div>
+                    <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
+                      <div className="text-[10px] text-white/60 font-semibold">Over</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.over_prob))}</div>
                     </div>
-
-                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Push</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {pct(toProb01(predRow.total_push_prob))}
-                      </div>
+                    <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
+                      <div className="text-[10px] text-white/60 font-semibold">Push</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.total_push_prob))}</div>
                     </div>
-
-                    <div className="rounded-md border border-[#2a2a2a] bg-black/25 p-2 text-center">
-                      <div className="text-[10px] text-[#b0b0b0] font-semibold">Under</div>
-                      <div className="text-white font-extrabold tabular-nums text-[12px]">
-                        {pct(toProb01(predRow.under_prob))}
-                      </div>
+                    <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
+                      <div className="text-[10px] text-white/60 font-semibold">Under</div>
+                      <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
                     </div>
                   </div>
                 </div>
@@ -2500,22 +1997,21 @@ function GameDetailsModal({
                 <Last5Panel title="Away" teamName={awayTeam} games={l5Away} loading={l5AwayLoading} error={l5AwayErr} />
                 <Last5Panel title="Home" teamName={homeTeam} games={l5Home} loading={l5HomeLoading} error={l5HomeErr} />
               </div>
-            </div>
+            </>
           )}
         </div>
       )}
 
-      {/* PLAYER PROPS TAB */}
+      {/* PROPS */}
       {tab === "props" && (
         <div className="pt-3">
-          {/* ✅ Sticky prop market buttons */}
           <div
-            className="sticky z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#1f1f1f]
-                     bg-[#0b0b0b]/92 backdrop-blur-[6px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
+            className="sticky z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-white/10
+                     bg-black/70 backdrop-blur-[8px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
             style={{ top: tabsBarH }}
           >
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20 shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
+              <div className="inline-flex overflow-hidden rounded-lg border border-white/10 bg-black/35">
                 {PROP_MARKETS.map((m) => (
                   <button
                     key={m}
@@ -2534,28 +2030,22 @@ function GameDetailsModal({
                 ))}
               </div>
 
-              <div className="text-[11px] text-[#b0b0b0] font-semibold">
-                Newest per (player, side, book)
+              <div className="text-[11px] text-white/60 font-semibold">
+                Odds shown in <span className="text-white font-extrabold">{oddsFormat === "american" ? "American" : "Decimal"}</span>
               </div>
             </div>
           </div>
 
           {propsLoading ? (
-            <div className="text-sm text-[#b0b0b0] p-4">Loading props…</div>
+            <div className="text-sm text-white/60 p-4">Loading props…</div>
           ) : propsError ? (
             <div className="text-sm text-red-400 p-4">Supabase error: {propsError}</div>
           ) : !propsAgg.length ? (
-            <div className="text-sm text-[#b0b0b0] p-4">No props found for this game/market.</div>
+            <div className="text-sm text-white/60 p-4">No props found for this game/market.</div>
           ) : (
-            <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[3px] overflow-hidden shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
+            <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] overflow-hidden shadow-[0_14px_55px_rgba(0,0,0,0.40)]">
               {/* ✅ Props table owns vertical scroll so sticky header never “floats” with gaps */}
-              <div
-                className="overflow-auto"
-                style={{
-                  // keep the table usable inside the modal without fighting the modal scroller
-                  maxHeight: "calc(92vh - 240px)",
-                }}
-              >
+              <div className="overflow-auto" style={{ maxHeight: "calc(92vh - 240px)" }}>
                 <table className="table-fixed min-w-[1100px] w-[1100px]">
                   <colgroup>
                     <col style={{ width: 260 }} />
@@ -2565,37 +2055,32 @@ function GameDetailsModal({
                     <col style={{ width: 320 }} />
                   </colgroup>
 
-                  {/* ✅ True sticky header */}
-                  <thead className="sticky top-0 z-30 bg-[#0b0b0b]/95 backdrop-blur-[6px]">
-                    <tr className="border-b border-[#2a2a2a]">
+                  <thead className="sticky top-0 z-30 bg-black/80 backdrop-blur-[8px]">
+                    <tr className="border-b border-white/10">
                       <th colSpan={5} className="px-4 py-2">
                         <div className="flex items-center justify-between min-w-[1100px]">
                           <div className="text-white font-extrabold text-sm">{propMarket}</div>
-                          <div className="text-[11px] text-[#b0b0b0] font-semibold">{propsAgg.length} players</div>
+                          <div className="text-[11px] text-white/60 font-semibold">{propsAgg.length} players</div>
                         </div>
                       </th>
                     </tr>
 
-                    <tr className="border-b border-[#2a2a2a]">
-                      <th className="text-left px-4 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Player</th>
-                      <th className="text-left px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Team</th>
-                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Line</th>
-                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Over</th>
-                      <th className="text-center px-3 py-2 text-[12px] text-[#d0d0d0] font-extrabold">Under</th>
+                    <tr className="border-b border-white/10">
+                      <th className="text-left px-4 py-2 text-[12px] text-white font-extrabold">Player</th>
+                      <th className="text-left px-3 py-2 text-[12px] text-white font-extrabold">Team</th>
+                      <th className="text-center px-3 py-2 text-[12px] text-white font-extrabold">Line</th>
+                      <th className="text-center px-3 py-2 text-[12px] text-white font-extrabold">Over</th>
+                      <th className="text-center px-3 py-2 text-[12px] text-white font-extrabold">Under</th>
                     </tr>
 
-                    <tr className="border-b border-[#1a1a1a]">
+                    <tr className="border-b border-white/10">
                       <th />
                       <th />
                       <th />
                       <th className="px-3 pb-2">
                         <div className="grid grid-cols-5 gap-2 justify-items-center">
                           {BOOKS.map((b) => (
-                            <div
-                              key={`ovh-${b}`}
-                              className="text-[10px] font-extrabold leading-none"
-                              style={{ color: BOOK_STROKES[b] }}
-                            >
+                            <div key={`ovh-${b}`} className="text-[10px] font-extrabold leading-none" style={{ color: BOOK_STROKES[b] }}>
                               {b.toUpperCase()}
                             </div>
                           ))}
@@ -2604,11 +2089,7 @@ function GameDetailsModal({
                       <th className="px-3 pb-2">
                         <div className="grid grid-cols-5 gap-2 justify-items-center">
                           {BOOKS.map((b) => (
-                            <div
-                              key={`unh-${b}`}
-                              className="text-[10px] font-extrabold leading-none"
-                              style={{ color: BOOK_STROKES[b] }}
-                            >
+                            <div key={`unh-${b}`} className="text-[10px] font-extrabold leading-none" style={{ color: BOOK_STROKES[b] }}>
                               {b.toUpperCase()}
                             </div>
                           ))}
@@ -2619,26 +2100,24 @@ function GameDetailsModal({
 
                   <tbody>
                     {propsAgg.map((r) => (
-                      <tr key={r.player_name} className="border-b border-[#141414] hover:bg-white/5">
+                      <tr key={r.player_name} className="border-b border-white/10 hover:bg-white/5">
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3 min-w-0">
                             {r.picture_url ? (
                               <img
                                 src={r.picture_url}
                                 alt={r.player_name}
-                                className="w-9 h-9 rounded-full object-cover border border-[#2a2a2a] shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
+                                className="w-9 h-9 rounded-full object-cover border border-white/10 shadow-[0_10px_35px_rgba(0,0,0,0.35)]"
                                 loading="lazy"
-                                onError={(e) =>
-                                  ((e.currentTarget as HTMLImageElement).style.display = "none")
-                                }
+                                onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
                               />
                             ) : (
-                              <div className="w-9 h-9 rounded-full bg-white/5 border border-[#2a2a2a]" />
+                              <div className="w-9 h-9 rounded-full bg-white/5 border border-white/10" />
                             )}
 
                             <div className="min-w-0">
                               <div className="text-white font-extrabold text-[13px] truncate">{r.player_name}</div>
-                              <div className="text-[11px] text-[#b0b0b0] font-semibold">{r.position ?? "—"}</div>
+                              <div className="text-[11px] text-white/60 font-semibold">{r.position ?? "—"}</div>
                             </div>
                           </div>
                         </td>
@@ -2652,11 +2131,8 @@ function GameDetailsModal({
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div
-                                key={`ov-${r.player_name}-${b}`}
-                                className="text-[12px] text-white font-extrabold tabular-nums"
-                              >
-                                {fmtLineOdds(r.over[b].line ?? r.display_line, r.over[b].odds)}
+                              <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                                {fmtLineOdds(r.over[b].line ?? r.display_line, r.over[b].odds, oddsFormat)}
                               </div>
                             ))}
                           </div>
@@ -2665,11 +2141,8 @@ function GameDetailsModal({
                         <td className="px-3 py-3">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
-                              <div
-                                key={`un-${r.player_name}-${b}`}
-                                className="text-[12px] text-white font-extrabold tabular-nums"
-                              >
-                                {fmtLineOdds(r.under[b].line ?? r.display_line, r.under[b].odds)}
+                              <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
+                                {fmtLineOdds(r.under[b].line ?? r.display_line, r.under[b].odds, oddsFormat)}
                               </div>
                             ))}
                           </div>
@@ -2685,7 +2158,291 @@ function GameDetailsModal({
       )}
     </ModalShell>
   );
-} // ✅ CRITICAL: closes GameDetailsModal (prevents “Unexpected export”)
+} // ✅ CRITICAL: closes GameDetailsModal
+
+/* =========================================================
+   TOP NAV (sports tabs like reference)
+========================================================= */
+
+type SportTab = { key: string; label: string };
+const SPORT_TABS: SportTab[] = [
+  { key: "baseball_mlb", label: "MLB" },
+  { key: "football_nfl", label: "NFL" },
+  { key: "football_ncaaf", label: "NCAAF" },
+  { key: "basketball_nba", label: "NBA" },
+  { key: "basketball_ncaab", label: "NCAAM" },
+  { key: "soccer", label: "Soccer" },
+  { key: "mma_mixed_martial_arts", label: "UFC" },
+];
+
+function sportLabelForKey(sportKey: string) {
+  if (sportKey === "basketball_nba") return "NBA";
+  if (sportKey === "basketball_ncaab") return "NCAAM";
+  if (sportKey === "football_nfl") return "NFL";
+  if (sportKey === "football_ncaaf") return "NCAAF";
+  if (sportKey === "icehockey_nhl") return "NHL";
+  if (sportKey === "baseball_mlb") return "MLB";
+  return "Sport";
+}
+
+/* =========================================================
+   BOARD TABLE (reference-style)
+========================================================= */
+
+function DateSectionHeader({ label }: { label: string }) {
+  return (
+    <tr>
+      <td colSpan={2 + BOOKS.length + 1} className="p-0">
+        <div className="px-4 py-2 flex items-center justify-between">
+          <div className="text-[12px] font-extrabold text-white/80">{label}</div>
+          <div className="text-[11px] font-semibold text-white/45">Pre-Game</div>
+        </div>
+        <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_TEAL}, transparent)` }} />
+      </td>
+    </tr>
+  );
+}
+
+function TableHeaderRow({
+  oddsFormat,
+}: {
+  oddsFormat: OddsFormat;
+}) {
+  return (
+    <thead className="sticky top-[104px] z-30">
+      <tr
+        className="border-y"
+        style={{
+          borderColor: PRISM_BORDER,
+          background: "rgba(15,15,15,0.92)",
+          backdropFilter: "blur(10px)",
+        }}
+      >
+        <th className="text-left px-4 py-3 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
+          Game
+        </th>
+        <th className="text-left px-3 py-3 text-[12px] font-extrabold text-white/80" style={{ width: COL_TIME }}>
+          Time
+        </th>
+
+        {/* Consensus column like reference (subtle) */}
+        <th className="text-center px-2 py-3 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
+          Cons
+          <div className="text-[10px] font-semibold text-white/45 mt-0.5">
+            {oddsFormat === "american" ? "AM" : "DEC"}
+          </div>
+        </th>
+
+        {BOOKS.map((bk) => {
+          const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
+          return (
+            <th key={bk} className="text-center px-2 py-3" style={{ width: COL_BOOK }}>
+              <div className="flex items-center justify-center">
+                <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+              </div>
+            </th>
+          );
+        })}
+      </tr>
+    </thead>
+  );
+}
+
+function EventRowTwoLines({
+  ev,
+  market,
+  oddsFormat,
+  onOpenDetails,
+}: {
+  ev: EventOdds;
+  market: Market;
+  oddsFormat: OddsFormat;
+  onOpenDetails: (ev: EventOdds) => void;
+}) {
+  const leftLabel = market === "total" ? "Over" : "Away";
+  const rightLabel = market === "total" ? "Under" : "Home";
+
+  const awayCons = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
+  const homeCons = consensusPartsForRow(ev, market, "HOME", oddsFormat);
+
+  return (
+    <>
+      {/* AWAY / OVER */}
+      <tr className="border-b border-white/10 hover:bg-white/5">
+        <td className="px-4 py-3 align-middle" rowSpan={2}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
+              <div className="mt-2">
+                <TeamCell team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} sub={rightLabel} />
+              </div>
+            </div>
+
+            <div className="shrink-0 flex flex-col items-end gap-2">
+              <div className="text-[11px] text-white/60 font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+              <button
+                type="button"
+                onClick={() => onOpenDetails(ev)}
+                className="h-8 px-3 rounded-lg border text-xs font-extrabold shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+                style={{
+                  background: PRISM_GOLD,
+                  borderColor: PRISM_GOLD,
+                  color: "#0a0a0a",
+                }}
+              >
+                Game Details
+              </button>
+            </div>
+          </div>
+        </td>
+
+        <td className="px-3 py-3 text-[12px] text-white/70 font-semibold">
+          {fmtCTDateTime(ev.commenceTime)}
+        </td>
+
+        {/* Consensus chip */}
+        <td className="px-2 py-3">
+          <div className="flex justify-center">
+            <OddsChip parts={awayCons} />
+          </div>
+        </td>
+
+        {/* Books */}
+        {BOOKS.map((bk) => (
+          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-3">
+            <div className="flex justify-center">
+              <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
+            </div>
+          </td>
+        ))}
+      </tr>
+
+      {/* HOME / UNDER */}
+      <tr className="border-b border-white/10 hover:bg-white/5">
+        <td className="px-3 py-3 text-[12px] text-white/70 font-semibold">
+          <span className="text-white/45"> </span>
+        </td>
+
+        <td className="px-2 py-3">
+          <div className="flex justify-center">
+            <OddsChip parts={homeCons} />
+          </div>
+        </td>
+
+        {BOOKS.map((bk) => (
+          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-3">
+            <div className="flex justify-center">
+              <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
+            </div>
+          </td>
+        ))}
+      </tr>
+    </>
+  );
+}
+
+/* =========================================================
+   MOBILE CARD (kept; styled closer to reference)
+========================================================= */
+
+function EventCardMobile({
+  ev,
+  market,
+  oddsFormat,
+  booksOpen,
+  onToggleBooks,
+  onOpenDetails,
+}: {
+  ev: EventOdds;
+  market: Market;
+  oddsFormat: OddsFormat;
+  booksOpen: boolean;
+  onToggleBooks: () => void;
+  onOpenDetails: (ev: EventOdds) => void;
+}) {
+  const leftLabel = market === "total" ? "Over" : "Away";
+  const rightLabel = market === "total" ? "Under" : "Home";
+
+  const awayCons = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
+  const homeCons = consensusPartsForRow(ev, market, "HOME", oddsFormat);
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] overflow-hidden shadow-[0_14px_55px_rgba(0,0,0,0.45)]">
+      <div className="px-3 py-2.5 border-b border-white/10 flex items-center justify-between gap-3 bg-black/30">
+        <div className="text-[12px] text-white/70 font-semibold">
+          {fmtCTTimeOnly(ev.commenceTime)} CT
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={onToggleBooks}>
+            {booksOpen ? "Hide Books" : "Show Books"}
+          </Btn>
+          <Btn onClick={() => onOpenDetails(ev)}>Game Details</Btn>
+        </div>
+      </div>
+
+      <div className="px-3 py-3 space-y-2.5">
+        <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
+        <TeamCell team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} sub={rightLabel} />
+      </div>
+
+      <div className="px-3 pb-3">
+        <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[12px] text-white font-extrabold">Consensus</div>
+            <div className="text-[11px] text-white/60 font-semibold">
+              {market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
+              <OddsChip parts={awayCons} />
+            </div>
+            <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
+              <OddsChip parts={homeCons} />
+            </div>
+          </div>
+        </div>
+
+        {booksOpen && (
+          <div className="mt-3 rounded-xl border border-white/10 bg-black/25 overflow-hidden">
+            <div className="px-3 py-2 border-b border-white/10 bg-black/30">
+              <div className="text-[12px] text-white font-extrabold">Books</div>
+              <div className="mt-2 grid grid-cols-[100px_1fr_1fr] gap-3 items-center">
+                <div />
+                <div className="text-[10px] text-white/60 font-semibold text-center">{leftLabel}</div>
+                <div className="text-[10px] text-white/60 font-semibold text-center">{rightLabel}</div>
+              </div>
+            </div>
+
+            <div className="px-3">
+              {BOOKS.map((bk) => {
+                const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
+                return (
+                  <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
+                    <div className="grid grid-cols-[100px_1fr_1fr] items-center gap-3">
+                      <div className="flex justify-start">
+                        <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+                      </div>
+
+                      <div className="flex justify-center">
+                        <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
+                      </div>
+                      <div className="flex justify-center">
+                        <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /* =========================================================
    SCREEN
@@ -2694,9 +2451,14 @@ function GameDetailsModal({
 export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
-  const [market, setMarket] = useState<Market>("ml");
+  const [market, setMarket] = useState<Market>("spread");
+  const [view, setView] = useState<BoardView>("pregame");
+  const [oddsFormat, setOddsFormat] = useState<OddsFormat>("american");
+  const [query, setQuery] = useState<string>("");
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
   const [lastUpdatedIso, setLastUpdatedIso] = useState<string | null>(null);
 
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -2744,7 +2506,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       if (sideOdds.side === "HOME") cur.home = sideOdds;
 
       cur.latestUpdatedAt = maxIso(cur.latestUpdatedAt, sideOdds.updatedAt);
-
       globalLatest = maxIso(globalLatest, sideOdds.updatedAt);
       globalLatest = maxIso(globalLatest, pickUpdatedAt(row));
 
@@ -2757,7 +2518,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       return ta - tb;
     });
 
-    // optional: include latest props snapshot time if available (non-blocking)
+    // include latest props snapshot time if available (non-blocking)
     let propsLatest: string | null = null;
     try {
       const propsRes = await supabase
@@ -2796,7 +2557,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   useEffect(() => {
     setSelectedDate("");
     setMobileOpenMap({});
-    setMarket("ml");
+    setMarket("spread");
     setDetailsOpen(false);
     setActiveEvent(null);
   }, [sportKey]);
@@ -2834,7 +2595,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
   }, [availableDates]);
 
-  const events = useMemo(() => {
+  const eventsForDate = useMemo(() => {
     if (!selectedDate) return [];
     const todayCt = ctTodayYmd();
     const nowMs = Date.now();
@@ -2843,6 +2604,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       const evDate = ctYmdFromIso(ev.commenceTime);
       if (evDate !== selectedDate) return false;
 
+      if (view === "live") {
+        // NOTE: If you have live flags, plug them in here. For now, live view shows none.
+        return false;
+      }
+
+      // pregame: future games
       if (selectedDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
@@ -2850,7 +2617,24 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       }
       return true;
     });
-  }, [allEvents, selectedDate]);
+  }, [allEvents, selectedDate, view]);
+
+  const events = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return eventsForDate;
+    return eventsForDate.filter((ev) => {
+      const a = (ev.away?.team ?? "").toLowerCase();
+      const h = (ev.home?.team ?? "").toLowerCase();
+      return a.includes(q) || h.includes(q);
+    });
+  }, [eventsForDate, query]);
+
+  const eventsByDaySection = useMemo(() => {
+    // Keep reference-style day sections even within a selected date:
+    // We show one section label, but this structure allows future extension.
+    const label = selectedDate ? fmtDateBtn(selectedDate) : "—";
+    return [{ label, events }];
+  }, [selectedDate, events]);
 
   useEffect(() => {
     setMobileOpenMap((prev) => {
@@ -2860,219 +2644,259 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
   }, [events]);
 
-  const sportLabel =
-    sportKey === "basketball_nba"
-      ? "NBA Odds"
-      : sportKey === "basketball_ncaab"
-      ? "NCAAB Odds"
-      : sportKey === "football_nfl"
-      ? "NFL Odds"
-      : sportKey === "football_ncaaf"
-      ? "NCAAF Odds"
-      : sportKey === "icehockey_nhl"
-      ? "NHL Odds"
-      : sportKey === "baseball_mlb"
-      ? "MLB Odds"
-      : "Odds";
-
   const openDetails = (ev: EventOdds) => {
     setActiveEvent(ev);
     setDetailsOpen(true);
   };
 
-  // ✅ richer page background + subtle noise
-  const pageNoiseSvg = encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="220" height="220">
-      <filter id="n">
-        <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="2" stitchTiles="stitch"/>
-        <feColorMatrix type="matrix"
-          values="0 0 0 0 0.85  0 0 0 0 0.75  0 0 0 0 0.20  0 0 0 0.12 0"/>
-      </filter>
-      <rect width="100%" height="100%" filter="url(#n)"/>
-    </svg>
-  `);
+  // “Top bar” height for sticky header computations:
+  // - Sports tabs bar ~ 44px
+  // - Filters bar ~ 60px
+  // => sticky header row uses top-[104px] in TableHeaderRow.
+  const topSport = sportLabelForKey(sportKey);
 
   return (
     <div
       className="w-full min-h-screen"
       style={{
         background:
-          "radial-gradient(1200px 700px at 12% 10%, rgba(212,175,55,0.12), transparent 55%)," +
-          "radial-gradient(1000px 700px at 85% 0%, rgba(37,99,235,0.10), transparent 55%)," +
-          "radial-gradient(900px 600px at 60% 90%, rgba(16,185,129,0.08), transparent 55%)," +
-          "linear-gradient(180deg, #070707, #0a0a0a 55%, #070707)",
+          `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
+          "radial-gradient(1000px 700px at 85% 0%, rgba(24,183,198,0.12), transparent 55%)," +
+          "linear-gradient(180deg, #050505, #0a0a0a 55%, #050505)",
       }}
     >
-      <div
-        className="pointer-events-none fixed inset-0 opacity-[0.10]"
-        style={{
-          backgroundImage: `url("data:image/svg+xml,${pageNoiseSvg}")`,
-          backgroundRepeat: "repeat",
-        }}
-      />
-
       <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X} relative`}>
-        {/* HERO */}
-        <div className="pt-4 md:pt-6">
-          <div className={HERO_WRAP}>
-            <div className={HERO_INNER}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className={PILL}>
-                    <span className={PILL_DOT} />
-                    <span className={PILL_TX}>Prism Odds Board</span>
+        {/* ===========================
+            TOP SPORTS TABS BAR
+        =========================== */}
+        <div className="sticky top-0 z-50">
+          <div
+            className="h-[44px] flex items-center justify-between px-2 md:px-0"
+            style={{
+              background: "rgba(5,5,5,0.88)",
+              borderBottom: `1px solid ${PRISM_BORDER}`,
+              backdropFilter: "blur(10px)",
+            }}
+          >
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+              {SPORT_TABS.map((t) => {
+                const active =
+                  t.key === sportKey ||
+                  (t.key === "soccer" && sportKey.includes("soccer")) ||
+                  (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                return (
+                  <div
+                    key={t.key}
+                    className="shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border"
+                    style={{
+                      borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
+                      background: active ? "rgba(212,175,55,0.12)" : "transparent",
+                      color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
+                    }}
+                    title={active ? `${t.label} (active)` : t.label}
+                  >
+                    {t.label}
                   </div>
-                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
-                    {sportLabel}
-                  </h2>
-                  <div className={HERO_SUB}>
-                    One board per slate. Books shown side-by-side with consensus. Open Game Details for predictions,
-                    movement, and props.
-                  </div>
-                </div>
+                );
+              })}
+            </div>
 
-                <div className="hidden md:flex flex-col items-end gap-2">
-                  <div className={LIVE_BADGE}>
-                    <span className={LIVE_TX}>Live</span>
-                    <span className={LIVE_DOT} />
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[10px] text-[#6a6a6a] font-semibold">Last Updated (CT)</div>
-                    <div className="text-xs text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                  </div>
-                </div>
+            <div className="flex items-center gap-2">
+              <div className="hidden md:flex items-center gap-2">
+                <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
+                <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+              </div>
+              <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
+            </div>
+          </div>
+
+          {/* ===========================
+              FILTERS TOOLBAR
+          =========================== */}
+          <div
+            className="h-[60px] flex items-center justify-between gap-3 px-2 md:px-0"
+            style={{
+              background: "rgba(12,12,12,0.80)",
+              borderBottom: `1px solid ${PRISM_BORDER}`,
+              backdropFilter: "blur(10px)",
+            }}
+          >
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+              <SelectPill
+                value={market}
+                onChange={(v) => setMarket(v as Market)}
+                label="Market"
+                options={[
+                  { value: "spread", label: "Point Spread" },
+                  { value: "total", label: "Total" },
+                  { value: "ml", label: "Moneyline" },
+                ]}
+              />
+
+              <SelectPill
+                value={view}
+                onChange={(v) => setView(v as BoardView)}
+                label="View"
+                options={[
+                  { value: "pregame", label: "Pre-Game" },
+                  { value: "live", label: "Live" },
+                ]}
+              />
+
+              <SelectPill
+                value={selectedDate}
+                onChange={(v) => setSelectedDate(v)}
+                label="Date"
+                options={
+                  availableDates.length
+                    ? availableDates.map((d) => ({ value: d, label: d }))
+                    : [{ value: "", label: "—" }]
+                }
+              />
+
+              <div className="hidden md:block">
+                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="md:hidden">
+                <TextInput value={query} onChange={setQuery} placeholder="Search..." />
               </div>
 
-              {/* Header row: games count + last updated on mobile */}
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/30 px-3 py-1.5 shadow-[0_10px_35px_rgba(0,0,0,0.35)]">
-                  <div className="text-[10px] font-bold text-[#808080]">Games</div>
-                  <div className="text-[11px] font-extrabold text-white tabular-nums">{events.length}</div>
+              <SelectPill
+                value={oddsFormat}
+                onChange={(v) => setOddsFormat(v as OddsFormat)}
+                label="Odds"
+                options={[
+                  { value: "american", label: "American" },
+                  { value: "decimal", label: "Decimal" },
+                ]}
+              />
+
+              <SelectPill
+                value={"all"}
+                onChange={() => {}}
+                label="Sportsbooks"
+                options={[{ value: "all", label: `All (${BOOKS.length})` }]}
+              />
+
+              <Btn
+                onClick={() => {
+                  setLoading(true);
+                  load();
+                }}
+              >
+                Refresh
+              </Btn>
+            </div>
+          </div>
+        </div>
+
+        {/* ===========================
+            BOARD BODY
+        =========================== */}
+        <div className="pt-4 pb-10">
+          <div
+            className="rounded-2xl border overflow-hidden shadow-[0_20px_90px_rgba(0,0,0,0.55)]"
+            style={{
+              borderColor: PRISM_BORDER,
+              background: PRISM_PANEL,
+              backdropFilter: "blur(6px)",
+            }}
+          >
+            <div className="px-4 py-3 border-b" style={{ borderColor: PRISM_BORDER }}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-white font-extrabold text-[14px]">
+                    {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
+                    <span style={{ color: PRISM_GOLD }}>{topSport}</span>
+                  </div>
+                  <div className="text-[11px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
+                    Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
+                    {oddsFormat === "american" ? "American" : "Decimal"}
+                  </div>
                 </div>
 
-                <div className="md:hidden w-full" />
-                <div className="md:hidden text-[11px] text-[#6a6a6a] font-semibold">
-                  Last Updated (CT): <span className="text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</span>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-3">
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                  {availableDates.map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => setSelectedDate(d)}
-                      className={[BTN_BASE, selectedDate === d ? BTN_ON : BTN_OFF].join(" ")}
-                      type="button"
-                    >
-                      {fmtDateBtn(d)}
-                    </button>
-                  ))}
-                  {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <Segmented value={market} onChange={setMarket} />
+                <div className="text-right">
+                  <div className="text-[11px] font-semibold" style={{ color: PRISM_MUTED }}>
+                    {events.length} games
+                  </div>
+                  <div className="text-[11px] font-extrabold text-white">
+                    Updated: {fmtCTDateTime(lastUpdatedIso)}
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="h-px bg-[#232323]" />
+            {/* MOBILE */}
+            <div className="md:hidden p-3">
+              {loading ? (
+                <div className="p-3 text-xs text-white/60">Loading odds…</div>
+              ) : error ? (
+                <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
+              ) : !events.length ? (
+                <div className="p-3 text-xs text-white/60">No games for {selectedDate || "—"}.</div>
+              ) : (
+                <div className="space-y-3">
+                  {events.map((ev) => (
+                    <EventCardMobile
+                      key={ev.eventId}
+                      ev={ev}
+                      market={market}
+                      oddsFormat={oddsFormat}
+                      booksOpen={!!mobileOpenMap[ev.eventId]}
+                      onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
+                      onOpenDetails={openDetails}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
 
-            <div className="p-3 md:p-4">
-              {/* MOBILE */}
-              <div className="md:hidden">
-                {loading ? (
-                  <div className="p-3 text-xs text-[#808080]">Loading odds…</div>
-                ) : error ? (
-                  <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
-                ) : !events.length ? (
-                  <div className="p-3 text-xs text-[#808080]">No games for {selectedDate || "—"}.</div>
-                ) : (
-                  <div className="space-y-3">
-                    {events.map((ev) => (
-                      <EventCardMobile
-                        key={ev.eventId}
-                        ev={ev}
-                        market={market}
-                        booksOpen={!!mobileOpenMap[ev.eventId]}
-                        onToggleBooks={() =>
-                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
-                        }
-                        onOpenDetails={openDetails}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
+            {/* DESKTOP */}
+            <div className="hidden md:block">
+              {loading ? (
+                <div className="p-6 text-sm text-white/60">Loading odds…</div>
+              ) : error ? (
+                <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
+              ) : !events.length ? (
+                <div className="p-6 text-sm text-white/60">No games for {selectedDate || "—"}.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full table-fixed min-w-[1180px]">
+                    <colgroup>
+                      <col style={{ width: COL_GAME }} />
+                      <col style={{ width: COL_TIME }} />
+                      <col style={{ width: COL_BOOK }} />
+                      {BOOKS.map((_, i) => (
+                        <col key={i} style={{ width: COL_BOOK }} />
+                      ))}
+                    </colgroup>
 
-              {/* DESKTOP */}
-              <div className="hidden md:block">
-                {loading ? (
-                  <div className="p-6 text-sm text-[#808080]">Loading odds…</div>
-                ) : error ? (
-                  <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
-                ) : !events.length ? (
-                  <div className="p-6 text-sm text-[#808080]">No games for {selectedDate || "—"}.</div>
-                ) : (
-                  <div className={PANEL_INNER}>
-                    <div className="overflow-x-auto">
-                      <table className="w-full table-fixed">
-                        <colgroup>
-                          <col style={{ width: COL_MATCHUP }} />
-                          <col style={{ width: COL_CONSENSUS }} />
-                          <col style={{ width: COL_BOOK }} />
-                          <col style={{ width: COL_BOOK }} />
-                          <col style={{ width: COL_BOOK }} />
-                          <col style={{ width: COL_BOOK }} />
-                          <col style={{ width: COL_BOOK }} />
-                        </colgroup>
+                    <TableHeaderRow oddsFormat={oddsFormat} />
 
-                        <thead className="sticky top-0 z-20">
-                          <tr className={`border-b ${HDR_BORDER}`}>
-                            <th
-                              className={[
-                                "text-left px-4 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "sticky left-0 z-30 text-[13px] font-extrabold",
-                                "backdrop-blur-[6px]",
-                              ].join(" ")}
-                            >
-                              Matchup
-                            </th>
-
-                            <th
-                              className={[
-                                "text-center px-3 py-3",
-                                HDR_LEFT_BG,
-                                HDR_TEXT,
-                                "z-20 text-[13px] font-extrabold border-l",
-                                HDR_BORDER,
-                                "backdrop-blur-[6px]",
-                              ].join(" ")}
-                            >
-                              Consensus
-                            </th>
-
-                            <BookHeader bookKey="dk" borderLeft />
-                            <BookHeader bookKey="fd" />
-                            <BookHeader bookKey="mgm" />
-                            <BookHeader bookKey="pin" />
-                            <BookHeader bookKey="bol" />
-                          </tr>
-                        </thead>
-
-                        <tbody>
-                          {events.map((ev) => (
-                            <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenDetails={openDetails} />
+                    <tbody>
+                      {eventsByDaySection.map((sec) => (
+                        <React.Fragment key={sec.label}>
+                          <DateSectionHeader label={sec.label} />
+                          {sec.events.map((ev) => (
+                            <EventRowTwoLines
+                              key={ev.eventId}
+                              ev={ev}
+                              market={market}
+                              oddsFormat={oddsFormat}
+                              onOpenDetails={openDetails}
+                            />
                           ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div className="h-3" />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -3082,13 +2906,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
           <GameDetailsModal
             sportKey={sportKey}
             ev={activeEvent}
+            oddsFormat={oddsFormat}
             onClose={() => setDetailsOpen(false)}
           />
         )}
-
-        <div className="h-12" />
       </div>
     </div>
   );
 }
-
