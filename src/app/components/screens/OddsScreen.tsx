@@ -1,13 +1,16 @@
-// screens/OddsScreen.tsx — FULL REWRITE (ONLY requested updates applied)
+"use client";
+
+// screens/OddsScreen.tsx — FULL REWRITE (adds “All Markets” dropdown + Line History / Odds Movement dropdown)
 // -------------------------------------------------------------------------------------------------------------
-// ✅ Player Props modal: headers (Points / “14 players” / Player Team Line Over Under) are STICKY while scrolling
-//    - FIX: no “blank gap” / jump by giving the props table its OWN vertical scroll container
-//      and using a real sticky <thead> (no offset-math / no cloned header / no horizontal-sync transforms)
-// ✅ Predictions “Key Lines”: remove Quantum ML block (consensus only; quantum ML already shown by team logos)
-// ✅ Mobile Predictions: smaller logos + team names in a compact row ABOVE the win% bar (both teams above the bar)
-// ✅ Everything else unchanged from your provided script
-//
-// NOTE: Fixes the build error by correctly closing GameDetailsModal (missing closing brace previously).
+// ✅ Board dropdown: All Markets / Moneyline / Spread / Total
+//    - “All Markets” shows ML + Spread + Total together in every cell (Consensus + each book)
+// ✅ Game Details modal keeps everything (Predictions + Props + Last 5) and adds a dropdown:
+//    - Line History (chart uses LINE values for spread/total)
+//    - Odds Movement (chart uses ODDS values) + quick movement summary (last → prior)
+// ✅ Player Props modal sticky header fix retained (table owns its own vertical scroll container)
+// ✅ Predictions “Key Lines”: consensus only (Quantum ML block removed — unchanged)
+// ✅ Mobile Predictions layout (compact logos + names above bar) retained
+// ✅ Everything else preserved
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
@@ -27,6 +30,8 @@ import {
 ========================================================= */
 
 type Market = "ml" | "spread" | "total";
+type BoardView = "all" | Market;
+
 type BookKey = "dk" | "fd" | "mgm" | "pin" | "bol";
 
 type SpreadCell = { line: number | null; odds: number | null };
@@ -406,7 +411,8 @@ function consensusPartsForRow(
 
   if (market === "ml") {
     const odds: number[] = [];
-    if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
+    if (src)
+      for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
     const mOdds = median(odds);
     return cellMl(mOdds == null ? null : mOdds);
   }
@@ -451,7 +457,8 @@ function consensusPartsForRow(
   const mOver = median(overOdds);
   const mUnder = median(underOdds);
 
-  if (side === "AWAY") return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
+  if (side === "AWAY")
+    return cellLineOdds(mLine == null ? null : mLine, mOver == null ? null : mOver);
   return cellLineOdds(mLine == null ? null : mLine, mUnder == null ? null : mUnder);
 }
 
@@ -464,7 +471,8 @@ function partsForBookSide(
   const src = side === "AWAY" ? ev.away : ev.home;
   if (!src) return { top: "—" };
 
-  if (market === "ml") return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
+  if (market === "ml")
+    return { top: src.ml[book] == null ? "—" : String(src.ml[book]) };
 
   if (market === "spread") {
     const c = src.spread[book];
@@ -477,6 +485,43 @@ function partsForBookSide(
   const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
   if (t?.line == null) return { top: "—" };
   return { top: String(t.line), bottom: odds == null ? "—" : `(${odds})` };
+}
+
+/* =========================================================
+   “ALL MARKETS” CELL RENDERING (ML + Spread + Total)
+========================================================= */
+
+function AllMarketCell({
+  ml,
+  spread,
+  total,
+}: {
+  ml: CellParts;
+  spread: CellParts;
+  total: CellParts;
+}) {
+  const row = (label: string, parts: CellParts) => (
+    <div className="flex items-center justify-between gap-2 w-full">
+      <div className="text-[10px] font-extrabold text-[#8a8a8a]">{label}</div>
+      <div className="text-white font-extrabold tabular-nums text-[12px] text-right">
+        {parts.bottom ? (
+          <>
+            <span>{parts.top}</span> <span className="text-[#b0b0b0]">{parts.bottom}</span>
+          </>
+        ) : (
+          <span>{parts.top}</span>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-1 w-full">
+      {row("ML", ml)}
+      {row("SP", spread)}
+      {row("TOT", total)}
+    </div>
+  );
 }
 
 /* =========================================================
@@ -533,7 +578,15 @@ function BookLogoPill({
 
 function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: boolean }) {
   const fb =
-    bookKey === "dk" ? "DK" : bookKey === "fd" ? "FD" : bookKey === "mgm" ? "MGM" : bookKey === "pin" ? "PIN" : "BOL";
+    bookKey === "dk"
+      ? "DK"
+      : bookKey === "fd"
+      ? "FD"
+      : bookKey === "mgm"
+      ? "MGM"
+      : bookKey === "pin"
+      ? "PIN"
+      : "BOL";
   return (
     <th
       className={[
@@ -546,13 +599,26 @@ function BookHeader({ bookKey, borderLeft }: { bookKey: BookKey; borderLeft?: bo
       style={{ width: COL_BOOK }}
     >
       <div className="flex items-center justify-center">
-        <BookLogoPill src={BOOK_LOGOS[bookKey]} alt={BOOK_LABEL[bookKey]} fallbackLabel={fb} size="md" />
+        <BookLogoPill
+          src={BOOK_LOGOS[bookKey]}
+          alt={BOOK_LABEL[bookKey]}
+          fallbackLabel={fb}
+          size="md"
+        />
       </div>
     </th>
   );
 }
 
-function ConsensusValue({ parts }: { parts: CellParts }) {
+function ConsensusValue({
+  parts,
+  isAll,
+  allParts,
+}: {
+  parts?: CellParts;
+  isAll: boolean;
+  allParts?: { ml: CellParts; spread: CellParts; total: CellParts };
+}) {
   return (
     <td
       className={[
@@ -560,12 +626,26 @@ function ConsensusValue({ parts }: { parts: CellParts }) {
         `border-r ${HDR_BORDER}`,
       ].join(" ")}
     >
-      {renderCellParts(parts)}
+      {isAll && allParts ? (
+        <AllMarketCell ml={allParts.ml} spread={allParts.spread} total={allParts.total} />
+      ) : (
+        renderCellParts(parts ?? { top: "—" })
+      )}
     </td>
   );
 }
 
-function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boolean }) {
+function BookValue({
+  parts,
+  borderLeft,
+  isAll,
+  allParts,
+}: {
+  parts?: CellParts;
+  borderLeft?: boolean;
+  isAll: boolean;
+  allParts?: { ml: CellParts; spread: CellParts; total: CellParts };
+}) {
   return (
     <td
       className={[
@@ -573,12 +653,24 @@ function BookValue({ parts, borderLeft }: { parts: CellParts; borderLeft?: boole
         borderLeft ? `border-l ${HDR_BORDER}` : "",
       ].join(" ")}
     >
-      {renderCellParts(parts)}
+      {isAll && allParts ? (
+        <AllMarketCell ml={allParts.ml} spread={allParts.spread} total={allParts.total} />
+      ) : (
+        renderCellParts(parts ?? { top: "—" })
+      )}
     </td>
   );
 }
 
-function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | null; side: "AWAY" | "HOME" }) {
+function MiniTeamRow({
+  team,
+  logoUrl,
+  side,
+}: {
+  team: string;
+  logoUrl: string | null;
+  side: "AWAY" | "HOME";
+}) {
   return (
     <div className="flex items-center gap-3">
       {logoUrl ? (
@@ -594,7 +686,9 @@ function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | 
       )}
 
       <div className="leading-tight min-w-0">
-        <div className="text-white font-extrabold text-[14px] md:text-[15px] truncate">{team}</div>
+        <div className="text-white font-extrabold text-[14px] md:text-[15px] truncate">
+          {team}
+        </div>
         <div className="text-[11px] text-[#7a7a7a] font-semibold">{side}</div>
       </div>
     </div>
@@ -602,50 +696,39 @@ function MiniTeamRow({ team, logoUrl, side }: { team: string; logoUrl: string | 
 }
 
 /* =========================================================
-   SEGMENTED MARKET CONTROL (board)
+   PREMIUM SELECT (board + modal dropdowns)
 ========================================================= */
 
-function SegButton({
-  active,
-  onClick,
-  children,
+function SelectPill({
+  value,
+  onChange,
+  options,
+  label,
 }: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+  label?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-1.5 text-xs font-extrabold transition-colors",
-        "border border-[#2a2a2a]",
-        active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
-          : "bg-[#0f0f0f] text-[#d0d0d0] hover:border-[#3a3a3a]",
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) => void }) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-      <SegButton active={value === "ml"} onClick={() => onChange("ml")}>
-        Moneyline
-      </SegButton>
-      <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "spread"} onClick={() => onChange("spread")}>
-        Spread
-      </SegButton>
-      <div className="w-px bg-[#2a2a2a]" />
-      <SegButton active={value === "total"} onClick={() => onChange("total")}>
-        Total
-      </SegButton>
-    </div>
+    <label className="inline-flex items-center gap-2 rounded-xl border border-[#2a2a2a] bg-black/25 px-3 py-2">
+      {label ? (
+        <span className="text-[10px] font-extrabold text-[#9a9a9a] whitespace-nowrap">
+          {label}
+        </span>
+      ) : null}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-transparent text-white font-extrabold text-xs outline-none"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value} className="bg-[#0b0b0b]">
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -655,23 +738,17 @@ function Segmented({ value, onChange }: { value: Market; onChange: (v: Market) =
 
 function EventCardMobile({
   ev,
-  market,
+  boardView,
   booksOpen,
   onToggleBooks,
   onOpenDetails,
 }: {
   ev: EventOdds;
-  market: Market;
+  boardView: BoardView;
   booksOpen: boolean;
   onToggleBooks: () => void;
   onOpenDetails: (ev: EventOdds) => void;
 }) {
-  const leftLabel = market === "total" ? "Over" : "Away";
-  const rightLabel = market === "total" ? "Under" : "Home";
-
-  const awayCons = consensusPartsForRow(ev, market, "AWAY");
-  const homeCons = consensusPartsForRow(ev, market, "HOME");
-
   const metaFor = (book: BookKey) =>
     book === "dk"
       ? { alt: "DraftKings", fb: "DK" }
@@ -683,16 +760,204 @@ function EventCardMobile({
       ? { alt: "Pinnacle", fb: "PIN" }
       : { alt: "BetOnline", fb: "BOL" };
 
+  const renderSingleConsensus = (market: Market) => {
+    const leftLabel = market === "total" ? "Over" : "Away";
+    const rightLabel = market === "total" ? "Under" : "Home";
+    const awayCons = consensusPartsForRow(ev, market, "AWAY");
+    const homeCons = consensusPartsForRow(ev, market, "HOME");
+
+    return (
+      <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b]/70 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[12px] text-white font-extrabold">Consensus</div>
+          <div className="text-[11px] text-[#808080] font-semibold">
+            {market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
+            <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
+              {leftLabel}
+            </div>
+            <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+              {renderCellParts(awayCons)}
+            </div>
+          </div>
+          <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
+            <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">
+              {rightLabel}
+            </div>
+            <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
+              {renderCellParts(homeCons)}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderAllConsensus = () => {
+    const mlA = consensusPartsForRow(ev, "ml", "AWAY");
+    const mlH = consensusPartsForRow(ev, "ml", "HOME");
+    const spA = consensusPartsForRow(ev, "spread", "AWAY");
+    const spH = consensusPartsForRow(ev, "spread", "HOME");
+    const toO = consensusPartsForRow(ev, "total", "AWAY");
+    const toU = consensusPartsForRow(ev, "total", "HOME");
+
+    const cell = (label: string, left: CellParts, right: CellParts, leftName: string, rightName: string) => (
+      <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-[10px] text-[#808080] font-semibold">{label}</div>
+          <div className="text-[10px] text-[#6a6a6a] font-semibold">
+            {leftName} / {rightName}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="text-center text-white font-extrabold tabular-nums text-[13px]">
+            {left.bottom ? (
+              <>
+                {left.top} <span className="text-[#b0b0b0]">{left.bottom}</span>
+              </>
+            ) : (
+              left.top
+            )}
+          </div>
+          <div className="text-center text-white font-extrabold tabular-nums text-[13px]">
+            {right.bottom ? (
+              <>
+                {right.top} <span className="text-[#b0b0b0]">{right.bottom}</span>
+              </>
+            ) : (
+              right.top
+            )}
+          </div>
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b]/70 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[12px] text-white font-extrabold">Consensus</div>
+          <div className="text-[11px] text-[#808080] font-semibold">All Markets</div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2">
+          {cell("Moneyline", mlA, mlH, "Away", "Home")}
+          {cell("Spread", spA, spH, "Away", "Home")}
+          {cell("Total", toO, toU, "Over", "Under")}
+        </div>
+      </div>
+    );
+  };
+
+  const booksBlock = (market: Market) => {
+    const leftLabel = market === "total" ? "Over" : "Away";
+    const rightLabel = market === "total" ? "Under" : "Home";
+
+    return (
+      <div className="mt-3 rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
+        <div className="px-3 py-2 border-b border-[#141414]">
+          <div className="text-[12px] text-white font-extrabold">Books</div>
+          <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
+            <div />
+            <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
+            <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
+          </div>
+        </div>
+
+        <div className="px-3">
+          {BOOKS.map((bk) => {
+            const meta = metaFor(bk);
+            return (
+              <div key={bk} className="py-2 border-b border-[#141414] last:border-b-0">
+                <div className="grid grid-cols-[110px_1fr_1fr] items-center gap-3">
+                  <div className="flex justify-start">
+                    <BookLogoPill src={BOOK_LOGOS[bk]} alt={meta.alt} fallbackLabel={meta.fb} size="md" />
+                  </div>
+
+                  <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
+                    {renderCellParts(partsForBookSide(ev, market, "AWAY", bk))}
+                  </div>
+                  <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
+                    {renderCellParts(partsForBookSide(ev, market, "HOME", bk))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const booksBlockAll = () => (
+    <div className="mt-3 rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
+      <div className="px-3 py-2 border-b border-[#141414]">
+        <div className="text-[12px] text-white font-extrabold">Books</div>
+        <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
+          <div />
+          <div className="text-[10px] text-[#808080] font-semibold text-center">Away</div>
+          <div className="text-[10px] text-[#808080] font-semibold text-center">Home</div>
+        </div>
+      </div>
+
+      <div className="px-3">
+        {BOOKS.map((bk) => {
+          const meta = metaFor(bk);
+
+          const awayAll = {
+            ml: partsForBookSide(ev, "ml", "AWAY", bk),
+            spread: partsForBookSide(ev, "spread", "AWAY", bk),
+            total: partsForBookSide(ev, "total", "AWAY", bk),
+          };
+          const homeAll = {
+            ml: partsForBookSide(ev, "ml", "HOME", bk),
+            spread: partsForBookSide(ev, "spread", "HOME", bk),
+            total: partsForBookSide(ev, "total", "HOME", bk),
+          };
+
+          return (
+            <div key={bk} className="py-2 border-b border-[#141414] last:border-b-0">
+              <div className="grid grid-cols-[110px_1fr_1fr] items-start gap-3">
+                <div className="flex justify-start pt-1">
+                  <BookLogoPill src={BOOK_LOGOS[bk]} alt={meta.alt} fallbackLabel={meta.fb} size="md" />
+                </div>
+
+                <div className="text-left">
+                  <AllMarketCell ml={awayAll.ml} spread={awayAll.spread} total={awayAll.total} />
+                </div>
+                <div className="text-left">
+                  <AllMarketCell ml={homeAll.ml} spread={homeAll.spread} total={homeAll.total} />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const showingAll = boardView === "all";
+  const market = (showingAll ? "ml" : boardView) as Market; // used only for the single-market books view
+
   return (
     <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 overflow-hidden backdrop-blur-[2px]">
       <div className="px-3 py-2.5 border-b border-[#2a2a2a] flex items-center justify-between gap-3">
-        <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+        <div className="text-[12px] text-[#cfcfcf] font-semibold">
+          {fmtCTTimeOnly(ev.commenceTime)} CT
+        </div>
 
         <div className="flex items-center gap-2">
           <button type="button" onClick={onToggleBooks} className={BTN_GHOST}>
             {booksOpen ? "Hide Books" : "Show Books"}
           </button>
-          <button type="button" onClick={() => onOpenDetails(ev)} className={[BTN_BASE, BTN_ON].join(" ")}>
+          <button
+            type="button"
+            onClick={() => onOpenDetails(ev)}
+            className={[BTN_BASE, BTN_ON].join(" ")}
+          >
             Game Details
           </button>
         </div>
@@ -704,64 +969,9 @@ function EventCardMobile({
       </div>
 
       <div className="px-3 pb-3">
-        <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b]/70 p-3">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px] text-white font-extrabold">Consensus</div>
-            <div className="text-[11px] text-[#808080] font-semibold">
-              {market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}
-            </div>
-          </div>
+        {showingAll ? renderAllConsensus() : renderSingleConsensus(market)}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{leftLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(awayCons)}
-              </div>
-            </div>
-            <div className="rounded-md border border-[#1f1f1f] bg-black/20 p-2">
-              <div className="text-[10px] text-[#808080] font-semibold mb-0.5 text-center">{rightLabel}</div>
-              <div className="text-[14px] text-white font-extrabold tabular-nums text-center">
-                {renderCellParts(homeCons)}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {booksOpen && (
-          <div className="mt-3 rounded-xl border border-[#2a2a2a] bg-black/10 overflow-hidden">
-            <div className="px-3 py-2 border-b border-[#141414]">
-              <div className="text-[12px] text-white font-extrabold">Books</div>
-              <div className="mt-2 grid grid-cols-[110px_1fr_1fr] gap-3 items-center">
-                <div />
-                <div className="text-[10px] text-[#808080] font-semibold text-center">{leftLabel}</div>
-                <div className="text-[10px] text-[#808080] font-semibold text-center">{rightLabel}</div>
-              </div>
-            </div>
-
-            <div className="px-3">
-              {BOOKS.map((bk) => {
-                const meta = metaFor(bk);
-                return (
-                  <div key={bk} className="py-2 border-b border-[#141414] last:border-b-0">
-                    <div className="grid grid-cols-[110px_1fr_1fr] items-center gap-3">
-                      <div className="flex justify-start">
-                        <BookLogoPill src={BOOK_LOGOS[bk]} alt={meta.alt} fallbackLabel={meta.fb} size="md" />
-                      </div>
-
-                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(partsForBookSide(ev, market, "AWAY", bk))}
-                      </div>
-                      <div className="text-center text-white font-extrabold tabular-nums text-[13px] leading-tight">
-                        {renderCellParts(partsForBookSide(ev, market, "HOME", bk))}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        {booksOpen && (showingAll ? booksBlockAll() : booksBlock(market))}
       </div>
     </div>
   );
@@ -769,27 +979,64 @@ function EventCardMobile({
 
 function EventTwoRows({
   ev,
-  market,
+  boardView,
   onOpenDetails,
 }: {
   ev: EventOdds;
-  market: Market;
+  boardView: BoardView;
   onOpenDetails: (ev: EventOdds) => void;
 }) {
-  const awayConsensus = consensusPartsForRow(ev, market, "AWAY");
-  const homeConsensus = consensusPartsForRow(ev, market, "HOME");
+  const isAll = boardView === "all";
+  const m = (isAll ? "ml" : boardView) as Market;
+
+  const awayConsensus = consensusPartsForRow(ev, m, "AWAY");
+  const homeConsensus = consensusPartsForRow(ev, m, "HOME");
+
+  const awayAllCons = isAll
+    ? {
+        ml: consensusPartsForRow(ev, "ml", "AWAY"),
+        spread: consensusPartsForRow(ev, "spread", "AWAY"),
+        total: consensusPartsForRow(ev, "total", "AWAY"),
+      }
+    : undefined;
+
+  const homeAllCons = isAll
+    ? {
+        ml: consensusPartsForRow(ev, "ml", "HOME"),
+        spread: consensusPartsForRow(ev, "spread", "HOME"),
+        total: consensusPartsForRow(ev, "total", "HOME"),
+      }
+    : undefined;
+
+  const bookAll = (side: "AWAY" | "HOME", bk: BookKey) =>
+    isAll
+      ? {
+          ml: partsForBookSide(ev, "ml", side, bk),
+          spread: partsForBookSide(ev, "spread", side, bk),
+          total: partsForBookSide(ev, "total", side, bk),
+        }
+      : undefined;
 
   return (
     <>
       <tr className="hover:bg-white/5 transition-colors">
         <td
-          className={["p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle", `border-r ${HDR_BORDER}`].join(" ")}
+          className={[
+            "p-4 sticky left-0 bg-[#0f0f0f] z-10 align-middle",
+            `border-r ${HDR_BORDER}`,
+          ].join(" ")}
           rowSpan={2}
         >
           <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[12px] text-[#cfcfcf] font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
+            <div className="text-[12px] text-[#cfcfcf] font-semibold">
+              {fmtCTTimeOnly(ev.commenceTime)} CT
+            </div>
 
-            <button type="button" onClick={() => onOpenDetails(ev)} className={[BTN_BASE, BTN_ON].join(" ")}>
+            <button
+              type="button"
+              onClick={() => onOpenDetails(ev)}
+              className={[BTN_BASE, BTN_ON].join(" ")}
+            >
               Game Details
             </button>
           </div>
@@ -800,12 +1047,38 @@ function EventTwoRows({
           </div>
         </td>
 
-        <ConsensusValue parts={awayConsensus} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "dk")} borderLeft />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "fd")} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "mgm")} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "pin")} />
-        <BookValue parts={partsForBookSide(ev, market, "AWAY", "bol")} />
+        <ConsensusValue
+          isAll={isAll}
+          parts={awayConsensus}
+          allParts={awayAllCons}
+        />
+
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "AWAY", "dk")}
+          allParts={bookAll("AWAY", "dk")}
+          borderLeft
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "AWAY", "fd")}
+          allParts={bookAll("AWAY", "fd")}
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "AWAY", "mgm")}
+          allParts={bookAll("AWAY", "mgm")}
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "AWAY", "pin")}
+          allParts={bookAll("AWAY", "pin")}
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "AWAY", "bol")}
+          allParts={bookAll("AWAY", "bol")}
+        />
       </tr>
 
       <tr
@@ -814,12 +1087,38 @@ function EventTwoRows({
           `border-t border-[#1a1a1a]/60 border-b ${HDR_BORDER}`,
         ].join(" ")}
       >
-        <ConsensusValue parts={homeConsensus} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "dk")} borderLeft />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "fd")} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "mgm")} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "pin")} />
-        <BookValue parts={partsForBookSide(ev, market, "HOME", "bol")} />
+        <ConsensusValue
+          isAll={isAll}
+          parts={homeConsensus}
+          allParts={homeAllCons}
+        />
+
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "HOME", "dk")}
+          allParts={bookAll("HOME", "dk")}
+          borderLeft
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "HOME", "fd")}
+          allParts={bookAll("HOME", "fd")}
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "HOME", "mgm")}
+          allParts={bookAll("HOME", "mgm")}
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "HOME", "pin")}
+          allParts={bookAll("HOME", "pin")}
+        />
+        <BookValue
+          isAll={isAll}
+          parts={partsForBookSide(ev, m, "HOME", "bol")}
+          allParts={bookAll("HOME", "bol")}
+        />
       </tr>
 
       <tr>
@@ -891,7 +1190,9 @@ function ModalShell({
         <div className="relative px-4 py-3 border-b border-[#2a2a2a] flex items-start justify-between gap-4 shrink-0">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
-            {subtitle && <div className="text-[11px] text-[#a0a0a0] mt-0.5 break-words">{subtitle}</div>}
+            {subtitle && (
+              <div className="text-[11px] text-[#a0a0a0] mt-0.5 break-words">{subtitle}</div>
+            )}
           </div>
           <button
             className="text-[#cfcfcf] hover:text-white text-sm font-bold px-2 py-1 rounded-md hover:bg-white/10"
@@ -906,7 +1207,6 @@ function ModalShell({
         <div
           className="relative overflow-y-auto"
           style={{
-            // ✅ prevents “focus scroll” from jumping content above sticky bars
             scrollPaddingTop: 140,
           }}
         >
@@ -923,11 +1223,18 @@ function ModalShell({
 
 type DetailsTab = "line" | "pred" | "props";
 
-function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function TabBtn({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
-      // ✅ prevent focus-scroll jump with sticky bars
       onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => {
         onClick();
@@ -946,7 +1253,7 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
 }
 
 /* =========================================================
-   LINE MOVEMENT (side-by-side charts)
+   LINE MOVEMENT (history fetch + charts) + movement summary
 ========================================================= */
 
 type HistoryRow = { ts: string; book: BookKey; odds: number | null; line: number | null };
@@ -968,11 +1275,13 @@ function buildSeries(points: HistoryRow[]): HistoryPoint[] {
   });
 }
 
-function HistoryTooltip({ active, payload, label, market }: any) {
+function HistoryTooltip({ active, payload, label, market, mode }: any) {
   if (!active || !payload?.length) return null;
 
   const base = payload?.[0]?.payload ?? {};
   const tsLabel = label || base?.label || "—";
+
+  const showLine = mode === "line" && market !== "ml";
 
   return (
     <div className="rounded-xl border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 shadow-[0_16px_60px_rgba(0,0,0,0.45)]">
@@ -980,26 +1289,38 @@ function HistoryTooltip({ active, payload, label, market }: any) {
 
       <div className="mt-1 space-y-1">
         {payload
-          .filter((p: any) => BOOKS.includes(p.dataKey))
+          .filter((p: any) => {
+            const k = String(p.dataKey || "");
+            return BOOKS.some((b) => k === b || k === `${b}__line`);
+          })
           .map((p: any) => {
-            const bk = p.dataKey as BookKey;
-            const odds = p.value as number | null | undefined;
+            const key = String(p.dataKey || "");
+            const isLine = key.endsWith("__line");
+            const bk = (isLine ? key.replace("__line", "") : key) as BookKey;
+            if (!BOOKS.includes(bk)) return null;
+
+            const odds = base?.[bk] ?? null;
             const line = base?.[`${bk}__line`] ?? null;
 
+            const val =
+              market === "ml"
+                ? odds == null
+                  ? "—"
+                  : String(odds)
+                : showLine
+                ? line == null
+                  ? "—"
+                  : String(line)
+                : odds == null
+                ? "—"
+                : String(odds);
+
             return (
-              <div key={bk} className="flex items-center justify-between gap-3 text-[11px]">
+              <div key={`${bk}-${isLine ? "L" : "O"}`} className="flex items-center justify-between gap-3 text-[11px]">
                 <div className="font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
                   {BOOK_LABEL[bk]}
                 </div>
-                <div className="text-white font-extrabold tabular-nums">
-                  {market === "ml"
-                    ? odds == null
-                      ? "—"
-                      : String(odds)
-                    : line == null && odds == null
-                    ? "—"
-                    : `${line == null ? "—" : String(line)}  (${odds == null ? "—" : String(odds)})`}
-                </div>
+                <div className="text-white font-extrabold tabular-nums">{val}</div>
               </div>
             );
           })}
@@ -1008,9 +1329,9 @@ function HistoryTooltip({ active, payload, label, market }: any) {
       <div className="mt-2 text-[10px] text-[#808080] font-semibold">
         {market === "ml"
           ? "Moneyline Odds History"
-          : market === "spread"
-          ? "Spread (line + odds) History"
-          : "Total (line + odds) History"}
+          : mode === "line"
+          ? "Line History"
+          : "Odds Movement"}
       </div>
     </div>
   );
@@ -1091,25 +1412,32 @@ function parseHistoryRows({
   return parsed;
 }
 
+type HistoryMode = "line" | "odds";
+
 function SideBySideLineCharts({
   leftTitle,
   rightTitle,
   leftPoints,
   rightPoints,
   market,
+  mode,
 }: {
   leftTitle: string;
   rightTitle: string;
   leftPoints: HistoryPoint[];
   rightPoints: HistoryPoint[];
   market: Market;
+  mode: HistoryMode;
 }) {
+  const showLine = mode === "line" && market !== "ml";
+  const dataKeyFor = (bk: BookKey) => (showLine ? `${bk}__line` : bk);
+
   const chart = (title: string, pts: HistoryPoint[]) => (
     <div className="rounded-2xl border border-[#2a2a2a] bg-black/25 backdrop-blur-[2px] p-3">
       <div className="text-[12px] text-white font-extrabold mb-2">{title}</div>
 
       {!pts.length ? (
-        <div className="text-sm text-[#a0a0a0] p-4">No odds history available for this side.</div>
+        <div className="text-sm text-[#a0a0a0] p-4">No history available for this side.</div>
       ) : (
         <div className="h-[280px]">
           <ResponsiveContainer width="100%" height="100%">
@@ -1121,14 +1449,18 @@ function SideBySideLineCharts({
                 interval="preserveStartEnd"
                 minTickGap={18}
               />
-              <YAxis tick={{ fill: "#b0b0b0", fontSize: 10 }} width={40} domain={["auto", "auto"]} />
-              <Tooltip content={<HistoryTooltip market={market} />} />
+              <YAxis
+                tick={{ fill: "#b0b0b0", fontSize: 10 }}
+                width={44}
+                domain={["auto", "auto"]}
+              />
+              <Tooltip content={<HistoryTooltip market={market} mode={mode} />} />
               <Legend wrapperStyle={{ color: "#d0d0d0", fontSize: 11 }} />
               {BOOKS.map((bk) => (
                 <Line
-                  key={bk}
+                  key={`${bk}-${mode}`}
                   type="monotone"
-                  dataKey={bk}
+                  dataKey={dataKeyFor(bk)}
                   name={BOOK_LABEL[bk]}
                   stroke={BOOK_STROKES[bk]}
                   strokeWidth={2}
@@ -1142,8 +1474,7 @@ function SideBySideLineCharts({
       )}
 
       <div className="mt-2 text-[11px] text-[#a0a0a0]">
-        Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>
-        {market === "ml" ? "." : <> and <span className="text-white font-extrabold">line + odds</span>.</>}
+        Tooltip includes <span className="text-white font-extrabold">date + time (CT)</span>.
       </div>
     </div>
   );
@@ -1152,6 +1483,105 @@ function SideBySideLineCharts({
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       {chart(leftTitle, leftPoints)}
       {chart(rightTitle, rightPoints)}
+    </div>
+  );
+}
+
+function MovementSummary({
+  title,
+  rows,
+  market,
+}: {
+  title: string;
+  rows: HistoryRow[];
+  market: Market;
+}) {
+  // last two by book
+  const byBook = useMemo(() => {
+    const m = new Map<BookKey, HistoryRow[]>();
+    for (const r of rows) {
+      const arr = m.get(r.book) ?? [];
+      arr.push(r);
+      m.set(r.book, arr);
+    }
+    for (const b of BOOKS) {
+      const arr = m.get(b) ?? [];
+      arr.sort((a, b2) => new Date(a.ts).getTime() - new Date(b2.ts).getTime());
+      m.set(b, arr);
+    }
+    return m;
+  }, [rows]);
+
+  const fmtDelta = (d: number) => (d > 0 ? `+${d}` : String(d));
+
+  const row = (bk: BookKey) => {
+    const arr = byBook.get(bk) ?? [];
+    if (arr.length < 2) {
+      return (
+        <div key={bk} className="flex items-center justify-between py-1.5">
+          <div className="text-[11px] font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
+            {BOOK_LABEL[bk]}
+          </div>
+          <div className="text-[11px] text-[#9a9a9a] font-semibold">Not enough history</div>
+        </div>
+      );
+    }
+    const prev = arr[arr.length - 2];
+    const cur = arr[arr.length - 1];
+
+    const oddsPrev = prev.odds;
+    const oddsCur = cur.odds;
+    const linePrev = prev.line;
+    const lineCur = cur.line;
+
+    const oddsDelta =
+      oddsPrev == null || oddsCur == null ? null : Math.round(oddsCur - oddsPrev);
+    const lineDelta =
+      linePrev == null || lineCur == null ? null : Number((lineCur - linePrev).toFixed(2));
+
+    return (
+      <div key={bk} className="flex items-center justify-between py-1.5">
+        <div className="text-[11px] font-extrabold" style={{ color: BOOK_STROKES[bk] }}>
+          {BOOK_LABEL[bk]}
+        </div>
+
+        <div className="text-[11px] text-white font-extrabold tabular-nums text-right">
+          {market === "ml" ? (
+            <>
+              {oddsPrev == null ? "—" : oddsPrev} → {oddsCur == null ? "—" : oddsCur}{" "}
+              <span className="text-[#b0b0b0]">
+                ({oddsDelta == null ? "—" : fmtDelta(oddsDelta)})
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-[#b0b0b0]">Line:</span>{" "}
+              {linePrev == null ? "—" : linePrev} → {lineCur == null ? "—" : lineCur}{" "}
+              <span className="text-[#b0b0b0]">
+                ({lineDelta == null ? "—" : fmtDelta(Number(lineDelta))})
+              </span>
+              <span className="text-[#666] mx-2">|</span>
+              <span className="text-[#b0b0b0]">Odds:</span>{" "}
+              {oddsPrev == null ? "—" : oddsPrev} → {oddsCur == null ? "—" : oddsCur}{" "}
+              <span className="text-[#b0b0b0]">
+                ({oddsDelta == null ? "—" : fmtDelta(oddsDelta)})
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-3">
+      <div className="flex items-center justify-between">
+        <div className="text-[12px] text-white font-extrabold">{title}</div>
+        <div className="text-[10px] text-[#808080] font-semibold">Last → Prior</div>
+      </div>
+      <div className="mt-2 divide-y divide-[#141414]">
+        {BOOKS.map((bk) => row(bk))}
+      </div>
     </div>
   );
 }
@@ -1204,7 +1634,6 @@ function pct(v01: number | null | undefined) {
   return `${(v01 * 100).toFixed(1)}%`;
 }
 
-/** Convert a probability (0..1) to "quantum fair odds" (American) */
 function probToAmerican(p: number | null): string {
   if (p == null || p <= 0 || p >= 1) return "—";
   if (p >= 0.5) {
@@ -1267,10 +1696,15 @@ function WinSplitMeter({
       </div>
 
       <div className="mt-2 relative h-4 rounded-full border border-[#2a2a2a] bg-black/30 overflow-hidden">
-        <div className="absolute inset-y-0 left-0" style={{ width: `${aN * 100}%`, background: awayColor, opacity: 0.9 }} />
-        <div className="absolute inset-y-0 right-0" style={{ width: `${hN * 100}%`, background: homeColor, opacity: 0.9 }} />
+        <div
+          className="absolute inset-y-0 left-0"
+          style={{ width: `${aN * 100}%`, background: awayColor, opacity: 0.9 }}
+        />
+        <div
+          className="absolute inset-y-0 right-0"
+          style={{ width: `${hN * 100}%`, background: homeColor, opacity: 0.9 }}
+        />
 
-        {/* 50% tick */}
         <div className="absolute top-[-4px] bottom-[-4px] left-1/2 w-[2px] bg-white/85" />
         <div className="absolute top-[-2px] left-1/2 -translate-x-1/2 w-3 h-3 rounded-full border border-white/70 bg-[#0f0f0f]" />
       </div>
@@ -1340,14 +1774,12 @@ function mapTeamGameRowsFromAny({
   for (const r of raw) {
     const dateIso =
       parseYmdToIso(
-        // ✅ basketballref_games_nba uses "date"
         pickAny(r, ["date", "game_date", "Date", "dt", "gameDay", "day"])
       ) ?? null;
     if (!dateIso) continue;
 
     const dateMs = new Date(`${dateIso}T12:00:00Z`).getTime();
     if (!Number.isFinite(dateMs)) continue;
-
     if (dateMs > nowMs) continue;
 
     const away =
@@ -1578,11 +2010,11 @@ function GameDetailsModal({
   ev: EventOdds;
   onClose: () => void;
 }) {
-  // ✅ Predictions tab opens first
   const [tab, setTab] = useState<DetailsTab>("pred");
 
   // line movement state
   const [lmMarket, setLmMarket] = useState<Market>("ml");
+  const [lmMode, setLmMode] = useState<HistoryMode>("odds"); // ✅ dropdown: Line History vs Odds Movement
   const [lmLoading, setLmLoading] = useState(true);
   const [lmError, setLmError] = useState("");
   const [lmAwayRows, setLmAwayRows] = useState<HistoryRow[]>([]);
@@ -1615,7 +2047,6 @@ function GameDetailsModal({
      ✅ Sticky stacking support for prop market bar
   ========================================================= */
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
-  const propBarRef = useRef<HTMLDivElement | null>(null);
   const [tabsBarH, setTabsBarH] = useState(0);
 
   useLayoutEffect(() => {
@@ -1942,7 +2373,7 @@ function GameDetailsModal({
   const lmAwayPoints = useMemo(() => buildSeries(lmAwayRows), [lmAwayRows]);
   const lmHomePoints = useMemo(() => buildSeries(lmHomeRows), [lmHomeRows]);
 
-  // Key Lines derived from board consensus (always matches what user sees)
+  // Key Lines derived from board consensus
   const consMlAway = consensusPartsForRow(ev, "ml", "AWAY");
   const consMlHome = consensusPartsForRow(ev, "ml", "HOME");
   const consSprAway = consensusPartsForRow(ev, "spread", "AWAY");
@@ -1950,9 +2381,11 @@ function GameDetailsModal({
   const consTotOver = consensusPartsForRow(ev, "total", "AWAY");
   const consTotUnder = consensusPartsForRow(ev, "total", "HOME");
 
+  const historyModeLabel = lmMode === "line" ? "Line History" : "Odds Movement";
+
   return (
     <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      {/* ✅ Sticky tabs bar — tighter + no “window” above it */}
+      {/* ✅ Sticky tabs bar */}
       <div
         ref={tabsBarRef}
         className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#232323]
@@ -1963,7 +2396,7 @@ function GameDetailsModal({
             Predictions
           </TabBtn>
           <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
-            Line Movement
+            Line / Odds History
           </TabBtn>
           <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
             Player Props
@@ -1973,80 +2406,75 @@ function GameDetailsModal({
 
       {/* LINE MOVEMENT TAB */}
       {tab === "line" && (
-        <div className="pt-0">
-          {/* single market selector ONLY here */}
-          <div className="flex flex-wrap items-center gap-2 mb-3">
-            <div className="inline-flex overflow-hidden rounded-lg border border-[#2a2a2a] bg-black/20">
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${
-                  lmMarket === "ml" ? "bg-[#d4af37] text-black" : "text-white"
-                }`}
-                onClick={(e) => {
-                  setLmMarket("ml");
-                  (e.currentTarget as HTMLButtonElement).blur();
-                }}
-              >
-                Moneyline
-              </button>
-              <div className="w-px bg-[#2a2a2a]" />
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${
-                  lmMarket === "spread" ? "bg-[#d4af37] text-black" : "text-white"
-                }`}
-                onClick={(e) => {
-                  setLmMarket("spread");
-                  (e.currentTarget as HTMLButtonElement).blur();
-                }}
-              >
-                Spread
-              </button>
-              <div className="w-px bg-[#2a2a2a]" />
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                className={`px-3 py-1.5 text-xs font-extrabold ${
-                  lmMarket === "total" ? "bg-[#d4af37] text-black" : "text-white"
-                }`}
-                onClick={(e) => {
-                  setLmMarket("total");
-                  (e.currentTarget as HTMLButtonElement).blur();
-                }}
-              >
-                Total
-              </button>
-            </div>
+        <div className="pt-0 space-y-3">
+          {/* ✅ dropdowns: history mode + market */}
+          <div className="flex flex-wrap items-center gap-2">
+            <SelectPill
+              label="History"
+              value={lmMode}
+              onChange={(v) => setLmMode(v as HistoryMode)}
+              options={[
+                { value: "line", label: "Line History" },
+                { value: "odds", label: "Odds Movement" },
+              ]}
+            />
+
+            <SelectPill
+              label="Market"
+              value={lmMarket}
+              onChange={(v) => setLmMarket(v as Market)}
+              options={[
+                { value: "ml", label: "Moneyline" },
+                { value: "spread", label: "Spread" },
+                { value: "total", label: "Total" },
+              ]}
+            />
 
             <div className="text-[11px] text-[#b0b0b0] font-semibold">
               {lmMarket === "total" ? (
                 <>
                   Left = <span className="text-white font-extrabold">Over</span>, Right ={" "}
-                  <span className="text-white font-extrabold">Under</span>
+                  <span className="text-white font-extrabold">Under</span> • {historyModeLabel}
                 </>
               ) : (
                 <>
                   Left = <span className="text-white font-extrabold">Away</span>, Right ={" "}
-                  <span className="text-white font-extrabold">Home</span>
+                  <span className="text-white font-extrabold">Home</span> • {historyModeLabel}
                 </>
               )}
             </div>
           </div>
 
           {lmLoading ? (
-            <div className="text-sm text-[#b0b0b0] p-4">Loading odds history…</div>
+            <div className="text-sm text-[#b0b0b0] p-4">Loading history…</div>
           ) : lmError ? (
-            <div className="text-sm text-red-400 p-4">No odds history available: {lmError}</div>
+            <div className="text-sm text-red-400 p-4">No history available: {lmError}</div>
           ) : (
-            <SideBySideLineCharts
-              leftTitle={lmMarket === "total" ? `Over • ${awayTeam}` : `Away • ${awayTeam}`}
-              rightTitle={lmMarket === "total" ? `Under • ${homeTeam}` : `Home • ${homeTeam}`}
-              leftPoints={lmAwayPoints}
-              rightPoints={lmHomePoints}
-              market={lmMarket}
-            />
+            <>
+              <SideBySideLineCharts
+                leftTitle={lmMarket === "total" ? `Over • ${awayTeam}` : `Away • ${awayTeam}`}
+                rightTitle={lmMarket === "total" ? `Under • ${homeTeam}` : `Home • ${homeTeam}`}
+                leftPoints={lmAwayPoints}
+                rightPoints={lmHomePoints}
+                market={lmMarket}
+                mode={lmMode}
+              />
+
+              {lmMode === "odds" && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <MovementSummary
+                    title={lmMarket === "total" ? "Over Movement Summary" : "Away Movement Summary"}
+                    rows={lmAwayRows}
+                    market={lmMarket}
+                  />
+                  <MovementSummary
+                    title={lmMarket === "total" ? "Under Movement Summary" : "Home Movement Summary"}
+                    rows={lmHomeRows}
+                    market={lmMarket}
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -2062,12 +2490,14 @@ function GameDetailsModal({
             <div className="text-sm text-[#b0b0b0] p-4">No predictions available for this game.</div>
           ) : (
             <div className="space-y-3">
-              {/* ✅ Key Lines: remove Quantum ML block; keep consensus lines only */}
+              {/* ✅ Key Lines: consensus only */}
               <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-white font-extrabold text-[13px]">Key Lines</div>
-                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">Consensus lines in one place</div>
+                    <div className="text-[11px] text-[#b0b0b0] font-semibold mt-0.5">
+                      Consensus lines in one place
+                    </div>
                   </div>
                 </div>
 
@@ -2105,7 +2535,7 @@ function GameDetailsModal({
 
               {/* Win% meter */}
               <div className="rounded-2xl border border-[#2a2a2a] bg-black/20 backdrop-blur-[2px] p-4">
-                {/* ✅ MOBILE: small logos + names ABOVE bar */}
+                {/* MOBILE */}
                 <div className="lg:hidden">
                   <div className="grid grid-cols-2 gap-3 mb-3">
                     <div className="flex items-center gap-2 min-w-0">
@@ -2166,7 +2596,7 @@ function GameDetailsModal({
                   />
                 </div>
 
-                {/* ✅ DESKTOP: unchanged */}
+                {/* DESKTOP */}
                 <div className="hidden lg:grid grid-cols-1 lg:grid-cols-[1fr_520px_1fr] gap-4 items-center">
                   <div className="flex items-center gap-3">
                     {awayLogo ? (
@@ -2242,7 +2672,9 @@ function GameDetailsModal({
                     <div className="flex items-center text-[11px] text-[#b0b0b0] font-semibold">
                       <span>
                         Margin Line (H):{" "}
-                        <span className="text-white font-extrabold tabular-nums">{predRow.spread_line_home ?? "—"}</span>
+                        <span className="text-white font-extrabold tabular-nums">
+                          {predRow.spread_line_home ?? "—"}
+                        </span>
                       </span>
 
                       <span className="mx-3 h-4 w-px bg-white/80" />
@@ -2344,7 +2776,6 @@ function GameDetailsModal({
         <div className="pt-3">
           {/* ✅ Sticky prop market buttons */}
           <div
-            ref={propBarRef}
             className="sticky z-40 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-[#1f1f1f]
                      bg-[#0b0b0b] shadow-[0_12px_30px_rgba(0,0,0,0.55)]"
             style={{ top: tabsBarH }}
@@ -2385,7 +2816,6 @@ function GameDetailsModal({
               <div
                 className="overflow-auto"
                 style={{
-                  // keep the table usable inside the modal without fighting the modal scroller
                   maxHeight: "calc(92vh - 240px)",
                 }}
               >
@@ -2398,7 +2828,6 @@ function GameDetailsModal({
                     <col style={{ width: 320 }} />
                   </colgroup>
 
-                  {/* ✅ True sticky header (Points / players / Player Team Line Over Under) */}
                   <thead className="sticky top-0 z-30 bg-[#0b0b0b]">
                     <tr className="border-b border-[#2a2a2a]">
                       <th colSpan={5} className="px-4 py-2">
@@ -2516,7 +2945,7 @@ function GameDetailsModal({
       )}
     </ModalShell>
   );
-} // ✅ CRITICAL: closes GameDetailsModal (prevents “Unexpected export”)
+} // ✅ closes GameDetailsModal
 
 /* =========================================================
    SCREEN
@@ -2525,7 +2954,7 @@ function GameDetailsModal({
 export function OddsScreen({ sportKey }: { sportKey: string }) {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
-  const [market, setMarket] = useState<Market>("ml");
+  const [boardView, setBoardView] = useState<BoardView>("all"); // ✅ NEW: dropdown includes All Markets
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastUpdatedIso, setLastUpdatedIso] = useState<string | null>(null);
@@ -2627,7 +3056,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   useEffect(() => {
     setSelectedDate("");
     setMobileOpenMap({});
-    setMarket("ml");
+    setBoardView("all");
     setDetailsOpen(false);
     setActiveEvent(null);
   }, [sportKey]);
@@ -2711,7 +3140,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     setDetailsOpen(true);
   };
 
-  // ✅ richer page background + subtle noise
+  // page background noise
   const pageNoiseSvg = encodeURIComponent(`
     <svg xmlns="http://www.w3.org/2000/svg" width="220" height="220">
       <filter id="n">
@@ -2753,9 +3182,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                     <span className={PILL_DOT} />
                     <span className={PILL_TX}>Prism Odds Board</span>
                   </div>
-                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">{sportLabel}</h2>
+                  <h2 className="mt-3 text-[22px] md:text-[28px] text-white font-extrabold tracking-tight">
+                    {sportLabel}
+                  </h2>
                   <div className={HERO_SUB}>
-                    One board per slate. Books shown side-by-side with consensus. Open Game Details for predictions, movement, and props.
+                    One board per slate. Use <span className="text-white font-extrabold">All Markets</span> to
+                    see ML + Spread + Total together. Open Game Details for predictions, movement, and props.
                   </div>
                 </div>
 
@@ -2771,7 +3203,6 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 </div>
               </div>
 
-              {/* ✅ trimmed header row: show only games for the selected day + last updated on mobile */}
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/30 px-3 py-1.5">
                   <div className="text-[10px] font-bold text-[#808080]">Games</div>
@@ -2799,8 +3230,19 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                   {!availableDates.length && <div className="text-xs text-[#808080]">No games available.</div>}
                 </div>
 
+                {/* ✅ Board dropdown */}
                 <div className="flex flex-wrap items-center gap-3">
-                  <Segmented value={market} onChange={setMarket} />
+                  <SelectPill
+                    label="Board"
+                    value={boardView}
+                    onChange={(v) => setBoardView(v as BoardView)}
+                    options={[
+                      { value: "all", label: "All Markets" },
+                      { value: "ml", label: "Moneyline" },
+                      { value: "spread", label: "Spread" },
+                      { value: "total", label: "Total" },
+                    ]}
+                  />
                 </div>
               </div>
             </div>
@@ -2822,9 +3264,11 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                       <EventCardMobile
                         key={ev.eventId}
                         ev={ev}
-                        market={market}
+                        boardView={boardView}
                         booksOpen={!!mobileOpenMap[ev.eventId]}
-                        onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
+                        onToggleBooks={() =>
+                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                        }
                         onOpenDetails={openDetails}
                       />
                     ))}
@@ -2876,7 +3320,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                                 HDR_BORDER,
                               ].join(" ")}
                             >
-                              Consensus
+                              {boardView === "all" ? "Consensus (All)" : "Consensus"}
                             </th>
 
                             <BookHeader bookKey="dk" borderLeft />
@@ -2889,7 +3333,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
                         <tbody>
                           {events.map((ev) => (
-                            <EventTwoRows key={ev.eventId} ev={ev} market={market} onOpenDetails={openDetails} />
+                            <EventTwoRows
+                              key={ev.eventId}
+                              ev={ev}
+                              boardView={boardView}
+                              onOpenDetails={openDetails}
+                            />
                           ))}
                         </tbody>
                       </table>
