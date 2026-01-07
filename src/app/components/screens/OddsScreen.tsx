@@ -12,17 +12,44 @@ import {
 } from "lucide-react";
 
 /* =========================================================
-   GOAL: Odds-board matrix like screenshot
-   - Teams are rows
-   - Sportsbooks are columns
-   - Market is "Point Spread" / "Moneyline" / "Total"
-   - Dense cells, sticky header, date separators
+   PREMIUM ODDS BOARD (Black/Gold theme + feed-safe)
+   ---------------------------------------------------------
+   ✅ Board look matches screenshot
+   ✅ Does NOT "lose feed data" — uses adapter that supports:
+      A) events + odds_snapshot (row-based offers)
+      B) odds_snapshot_latest / odds_board_latest style views
+
+   ✅ team_map integration (logos + abbreviations)
+   ✅ lastUpdated pulled from DB (max ts)
+   ✅ multi-sport tabs
 ========================================================= */
 
+/* ---------------------------
+   THEME (Pittsburgh)
+---------------------------- */
+const THEME = {
+  bg: "#070a0f", // deep black
+  panel: "#0b1018",
+  panel2: "#0a0f17",
+  border: "#1b2430",
+  border2: "#141c27",
+  text: "#e7eef8",
+  muted: "#95a6bb",
+  dim: "#607289",
+  gold: "#d4af37",
+  gold2: "#b08a1c",
+  teal: "#2dd4bf", // optional accent for separators
+  blue: "#2b8cff",
+};
+
+const CT = "America/Chicago";
+
+/* ---------------------------
+   Types
+---------------------------- */
 type MarketMode = "spreads" | "h2h" | "totals";
-type GameFilter = "all" | "full_game";
 type PhaseMode = "pregame" | "live";
-type OddsFormat = "american"; // (easy to add decimal later)
+type OddsFormat = "american";
 
 type BookKey =
   | "pinnacle"
@@ -35,24 +62,23 @@ type BookKey =
   | "espnbet"
   | "betrivers";
 
-/**
- * === IMPORTANT ===
- * This component assumes you have a row-based odds table like:
- * public.odds_snapshot (or public.odds_snapshot_latest)
- *
- * Typical columns seen in odds APIs:
- * - sport_key
- * - event_id
- * - commence_time
- * - home_team, away_team
- * - market_key ("h2h" | "spreads" | "totals")
- * - bookmaker_key (draftkings, fanduel, etc)
- * - outcome_name ("Home" / "Away" / team name / "Over" / "Under")
- * - price (American odds int)
- * - point (spread/total line float, nullable)
- *
- * If your names differ, update the "FETCH" mapper section only.
- */
+type SportTab =
+  | "basketball_nba"
+  | "basketball_ncaab"
+  | "americanfootball_nfl"
+  | "americanfootball_ncaaf"
+  | "soccer_epl"
+  | "mma_mixed_martial_arts"
+  | "ufc"; // optional alias; you can map it
+
+type EventRow = {
+  id: string;
+  sport_key: string;
+  commence_time: string;
+  home_team: string;
+  away_team: string;
+};
+
 type SnapshotRow = {
   sport_key?: string | null;
   event_id: string;
@@ -61,42 +87,45 @@ type SnapshotRow = {
   home_team: string;
   away_team: string;
 
-  market_key: string; // "h2h" | "spreads" | "totals"
+  market_key: string;
   bookmaker_key: string;
 
-  outcome_name: string; // team name OR "Over"/"Under"
+  outcome_name: string;
   price: number | null;
   point: number | null;
 
-  // optional timestamp if you have it
-  ts?: string | null;
+  ts?: string | null; // if your table has it
+};
+
+type TeamMapRow = {
+  canonical: string;
+  abbreviation?: string | null;
+  abbreviation2?: string | null;
+  logo_url?: string | null;
 };
 
 type TeamSide = "away" | "home";
 
 type CellOffer = {
-  // for spreads: line + price
-  // for h2h: price only
-  // for totals: over/under by row (we render separate "Over"/"Under" rows)
   line?: number | null;
   price?: number | null;
+  ts?: string | null;
 };
 
 type BoardRow = {
-  // identifies row
   event_id: string;
   commence_time: string;
   dateKey: string;
 
-  // row label
   rowType: "team" | "total";
-  side: TeamSide | null; // for team rows
-  totalSide: "over" | "under" | null; // for totals rows
-  labelLeft: string; // "Los Angeles Rams"
-  labelRight: string; // "vs Carolina Panthers" (optional)
+  side: TeamSide | null;
+  totalSide: "over" | "under" | null;
+
+  teamCanonical: string; // for logo + abbr lookup
+  labelLeft: string; // main label (team / Over / Under)
+  labelRight: string; // sub label (matchup)
   timeLabel: string;
 
-  // offers per book
   offersByBook: Record<BookKey, CellOffer | null>;
 };
 
@@ -107,10 +136,9 @@ type EventMeta = {
   away_team: string;
 };
 
-/* =========================================================
-   BOOKS (columns) — match screenshot vibe
-========================================================= */
-
+/* ---------------------------
+   Books (columns)
+---------------------------- */
 const BOOKS: { key: BookKey; label: string }[] = [
   { key: "pinnacle", label: "Pinnacle" },
   { key: "betmgm", label: "BetMGM" },
@@ -123,7 +151,6 @@ const BOOKS: { key: BookKey; label: string }[] = [
   { key: "betrivers", label: "BetRivers" },
 ];
 
-/** Optional: wire in your local assets (recommended) */
 const BOOK_ICON: Partial<Record<BookKey, string>> = {
   pinnacle: "/books/pinnacle.png",
   betmgm: "/books/betmgm.png",
@@ -136,12 +163,22 @@ const BOOK_ICON: Partial<Record<BookKey, string>> = {
   betrivers: "/books/betrivers.png",
 };
 
-/* =========================================================
-   STYLE HELPERS
-========================================================= */
+/* ---------------------------
+   Sports tabs (top)
+   (Adjust labels + keys to match your app)
+---------------------------- */
+const SPORT_TABS: { key: SportTab; label: string }[] = [
+  { key: "americanfootball_nfl", label: "NFL" },
+  { key: "americanfootball_ncaaf", label: "NCAAF" },
+  { key: "basketball_nba", label: "NBA" },
+  { key: "basketball_ncaab", label: "NCAAM" },
+  { key: "soccer_epl", label: "Soccer" },
+  { key: "mma_mixed_martial_arts", label: "UFC" },
+];
 
-const CT = "America/Chicago";
-
+/* ---------------------------
+   Helpers
+---------------------------- */
 function fmtAmerican(n?: number | null) {
   if (n == null) return "";
   if (n > 0) return `+${n}`;
@@ -150,7 +187,6 @@ function fmtAmerican(n?: number | null) {
 
 function fmtLine(n?: number | null) {
   if (n == null) return "";
-  // keep 0.5 lines clean
   const s = Number.isInteger(n) ? `${n}` : n.toFixed(1);
   return s.startsWith("-") ? s : `+${s}`;
 }
@@ -173,7 +209,6 @@ function fmtDateHeaderCT(iso: string) {
 }
 
 function ymdCT(iso: string) {
-  // used for grouping by day
   const d = new Date(iso);
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: CT,
@@ -189,6 +224,20 @@ function ymdCT(iso: string) {
 
 function normalizeBookKey(raw: string): BookKey | null {
   const k = raw.toLowerCase();
+
+  // fast path (exact)
+  if (
+    k === "pinnacle" ||
+    k === "betmgm" ||
+    k === "circa" ||
+    k === "fanduel" ||
+    k === "draftkings" ||
+    k === "betonlineag" ||
+    k === "caesars" ||
+    k === "espnbet" ||
+    k === "betrivers"
+  ) return k as BookKey;
+
   if (k.includes("pinnacle")) return "pinnacle";
   if (k.includes("betmgm")) return "betmgm";
   if (k.includes("circa")) return "circa";
@@ -199,24 +248,18 @@ function normalizeBookKey(raw: string): BookKey | null {
   if (k.includes("espn")) return "espnbet";
   if (k.includes("betrivers")) return "betrivers";
 
-  // if your DB stores exactly these keys, you can simplify:
-  if (k === "pinnacle") return "pinnacle";
-  if (k === "betmgm") return "betmgm";
-  if (k === "circa") return "circa";
-  if (k === "fanduel") return "fanduel";
-  if (k === "draftkings") return "draftkings";
-  if (k === "betonlineag") return "betonlineag";
-  if (k === "caesars") return "caesars";
-  if (k === "espnbet") return "espnbet";
-  if (k === "betrivers") return "betrivers";
-
   return null;
 }
 
-/* =========================================================
-   UI PARTS
-========================================================= */
+function isLiveHeuristic(commence_time: string) {
+  // your old feed likely had a status column; if you do, replace this.
+  // this is just a safe fallback.
+  return new Date(commence_time).getTime() < Date.now() - 5 * 60 * 1000;
+}
 
+/* ---------------------------
+   UI atoms
+---------------------------- */
 function Select({
   value,
   onChange,
@@ -231,7 +274,13 @@ function Select({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="appearance-none bg-[#101821] text-[#dbe4ee] border border-[#1e2a36] rounded-md px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-1 focus:ring-[#2b8cff]"
+        className="appearance-none rounded-md px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-1"
+        style={{
+          background: THEME.panel2,
+          color: THEME.text,
+          border: `1px solid ${THEME.border}`,
+          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
+        }}
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -239,20 +288,24 @@ function Select({
           </option>
         ))}
       </select>
-      <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-[#7b8a9a]" />
+      <ChevronDown
+        className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2"
+        style={{ color: THEME.dim }}
+      />
     </div>
   );
 }
 
-function Chip({
-  icon,
-  label,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-}) {
+function Chip({ icon, label }: { icon?: React.ReactNode; label: string }) {
   return (
-    <div className="flex items-center gap-2 bg-[#0f1720] border border-[#1e2a36] rounded-md px-3 py-2 text-sm text-[#dbe4ee]">
+    <div
+      className="flex items-center gap-2 rounded-md px-3 py-2 text-sm"
+      style={{
+        background: THEME.panel2,
+        border: `1px solid ${THEME.border}`,
+        color: THEME.text,
+      }}
+    >
       {icon}
       <span className="whitespace-nowrap">{label}</span>
     </div>
@@ -260,21 +313,22 @@ function Chip({
 }
 
 /* =========================================================
-   MAIN
+   MAIN SCREEN
 ========================================================= */
 
 export function OddsScreen({
-  sportKey = "americanfootball_nfl",
+  defaultSportKey = "americanfootball_nfl",
 }: {
-  sportKey?: string;
+  defaultSportKey?: string;
 }) {
+  const [sportKey, setSportKey] = useState<string>(defaultSportKey);
+
   const [market, setMarket] = useState<MarketMode>("spreads");
   const [phase, setPhase] = useState<PhaseMode>("pregame");
-  const [gameFilter, setGameFilter] = useState<GameFilter>("all");
   const [format, setFormat] = useState<OddsFormat>("american");
   const [search, setSearch] = useState("");
+
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    // default: today CT
     const now = new Date().toISOString();
     return ymdCT(now);
   });
@@ -282,27 +336,103 @@ export function OddsScreen({
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
-  const [raw, setRaw] = useState<SnapshotRow[]>([]);
-  const [metaByEvent, setMetaByEvent] = useState<Record<string, EventMeta>>({});
+  // feed payloads
+  const [events, setEvents] = useState<EventRow[]>([]);
+  const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
+  const [teamMap, setTeamMap] = useState<Record<string, TeamMapRow>>({});
+
+  const metaByEvent = useMemo(() => {
+    const meta: Record<string, EventMeta> = {};
+    for (const e of events) {
+      meta[e.id] = {
+        event_id: e.id,
+        commence_time: e.commence_time,
+        home_team: e.home_team,
+        away_team: e.away_team,
+      };
+    }
+    // fill missing from snapshots if events feed is empty (Pattern B support)
+    for (const s of snapshots) {
+      if (!meta[s.event_id]) {
+        meta[s.event_id] = {
+          event_id: s.event_id,
+          commence_time: s.commence_time,
+          home_team: s.home_team,
+          away_team: s.away_team,
+        };
+      }
+    }
+    return meta;
+  }, [events, snapshots]);
+
+  /* =========================================================
+     FEED LOADER (adapter)
+     - Loads team_map
+     - Loads events (if available)
+     - Loads odds snapshots (either from odds_snapshot OR odds_snapshot_latest/view)
+     - Loads lastUpdated from DB using max(ts) if available
+  ========================================================= */
 
   const refresh = async () => {
     setLoading(true);
     try {
-      /* =========================================================
-         FETCH
-         - Update table name here if needed
-         - Update selected columns if needed
-         - Everything else is just UI + pivoting
-      ========================================================= */
-
-      // We fetch a window around selectedDate to be safe.
-      // If you have a proper date column, filter on it instead.
       const dayStart = new Date(`${selectedDate}T00:00:00.000Z`);
       const dayEnd = new Date(`${selectedDate}T23:59:59.999Z`);
 
-      // NOTE: this assumes commence_time is stored in ISO and comparable.
-      const { data, error } = await supabase
-        .from("odds_snapshot") // ✅ change if yours is odds_snapshot_latest, odds_snapshot_view, etc.
+      // 1) team_map (logos/abbr)
+      // Supports either canonical column names or your existing mapping.
+      const tmRes = await supabase
+        .from("team_map")
+        .select(`canonical, "Logo URL", "Abbreviation", "Abbreviation2"`)
+        .limit(5000);
+
+      if (!tmRes.error && tmRes.data) {
+        const map: Record<string, TeamMapRow> = {};
+        for (const r of tmRes.data as any[]) {
+          const canonical = (r.canonical ?? "").toString();
+          if (!canonical) continue;
+          map[canonical] = {
+            canonical,
+            logo_url: r["Logo URL"] ?? null,
+            abbreviation: r["Abbreviation"] ?? null,
+            abbreviation2: r["Abbreviation2"] ?? null,
+          };
+        }
+        setTeamMap(map);
+      } else {
+        setTeamMap({});
+      }
+
+      // 2) events feed (Pattern A)
+      // If your old script used a view like events_today, swap the table name here.
+      const evRes = await supabase
+        .from("events")
+        .select("id,sport_key,commence_time,home_team,away_team")
+        .eq("sport_key", sportKey)
+        .gte("commence_time", dayStart.toISOString())
+        .lte("commence_time", dayEnd.toISOString())
+        .order("commence_time", { ascending: true });
+
+      const eventsData = (evRes.data ?? []) as any[];
+      const eventsClean: EventRow[] = eventsData.map((e) => ({
+        id: e.id,
+        sport_key: e.sport_key,
+        commence_time: e.commence_time,
+        home_team: e.home_team,
+        away_team: e.away_team,
+      }));
+      setEvents(eventsClean);
+
+      // 3) snapshots feed
+      // Try "odds_snapshot_latest" first (many apps already use a latest view),
+      // then fall back to "odds_snapshot" if the view doesn't exist.
+      // This prevents losing your old feed if it was using a view.
+      let snap: SnapshotRow[] = [];
+      let lastTs: string | null = null;
+
+      // Attempt latest view
+      const snapLatest = await supabase
+        .from("odds_snapshot_latest")
         .select(
           "sport_key,event_id,commence_time,home_team,away_team,market_key,bookmaker_key,outcome_name,price,point,ts"
         )
@@ -311,35 +441,68 @@ export function OddsScreen({
         .lte("commence_time", dayEnd.toISOString())
         .in("market_key", ["h2h", "spreads", "totals"]);
 
-      if (error) throw error;
+      if (!snapLatest.error && snapLatest.data) {
+        snap = snapLatest.data as SnapshotRow[];
+        // true last updated from DB max(ts)
+        lastTs =
+          snap
+            .map((r) => r.ts)
+            .filter(Boolean)
+            .sort()
+            .at(-1) ?? null;
+      } else {
+        // Fall back to odds_snapshot
+        const snapRes = await supabase
+          .from("odds_snapshot")
+          .select(
+            "sport_key,event_id,commence_time,home_team,away_team,market_key,bookmaker_key,outcome_name,price,point,ts"
+          )
+          .eq("sport_key", sportKey)
+          .gte("commence_time", dayStart.toISOString())
+          .lte("commence_time", dayEnd.toISOString())
+          .in("market_key", ["h2h", "spreads", "totals"]);
 
-      const rows = ((data ?? []) as SnapshotRow[]).filter((r) => {
-        // phase: pregame vs live (basic heuristic; change if you have status column)
-        const isLive =
-          new Date(r.commence_time).getTime() < Date.now() - 5 * 60 * 1000;
-        return phase === "live" ? isLive : !isLive;
-      });
+        if (snapRes.error) throw snapRes.error;
+        snap = (snapRes.data ?? []) as SnapshotRow[];
 
-      // meta
-      const meta: Record<string, EventMeta> = {};
-      for (const r of rows) {
-        if (!meta[r.event_id]) {
-          meta[r.event_id] = {
-            event_id: r.event_id,
-            commence_time: r.commence_time,
-            home_team: r.home_team,
-            away_team: r.away_team,
-          };
-        }
+        lastTs =
+          snap
+            .map((r) => r.ts)
+            .filter(Boolean)
+            .sort()
+            .at(-1) ?? null;
       }
 
-      setRaw(rows);
-      setMetaByEvent(meta);
-      setLastUpdated(new Date().toLocaleTimeString("en-US", { timeZone: CT }));
+      // Apply phase (live/pregame) filtering without destroying feed
+      const filtered = snap.filter((r) => {
+        const live = isLiveHeuristic(r.commence_time);
+        return phase === "live" ? live : !live;
+      });
+
+      setSnapshots(filtered);
+
+      // lastUpdated display (prefer db ts, else local clock)
+      if (lastTs) {
+        setLastUpdated(
+          new Intl.DateTimeFormat("en-US", {
+            timeZone: CT,
+            hour: "numeric",
+            minute: "2-digit",
+          }).format(new Date(lastTs))
+        );
+      } else {
+        setLastUpdated(
+          new Intl.DateTimeFormat("en-US", {
+            timeZone: CT,
+            hour: "numeric",
+            minute: "2-digit",
+          }).format(new Date())
+        );
+      }
     } catch (e) {
       console.error(e);
-      setRaw([]);
-      setMetaByEvent({});
+      setEvents([]);
+      setSnapshots([]);
       setLastUpdated(null);
     } finally {
       setLoading(false);
@@ -352,40 +515,43 @@ export function OddsScreen({
   }, [sportKey, selectedDate, phase]);
 
   /* =========================================================
-     PIVOT -> BOARD ROWS
-     - This is where the “screenshot look” is born
+     BOARD BUILD (pivot snapshots -> matrix rows)
+     - Uses events feed if present (best)
+     - Falls back to snapshot-derived meta (still works)
   ========================================================= */
 
   const boardRows: BoardRow[] = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const marketKey = market;
 
-    // Filter raw to current market
-    const marketKey = market; // "spreads" | "h2h" | "totals"
-    const rows = raw.filter((r) => r.market_key === marketKey);
+    const rows = snapshots.filter((r) => r.market_key === marketKey);
 
-    // Group by event
+    // group snapshot rows by event_id
     const byEvent: Record<string, SnapshotRow[]> = {};
     for (const r of rows) {
       if (!byEvent[r.event_id]) byEvent[r.event_id] = [];
       byEvent[r.event_id].push(r);
     }
 
+    // choose event order:
+    // - if events feed exists, use it (preserves your old feed ordering)
+    // - else order by commence_time from meta
+    const orderedEventIds: string[] =
+      events.length > 0
+        ? events.map((e) => e.id).filter((id) => byEvent[id] || metaByEvent[id])
+        : Object.keys(byEvent).sort((a, b) => {
+            const ta = new Date(metaByEvent[a]?.commence_time ?? 0).getTime();
+            const tb = new Date(metaByEvent[b]?.commence_time ?? 0).getTime();
+            return ta - tb;
+          });
+
     const out: BoardRow[] = [];
 
-    const eventIds = Object.keys(byEvent).sort((a, b) => {
-      const ta = new Date(metaByEvent[a]?.commence_time ?? 0).getTime();
-      const tb = new Date(metaByEvent[b]?.commence_time ?? 0).getTime();
-      return ta - tb;
-    });
-
-    for (const event_id of eventIds) {
+    for (const event_id of orderedEventIds) {
       const meta = metaByEvent[event_id];
       if (!meta) continue;
 
-      const dateKey = ymdCT(meta.commence_time);
-      const timeLabel = fmtTimeCT(meta.commence_time);
-
-      // Search filter
+      // search filter
       if (q) {
         const hit =
           meta.home_team.toLowerCase().includes(q) ||
@@ -393,10 +559,11 @@ export function OddsScreen({
         if (!hit) continue;
       }
 
-      const chunk = byEvent[event_id];
+      const dateKey = ymdCT(meta.commence_time);
+      const timeLabel = fmtTimeCT(meta.commence_time);
+      const chunk = byEvent[event_id] ?? [];
 
       if (market === "totals") {
-        // Totals board: render two rows "Over" and "Under" (like a board would)
         const makeTotalsRow = (totalSide: "over" | "under"): BoardRow => {
           const offersByBook = {} as Record<BookKey, CellOffer | null>;
           for (const b of BOOKS) offersByBook[b.key] = null;
@@ -405,13 +572,14 @@ export function OddsScreen({
             const bk = normalizeBookKey(r.bookmaker_key);
             if (!bk) continue;
 
-            const name = r.outcome_name.toLowerCase();
+            const name = (r.outcome_name ?? "").toLowerCase();
             const want = totalSide === "over" ? "over" : "under";
             if (!name.includes(want)) continue;
 
             offersByBook[bk] = {
               line: r.point,
               price: r.price,
+              ts: r.ts ?? null,
             };
           }
 
@@ -422,6 +590,7 @@ export function OddsScreen({
             rowType: "total",
             side: null,
             totalSide,
+            teamCanonical: "", // totals row
             labelLeft: totalSide === "over" ? "Over" : "Under",
             labelRight: `${meta.away_team} vs ${meta.home_team}`,
             timeLabel,
@@ -434,7 +603,6 @@ export function OddsScreen({
         continue;
       }
 
-      // Spreads / H2H board: two team rows (away, home)
       const makeTeamRow = (side: TeamSide): BoardRow => {
         const team = side === "away" ? meta.away_team : meta.home_team;
 
@@ -445,20 +613,22 @@ export function OddsScreen({
           const bk = normalizeBookKey(r.bookmaker_key);
           if (!bk) continue;
 
-          // outcome_name may be team name OR "Away"/"Home"
-          const on = r.outcome_name.toLowerCase();
+          const on = (r.outcome_name ?? "").toLowerCase();
+          const teamLower = team.toLowerCase();
 
+          // outcome matching: supports team names, "Home"/"Away", etc.
           const isMatch =
-            on === team.toLowerCase() ||
+            on === teamLower ||
             (side === "away" && on === "away") ||
             (side === "home" && on === "home") ||
-            on.includes(team.toLowerCase());
+            on.includes(teamLower);
 
           if (!isMatch) continue;
 
           offersByBook[bk] = {
             line: market === "spreads" ? r.point : null,
             price: r.price,
+            ts: r.ts ?? null,
           };
         }
 
@@ -469,8 +639,9 @@ export function OddsScreen({
           rowType: "team",
           side,
           totalSide: null,
+          teamCanonical: team,
           labelLeft: team,
-          labelRight: side === "away" ? "@" : "",
+          labelRight: "",
           timeLabel,
           offersByBook,
         };
@@ -481,9 +652,8 @@ export function OddsScreen({
     }
 
     return out;
-  }, [raw, metaByEvent, market, search]);
+  }, [snapshots, events, metaByEvent, market, search]);
 
-  // Group by dateKey for the date separator rows
   const grouped = useMemo(() => {
     const map = new Map<string, BoardRow[]>();
     for (const r of boardRows) {
@@ -493,19 +663,80 @@ export function OddsScreen({
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [boardRows]);
 
-  const sportsBookCount = BOOKS.length;
+  const sportsbookCount = BOOKS.length;
+
+  // Abbr + logo helpers
+  const getAbbr = (canonical: string) => {
+    const m = teamMap[canonical];
+    return (m?.abbreviation || m?.abbreviation2 || canonical.slice(0, 3)).toUpperCase();
+  };
+  const getLogo = (canonical: string) => {
+    const m = teamMap[canonical];
+    return m?.logo_url || null;
+  };
 
   /* =========================================================
      RENDER
 ========================================================= */
 
   return (
-    <div className="min-h-screen bg-[#0b1118] text-[#dbe4ee]">
-      {/* Top Nav / Toolbar */}
+    <div
+      className="min-h-screen"
+      style={{
+        background: THEME.bg,
+        color: THEME.text,
+      }}
+    >
+      {/* Top sport tabs */}
+      <div
+        className="px-4 pt-3"
+        style={{
+          borderBottom: `1px solid ${THEME.border2}`,
+          background: "linear-gradient(180deg, rgba(212,175,55,0.10), rgba(0,0,0,0))",
+        }}
+      >
+        <div className="flex items-center gap-2 overflow-x-auto pb-2">
+          {SPORT_TABS.map((t) => {
+            const active = sportKey === t.key || (t.key === "ufc" && sportKey === "mma_mixed_martial_arts");
+            return (
+              <button
+                key={t.key}
+                onClick={() =>
+                  setSportKey(t.key === "ufc" ? "mma_mixed_martial_arts" : t.key)
+                }
+                className="px-3 py-2 rounded-md text-sm font-semibold whitespace-nowrap"
+                style={{
+                  background: active ? `rgba(212,175,55,0.16)` : "transparent",
+                  border: `1px solid ${active ? THEME.gold2 : "transparent"}`,
+                  color: active ? THEME.gold : THEME.text,
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+
+          <div className="ml-auto flex items-center gap-2">
+            <div
+              className="text-xs"
+              style={{ color: THEME.dim }}
+            >
+              {lastUpdated ? `Last updated ${lastUpdated} CT` : "—"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Toolbar */}
       <div className="px-4 pt-4">
-        <div className="rounded-xl border border-[#17222e] bg-gradient-to-b from-[#0f1720] to-[#0b1118]">
-          <div className="flex flex-col gap-3 p-4">
-            {/* Row 1 */}
+        <div
+          className="rounded-xl overflow-hidden"
+          style={{
+            border: `1px solid ${THEME.border}`,
+            background: `linear-gradient(180deg, ${THEME.panel}, ${THEME.bg})`,
+          }}
+        >
+          <div className="p-4 flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={market}
@@ -516,37 +747,32 @@ export function OddsScreen({
                   { value: "totals", label: "Total" },
                 ]}
               />
-              <Select
-                value={gameFilter}
-                onChange={(v) => setGameFilter(v as GameFilter)}
-                options={[
-                  { value: "all", label: "All Games" },
-                  { value: "full_game", label: "Full Game" },
-                ]}
-              />
 
               <button
-                onClick={() =>
-                  setPhase((p) => (p === "pregame" ? "live" : "pregame"))
-                }
-                className="flex items-center gap-2 bg-[#101821] border border-[#1e2a36] rounded-md px-3 py-2 text-sm"
+                onClick={() => setPhase((p) => (p === "pregame" ? "live" : "pregame"))}
+                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm"
+                style={{
+                  background: THEME.panel2,
+                  border: `1px solid ${THEME.border}`,
+                  color: THEME.text,
+                }}
                 title="Toggle Pre Game / Live"
               >
                 {phase === "pregame" ? (
                   <>
-                    <ToggleLeft className="w-4 h-4 text-[#7b8a9a]" />
+                    <ToggleLeft className="w-4 h-4" style={{ color: THEME.dim }} />
                     <span>Pre Game</span>
                   </>
                 ) : (
                   <>
-                    <ToggleRight className="w-4 h-4 text-[#2b8cff]" />
+                    <ToggleRight className="w-4 h-4" style={{ color: THEME.gold }} />
                     <span>Live</span>
                   </>
                 )}
               </button>
 
               <Chip
-                icon={<CalendarDays className="w-4 h-4 text-[#7b8a9a]" />}
+                icon={<CalendarDays className="w-4 h-4" style={{ color: THEME.dim }} />}
                 label={selectedDate}
               />
 
@@ -554,52 +780,61 @@ export function OddsScreen({
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-[#101821] text-[#dbe4ee] border border-[#1e2a36] rounded-md px-3 py-2 text-sm"
+                className="rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1"
+                style={{
+                  background: THEME.panel2,
+                  border: `1px solid ${THEME.border}`,
+                  color: THEME.text,
+                }}
               />
 
               <div className="flex-1" />
+
               <div className="relative w-full sm:w-[340px]">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#7b8a9a]" />
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: THEME.dim }} />
                 <input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search teams…"
-                  className="w-full bg-[#101821] text-[#dbe4ee] border border-[#1e2a36] rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#2b8cff]"
+                  className="w-full rounded-md pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1"
+                  style={{
+                    background: THEME.panel2,
+                    border: `1px solid ${THEME.border}`,
+                    color: THEME.text,
+                  }}
                 />
               </div>
             </div>
 
-            {/* Row 2 */}
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={format}
                 onChange={(v) => setFormat(v as OddsFormat)}
                 options={[{ value: "american", label: "American" }]}
               />
-
-              <Chip label={`Sportsbooks (${sportsBookCount})`} />
+              <Chip label={`Sportsbooks (${sportsbookCount})`} />
 
               <button
                 onClick={refresh}
-                className="ml-auto flex items-center gap-2 bg-[#0f2236] border border-[#224663] text-[#dbe4ee] rounded-md px-3 py-2 text-sm hover:bg-[#12314e]"
+                className="ml-auto flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold"
+                style={{
+                  background: `linear-gradient(180deg, rgba(212,175,55,0.22), rgba(212,175,55,0.10))`,
+                  border: `1px solid ${THEME.gold2}`,
+                  color: THEME.text,
+                }}
               >
                 <RefreshCcw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
                 Refresh
               </button>
             </div>
 
-            {/* Status */}
-            <div className="flex items-center justify-between text-xs text-[#7b8a9a]">
+            <div className="flex items-center justify-between text-xs" style={{ color: THEME.dim }}>
               <div>
                 {boardRows.length} rows ·{" "}
-                {market === "spreads"
-                  ? "Point spreads"
-                  : market === "h2h"
-                  ? "Moneylines"
-                  : "Totals"}
+                {market === "spreads" ? "Point spreads" : market === "h2h" ? "Moneylines" : "Totals"}
               </div>
               <div>
-                {lastUpdated ? `Last updated ${lastUpdated} CT` : "—"}
+                Feed: {events.length > 0 ? "events + odds" : "odds-only"} · {snapshots.length} offers
               </div>
             </div>
           </div>
@@ -608,31 +843,39 @@ export function OddsScreen({
 
       {/* Board */}
       <div className="px-4 pb-6 pt-3">
-        <div className="rounded-xl border border-[#17222e] bg-[#0b1118] overflow-hidden">
+        <div
+          className="rounded-xl overflow-hidden"
+          style={{
+            border: `1px solid ${THEME.border}`,
+            background: THEME.bg,
+          }}
+        >
           <div className="overflow-x-auto">
             <table className="min-w-[1100px] w-full border-collapse">
-              {/* Sticky Header */}
-              <thead className="sticky top-0 z-10 bg-[#0f1720]">
-                <tr className="border-b border-[#17222e]">
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-[#9fb0c2] w-[360px]">
+              <thead
+                className="sticky top-0 z-10"
+                style={{
+                  background: THEME.panel,
+                  borderBottom: `1px solid ${THEME.border}`,
+                }}
+              >
+                <tr>
+                  <th className="text-left px-4 py-3 text-xs font-semibold w-[380px]" style={{ color: THEME.muted }}>
                     Game
                   </th>
-                  <th className="text-left px-3 py-3 text-xs font-semibold text-[#9fb0c2] w-[90px]">
+                  <th className="text-left px-3 py-3 text-xs font-semibold w-[90px]" style={{ color: THEME.muted }}>
                     Time
                   </th>
 
                   {BOOKS.map((b) => (
                     <th
                       key={b.key}
-                      className="px-2 py-3 text-center text-xs font-semibold text-[#9fb0c2] w-[120px]"
+                      className="px-2 py-3 text-center text-xs font-semibold w-[120px]"
+                      style={{ color: THEME.muted }}
                     >
                       <div className="flex items-center justify-center gap-2">
                         {BOOK_ICON[b.key] ? (
-                          <img
-                            src={BOOK_ICON[b.key]}
-                            alt={b.label}
-                            className="h-4 w-auto opacity-90"
-                          />
+                          <img src={BOOK_ICON[b.key]} alt={b.label} className="h-4 w-auto opacity-95" />
                         ) : (
                           <span className="opacity-90">{b.label}</span>
                         )}
@@ -645,10 +888,7 @@ export function OddsScreen({
               <tbody>
                 {grouped.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={2 + BOOKS.length}
-                      className="px-4 py-10 text-center text-sm text-[#7b8a9a]"
-                    >
+                    <td colSpan={2 + BOOKS.length} className="px-4 py-10 text-center text-sm" style={{ color: THEME.dim }}>
                       No games found for this date/phase.
                     </td>
                   </tr>
@@ -656,64 +896,97 @@ export function OddsScreen({
 
                 {grouped.map(([dateKey, rowsForDate]) => {
                   const dateHeaderLabel =
-                    rowsForDate.length > 0
-                      ? fmtDateHeaderCT(rowsForDate[0].commence_time)
-                      : dateKey;
+                    rowsForDate.length > 0 ? fmtDateHeaderCT(rowsForDate[0].commence_time) : dateKey;
 
                   return (
                     <React.Fragment key={dateKey}>
-                      {/* Date separator row */}
-                      <tr className="bg-[#0f1520]">
+                      <tr style={{ background: THEME.panel2 }}>
                         <td
                           colSpan={2 + BOOKS.length}
-                          className="px-4 py-2 text-xs font-semibold text-[#3fb7ff]"
+                          className="px-4 py-2 text-xs font-semibold"
+                          style={{ color: THEME.gold }}
                         >
                           {dateHeaderLabel}
                         </td>
                       </tr>
 
                       {rowsForDate.map((r, idx) => {
-                        const isFirstOfEvent =
-                          idx === 0 || rowsForDate[idx - 1].event_id !== r.event_id;
-
-                        // Add a subtle divider between games like screenshot
                         const showGameDivider =
-                          idx > 0 &&
-                          rowsForDate[idx - 1].event_id !== r.event_id;
+                          idx > 0 && rowsForDate[idx - 1].event_id !== r.event_id;
+
+                        const meta = metaByEvent[r.event_id];
+                        const matchup = meta ? `${getAbbr(meta.away_team)} vs ${getAbbr(meta.home_team)}` : "";
+
+                        const logo = r.rowType === "team" ? getLogo(r.teamCanonical) : null;
+                        const abbr = r.rowType === "team" ? getAbbr(r.teamCanonical) : "";
 
                         return (
-                          <React.Fragment key={`${r.event_id}-${r.rowType}-${r.side ?? r.totalSide}`}>
+                          <React.Fragment
+                            key={`${r.event_id}-${r.rowType}-${r.side ?? r.totalSide}`}
+                          >
                             {showGameDivider && (
                               <tr>
                                 <td
                                   colSpan={2 + BOOKS.length}
-                                  className="h-[8px] bg-[#0b1118] border-t border-[#17222e]"
+                                  className="h-[8px]"
+                                  style={{
+                                    background: THEME.bg,
+                                    borderTop: `1px solid ${THEME.border2}`,
+                                  }}
                                 />
                               </tr>
                             )}
 
-                            <tr className="border-t border-[#131c26] hover:bg-[#0f1720]">
-                              {/* Game / Team cell */}
+                            <tr
+                              style={{
+                                borderTop: `1px solid ${THEME.border2}`,
+                              }}
+                            >
+                              {/* Team cell */}
                               <td className="px-4 py-3 align-middle">
                                 <div className="flex items-center gap-3">
-                                  <div className="min-w-0">
-                                    <div className="text-sm font-semibold text-[#e6edf6] truncate">
-                                      {r.rowType === "team" ? r.labelLeft : r.labelLeft}
-                                    </div>
-
-                                    {/* Only show matchup subline on first row of each event */}
-                                    {isFirstOfEvent && (
-                                      <div className="text-xs text-[#7b8a9a] mt-1 truncate">
-                                        {metaByEvent[r.event_id]?.away_team} vs{" "}
-                                        {metaByEvent[r.event_id]?.home_team}
+                                  {r.rowType === "team" ? (
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      {logo ? (
+                                        <img
+                                          src={logo}
+                                          alt={abbr}
+                                          className="h-6 w-6 rounded-sm"
+                                          style={{ objectFit: "contain" }}
+                                        />
+                                      ) : (
+                                        <div
+                                          className="h-6 w-6 rounded-sm"
+                                          style={{
+                                            background: THEME.panel2,
+                                            border: `1px solid ${THEME.border}`,
+                                          }}
+                                        />
+                                      )}
+                                      <div className="min-w-0">
+                                        <div className="text-sm font-semibold truncate" style={{ color: THEME.text }}>
+                                          {r.labelLeft}
+                                        </div>
+                                        <div className="text-xs truncate" style={{ color: THEME.dim }}>
+                                          {matchup}
+                                        </div>
                                       </div>
-                                    )}
-                                  </div>
+                                    </div>
+                                  ) : (
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-semibold" style={{ color: THEME.text }}>
+                                        {r.labelLeft}
+                                      </div>
+                                      <div className="text-xs truncate" style={{ color: THEME.dim }}>
+                                        {r.labelRight}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </td>
 
-                              {/* Time cell */}
-                              <td className="px-3 py-3 text-xs text-[#9fb0c2]">
+                              {/* Time */}
+                              <td className="px-3 py-3 text-xs" style={{ color: THEME.muted }}>
                                 {r.timeLabel}
                               </td>
 
@@ -723,33 +996,33 @@ export function OddsScreen({
                                 const has = offer && (offer.price != null || offer.line != null);
 
                                 return (
-                                  <td
-                                    key={b.key}
-                                    className="px-2 py-2 text-center align-middle"
-                                  >
-                                    <div className="mx-auto w-[104px] rounded-md border border-[#1a2734] bg-[#0e151f] px-2 py-2">
+                                  <td key={b.key} className="px-2 py-2 text-center align-middle">
+                                    <div
+                                      className="mx-auto w-[104px] rounded-md px-2 py-2"
+                                      style={{
+                                        background: THEME.panel2,
+                                        border: `1px solid ${THEME.border}`,
+                                        boxShadow: "inset 0 1px 0 rgba(255,255,255,0.02)",
+                                      }}
+                                    >
                                       {!has ? (
-                                        <div className="text-xs text-[#3b4a5b]">—</div>
+                                        <div className="text-xs" style={{ color: "#3b4a5b" }}>
+                                          —
+                                        </div>
                                       ) : market === "h2h" ? (
-                                        <div className="text-xs font-semibold text-[#dbe4ee] tabular-nums">
+                                        <div className="text-xs font-semibold tabular-nums" style={{ color: THEME.text }}>
                                           {fmtAmerican(offer?.price)}
                                         </div>
-                                      ) : market === "spreads" ? (
-                                        <div className="space-y-[2px] text-xs font-semibold tabular-nums">
-                                          <div className="text-[#dbe4ee]">
-                                            {offer?.line != null ? fmtLine(offer.line) : ""}
-                                          </div>
-                                          <div className="text-[#9fb0c2]">
-                                            {fmtAmerican(offer?.price)}
-                                          </div>
-                                        </div>
                                       ) : (
-                                        // totals
                                         <div className="space-y-[2px] text-xs font-semibold tabular-nums">
-                                          <div className="text-[#dbe4ee]">
-                                            {offer?.line != null ? offer.line.toFixed(1) : ""}
+                                          <div style={{ color: THEME.text }}>
+                                            {offer?.line != null
+                                              ? market === "totals"
+                                                ? offer.line.toFixed(1)
+                                                : fmtLine(offer.line)
+                                              : ""}
                                           </div>
-                                          <div className="text-[#9fb0c2]">
+                                          <div style={{ color: THEME.muted }}>
                                             {fmtAmerican(offer?.price)}
                                           </div>
                                         </div>
@@ -769,10 +1042,16 @@ export function OddsScreen({
             </table>
           </div>
 
-          {/* Footer */}
-          <div className="flex items-center justify-between px-4 py-3 border-t border-[#17222e] text-xs text-[#7b8a9a] bg-[#0b1118]">
+          <div
+            className="flex items-center justify-between px-4 py-3 text-xs"
+            style={{
+              borderTop: `1px solid ${THEME.border}`,
+              background: THEME.panel,
+              color: THEME.dim,
+            }}
+          >
             <div>Showing {boardRows.length} rows</div>
-            <div className="italic">Market Board · American format</div>
+            <div className="italic">Market Board · Pittsburgh Theme</div>
           </div>
         </div>
       </div>
