@@ -82,6 +82,7 @@ const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
 const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
 const BOARD_STICKY_BG = BOARD_BG;
+const TABLE_HEADER_BG = "#0b0b0b";
 const FILTER_ROW_HEIGHT = 48;
 const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
 const DATE_BAR_HEIGHT = 44;
@@ -2376,10 +2377,9 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
           className="sticky px-4 py-2 flex items-center justify-between border-y"
           style={{
             top: HEADER_ROW_HEIGHT,
-            zIndex: 70,
+            zIndex: 20,
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
-            backdropFilter: "blur(10px)",
             height: DATE_BAR_HEIGHT,
           }}
         >
@@ -2413,17 +2413,24 @@ function TableHeaderRow({
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
     top: 0,
-    zIndex: 80,
-    background: BOARD_BG,
+    zIndex: 101,
+    background: TABLE_HEADER_BG,
+    backgroundClip: "padding-box",
   };
   return (
-    <thead>
+    <thead
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 100,
+        background: TABLE_HEADER_BG,
+      }}
+    >
       <tr
         className="border-y"
         style={{
           borderColor: PRISM_BORDER,
-          background: BOARD_BG,
-          backdropFilter: "blur(10px)",
+          background: TABLE_HEADER_BG,
           height: HEADER_ROW_HEIGHT,
         }}
       >
@@ -3264,7 +3271,10 @@ export function OddsScreen({
                         background: BOARD_BG,
                       }}
                     >
-                      <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
+                      <table
+                        className="w-full table-fixed min-w-[1080px]"
+                        style={{ background: BOARD_BG, borderCollapse: "separate", borderSpacing: 0 }}
+                      >
                         <colgroup>
                           <col style={{ width: COL_GAME }} />
                           <col style={{ width: COL_BOOK }} />
