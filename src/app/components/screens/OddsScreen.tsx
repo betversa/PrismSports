@@ -3238,7 +3238,7 @@ export function OddsScreen({
                   className="max-h-[calc(100vh-240px)] overflow-auto"
                   style={{ scrollPaddingTop: DATE_BAR_HEIGHT + 40, background: BOARD_BG }}
                 >
-                  <table className="w-full table-fixed min-w-[1080px]">
+                  <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
                     <colgroup>
                       <col style={{ width: COL_GAME }} />
                       <col style={{ width: COL_BOOK }} />
