@@ -9,7 +9,7 @@
 //    - Date section separators like the reference board
 //    - Odds cells rendered as compact “chips” (line + price) inside gray rounded boxes
 //
-// ✅ KEEP: Game Details modal button (desktop + mobile)
+// ✅ KEEP: Game Details modal (triggered by icon actions)
 // ✅ KEEP: Predictions “Key Lines”: remove Quantum ML block (consensus only)
 // ✅ KEEP: Mobile Predictions: smaller logos + team names ABOVE the win% bar
 // ✅ KEEP: Player Props modal: sticky headers + its OWN scroll container (no blank gap jump)
@@ -75,17 +75,17 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-// Prism Theme (black / gold + subtle teal like reference separators)
-const PRISM_BG = "#070707";
-const PRISM_PANEL = "rgba(10,10,10,0.55)";
+// Prism Theme (black / gold)
 const PRISM_BORDER = "rgba(255,255,255,0.08)";
 const PRISM_GOLD = "#d4af37";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
-const PRISM_TEAL = "#18b7c6"; // subtle accent similar to reference lines
-const PRISM_TEXT = "#e8e8e8";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
+const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
+const BOARD_STICKY_BG = BOARD_BG;
+const DATE_BAR_HEIGHT = 44;
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
+const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
 const BOOK_LABEL: Record<BookKey, string> = {
   dk: "DraftKings",
   fd: "FanDuel",
@@ -110,8 +110,7 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   bol: "/books/bol.png",
 };
 
-const COL_GAME = 360;
-const COL_TIME = 120;
+const COL_GAME = 380;
 const COL_BOOK = 120;
 
 const PAGE_MAX_W = "max-w-[1500px]";
@@ -209,6 +208,16 @@ function maxIso(a: string | null, b: string | null) {
   if (!an) return b;
   if (!bn) return a;
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
+}
+
+function minutesSinceIso(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const n = normalizeIso(iso);
+  if (!n) return null;
+  const ts = new Date(n).getTime();
+  if (!Number.isFinite(ts)) return null;
+  const diffMs = Date.now() - ts;
+  return diffMs >= 0 ? Math.round(diffMs / 60000) : 0;
 }
 
 /* =========================================================
@@ -487,7 +496,7 @@ function OddsChip({
 }) {
   // chip like reference: gray box, two-line
   return (
-    <div className="w-[104px] h-[44px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
+    <div className="w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
       <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
         {parts.top}
       </div>
@@ -531,18 +540,33 @@ function TextInput({
   value,
   onChange,
   placeholder,
+  onClear,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
+  onClear?: () => void;
 }) {
+  const showClear = Boolean(onClear && value);
   return (
-    <input
-      className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 outline-none focus:border-[rgba(212,175,55,0.55)]"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-    />
+    <div className="relative">
+      <input
+        className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {showClear ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="absolute right-2 top-1/2 -translate-y-1/2 h-6 w-6 rounded-md text-white/70 hover:text-white hover:bg-white/10 border border-transparent hover:border-white/10 text-xs font-bold"
+          aria-label="Clear search"
+        >
+          ✕
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -550,10 +574,12 @@ function Btn({
   onClick,
   children,
   variant = "gold",
+  disabled = false,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   variant?: "gold" | "ghost";
+  disabled?: boolean;
 }) {
   const base =
     "h-9 px-3 rounded-lg border text-sm font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
@@ -561,10 +587,144 @@ function Btn({
     "bg-[#d4af37] text-black border-[#d4af37] hover:bg-[#e2c257] hover:border-[#e2c257]";
   const ghost =
     "bg-black/30 text-white border-white/10 hover:border-white/20 hover:bg-black/40";
+  const disabledStyles = "opacity-60 cursor-not-allowed hover:bg-[#d4af37] hover:border-[#d4af37]";
   return (
-    <button className={`${base} ${variant === "gold" ? gold : ghost}`} onClick={onClick} type="button">
+    <button
+      className={`${base} ${variant === "gold" ? gold : ghost} ${disabled ? disabledStyles : ""}`}
+      onClick={onClick}
+      type="button"
+      disabled={disabled}
+    >
       {children}
     </button>
+  );
+}
+
+function DateReminder({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="text-[11px] text-white/60 font-semibold">Selected date</div>
+      <div className="h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold flex items-center">
+        {label}
+      </div>
+    </div>
+  );
+}
+
+function SegmentedToggle<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-white/10 bg-black/35 p-1">
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={[
+              "h-7 px-3 rounded-md text-[11px] font-extrabold transition-colors",
+              active
+                ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
+                : "text-white/70 hover:text-white",
+            ].join(" ")}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  icon,
+  active = false,
+}: {
+  label: string;
+  onClick: () => void;
+  icon: React.ReactNode;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={[
+        "h-8 w-8 flex items-center justify-center rounded-lg border text-white/80 transition-colors",
+        "hover:border-white/30 hover:bg-white/10 hover:text-white",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.35)]",
+        active ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.18)] text-white" : "border-white/10 bg-black/30",
+      ].join(" ")}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function IconInfo() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 10.5v6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="12" cy="7.5" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function IconTrend() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 16l6-6 4 4 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M16 7h4v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconPlayers() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="3" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="17" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M4.5 18c.6-2.3 2.7-4 4.5-4s3.9 1.7 4.5 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M14.5 18c.4-1.6 1.8-2.7 3.5-2.7 1.4 0 2.6.7 3.2 1.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconBooks() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6 6h8a3 3 0 0 1 3 3v9H9a3 3 0 0 0-3 3z" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M6 6v15" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M9 6h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function EmptyState({
+  title,
+  subtitle,
+}: {
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <div className="p-6 text-center text-white/70">
+      <div className="text-sm font-extrabold text-white">{title}</div>
+      {subtitle ? <div className="text-xs mt-1 text-white/60">{subtitle}</div> : null}
+    </div>
   );
 }
 
@@ -603,11 +763,11 @@ function ModalShell({
         style={{
           background:
             `radial-gradient(1200px 700px at 15% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-            "radial-gradient(900px 700px at 70% 95%, rgba(24,183,198,0.10), transparent 58%)," +
+            "radial-gradient(900px 700px at 70% 95%, rgba(212,175,55,0.12), transparent 58%)," +
             "linear-gradient(180deg, rgba(15,15,15,0.98), rgba(10,10,10,0.98))",
         }}
       >
-        <div className="px-4 py-3 border-b border-white/10 flex items-start justify-between gap-4 shrink-0 bg-black/30 backdrop-blur-[6px]">
+        <div className="px-4 py-2.5 border-b border-white/10 flex items-start justify-between gap-4 shrink-0 bg-black/30 backdrop-blur-[6px]">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
             {subtitle ? (
@@ -1324,14 +1484,20 @@ function GameDetailsModal({
   sportKey,
   ev,
   oddsFormat,
+  initialTab = "pred",
   onClose,
 }: {
   sportKey: string;
   ev: EventOdds;
   oddsFormat: OddsFormat;
+  initialTab?: DetailsTab;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<DetailsTab>("pred");
+  const [tab, setTab] = useState<DetailsTab>(initialTab);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   // line movement state
   const [lmMarket, setLmMarket] = useState<Market>("ml");
@@ -2100,8 +2266,8 @@ function GameDetailsModal({
 
                   <tbody>
                     {propsAgg.map((r) => (
-                      <tr key={r.player_name} className="border-b border-white/10 hover:bg-white/5">
-                        <td className="px-4 py-3">
+                      <tr key={r.player_name} className="border-b border-white/10 hover:bg-white/6">
+                        <td className="px-4 py-2.5">
                           <div className="flex items-center gap-3 min-w-0">
                             {r.picture_url ? (
                               <img
@@ -2122,13 +2288,13 @@ function GameDetailsModal({
                           </div>
                         </td>
 
-                        <td className="px-3 py-3 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
+                        <td className="px-3 py-2.5 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
 
-                        <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
+                        <td className="px-3 py-2.5 text-center text-white font-extrabold tabular-nums text-[12px]">
                           {r.display_line == null ? "—" : r.display_line}
                         </td>
 
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-2.5">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
                               <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
@@ -2138,7 +2304,7 @@ function GameDetailsModal({
                           </div>
                         </td>
 
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-2.5">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
                               <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
@@ -2175,6 +2341,19 @@ const SPORT_TABS: SportTab[] = [
   { key: "mma_mixed_martial_arts", label: "UFC" },
 ];
 
+const ODDS_SPORT_KEYS = new Set([
+  "baseball_mlb",
+  "football_nfl",
+  "football_ncaaf",
+  "basketball_nba",
+  "basketball_ncaab",
+  "icehockey_nhl",
+]);
+
+function isOddsSportKey(key: string): boolean {
+  return ODDS_SPORT_KEYS.has(key);
+}
+
 function sportLabelForKey(sportKey: string) {
   if (sportKey === "basketball_nba") return "NBA";
   if (sportKey === "basketball_ncaab") return "NCAAM";
@@ -2189,15 +2368,26 @@ function sportLabelForKey(sportKey: string) {
    BOARD TABLE (reference-style)
 ========================================================= */
 
-function DateSectionHeader({ label }: { label: string }) {
+function DateSectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <tr>
-      <td colSpan={2 + BOOKS.length + 1} className="p-0">
-        <div className="px-4 py-2 flex items-center justify-between">
-          <div className="text-[12px] font-extrabold text-white/80">{label}</div>
-          <div className="text-[11px] font-semibold text-white/45">Pre-Game</div>
+      <td colSpan={BOOKS.length + 2} className="p-0">
+        <div
+          className="sticky top-0 z-30 px-4 py-2 flex items-center justify-between border-y"
+          style={{
+            borderColor: PRISM_BORDER,
+            background: BOARD_STICKY_BG,
+            backdropFilter: "blur(10px)",
+            height: DATE_BAR_HEIGHT,
+          }}
+        >
+          <div className="text-[11px] font-extrabold text-white/90">
+            {label}
+            <span className="text-white/50 font-semibold ml-2">({count} games)</span>
+          </div>
+          <div className="text-[10px] font-semibold text-white/45">Pre-Game</div>
         </div>
-        <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_TEAL}, transparent)` }} />
+        <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_GOLD}, transparent)` }} />
       </td>
     </tr>
   );
@@ -2205,40 +2395,62 @@ function DateSectionHeader({ label }: { label: string }) {
 
 function TableHeaderRow({
   oddsFormat,
+  displayBooks,
+  draggingKey,
+  onBookPointerDown,
+  onBookPointerUp,
+  onBookPointerCancel,
 }: {
   oddsFormat: OddsFormat;
+  displayBooks: BookKey[];
+  draggingKey: BookKey | null;
+  onBookPointerDown: (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => void;
+  onBookPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
 }) {
   return (
-    <thead className="sticky top-[104px] z-30">
+    <thead style={{ position: "sticky", top: DATE_BAR_HEIGHT, zIndex: 20, background: BOARD_BG }}>
       <tr
         className="border-y"
         style={{
           borderColor: PRISM_BORDER,
-          background: "rgba(15,15,15,0.92)",
+          background: BOARD_BG,
           backdropFilter: "blur(10px)",
         }}
       >
-        <th className="text-left px-4 py-3 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
+        <th className="text-left px-4 py-2 text-[11px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
           Game
-        </th>
-        <th className="text-left px-3 py-3 text-[12px] font-extrabold text-white/80" style={{ width: COL_TIME }}>
-          Time
         </th>
 
         {/* Consensus column like reference (subtle) */}
-        <th className="text-center px-2 py-3 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
+        <th className="text-center px-2 py-2 text-[11px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
           Cons
-          <div className="text-[10px] font-semibold text-white/45 mt-0.5">
+          <div className="text-[9px] font-semibold text-white/45 mt-0.5">
             {oddsFormat === "american" ? "AM" : "DEC"}
           </div>
         </th>
 
-        {BOOKS.map((bk) => {
+        {displayBooks.map((bk) => {
           const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
           return (
-            <th key={bk} className="text-center px-2 py-3" style={{ width: COL_BOOK }}>
+            <th key={bk} className="text-center px-2 py-2" style={{ width: COL_BOOK }}>
               <div className="flex items-center justify-center">
-                <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+                <button
+                  type="button"
+                  data-book={bk}
+                  onPointerDown={onBookPointerDown(bk)}
+                  onPointerUp={onBookPointerUp}
+                  onPointerCancel={onBookPointerCancel}
+                  className={[
+                    "rounded-full transition-colors",
+                    draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
+                  ].join(" ")}
+                  style={{ touchAction: "none" }}
+                  title="Drag to reorder"
+                  aria-label={`Reorder ${BOOK_LABEL[bk]}`}
+                >
+                  <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+                </button>
               </div>
             </th>
           );
@@ -2252,12 +2464,14 @@ function EventRowTwoLines({
   ev,
   market,
   oddsFormat,
+  displayBooks,
   onOpenDetails,
 }: {
   ev: EventOdds;
   market: Market;
   oddsFormat: OddsFormat;
-  onOpenDetails: (ev: EventOdds) => void;
+  displayBooks: BookKey[];
+  onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
 }) {
   const leftLabel = market === "total" ? "Over" : "Away";
   const rightLabel = market === "total" ? "Under" : "Home";
@@ -2268,8 +2482,8 @@ function EventRowTwoLines({
   return (
     <>
       {/* AWAY / OVER */}
-      <tr className="border-b border-white/10 hover:bg-white/5">
-        <td className="px-4 py-3 align-middle" rowSpan={2}>
+      <tr className="border-b border-white/10 hover:bg-white/6">
+        <td className="px-4 py-2.5 align-middle" rowSpan={2}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
@@ -2280,36 +2494,25 @@ function EventRowTwoLines({
 
             <div className="shrink-0 flex flex-col items-end gap-2">
               <div className="text-[11px] text-white/60 font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-              <button
-                type="button"
-                onClick={() => onOpenDetails(ev)}
-                className="h-8 px-3 rounded-lg border text-xs font-extrabold shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
-                style={{
-                  background: PRISM_GOLD,
-                  borderColor: PRISM_GOLD,
-                  color: "#0a0a0a",
-                }}
-              >
-                Game Details
-              </button>
+              <div className="flex items-center gap-2">
+                <IconButton label="Game details" onClick={() => onOpenDetails(ev, "pred")} icon={<IconInfo />} />
+                <IconButton label="Line movement" onClick={() => onOpenDetails(ev, "line")} icon={<IconTrend />} />
+                <IconButton label="Player props" onClick={() => onOpenDetails(ev, "props")} icon={<IconPlayers />} />
+              </div>
             </div>
           </div>
         </td>
 
-        <td className="px-3 py-3 text-[12px] text-white/70 font-semibold">
-          {fmtCTDateTime(ev.commenceTime)}
-        </td>
-
         {/* Consensus chip */}
-        <td className="px-2 py-3">
+        <td className="px-2 py-2.5">
           <div className="flex justify-center">
             <OddsChip parts={awayCons} />
           </div>
         </td>
 
         {/* Books */}
-        {BOOKS.map((bk) => (
-          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-3">
+        {displayBooks.map((bk) => (
+          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-2.5">
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
             </div>
@@ -2318,19 +2521,15 @@ function EventRowTwoLines({
       </tr>
 
       {/* HOME / UNDER */}
-      <tr className="border-b border-white/10 hover:bg-white/5">
-        <td className="px-3 py-3 text-[12px] text-white/70 font-semibold">
-          <span className="text-white/45"> </span>
-        </td>
-
-        <td className="px-2 py-3">
+      <tr className="border-b border-white/10 hover:bg-white/6">
+        <td className="px-2 py-2.5">
           <div className="flex justify-center">
             <OddsChip parts={homeCons} />
           </div>
         </td>
 
-        {BOOKS.map((bk) => (
-          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-3">
+        {displayBooks.map((bk) => (
+          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-2.5">
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
             </div>
@@ -2349,6 +2548,7 @@ function EventCardMobile({
   ev,
   market,
   oddsFormat,
+  displayBooks,
   booksOpen,
   onToggleBooks,
   onOpenDetails,
@@ -2356,9 +2556,10 @@ function EventCardMobile({
   ev: EventOdds;
   market: Market;
   oddsFormat: OddsFormat;
+  displayBooks: BookKey[];
   booksOpen: boolean;
   onToggleBooks: () => void;
-  onOpenDetails: (ev: EventOdds) => void;
+  onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
 }) {
   const leftLabel = market === "total" ? "Over" : "Away";
   const rightLabel = market === "total" ? "Under" : "Home";
@@ -2374,14 +2575,19 @@ function EventCardMobile({
         </div>
 
         <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={onToggleBooks}>
-            {booksOpen ? "Hide Books" : "Show Books"}
-          </Btn>
-          <Btn onClick={() => onOpenDetails(ev)}>Game Details</Btn>
+          <IconButton
+            label={booksOpen ? "Hide books" : "Show books"}
+            onClick={onToggleBooks}
+            icon={<IconBooks />}
+            active={booksOpen}
+          />
+          <IconButton label="Game details" onClick={() => onOpenDetails(ev, "pred")} icon={<IconInfo />} />
+          <IconButton label="Line movement" onClick={() => onOpenDetails(ev, "line")} icon={<IconTrend />} />
+          <IconButton label="Player props" onClick={() => onOpenDetails(ev, "props")} icon={<IconPlayers />} />
         </div>
       </div>
 
-      <div className="px-3 py-3 space-y-2.5">
+      <div className="px-3 py-2.5 space-y-2.5">
         <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
         <TeamCell team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} sub={rightLabel} />
       </div>
@@ -2417,7 +2623,7 @@ function EventCardMobile({
             </div>
 
             <div className="px-3">
-              {BOOKS.map((bk) => {
+              {displayBooks.map((bk) => {
                 const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
                 return (
                   <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
@@ -2448,7 +2654,13 @@ function EventCardMobile({
    SCREEN
 ========================================================= */
 
-export function OddsScreen({ sportKey }: { sportKey: string }) {
+export function OddsScreen({
+  sportKey,
+  onPickSport,
+}: {
+  sportKey: string;
+  onPickSport?: (key: string) => void;
+}) {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [market, setMarket] = useState<Market>("spread");
@@ -2463,8 +2675,12 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [activeEvent, setActiveEvent] = useState<EventOdds | null>(null);
+  const [detailsTab, setDetailsTab] = useState<DetailsTab>("pred");
 
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
+  const [bookOrder, setBookOrder] = useState<BookKey[]>(BOOKS);
+  const [draggingBook, setDraggingBook] = useState<BookKey | null>(null);
+  const dragBookRef = useRef<BookKey | null>(null);
 
   async function load() {
     setError("");
@@ -2562,6 +2778,28 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     setActiveEvent(null);
   }, [sportKey]);
 
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(BOOK_ORDER_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const next = parsed.filter((b) => BOOKS.includes(b));
+      if (next.length !== BOOKS.length) return;
+      setBookOrder(next);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BOOK_ORDER_STORAGE_KEY, JSON.stringify(bookOrder));
+    } catch {
+      // ignore
+    }
+  }, [bookOrder]);
+
   const availableDates = useMemo(() => {
     const todayCt = ctTodayYmd();
     const nowMs = Date.now();
@@ -2595,46 +2833,56 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
   }, [availableDates]);
 
-  const eventsForDate = useMemo(() => {
-    if (!selectedDate) return [];
+  const eventsForView = useMemo(() => {
     const todayCt = ctTodayYmd();
     const nowMs = Date.now();
 
     return allEvents.filter((ev) => {
-      const evDate = ctYmdFromIso(ev.commenceTime);
-      if (evDate !== selectedDate) return false;
-
       if (view === "live") {
         // NOTE: If you have live flags, plug them in here. For now, live view shows none.
         return false;
       }
 
       // pregame: future games
-      if (selectedDate === todayCt) {
+      const evDate = ctYmdFromIso(ev.commenceTime);
+      if (evDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
         return startMs > nowMs;
       }
       return true;
     });
-  }, [allEvents, selectedDate, view]);
+  }, [allEvents, view]);
 
   const events = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return eventsForDate;
-    return eventsForDate.filter((ev) => {
+    if (!q) return eventsForView;
+    return eventsForView.filter((ev) => {
       const a = (ev.away?.team ?? "").toLowerCase();
       const h = (ev.home?.team ?? "").toLowerCase();
       return a.includes(q) || h.includes(q);
     });
-  }, [eventsForDate, query]);
+  }, [eventsForView, query]);
 
   const eventsByDaySection = useMemo(() => {
-    // Keep reference-style day sections even within a selected date:
-    // We show one section label, but this structure allows future extension.
-    const label = selectedDate ? fmtDateBtn(selectedDate) : "—";
-    return [{ label, events }];
-  }, [selectedDate, events]);
+    const grouped = new Map<string, EventOdds[]>();
+    for (const ev of events) {
+      const ymd = ctYmdFromIso(ev.commenceTime);
+      if (!ymd) continue;
+      const list = grouped.get(ymd) ?? [];
+      list.push(ev);
+      grouped.set(ymd, list);
+    }
+
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([ymd, list]) => ({
+        ymd,
+        label: fmtDateBtn(ymd),
+        count: list.length,
+        events: list,
+      }));
+  }, [events]);
 
   useEffect(() => {
     setMobileOpenMap((prev) => {
@@ -2644,9 +2892,51 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
     });
   }, [events]);
 
-  const openDetails = (ev: EventOdds) => {
+  const openDetails = (ev: EventOdds, tab: DetailsTab = "pred") => {
     setActiveEvent(ev);
+    setDetailsTab(tab);
     setDetailsOpen(true);
+  };
+
+  const handleBookPointerDown = (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => {
+    dragBookRef.current = bk;
+    setDraggingBook(bk);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleBookPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const from = dragBookRef.current;
+    dragBookRef.current = null;
+    setDraggingBook(null);
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (!from) return;
+    const targetEl = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const targetKey = targetEl?.closest("[data-book]")?.getAttribute("data-book") as BookKey | null;
+    if (!targetKey || targetKey === from) return;
+    setBookOrder((prev) => {
+      const next = prev.slice();
+      const fromIdx = next.indexOf(from);
+      const toIdx = next.indexOf(targetKey);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, from);
+      return next;
+    });
+  };
+
+  const handleBookPointerCancel = (e: React.PointerEvent<HTMLButtonElement>) => {
+    dragBookRef.current = null;
+    setDraggingBook(null);
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
+  const handleResetBookOrder = () => {
+    setBookOrder(BOOKS);
+    try {
+      window.localStorage.removeItem(BOOK_ORDER_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
   };
 
   // “Top bar” height for sticky header computations:
@@ -2654,6 +2944,49 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   // - Filters bar ~ 60px
   // => sticky header row uses top-[104px] in TableHeaderRow.
   const topSport = sportLabelForKey(sportKey);
+  const lastUpdatedAge = useMemo(() => minutesSinceIso(lastUpdatedIso), [lastUpdatedIso]);
+  const freshness = useMemo(() => {
+    if (lastUpdatedAge == null) {
+      return { label: "No recent update", tone: "text-white/50", dot: "bg-white/30" };
+    }
+    if (lastUpdatedAge <= 5) {
+      return { label: `${lastUpdatedAge}m ago`, tone: "text-emerald-300", dot: "bg-emerald-400" };
+    }
+    if (lastUpdatedAge <= 15) {
+      return { label: `${lastUpdatedAge}m ago`, tone: "text-amber-300", dot: "bg-amber-400" };
+    }
+    return { label: `${lastUpdatedAge}m ago`, tone: "text-red-300", dot: "bg-red-400" };
+  }, [lastUpdatedAge]);
+
+  const emptyState = useMemo(() => {
+    if (view === "live") {
+      return {
+        title: "No live games available yet.",
+        subtitle: "Live odds will appear when your feed supports in-game updates.",
+      };
+    }
+    if (!availableDates.length) {
+      return {
+        title: "No upcoming games.",
+        subtitle: "Check back later for the next slate.",
+      };
+    }
+    if (query.trim() && !events.length && eventsForView.length) {
+      return {
+        title: `No matches for “${query.trim()}”.`,
+        subtitle: "Try a different team name or clear the search.",
+      };
+    }
+    return {
+      title: "No games available.",
+      subtitle: "Pick another market or refresh the feed.",
+    };
+  }, [availableDates.length, events.length, eventsForView.length, query, view]);
+
+  const selectedDateLabel = useMemo(() => {
+    if (!selectedDate) return "—";
+    return fmtDateBtn(selectedDate);
+  }, [selectedDate]);
 
   return (
     <div
@@ -2661,8 +2994,8 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
       style={{
         background:
           `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-          "radial-gradient(1000px 700px at 85% 0%, rgba(24,183,198,0.12), transparent 55%)," +
-          "linear-gradient(180deg, #050505, #0a0a0a 55%, #050505)",
+          "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
+          "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
       }}
     >
       <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X} relative`}>
@@ -2671,9 +3004,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         =========================== */}
         <div className="sticky top-0 z-50">
           <div
-            className="h-[44px] flex items-center justify-between px-2 md:px-0"
+            className="h-[42px] flex items-center justify-between px-2 md:px-0"
             style={{
-              background: "rgba(5,5,5,0.88)",
+              background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
               borderBottom: `1px solid ${PRISM_BORDER}`,
               backdropFilter: "blur(10px)",
             }}
@@ -2684,19 +3017,36 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                   t.key === sportKey ||
                   (t.key === "soccer" && sportKey.includes("soccer")) ||
                   (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
                 return (
-                  <div
+                  <button
                     key={t.key}
-                    className="shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border"
+                    type="button"
+                    onClick={() => {
+                      if (enabled && onPickSport) onPickSport(t.key);
+                    }}
+                    disabled={!enabled}
+                    className={[
+                      "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
+                      enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+                      active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                    ].join(" ")}
                     style={{
                       borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                      background: active ? "rgba(212,175,55,0.12)" : "transparent",
+                      background: active ? "rgba(212,175,55,0.16)" : "transparent",
                       color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
                     }}
-                    title={active ? `${t.label} (active)` : t.label}
+                    title={
+                      !enabled
+                        ? `${t.label} (not wired)`
+                        : active
+                          ? `${t.label} (active)`
+                          : `Switch to ${t.label}`
+                    }
                   >
                     {t.label}
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -2705,6 +3055,10 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               <div className="hidden md:flex items-center gap-2">
                 <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
                 <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                  <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                  <span className={freshness.tone}>{freshness.label}</span>
+                </div>
               </div>
               <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
             </div>
@@ -2714,9 +3068,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               FILTERS TOOLBAR
           =========================== */}
           <div
-            className="h-[60px] flex items-center justify-between gap-3 px-2 md:px-0"
+            className="h-[56px] flex items-center justify-between gap-3 px-2 md:px-0"
             style={{
-              background: "rgba(12,12,12,0.80)",
+              background: "linear-gradient(180deg, rgba(12,12,12,0.85), rgba(9,9,9,0.78))",
               borderBottom: `1px solid ${PRISM_BORDER}`,
               backdropFilter: "blur(10px)",
             }}
@@ -2733,35 +3087,28 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 ]}
               />
 
-              <SelectPill
-                value={view}
-                onChange={(v) => setView(v as BoardView)}
-                label="View"
-                options={[
-                  { value: "pregame", label: "Pre-Game" },
-                  { value: "live", label: "Live" },
-                ]}
-              />
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] text-white/60 font-semibold">View</div>
+                <SegmentedToggle
+                  value={view}
+                  options={[
+                    { value: "pregame", label: "Pre-Game" },
+                    { value: "live", label: "Live" },
+                  ]}
+                  onChange={(next) => setView(next as BoardView)}
+                />
+              </div>
 
-              <SelectPill
-                value={selectedDate}
-                onChange={(v) => setSelectedDate(v)}
-                label="Date"
-                options={
-                  availableDates.length
-                    ? availableDates.map((d) => ({ value: d, label: d }))
-                    : [{ value: "", label: "—" }]
-                }
-              />
+              <DateReminder label={selectedDateLabel} />
 
               <div className="hidden md:block">
-                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." />
+                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." onClear={() => setQuery("")} />
               </div>
             </div>
 
             <div className="flex items-center gap-2">
               <div className="md:hidden">
-                <TextInput value={query} onChange={setQuery} placeholder="Search..." />
+                <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
               </div>
 
               <SelectPill
@@ -2780,14 +3127,22 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                 label="Sportsbooks"
                 options={[{ value: "all", label: `All (${BOOKS.length})` }]}
               />
+              <button
+                type="button"
+                onClick={handleResetBookOrder}
+                className="text-[11px] font-semibold text-white/60 hover:text-white"
+              >
+                Reset order
+              </button>
 
               <Btn
                 onClick={() => {
                   setLoading(true);
                   load();
                 }}
+                disabled={loading}
               >
-                Refresh
+                {loading ? "Refreshing…" : "Refresh"}
               </Btn>
             </div>
           </div>
@@ -2796,34 +3151,36 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
         {/* ===========================
             BOARD BODY
         =========================== */}
-        <div className="pt-4 pb-10">
+        <div className="pt-2.5 pb-6">
           <div
-            className="rounded-2xl border overflow-hidden shadow-[0_20px_90px_rgba(0,0,0,0.55)]"
+            className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
             style={{
               borderColor: PRISM_BORDER,
-              background: PRISM_PANEL,
+              background: BOARD_BG,
               backdropFilter: "blur(6px)",
             }}
           >
-            <div className="px-4 py-3 border-b" style={{ borderColor: PRISM_BORDER }}>
+            <div className="px-4 py-2 border-b" style={{ borderColor: PRISM_BORDER }}>
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <div className="text-white font-extrabold text-[14px]">
+                  <div className="text-white font-extrabold text-[13px] leading-tight">
                     {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
                     <span style={{ color: PRISM_GOLD }}>{topSport}</span>
                   </div>
-                  <div className="text-[11px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
+                  <div className="text-[10px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
                     Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
                     {oddsFormat === "american" ? "American" : "Decimal"}
                   </div>
                 </div>
 
                 <div className="text-right">
-                  <div className="text-[11px] font-semibold" style={{ color: PRISM_MUTED }}>
+                  <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
                     {events.length} games
                   </div>
-                  <div className="text-[11px] font-extrabold text-white">
-                    Updated: {fmtCTDateTime(lastUpdatedIso)}
+                  <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
+                    <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
+                    <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                    <span className={freshness.tone}>{freshness.label}</span>
                   </div>
                 </div>
               </div>
@@ -2836,19 +3193,33 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               ) : error ? (
                 <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
               ) : !events.length ? (
-                <div className="p-3 text-xs text-white/60">No games for {selectedDate || "—"}.</div>
+                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
                 <div className="space-y-3">
-                  {events.map((ev) => (
-                    <EventCardMobile
-                      key={ev.eventId}
-                      ev={ev}
-                      market={market}
-                      oddsFormat={oddsFormat}
-                      booksOpen={!!mobileOpenMap[ev.eventId]}
-                      onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
-                      onOpenDetails={openDetails}
-                    />
+                  {eventsByDaySection.map((sec) => (
+                    <div key={sec.ymd} className="space-y-3">
+                      <div
+                        className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
+                        style={{ background: BOARD_STICKY_BG, boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
+                      >
+                        <div className="text-[12px] font-extrabold text-white/90">
+                          {sec.label}
+                          <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
+                        </div>
+                      </div>
+                      {sec.events.map((ev) => (
+                        <EventCardMobile
+                          key={ev.eventId}
+                          ev={ev}
+                          market={market}
+                          oddsFormat={oddsFormat}
+                          displayBooks={bookOrder}
+                          booksOpen={!!mobileOpenMap[ev.eventId]}
+                          onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
+                          onOpenDetails={openDetails}
+                        />
+                      ))}
+                    </div>
                   ))}
                 </div>
               )}
@@ -2861,31 +3232,41 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               ) : error ? (
                 <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
               ) : !events.length ? (
-                <div className="p-6 text-sm text-white/60">No games for {selectedDate || "—"}.</div>
+                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full table-fixed min-w-[1180px]">
+                <div
+                  className="max-h-[calc(100vh-240px)] overflow-auto"
+                  style={{ scrollPaddingTop: DATE_BAR_HEIGHT + 40, background: BOARD_BG }}
+                >
+                  <table className="w-full table-fixed min-w-[1080px]">
                     <colgroup>
                       <col style={{ width: COL_GAME }} />
-                      <col style={{ width: COL_TIME }} />
                       <col style={{ width: COL_BOOK }} />
                       {BOOKS.map((_, i) => (
                         <col key={i} style={{ width: COL_BOOK }} />
                       ))}
                     </colgroup>
 
-                    <TableHeaderRow oddsFormat={oddsFormat} />
+                    <TableHeaderRow
+                      oddsFormat={oddsFormat}
+                      displayBooks={bookOrder}
+                      draggingKey={draggingBook}
+                      onBookPointerDown={handleBookPointerDown}
+                      onBookPointerUp={handleBookPointerUp}
+                      onBookPointerCancel={handleBookPointerCancel}
+                    />
 
                     <tbody>
                       {eventsByDaySection.map((sec) => (
-                        <React.Fragment key={sec.label}>
-                          <DateSectionHeader label={sec.label} />
+                        <React.Fragment key={sec.ymd}>
+                          <DateSectionHeader label={sec.label} count={sec.count} />
                           {sec.events.map((ev) => (
                             <EventRowTwoLines
                               key={ev.eventId}
                               ev={ev}
                               market={market}
                               oddsFormat={oddsFormat}
+                              displayBooks={bookOrder}
                               onOpenDetails={openDetails}
                             />
                           ))}
@@ -2907,6 +3288,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
             sportKey={sportKey}
             ev={activeEvent}
             oddsFormat={oddsFormat}
+            initialTab={detailsTab}
             onClose={() => setDetailsOpen(false)}
           />
         )}

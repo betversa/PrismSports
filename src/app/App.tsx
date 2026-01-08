@@ -128,7 +128,7 @@ export default function App() {
       "monte-carlo": <MonteCarloScreen sportKey={predSportKey} />,
 
       // ✅ Odds sport wired here
-      odds: <OddsScreen sportKey={oddsSportKey} />,
+      odds: <OddsScreen sportKey={oddsSportKey} onPickSport={handlePickOddsSport} />,
 
       results: <ResultsScreen />,
       calibration: <CalibrationScreen />,
@@ -175,10 +175,6 @@ export default function App() {
         }}
         activeScreen={activeScreen}
         onHeightChange={(px) => setHeaderH(Math.ceil(px))}
-        oddsSportKey={oddsSportKey}
-        onPickOddsSport={handlePickOddsSport}
-        predSportKey={predSportKey}
-        onPickPredSport={handlePickPredSport}
       />
 
       {/* Main Content scroll container */}
