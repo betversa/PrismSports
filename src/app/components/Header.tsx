@@ -1,26 +1,21 @@
-// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate) + Parlay + Props + Calculator
+// components/Header.tsx — FULL REWRITE (PRISM LOGO THEME: Black + Gold + Slate)
 // ---------------------------------------------------------------------------------------------------
-// ✅ Theme matches provided Prism logo (black/gold/slate) — removes rainbow prism gradients
-// ✅ Fix retained: first dropdown item no longer “pre-highlighted”
-//    - No selected-row background
-//    - Subtle gold dot for selected instead
+// ✅ Theme matches provided Prism logo (black/gold/slate)
 // ✅ Desktop nav centered; logo bigger (md:h-24)
 // ✅ Clicking logo -> Overview
 // ✅ Logo path: /logos/mainlogo.png (kept as-is)
-// ✅ Adds "Parlay" + "Props" + NEW "Calculator" to nav
 // ✅ Mobile: hamburger remains (menu controlled by parent)
-// ✅ Everything else unchanged (API + behavior)
+// ✅ Odds/Predictions are standard nav links (no dropdowns)
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Menu, ChevronDown } from "lucide-react";
-import type { SportKey } from "../App";
+import React, { useLayoutEffect, useRef } from "react";
+import { Menu } from "lucide-react";
 
 type Screen =
   | "overview"
   | "model"
   | "props"
   | "parlay"
-  | "calculator" // ✅ NEW
+  | "calculator"
   | "monte-carlo"
   | "odds"
   | "results"
@@ -32,16 +27,7 @@ type HeaderProps = {
   onNavigate?: (screen: Screen) => void;
   activeScreen?: Screen;
   onHeightChange?: (px: number) => void;
-
-  oddsSportKey: SportKey;
-  onPickOddsSport: (k: SportKey) => void;
-
-  predSportKey: SportKey;
-  onPickPredSport: (k: SportKey) => void;
 };
-
-type UiSport = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
-const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 
 /** =========================
  * THEME (from logo palette)
@@ -49,49 +35,10 @@ const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
 const GOLD = "#d89211";
 const GOLD_SOFT = "rgba(216, 146, 17, 0.18)";
 const GOLD_GLOW = "rgba(216, 146, 17, 0.32)";
-const SLATE = "#575a62";
 const PANEL = "#0b0b0b";
 const BORDER = "#2a2a2a";
 
-const DROPDOWN_EVENT = "prism:header-dropdown-open";
-const DROPDOWN_CLOSE_DELAY_MS = 240;
-
 const TAGLINE = "Sports Models · Projections · Analysis";
-
-/** =========================
- * SPORT MAPPING
- * ========================= */
-function uiToDbSport(s: UiSport): SportKey {
-  switch (s) {
-    case "NCAAB":
-      return "basketball_ncaab";
-    case "NBA":
-      return "basketball_nba";
-    case "NCAAF":
-      return "football_ncaaf";
-    case "NFL":
-      return "football_nfl";
-    case "NHL":
-      return "icehockey_nhl";
-    case "MLB":
-      return "baseball_mlb";
-  }
-}
-
-function isEnabled(db: SportKey) {
-  return db === "basketball_ncaab" || db === "basketball_nba";
-}
-
-function useOutsideClick(ref: React.RefObject<HTMLElement>, onClose: () => void) {
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [ref, onClose]);
-}
 
 function NavItem({
   label,
@@ -125,184 +72,11 @@ function NavItem({
   );
 }
 
-function HoverDropdown({
-  label,
-  active,
-  suffix,
-  selectedDbSport,
-  onPickDbSport,
-}: {
-  label: "Odds" | "Predictions";
-  active?: boolean;
-  suffix: "Odds" | "Predictions";
-  selectedDbSport: SportKey;
-  onPickDbSport: (sportKey: SportKey) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  useOutsideClick(wrapRef, () => setOpen(false));
-
-  const idRef = useRef<string>(`${label}-${Math.random().toString(16).slice(2)}`);
-
-  const closeTimer = useRef<number | null>(null);
-  const clearTimer = () => {
-    if (closeTimer.current) {
-      window.clearTimeout(closeTimer.current);
-      closeTimer.current = null;
-    }
-  };
-
-  const closeNow = () => {
-    clearTimer();
-    setOpen(false);
-  };
-
-  const scheduleClose = () => {
-    clearTimer();
-    closeTimer.current = window.setTimeout(() => setOpen(false), DROPDOWN_CLOSE_DELAY_MS);
-  };
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const ev = e as CustomEvent<{ id: string }>;
-      const openedId = ev?.detail?.id;
-      if (!openedId) return;
-      if (openedId !== idRef.current) closeNow();
-    };
-    window.addEventListener(DROPDOWN_EVENT, handler as EventListener);
-    return () => window.removeEventListener(DROPDOWN_EVENT, handler as EventListener);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const openNow = () => {
-    clearTimer();
-    window.dispatchEvent(new CustomEvent(DROPDOWN_EVENT, { detail: { id: idRef.current } }));
-    setOpen(true);
-  };
-
-  return (
-    <div ref={wrapRef} className="relative" onMouseEnter={openNow} onMouseLeave={scheduleClose}>
-      <button
-        type="button"
-        className={[
-          "relative flex items-center gap-1 px-1 py-1",
-          "text-[14px] md:text-[15px] font-medium tracking-normal transition-colors",
-          active ? "text-white" : "text-[#cfcfcf] hover:text-white",
-        ].join(" ")}
-        onMouseEnter={openNow}
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent(DROPDOWN_EVENT, { detail: { id: idRef.current } }));
-          setOpen((v) => !v);
-        }}
-      >
-        {label}
-        <ChevronDown className="w-4 h-4 opacity-70" />
-        <span
-          className="absolute left-0 -bottom-2 h-[2px] w-full rounded"
-          style={{
-            background:
-              "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.95), rgba(216,146,17,0.0))",
-            opacity: active ? 1 : 0,
-          }}
-        />
-      </button>
-
-      {open && (
-        <div
-          className="absolute left-0 mt-3 w-[280px] rounded-xl border shadow-2xl overflow-hidden z-50"
-          style={{
-            borderColor: BORDER,
-            background: PANEL,
-          }}
-          onMouseEnter={openNow}
-          onMouseLeave={scheduleClose}
-        >
-          <div
-            className="pointer-events-none absolute inset-0 z-0"
-            style={{
-              background: [
-                `radial-gradient(520px 220px at 14% 0%, ${GOLD_GLOW}, transparent 62%)`,
-                `radial-gradient(560px 260px at 72% -10%, rgba(87,90,98,0.28), transparent 64%)`,
-                `radial-gradient(720px 340px at 70% 120%, rgba(0,0,0,0.75), transparent 62%)`,
-                `linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02) 55%, rgba(0,0,0,0.0) 100%)`,
-                `linear-gradient(180deg, rgba(0,0,0,0.22), rgba(0,0,0,0.64) 55%, rgba(0,0,0,0.86) 100%)`,
-              ].join(", "),
-            }}
-          />
-
-          <div
-            className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] opacity-80"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.62), rgba(216,146,17,0.0))",
-            }}
-          />
-
-          <div className="relative z-10">
-            {SPORTS.map((ui) => {
-              const db = uiToDbSport(ui);
-              const enabled = isEnabled(db);
-              const title = `${ui} ${suffix}`;
-              const selected = selectedDbSport === db;
-
-              return (
-                <button
-                  key={ui}
-                  type="button"
-                  disabled={!enabled}
-                  onClick={() => {
-                    if (!enabled) return;
-                    onPickDbSport(db);
-                    setOpen(false);
-                  }}
-                  className={[
-                    "w-full text-left px-4 py-3 flex items-center justify-between",
-                    "transition-colors border-b last:border-b-0",
-                    enabled ? "text-white hover:bg-[#141414]" : "text-[#6f6f6f] cursor-not-allowed",
-                  ].join(" ")}
-                  style={{ borderBottomColor: "#141414" }}
-                >
-                  <span className="text-[14px] font-medium leading-tight">{title}</span>
-
-                  {!enabled ? (
-                    <span className="font-semibold text-[11px]" style={{ color: GOLD }}>
-                      COMING SOON
-                    </span>
-                  ) : selected ? (
-                    <span className="inline-flex items-center gap-2">
-                      <span className="text-[11px] text-[#8a8a8a] hidden sm:inline">Selected</span>
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{
-                          backgroundColor: GOLD,
-                          boxShadow: `0 0 0 2px rgba(216,146,17,0.18), 0 0 18px rgba(216,146,17,0.18)`,
-                        }}
-                        aria-label="Selected"
-                      />
-                    </span>
-                  ) : (
-                    <span className="w-2 h-2" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function Header({
   onOpenMenu,
   onNavigate,
   activeScreen,
   onHeightChange,
-
-  oddsSportKey,
-  onPickOddsSport,
-  predSportKey,
-  onPickPredSport,
 }: HeaderProps) {
   const headerRef = useRef<HTMLElement>(null);
 
@@ -427,26 +201,11 @@ export function Header({
           {/* CENTER */}
           <div className="hidden md:flex justify-center">
             <nav className="flex items-center gap-7 pb-1 pt-0.5">
-              <HoverDropdown
-                label="Odds"
-                suffix="Odds"
-                active={activeScreen === "odds"}
-                selectedDbSport={oddsSportKey}
-                onPickDbSport={(k) => {
-                  onPickOddsSport(k);
-                  onNavigate?.("odds");
-                }}
-              />
-
-              <HoverDropdown
+              <NavItem label="Odds" active={activeScreen === "odds"} onClick={() => onNavigate?.("odds")} />
+              <NavItem
                 label="Predictions"
-                suffix="Predictions"
                 active={activeScreen === "monte-carlo"}
-                selectedDbSport={predSportKey}
-                onPickDbSport={(k) => {
-                  onPickPredSport(k);
-                  onNavigate?.("monte-carlo");
-                }}
+                onClick={() => onNavigate?.("monte-carlo")}
               />
 
               <div className="h-5 w-px" style={{ background: "#2a2a2a" }} />
@@ -455,7 +214,6 @@ export function Header({
               <NavItem label="Props" active={activeScreen === "props"} onClick={() => onNavigate?.("props")} />
               <NavItem label="Parlay" active={activeScreen === "parlay"} onClick={() => onNavigate?.("parlay")} />
 
-              {/* ✅ NEW: Calculator */}
               <NavItem
                 label="Calculator"
                 active={activeScreen === "calculator"}
@@ -494,4 +252,3 @@ export function Header({
     </header>
   );
 }
-

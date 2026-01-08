@@ -9,7 +9,7 @@
 //    - Date section separators like the reference board
 //    - Odds cells rendered as compact “chips” (line + price) inside gray rounded boxes
 //
-// ✅ KEEP: Game Details modal button (desktop + mobile)
+// ✅ KEEP: Game Details modal (triggered by icon actions)
 // ✅ KEEP: Predictions “Key Lines”: remove Quantum ML block (consensus only)
 // ✅ KEEP: Mobile Predictions: smaller logos + team names ABOVE the win% bar
 // ✅ KEEP: Player Props modal: sticky headers + its OWN scroll container (no blank gap jump)
@@ -75,13 +75,12 @@ type EventOdds = {
 
 const CT_TZ = "America/Chicago";
 
-// Prism Theme (black / gold + subtle teal like reference separators)
+// Prism Theme (black / gold)
 const PRISM_BG = "#070707";
 const PRISM_PANEL = "rgba(10,10,10,0.55)";
 const PRISM_BORDER = "rgba(255,255,255,0.08)";
 const PRISM_GOLD = "#d4af37";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
-const PRISM_TEAL = "#18b7c6"; // subtle accent similar to reference lines
 const PRISM_TEXT = "#e8e8e8";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
 
@@ -110,8 +109,7 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   bol: "/books/bol.png",
 };
 
-const COL_GAME = 360;
-const COL_TIME = 120;
+const COL_GAME = 380;
 const COL_BOOK = 120;
 
 const PAGE_MAX_W = "max-w-[1500px]";
@@ -598,6 +596,75 @@ function Btn({
     >
       {children}
     </button>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  icon,
+  active = false,
+}: {
+  label: string;
+  onClick: () => void;
+  icon: React.ReactNode;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={[
+        "h-8 w-8 flex items-center justify-center rounded-lg border text-white/80 transition-colors",
+        "hover:border-white/30 hover:bg-white/10 hover:text-white",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.35)]",
+        active ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.18)] text-white" : "border-white/10 bg-black/30",
+      ].join(" ")}
+    >
+      {icon}
+    </button>
+  );
+}
+
+function IconInfo() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 10.5v6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="12" cy="7.5" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function IconTrend() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M4 16l6-6 4 4 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M16 7h4v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconPlayers() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="3" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="17" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M4.5 18c.6-2.3 2.7-4 4.5-4s3.9 1.7 4.5 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M14.5 18c.4-1.6 1.8-2.7 3.5-2.7 1.4 0 2.6.7 3.2 1.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconBooks() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6 6h8a3 3 0 0 1 3 3v9H9a3 3 0 0 0-3 3z" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M6 6v15" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M9 6h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -1372,14 +1439,20 @@ function GameDetailsModal({
   sportKey,
   ev,
   oddsFormat,
+  initialTab = "pred",
   onClose,
 }: {
   sportKey: string;
   ev: EventOdds;
   oddsFormat: OddsFormat;
+  initialTab?: DetailsTab;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<DetailsTab>("pred");
+  const [tab, setTab] = useState<DetailsTab>(initialTab);
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   // line movement state
   const [lmMarket, setLmMarket] = useState<Market>("ml");
@@ -2253,12 +2326,12 @@ function sportLabelForKey(sportKey: string) {
 function DateSectionHeader({ label }: { label: string }) {
   return (
     <tr>
-      <td colSpan={2 + BOOKS.length + 1} className="p-0">
+      <td colSpan={BOOKS.length + 2} className="p-0">
         <div className="px-4 py-2 flex items-center justify-between">
           <div className="text-[12px] font-extrabold text-white/80">{label}</div>
           <div className="text-[11px] font-semibold text-white/45">Pre-Game</div>
         </div>
-        <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_TEAL}, transparent)` }} />
+        <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_GOLD}, transparent)` }} />
       </td>
     </tr>
   );
@@ -2277,9 +2350,6 @@ function TableHeaderRow({ oddsFormat }: { oddsFormat: OddsFormat }) {
       >
         <th className="text-left px-4 py-3 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
           Game
-        </th>
-        <th className="text-left px-3 py-3 text-[12px] font-extrabold text-white/80" style={{ width: COL_TIME }}>
-          Time
         </th>
 
         {/* Consensus column like reference (subtle) */}
@@ -2314,7 +2384,7 @@ function EventRowTwoLines({
   ev: EventOdds;
   market: Market;
   oddsFormat: OddsFormat;
-  onOpenDetails: (ev: EventOdds) => void;
+  onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
 }) {
   const leftLabel = market === "total" ? "Over" : "Away";
   const rightLabel = market === "total" ? "Under" : "Home";
@@ -2337,24 +2407,13 @@ function EventRowTwoLines({
 
             <div className="shrink-0 flex flex-col items-end gap-2">
               <div className="text-[11px] text-white/60 font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-              <button
-                type="button"
-                onClick={() => onOpenDetails(ev)}
-                className="h-8 px-3 rounded-lg border text-xs font-extrabold shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
-                style={{
-                  background: PRISM_GOLD,
-                  borderColor: PRISM_GOLD,
-                  color: "#0a0a0a",
-                }}
-              >
-                Game Details
-              </button>
+              <div className="flex items-center gap-2">
+                <IconButton label="Game details" onClick={() => onOpenDetails(ev, "pred")} icon={<IconInfo />} />
+                <IconButton label="Line movement" onClick={() => onOpenDetails(ev, "line")} icon={<IconTrend />} />
+                <IconButton label="Player props" onClick={() => onOpenDetails(ev, "props")} icon={<IconPlayers />} />
+              </div>
             </div>
           </div>
-        </td>
-
-        <td className="px-3 py-3 text-[12px] text-white/70 font-semibold">
-          {fmtCTDateTime(ev.commenceTime)}
         </td>
 
         {/* Consensus chip */}
@@ -2376,10 +2435,6 @@ function EventRowTwoLines({
 
       {/* HOME / UNDER */}
       <tr className="border-b border-white/10 hover:bg-white/5">
-        <td className="px-3 py-3 text-[12px] text-white/70 font-semibold">
-          <span className="text-white/45"> </span>
-        </td>
-
         <td className="px-2 py-3">
           <div className="flex justify-center">
             <OddsChip parts={homeCons} />
@@ -2415,7 +2470,7 @@ function EventCardMobile({
   oddsFormat: OddsFormat;
   booksOpen: boolean;
   onToggleBooks: () => void;
-  onOpenDetails: (ev: EventOdds) => void;
+  onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
 }) {
   const leftLabel = market === "total" ? "Over" : "Away";
   const rightLabel = market === "total" ? "Under" : "Home";
@@ -2431,10 +2486,15 @@ function EventCardMobile({
         </div>
 
         <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={onToggleBooks}>
-            {booksOpen ? "Hide Books" : "Show Books"}
-          </Btn>
-          <Btn onClick={() => onOpenDetails(ev)}>Game Details</Btn>
+          <IconButton
+            label={booksOpen ? "Hide books" : "Show books"}
+            onClick={onToggleBooks}
+            icon={<IconBooks />}
+            active={booksOpen}
+          />
+          <IconButton label="Game details" onClick={() => onOpenDetails(ev, "pred")} icon={<IconInfo />} />
+          <IconButton label="Line movement" onClick={() => onOpenDetails(ev, "line")} icon={<IconTrend />} />
+          <IconButton label="Player props" onClick={() => onOpenDetails(ev, "props")} icon={<IconPlayers />} />
         </div>
       </div>
 
@@ -2526,6 +2586,7 @@ export function OddsScreen({
 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [activeEvent, setActiveEvent] = useState<EventOdds | null>(null);
+  const [detailsTab, setDetailsTab] = useState<DetailsTab>("pred");
 
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
 
@@ -2707,8 +2768,9 @@ export function OddsScreen({
     });
   }, [events]);
 
-  const openDetails = (ev: EventOdds) => {
+  const openDetails = (ev: EventOdds, tab: DetailsTab = "pred") => {
     setActiveEvent(ev);
+    setDetailsTab(tab);
     setDetailsOpen(true);
   };
 
@@ -2988,11 +3050,10 @@ export function OddsScreen({
               ) : !events.length ? (
                 <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
-                <div className="max-h-[calc(100vh-360px)] overflow-auto">
-                  <table className="w-full table-fixed min-w-[1180px]">
+                <div className="max-h-[calc(100vh-360px)] overflow-auto" style={{ scrollPaddingTop: 56 }}>
+                  <table className="w-full table-fixed min-w-[1080px]">
                     <colgroup>
                       <col style={{ width: COL_GAME }} />
-                      <col style={{ width: COL_TIME }} />
                       <col style={{ width: COL_BOOK }} />
                       {BOOKS.map((_, i) => (
                         <col key={i} style={{ width: COL_BOOK }} />
@@ -3032,6 +3093,7 @@ export function OddsScreen({
             sportKey={sportKey}
             ev={activeEvent}
             oddsFormat={oddsFormat}
+            initialTab={detailsTab}
             onClose={() => setDetailsOpen(false)}
           />
         )}
