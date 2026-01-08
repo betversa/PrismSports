@@ -83,6 +83,7 @@ const PRISM_MUTED = "rgba(232,232,232,0.60)";
 const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
 const BOARD_STICKY_BG = BOARD_BG;
 const DATE_BAR_HEIGHT = 44;
+const HEADER_ROW_HEIGHT = 36;
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
@@ -2373,8 +2374,9 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
     <tr>
       <td colSpan={BOOKS.length + 2} className="p-0">
         <div
-          className="sticky top-0 z-30 px-4 py-2 flex items-center justify-between border-y"
+          className="sticky z-20 px-4 py-2 flex items-center justify-between border-y"
           style={{
+            top: HEADER_ROW_HEIGHT,
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
             backdropFilter: "blur(10px)",
@@ -2410,8 +2412,8 @@ function TableHeaderRow({
 }) {
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
-    top: DATE_BAR_HEIGHT,
-    zIndex: 20,
+    top: 0,
+    zIndex: 30,
     background: BOARD_BG,
   };
   return (
@@ -2422,6 +2424,7 @@ function TableHeaderRow({
           borderColor: PRISM_BORDER,
           background: BOARD_BG,
           backdropFilter: "blur(10px)",
+          height: HEADER_ROW_HEIGHT,
         }}
       >
         <th
@@ -3248,7 +3251,7 @@ export function OddsScreen({
               ) : (
                 <div
                   className="max-h-[calc(100vh-240px)] overflow-auto"
-                  style={{ scrollPaddingTop: DATE_BAR_HEIGHT + 40, background: BOARD_BG }}
+                  style={{ scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24, background: BOARD_BG }}
                 >
                   <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
                     <colgroup>
