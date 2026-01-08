@@ -40,8 +40,8 @@ export function Sidebar({
     [
       "w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded transition-colors",
       active
-        ? "bg-[#d4af37] text-black"
-        : "text-[#b0b0b0] hover:bg-[#1a1a1a] hover:text-white",
+        ? "bg-[#d89211] text-black"
+        : "text-[#b0b0b0] hover:bg-[#151515] hover:text-white",
     ].join(" ");
 
   const SectionDivider = () => <div className="my-2 h-px bg-[#1a1a1a]" />;
@@ -164,7 +164,7 @@ export function Sidebar({
               type="button"
             >
               <div className="flex items-center gap-3">
-                <Calculator className="w-4 h-4" />
+                <TrendingUp className="w-4 h-4" />
                 <span className="text-sm">Predictions</span>
               </div>
             </button>
