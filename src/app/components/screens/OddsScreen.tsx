@@ -76,12 +76,9 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 // Prism Theme (black / gold)
-const PRISM_BG = "#070707";
-const PRISM_PANEL = "rgba(10,10,10,0.55)";
 const PRISM_BORDER = "rgba(255,255,255,0.08)";
 const PRISM_GOLD = "#d4af37";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
-const PRISM_TEXT = "#e8e8e8";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
@@ -718,11 +715,11 @@ function ModalShell({
         style={{
           background:
             `radial-gradient(1200px 700px at 15% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-            "radial-gradient(900px 700px at 70% 95%, rgba(24,183,198,0.10), transparent 58%)," +
+            "radial-gradient(900px 700px at 70% 95%, rgba(212,175,55,0.12), transparent 58%)," +
             "linear-gradient(180deg, rgba(15,15,15,0.98), rgba(10,10,10,0.98))",
         }}
       >
-        <div className="px-4 py-3 border-b border-white/10 flex items-start justify-between gap-4 shrink-0 bg-black/30 backdrop-blur-[6px]">
+        <div className="px-4 py-2.5 border-b border-white/10 flex items-start justify-between gap-4 shrink-0 bg-black/30 backdrop-blur-[6px]">
           <div className="min-w-0">
             <div className="text-white font-extrabold text-sm">{title}</div>
             {subtitle ? (
@@ -2221,8 +2218,8 @@ function GameDetailsModal({
 
                   <tbody>
                     {propsAgg.map((r) => (
-                      <tr key={r.player_name} className="border-b border-white/10 hover:bg-white/5">
-                        <td className="px-4 py-3">
+                      <tr key={r.player_name} className="border-b border-white/10 hover:bg-white/6">
+                        <td className="px-4 py-2.5">
                           <div className="flex items-center gap-3 min-w-0">
                             {r.picture_url ? (
                               <img
@@ -2243,13 +2240,13 @@ function GameDetailsModal({
                           </div>
                         </td>
 
-                        <td className="px-3 py-3 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
+                        <td className="px-3 py-2.5 text-white font-extrabold text-[12px]">{r.team ?? "—"}</td>
 
-                        <td className="px-3 py-3 text-center text-white font-extrabold tabular-nums text-[12px]">
+                        <td className="px-3 py-2.5 text-center text-white font-extrabold tabular-nums text-[12px]">
                           {r.display_line == null ? "—" : r.display_line}
                         </td>
 
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-2.5">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
                               <div key={`ov-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
@@ -2259,7 +2256,7 @@ function GameDetailsModal({
                           </div>
                         </td>
 
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-2.5">
                           <div className="grid grid-cols-5 gap-2 justify-items-center">
                             {BOOKS.map((b) => (
                               <div key={`un-${r.player_name}-${b}`} className="text-[12px] text-white font-extrabold tabular-nums">
@@ -2344,16 +2341,16 @@ function TableHeaderRow({ oddsFormat }: { oddsFormat: OddsFormat }) {
         className="border-y"
         style={{
           borderColor: PRISM_BORDER,
-          background: "rgba(15,15,15,0.92)",
+          background: "linear-gradient(180deg, rgba(14,14,14,0.95), rgba(10,10,10,0.92))",
           backdropFilter: "blur(10px)",
         }}
       >
-        <th className="text-left px-4 py-3 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
+        <th className="text-left px-4 py-2.5 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
           Game
         </th>
 
         {/* Consensus column like reference (subtle) */}
-        <th className="text-center px-2 py-3 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
+        <th className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
           Cons
           <div className="text-[10px] font-semibold text-white/45 mt-0.5">
             {oddsFormat === "american" ? "AM" : "DEC"}
@@ -2363,7 +2360,7 @@ function TableHeaderRow({ oddsFormat }: { oddsFormat: OddsFormat }) {
         {BOOKS.map((bk) => {
           const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
           return (
-            <th key={bk} className="text-center px-2 py-3" style={{ width: COL_BOOK }}>
+            <th key={bk} className="text-center px-2 py-2.5" style={{ width: COL_BOOK }}>
               <div className="flex items-center justify-center">
                 <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
               </div>
@@ -2395,8 +2392,8 @@ function EventRowTwoLines({
   return (
     <>
       {/* AWAY / OVER */}
-      <tr className="border-b border-white/10 hover:bg-white/5">
-        <td className="px-4 py-3 align-middle" rowSpan={2}>
+      <tr className="border-b border-white/10 hover:bg-white/6">
+        <td className="px-4 py-2.5 align-middle" rowSpan={2}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
@@ -2417,7 +2414,7 @@ function EventRowTwoLines({
         </td>
 
         {/* Consensus chip */}
-        <td className="px-2 py-3">
+        <td className="px-2 py-2.5">
           <div className="flex justify-center">
             <OddsChip parts={awayCons} />
           </div>
@@ -2425,7 +2422,7 @@ function EventRowTwoLines({
 
         {/* Books */}
         {BOOKS.map((bk) => (
-          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-3">
+          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-2.5">
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
             </div>
@@ -2434,15 +2431,15 @@ function EventRowTwoLines({
       </tr>
 
       {/* HOME / UNDER */}
-      <tr className="border-b border-white/10 hover:bg-white/5">
-        <td className="px-2 py-3">
+      <tr className="border-b border-white/10 hover:bg-white/6">
+        <td className="px-2 py-2.5">
           <div className="flex justify-center">
             <OddsChip parts={homeCons} />
           </div>
         </td>
 
         {BOOKS.map((bk) => (
-          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-3">
+          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-2.5">
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
             </div>
@@ -2498,7 +2495,7 @@ function EventCardMobile({
         </div>
       </div>
 
-      <div className="px-3 py-3 space-y-2.5">
+      <div className="px-3 py-2.5 space-y-2.5">
         <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
         <TeamCell team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} sub={rightLabel} />
       </div>
@@ -2824,8 +2821,8 @@ export function OddsScreen({
       style={{
         background:
           `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-          "radial-gradient(1000px 700px at 85% 0%, rgba(24,183,198,0.12), transparent 55%)," +
-          "linear-gradient(180deg, #050505, #0a0a0a 55%, #050505)",
+          "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
+          "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
       }}
     >
       <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X} relative`}>
@@ -2836,7 +2833,7 @@ export function OddsScreen({
           <div
             className="h-[44px] flex items-center justify-between px-2 md:px-0"
             style={{
-              background: "rgba(5,5,5,0.88)",
+              background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
               borderBottom: `1px solid ${PRISM_BORDER}`,
               backdropFilter: "blur(10px)",
             }}
@@ -2900,7 +2897,7 @@ export function OddsScreen({
           <div
             className="h-[60px] flex items-center justify-between gap-3 px-2 md:px-0"
             style={{
-              background: "rgba(12,12,12,0.80)",
+              background: "linear-gradient(180deg, rgba(12,12,12,0.85), rgba(9,9,9,0.78))",
               borderBottom: `1px solid ${PRISM_BORDER}`,
               backdropFilter: "blur(10px)",
             }}
@@ -2981,16 +2978,16 @@ export function OddsScreen({
         {/* ===========================
             BOARD BODY
         =========================== */}
-        <div className="pt-4 pb-10">
+        <div className="pt-3 pb-8">
           <div
-            className="rounded-2xl border overflow-hidden shadow-[0_20px_90px_rgba(0,0,0,0.55)]"
+            className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
             style={{
               borderColor: PRISM_BORDER,
-              background: PRISM_PANEL,
+              background: "linear-gradient(180deg, rgba(10,10,10,0.78), rgba(7,7,7,0.95))",
               backdropFilter: "blur(6px)",
             }}
           >
-            <div className="px-4 py-3 border-b" style={{ borderColor: PRISM_BORDER }}>
+            <div className="px-4 py-2.5 border-b" style={{ borderColor: PRISM_BORDER }}>
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-white font-extrabold text-[14px]">
@@ -3050,7 +3047,7 @@ export function OddsScreen({
               ) : !events.length ? (
                 <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
-                <div className="max-h-[calc(100vh-360px)] overflow-auto" style={{ scrollPaddingTop: 56 }}>
+                <div className="max-h-[calc(100vh-300px)] overflow-auto" style={{ scrollPaddingTop: 56 }}>
                   <table className="w-full table-fixed min-w-[1080px]">
                     <colgroup>
                       <col style={{ width: COL_GAME }} />
