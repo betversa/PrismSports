@@ -596,6 +596,17 @@ function Btn({
   );
 }
 
+function DateReminder({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="text-[11px] text-white/60 font-semibold">Selected date</div>
+      <div className="h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold flex items-center">
+        {label}
+      </div>
+    </div>
+  );
+}
+
 function IconButton({
   label,
   onClick,
@@ -2320,12 +2331,22 @@ function sportLabelForKey(sportKey: string) {
    BOARD TABLE (reference-style)
 ========================================================= */
 
-function DateSectionHeader({ label }: { label: string }) {
+function DateSectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <tr>
       <td colSpan={BOOKS.length + 2} className="p-0">
-        <div className="px-4 py-2 flex items-center justify-between">
-          <div className="text-[12px] font-extrabold text-white/80">{label}</div>
+        <div
+          className="sticky top-0 z-20 px-4 py-2 flex items-center justify-between border-y"
+          style={{
+            borderColor: PRISM_BORDER,
+            background: "linear-gradient(180deg, rgba(12,12,12,0.98), rgba(10,10,10,0.95))",
+            backdropFilter: "blur(10px)",
+          }}
+        >
+          <div className="text-[12px] font-extrabold text-white/90">
+            {label}
+            <span className="text-white/50 font-semibold ml-2">({count} games)</span>
+          </div>
           <div className="text-[11px] font-semibold text-white/45">Pre-Game</div>
         </div>
         <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_GOLD}, transparent)` }} />
@@ -2336,7 +2357,7 @@ function DateSectionHeader({ label }: { label: string }) {
 
 function TableHeaderRow({ oddsFormat }: { oddsFormat: OddsFormat }) {
   return (
-    <thead className="sticky top-0 z-30">
+    <thead>
       <tr
         className="border-y"
         style={{
@@ -2716,46 +2737,56 @@ export function OddsScreen({
     });
   }, [availableDates]);
 
-  const eventsForDate = useMemo(() => {
-    if (!selectedDate) return [];
+  const eventsForView = useMemo(() => {
     const todayCt = ctTodayYmd();
     const nowMs = Date.now();
 
     return allEvents.filter((ev) => {
-      const evDate = ctYmdFromIso(ev.commenceTime);
-      if (evDate !== selectedDate) return false;
-
       if (view === "live") {
         // NOTE: If you have live flags, plug them in here. For now, live view shows none.
         return false;
       }
 
       // pregame: future games
-      if (selectedDate === todayCt) {
+      const evDate = ctYmdFromIso(ev.commenceTime);
+      if (evDate === todayCt) {
         const startMs = new Date(normalizeIso(ev.commenceTime) ?? ev.commenceTime).getTime();
         if (!Number.isFinite(startMs)) return false;
         return startMs > nowMs;
       }
       return true;
     });
-  }, [allEvents, selectedDate, view]);
+  }, [allEvents, view]);
 
   const events = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return eventsForDate;
-    return eventsForDate.filter((ev) => {
+    if (!q) return eventsForView;
+    return eventsForView.filter((ev) => {
       const a = (ev.away?.team ?? "").toLowerCase();
       const h = (ev.home?.team ?? "").toLowerCase();
       return a.includes(q) || h.includes(q);
     });
-  }, [eventsForDate, query]);
+  }, [eventsForView, query]);
 
   const eventsByDaySection = useMemo(() => {
-    // Keep reference-style day sections even within a selected date:
-    // We show one section label, but this structure allows future extension.
-    const label = selectedDate ? fmtDateBtn(selectedDate) : "—";
-    return [{ label, events }];
-  }, [selectedDate, events]);
+    const grouped = new Map<string, EventOdds[]>();
+    for (const ev of events) {
+      const ymd = ctYmdFromIso(ev.commenceTime);
+      if (!ymd) continue;
+      const list = grouped.get(ymd) ?? [];
+      list.push(ev);
+      grouped.set(ymd, list);
+    }
+
+    return Array.from(grouped.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([ymd, list]) => ({
+        ymd,
+        label: fmtDateBtn(ymd),
+        count: list.length,
+        events: list,
+      }));
+  }, [events]);
 
   useEffect(() => {
     setMobileOpenMap((prev) => {
@@ -2803,17 +2834,22 @@ export function OddsScreen({
         subtitle: "Check back later for the next slate.",
       };
     }
-    if (query.trim() && !events.length && eventsForDate.length) {
+    if (query.trim() && !events.length && eventsForView.length) {
       return {
         title: `No matches for “${query.trim()}”.`,
         subtitle: "Try a different team name or clear the search.",
       };
     }
     return {
-      title: `No games for ${selectedDate || "this date"}.`,
-      subtitle: "Pick another date or refresh the feed.",
+      title: "No games available.",
+      subtitle: "Pick another market or refresh the feed.",
     };
-  }, [availableDates.length, events.length, eventsForDate.length, query, selectedDate, view]);
+  }, [availableDates.length, events.length, eventsForView.length, query, view]);
+
+  const selectedDateLabel = useMemo(() => {
+    if (!selectedDate) return "—";
+    return fmtDateBtn(selectedDate);
+  }, [selectedDate]);
 
   return (
     <div
@@ -2924,16 +2960,7 @@ export function OddsScreen({
                 ]}
               />
 
-              <SelectPill
-                value={selectedDate}
-                onChange={(v) => setSelectedDate(v)}
-                label="Date"
-                options={
-                  availableDates.length
-                    ? availableDates.map((d) => ({ value: d, label: d }))
-                    : [{ value: "", label: "—" }]
-                }
-              />
+              <DateReminder label={selectedDateLabel} />
 
               <div className="hidden md:block">
                 <TextInput value={query} onChange={setQuery} placeholder="Search teams..." onClear={() => setQuery("")} />
@@ -3023,16 +3050,29 @@ export function OddsScreen({
                 <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
                 <div className="space-y-3">
-                  {events.map((ev) => (
-                    <EventCardMobile
-                      key={ev.eventId}
-                      ev={ev}
-                      market={market}
-                      oddsFormat={oddsFormat}
-                      booksOpen={!!mobileOpenMap[ev.eventId]}
-                      onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
-                      onOpenDetails={openDetails}
-                    />
+                  {eventsByDaySection.map((sec) => (
+                    <div key={sec.ymd} className="space-y-3">
+                      <div
+                        className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 bg-black/70 backdrop-blur-[8px]"
+                        style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
+                      >
+                        <div className="text-[12px] font-extrabold text-white/90">
+                          {sec.label}
+                          <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
+                        </div>
+                      </div>
+                      {sec.events.map((ev) => (
+                        <EventCardMobile
+                          key={ev.eventId}
+                          ev={ev}
+                          market={market}
+                          oddsFormat={oddsFormat}
+                          booksOpen={!!mobileOpenMap[ev.eventId]}
+                          onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
+                          onOpenDetails={openDetails}
+                        />
+                      ))}
+                    </div>
                   ))}
                 </div>
               )}
@@ -3061,8 +3101,8 @@ export function OddsScreen({
 
                     <tbody>
                       {eventsByDaySection.map((sec) => (
-                        <React.Fragment key={sec.label}>
-                          <DateSectionHeader label={sec.label} />
+                        <React.Fragment key={sec.ymd}>
+                          <DateSectionHeader label={sec.label} count={sec.count} />
                           {sec.events.map((ev) => (
                             <EventRowTwoLines
                               key={ev.eventId}
