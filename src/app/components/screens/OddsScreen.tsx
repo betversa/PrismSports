@@ -3333,7 +3333,6 @@ export function OddsScreen({
           onClose={() => setDetailsOpen(false)}
         />
       )}
-      </div>
     </div>
   );
 }
