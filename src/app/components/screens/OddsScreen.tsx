@@ -104,11 +104,11 @@ const BOOK_STROKES: Record<BookKey, string> = {
 };
 
 const BOOK_LOGOS: Record<BookKey, string> = {
-  dk: "/books/dk.png",
-  fd: "/books/fd.png",
-  mgm: "/books/mgm.png",
-  pin: "/books/pin.png",
-  bol: "/books/bol.png",
+  dk: "/books/dksquare.png",
+  fd: "/books/fdsquare.png",
+  mgm: "/books/mgmsquare.png",
+  pin: "/books/pinsquare.png",
+  bol: "/books/bolsquare.png",
 };
 
 const COL_GAME = 380;
@@ -420,41 +420,28 @@ function partsForBookSide(
    UI PRIMITIVES (board look)
 ========================================================= */
 
-function headerFallbackPillDataUri(label: string) {
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="88" height="22">
-    <rect x="0" y="0" width="88" height="22" rx="8" ry="8" fill="#111111"/>
-    <rect x="0.5" y="0.5" width="87" height="21" rx="8" ry="8" fill="none" stroke="#3a3a3a"/>
-    <text x="44" y="15"
-      font-family="Arial, sans-serif" font-size="11" font-weight="700"
-      text-anchor="middle" fill="#d4af37">${label}</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
-}
-
 function BookLogoPill({
   src,
   alt,
-  fallbackLabel,
 }: {
   src: string;
   alt: string;
-  fallbackLabel: string;
 }) {
   return (
     <div
-      className="h-7 w-[92px] rounded-lg bg-black/40 border border-white/10 px-3 flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]"
+      className="h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center gap-2 shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]"
       title={alt}
     >
       <img
         src={src}
         alt={alt}
-        className="h-4 w-auto object-contain opacity-85"
+        className="h-5 w-5 rounded-md object-contain bg-black/50 p-0.5 opacity-85"
         loading="lazy"
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+          (e.currentTarget as HTMLImageElement).style.display = "none";
         }}
       />
+      <span className="text-[11px] font-semibold text-white/75 truncate">{alt}</span>
     </div>
   );
 }
@@ -2455,31 +2442,28 @@ function TableHeaderRow({
           </div>
         </th>
 
-        {displayBooks.map((bk) => {
-          const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
-          return (
-            <th key={bk} className="text-center px-2 py-2" style={{ ...stickyCellStyle, width: COL_BOOK }}>
-              <div className="flex items-center justify-center">
-                <button
-                  type="button"
-                  data-book={bk}
-                  onPointerDown={onBookPointerDown(bk)}
-                  onPointerUp={onBookPointerUp}
-                  onPointerCancel={onBookPointerCancel}
-                  className={[
-                    "rounded-lg transition-colors",
-                    draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
-                  ].join(" ")}
-                  style={{ touchAction: "none" }}
-                  title="Drag to reorder"
-                  aria-label={`Reorder ${BOOK_LABEL[bk]}`}
-                >
-                  <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
-                </button>
-              </div>
-            </th>
-          );
-        })}
+        {displayBooks.map((bk) => (
+          <th key={bk} className="text-center px-2 py-2" style={{ ...stickyCellStyle, width: COL_BOOK }}>
+            <div className="flex items-center justify-center">
+              <button
+                type="button"
+                data-book={bk}
+                onPointerDown={onBookPointerDown(bk)}
+                onPointerUp={onBookPointerUp}
+                onPointerCancel={onBookPointerCancel}
+                className={[
+                  "rounded-lg transition-colors",
+                  draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
+                ].join(" ")}
+                style={{ touchAction: "none" }}
+                title="Drag to reorder"
+                aria-label={`Reorder ${BOOK_LABEL[bk]}`}
+              >
+                <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} />
+              </button>
+            </div>
+          </th>
+        ))}
       </tr>
     </thead>
   );
@@ -2648,25 +2632,22 @@ function EventCardMobile({
             </div>
 
             <div className="px-3">
-              {displayBooks.map((bk) => {
-                const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
-                return (
-                  <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
-                    <div className="grid grid-cols-[100px_1fr_1fr] items-center gap-3">
-                      <div className="flex justify-start">
-                        <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
-                      </div>
+              {displayBooks.map((bk) => (
+                <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
+                  <div className="grid grid-cols-[120px_1fr_1fr] items-center gap-3">
+                    <div className="flex justify-start">
+                      <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} />
+                    </div>
 
-                      <div className="flex justify-center">
-                        <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
-                      </div>
-                      <div className="flex justify-center">
-                        <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
-                      </div>
+                    <div className="flex justify-center">
+                      <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
+                    </div>
+                    <div className="flex justify-center">
+                      <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
           </div>
         )}
