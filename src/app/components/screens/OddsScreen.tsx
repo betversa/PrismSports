@@ -2223,6 +2223,19 @@ const SPORT_TABS: SportTab[] = [
   { key: "mma_mixed_martial_arts", label: "UFC" },
 ];
 
+const ODDS_SPORT_KEYS = new Set([
+  "baseball_mlb",
+  "football_nfl",
+  "football_ncaaf",
+  "basketball_nba",
+  "basketball_ncaab",
+  "icehockey_nhl",
+]);
+
+function isOddsSportKey(key: string): boolean {
+  return ODDS_SPORT_KEYS.has(key);
+}
+
 function sportLabelForKey(sportKey: string) {
   if (sportKey === "basketball_nba") return "NBA";
   if (sportKey === "basketball_ncaab") return "NCAAM";
@@ -2251,13 +2264,9 @@ function DateSectionHeader({ label }: { label: string }) {
   );
 }
 
-function TableHeaderRow({
-  oddsFormat,
-}: {
-  oddsFormat: OddsFormat;
-}) {
+function TableHeaderRow({ oddsFormat }: { oddsFormat: OddsFormat }) {
   return (
-    <thead className="sticky top-[104px] z-30">
+    <thead className="sticky top-0 z-30">
       <tr
         className="border-y"
         style={{
@@ -2496,7 +2505,13 @@ function EventCardMobile({
    SCREEN
 ========================================================= */
 
-export function OddsScreen({ sportKey }: { sportKey: string }) {
+export function OddsScreen({
+  sportKey,
+  onPickSport,
+}: {
+  sportKey: string;
+  onPickSport?: (key: string) => void;
+}) {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
   const [selectedDate, setSelectedDate] = useState<string>("");
   const [market, setMarket] = useState<Market>("spread");
@@ -2770,19 +2785,36 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                   t.key === sportKey ||
                   (t.key === "soccer" && sportKey.includes("soccer")) ||
                   (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
                 return (
-                  <div
+                  <button
                     key={t.key}
-                    className="shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border"
+                    type="button"
+                    onClick={() => {
+                      if (enabled && onPickSport) onPickSport(t.key);
+                    }}
+                    disabled={!enabled}
+                    className={[
+                      "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
+                      enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+                      active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                    ].join(" ")}
                     style={{
                       borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                      background: active ? "rgba(212,175,55,0.12)" : "transparent",
+                      background: active ? "rgba(212,175,55,0.16)" : "transparent",
                       color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
                     }}
-                    title={active ? `${t.label} (active)` : t.label}
+                    title={
+                      !enabled
+                        ? `${t.label} (not wired)`
+                        : active
+                          ? `${t.label} (active)`
+                          : `Switch to ${t.label}`
+                    }
                   >
                     {t.label}
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -2956,7 +2988,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               ) : !events.length ? (
                 <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
-                <div className="overflow-x-auto">
+                <div className="max-h-[calc(100vh-360px)] overflow-auto">
                   <table className="w-full table-fixed min-w-[1180px]">
                     <colgroup>
                       <col style={{ width: COL_GAME }} />

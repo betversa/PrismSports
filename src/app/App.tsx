@@ -128,7 +128,7 @@ export default function App() {
       "monte-carlo": <MonteCarloScreen sportKey={predSportKey} />,
 
       // ✅ Odds sport wired here
-      odds: <OddsScreen sportKey={oddsSportKey} />,
+      odds: <OddsScreen sportKey={oddsSportKey} onPickSport={handlePickOddsSport} />,
 
       results: <ResultsScreen />,
       calibration: <CalibrationScreen />,
