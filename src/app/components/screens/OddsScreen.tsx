@@ -487,7 +487,6 @@ function TeamCell({
         <div className="text-[11px] text-white/60 font-semibold">{sub}</div>
       </div>
     </div>
-    </div>
   );
 }
 
