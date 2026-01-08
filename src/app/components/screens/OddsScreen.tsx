@@ -83,7 +83,7 @@ const PRISM_MUTED = "rgba(232,232,232,0.60)";
 const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
 const BOARD_STICKY_BG = BOARD_BG;
 const DATE_BAR_HEIGHT = 44;
-const HEADER_ROW_HEIGHT = 36;
+const HEADER_ROW_HEIGHT = 44;
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
@@ -2410,7 +2410,7 @@ function TableHeaderRow({
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
     top: "var(--app-header-h, 0px)",
-    zIndex: 30,
+    zIndex: 40,
     background: BOARD_BG,
   };
   return (
@@ -2452,7 +2452,7 @@ function TableHeaderRow({
                 onPointerUp={onBookPointerUp}
                 onPointerCancel={onBookPointerCancel}
                 className={[
-                  "rounded-lg transition-colors",
+                  "rounded-lg transition-colors cursor-grab active:cursor-grabbing",
                   draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
                 ].join(" ")}
                 style={{ touchAction: "none" }}
