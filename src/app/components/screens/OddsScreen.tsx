@@ -80,8 +80,11 @@ const PRISM_BORDER = "rgba(255,255,255,0.08)";
 const PRISM_GOLD = "#d4af37";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
+const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.86), rgba(8,8,8,0.96))";
+const BOARD_STICKY_BG = "linear-gradient(180deg, rgba(12,12,12,0.98), rgba(10,10,10,0.96))";
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
+const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
 const BOOK_LABEL: Record<BookKey, string> = {
   dk: "DraftKings",
   fd: "FanDuel",
@@ -603,6 +606,39 @@ function DateReminder({ label }: { label: string }) {
       <div className="h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold flex items-center">
         {label}
       </div>
+    </div>
+  );
+}
+
+function SegmentedToggle<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-white/10 bg-black/35 p-1">
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={[
+              "h-7 px-3 rounded-md text-[11px] font-extrabold transition-colors",
+              active
+                ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
+                : "text-white/70 hover:text-white",
+            ].join(" ")}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -2339,7 +2375,7 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
           className="sticky top-0 z-20 px-4 py-2 flex items-center justify-between border-y"
           style={{
             borderColor: PRISM_BORDER,
-            background: "linear-gradient(180deg, rgba(12,12,12,0.98), rgba(10,10,10,0.95))",
+            background: BOARD_STICKY_BG,
             backdropFilter: "blur(10px)",
           }}
         >
@@ -2355,14 +2391,28 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
   );
 }
 
-function TableHeaderRow({ oddsFormat }: { oddsFormat: OddsFormat }) {
+function TableHeaderRow({
+  oddsFormat,
+  displayBooks,
+  draggingKey,
+  onBookPointerDown,
+  onBookPointerUp,
+  onBookPointerCancel,
+}: {
+  oddsFormat: OddsFormat;
+  displayBooks: BookKey[];
+  draggingKey: BookKey | null;
+  onBookPointerDown: (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => void;
+  onBookPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
+}) {
   return (
     <thead>
       <tr
         className="border-y"
         style={{
           borderColor: PRISM_BORDER,
-          background: "linear-gradient(180deg, rgba(14,14,14,0.95), rgba(10,10,10,0.92))",
+          background: BOARD_BG,
           backdropFilter: "blur(10px)",
         }}
       >
@@ -2378,12 +2428,27 @@ function TableHeaderRow({ oddsFormat }: { oddsFormat: OddsFormat }) {
           </div>
         </th>
 
-        {BOOKS.map((bk) => {
+        {displayBooks.map((bk) => {
           const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
           return (
             <th key={bk} className="text-center px-2 py-2.5" style={{ width: COL_BOOK }}>
               <div className="flex items-center justify-center">
-                <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+                <button
+                  type="button"
+                  data-book={bk}
+                  onPointerDown={onBookPointerDown(bk)}
+                  onPointerUp={onBookPointerUp}
+                  onPointerCancel={onBookPointerCancel}
+                  className={[
+                    "rounded-full transition-colors",
+                    draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
+                  ].join(" ")}
+                  style={{ touchAction: "none" }}
+                  title="Drag to reorder"
+                  aria-label={`Reorder ${BOOK_LABEL[bk]}`}
+                >
+                  <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+                </button>
               </div>
             </th>
           );
@@ -2397,11 +2462,13 @@ function EventRowTwoLines({
   ev,
   market,
   oddsFormat,
+  displayBooks,
   onOpenDetails,
 }: {
   ev: EventOdds;
   market: Market;
   oddsFormat: OddsFormat;
+  displayBooks: BookKey[];
   onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
 }) {
   const leftLabel = market === "total" ? "Over" : "Away";
@@ -2442,7 +2509,7 @@ function EventRowTwoLines({
         </td>
 
         {/* Books */}
-        {BOOKS.map((bk) => (
+        {displayBooks.map((bk) => (
           <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-2.5">
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
@@ -2459,7 +2526,7 @@ function EventRowTwoLines({
           </div>
         </td>
 
-        {BOOKS.map((bk) => (
+        {displayBooks.map((bk) => (
           <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-2.5">
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
@@ -2479,6 +2546,7 @@ function EventCardMobile({
   ev,
   market,
   oddsFormat,
+  displayBooks,
   booksOpen,
   onToggleBooks,
   onOpenDetails,
@@ -2486,6 +2554,7 @@ function EventCardMobile({
   ev: EventOdds;
   market: Market;
   oddsFormat: OddsFormat;
+  displayBooks: BookKey[];
   booksOpen: boolean;
   onToggleBooks: () => void;
   onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
@@ -2552,7 +2621,7 @@ function EventCardMobile({
             </div>
 
             <div className="px-3">
-              {BOOKS.map((bk) => {
+              {displayBooks.map((bk) => {
                 const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
                 return (
                   <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
@@ -2607,6 +2676,9 @@ export function OddsScreen({
   const [detailsTab, setDetailsTab] = useState<DetailsTab>("pred");
 
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
+  const [bookOrder, setBookOrder] = useState<BookKey[]>(BOOKS);
+  const [draggingBook, setDraggingBook] = useState<BookKey | null>(null);
+  const dragBookRef = useRef<BookKey | null>(null);
 
   async function load() {
     setError("");
@@ -2704,6 +2776,28 @@ export function OddsScreen({
     setActiveEvent(null);
   }, [sportKey]);
 
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(BOOK_ORDER_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const next = parsed.filter((b) => BOOKS.includes(b));
+      if (next.length !== BOOKS.length) return;
+      setBookOrder(next);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(BOOK_ORDER_STORAGE_KEY, JSON.stringify(bookOrder));
+    } catch {
+      // ignore
+    }
+  }, [bookOrder]);
+
   const availableDates = useMemo(() => {
     const todayCt = ctTodayYmd();
     const nowMs = Date.now();
@@ -2800,6 +2894,47 @@ export function OddsScreen({
     setActiveEvent(ev);
     setDetailsTab(tab);
     setDetailsOpen(true);
+  };
+
+  const handleBookPointerDown = (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => {
+    dragBookRef.current = bk;
+    setDraggingBook(bk);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleBookPointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const from = dragBookRef.current;
+    dragBookRef.current = null;
+    setDraggingBook(null);
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (!from) return;
+    const targetEl = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const targetKey = targetEl?.closest("[data-book]")?.getAttribute("data-book") as BookKey | null;
+    if (!targetKey || targetKey === from) return;
+    setBookOrder((prev) => {
+      const next = prev.slice();
+      const fromIdx = next.indexOf(from);
+      const toIdx = next.indexOf(targetKey);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, from);
+      return next;
+    });
+  };
+
+  const handleBookPointerCancel = (e: React.PointerEvent<HTMLButtonElement>) => {
+    dragBookRef.current = null;
+    setDraggingBook(null);
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
+  const handleResetBookOrder = () => {
+    setBookOrder(BOOKS);
+    try {
+      window.localStorage.removeItem(BOOK_ORDER_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
   };
 
   // “Top bar” height for sticky header computations:
@@ -2950,15 +3085,17 @@ export function OddsScreen({
                 ]}
               />
 
-              <SelectPill
-                value={view}
-                onChange={(v) => setView(v as BoardView)}
-                label="View"
-                options={[
-                  { value: "pregame", label: "Pre-Game" },
-                  { value: "live", label: "Live" },
-                ]}
-              />
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] text-white/60 font-semibold">View</div>
+                <SegmentedToggle
+                  value={view}
+                  options={[
+                    { value: "pregame", label: "Pre-Game" },
+                    { value: "live", label: "Live" },
+                  ]}
+                  onChange={(next) => setView(next as BoardView)}
+                />
+              </div>
 
               <DateReminder label={selectedDateLabel} />
 
@@ -2988,6 +3125,13 @@ export function OddsScreen({
                 label="Sportsbooks"
                 options={[{ value: "all", label: `All (${BOOKS.length})` }]}
               />
+              <button
+                type="button"
+                onClick={handleResetBookOrder}
+                className="text-[11px] font-semibold text-white/60 hover:text-white"
+              >
+                Reset order
+              </button>
 
               <Btn
                 onClick={() => {
@@ -3010,7 +3154,7 @@ export function OddsScreen({
             className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
             style={{
               borderColor: PRISM_BORDER,
-              background: "linear-gradient(180deg, rgba(10,10,10,0.78), rgba(7,7,7,0.95))",
+              background: BOARD_BG,
               backdropFilter: "blur(6px)",
             }}
           >
@@ -3053,8 +3197,8 @@ export function OddsScreen({
                   {eventsByDaySection.map((sec) => (
                     <div key={sec.ymd} className="space-y-3">
                       <div
-                        className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 bg-black/70 backdrop-blur-[8px]"
-                        style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
+                        className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
+                        style={{ background: BOARD_STICKY_BG, boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
                       >
                         <div className="text-[12px] font-extrabold text-white/90">
                           {sec.label}
@@ -3067,6 +3211,7 @@ export function OddsScreen({
                           ev={ev}
                           market={market}
                           oddsFormat={oddsFormat}
+                          displayBooks={bookOrder}
                           booksOpen={!!mobileOpenMap[ev.eventId]}
                           onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
                           onOpenDetails={openDetails}
@@ -3097,7 +3242,14 @@ export function OddsScreen({
                       ))}
                     </colgroup>
 
-                    <TableHeaderRow oddsFormat={oddsFormat} />
+                    <TableHeaderRow
+                      oddsFormat={oddsFormat}
+                      displayBooks={bookOrder}
+                      draggingKey={draggingBook}
+                      onBookPointerDown={handleBookPointerDown}
+                      onBookPointerUp={handleBookPointerUp}
+                      onBookPointerCancel={handleBookPointerCancel}
+                    />
 
                     <tbody>
                       {eventsByDaySection.map((sec) => (
@@ -3109,6 +3261,7 @@ export function OddsScreen({
                               ev={ev}
                               market={market}
                               oddsFormat={oddsFormat}
+                              displayBooks={bookOrder}
                               onOpenDetails={openDetails}
                             />
                           ))}
