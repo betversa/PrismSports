@@ -487,6 +487,7 @@ function TeamCell({
         <div className="text-[11px] text-white/60 font-semibold">{sub}</div>
       </div>
     </div>
+    </div>
   );
 }
 
@@ -3023,306 +3024,316 @@ export function OddsScreen({
           "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
       }}
     >
-      <div className={`${PAGE_X} relative`}>
-        <div className={`${PAGE_MAX_W} mx-auto`}>
-        {/* ===========================
-            TOP SPORTS TABS BAR
-        =========================== */}
-        <div className="sticky top-0 z-50">
-          <div
-            className="h-[42px] flex items-center justify-between px-2 md:px-0"
-            style={{
-              background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
-              borderBottom: `1px solid ${PRISM_BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-              {SPORT_TABS.map((t) => {
-                const active =
-                  t.key === sportKey ||
-                  (t.key === "soccer" && sportKey.includes("soccer")) ||
-                  (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
-                const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    onClick={() => {
-                      if (enabled && onPickSport) onPickSport(t.key);
-                    }}
-                    disabled={!enabled}
-                    className={[
-                      "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
-                      enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                      active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
-                    ].join(" ")}
-                    style={{
-                      borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                      background: active ? "rgba(212,175,55,0.16)" : "transparent",
-                      color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
-                    }}
-                    title={
-                      !enabled
-                        ? `${t.label} (not wired)`
-                        : active
-                          ? `${t.label} (active)`
-                          : `Switch to ${t.label}`
-                    }
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <div className="hidden md:flex items-center gap-2">
-                <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
-                <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                  <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                  <span className={freshness.tone}>{freshness.label}</span>
-                </div>
-              </div>
-              <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
-            </div>
-          </div>
-
-          {/* ===========================
-              FILTERS TOOLBAR
-          =========================== */}
-          <div
-            className="min-h-[56px] w-full"
-            style={{
-              background: BOARD_BG,
-              borderBottom: `1px solid ${PRISM_BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="min-h-[56px] flex flex-col md:flex-row md:items-center justify-between gap-3 px-2 md:px-0">
-              <div className="flex flex-wrap items-center gap-2">
-              <SelectPill
-                value={market}
-                onChange={(v) => setMarket(v as Market)}
-                label="Market"
-                options={[
-                  { value: "spread", label: "Point Spread" },
-                  { value: "total", label: "Total" },
-                  { value: "ml", label: "Moneyline" },
-                ]}
-              />
-
-              <div className="flex items-center gap-2">
-                <div className="text-[11px] text-white/60 font-semibold">View</div>
-                <SegmentedToggle
-                  value={view}
-                  options={[
-                    { value: "pregame", label: "Pre-Game" },
-                    { value: "live", label: "Live" },
-                  ]}
-                  onChange={(next) => setView(next as BoardView)}
-                />
-              </div>
-
-              <DateReminder label={selectedDateLabel} />
-
-              <div className="hidden md:block">
-                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." onClear={() => setQuery("")} />
-              </div>
-            </div>
-
-              <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                <div className="md:hidden w-full">
-                  <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
+      <div className="w-full" style={{ background: BOARD_BG }}>
+        <div className={`${PAGE_X} relative`}>
+          <div className={`${PAGE_MAX_W} mx-auto`}>
+            {/* ===========================
+                TOP SPORTS TABS BAR
+            =========================== */}
+            <div className="sticky top-0 z-50">
+              <div
+                className="h-[42px] flex items-center justify-between px-2 md:px-0"
+                style={{
+                  background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
+                  borderBottom: `1px solid ${PRISM_BORDER}`,
+                  backdropFilter: "blur(10px)",
+                }}
+              >
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                  {SPORT_TABS.map((t) => {
+                    const active =
+                      t.key === sportKey ||
+                      (t.key === "soccer" && sportKey.includes("soccer")) ||
+                      (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                    const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
+                    return (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => {
+                          if (enabled && onPickSport) onPickSport(t.key);
+                        }}
+                        disabled={!enabled}
+                        className={[
+                          "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
+                          enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+                          active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                        ].join(" ")}
+                        style={{
+                          borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
+                          background: active ? "rgba(212,175,55,0.16)" : "transparent",
+                          color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
+                        }}
+                        title={
+                          !enabled
+                            ? `${t.label} (not wired)`
+                            : active
+                              ? `${t.label} (active)`
+                              : `Switch to ${t.label}`
+                        }
+                      >
+                        {t.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
-                <SelectPill
-                  value={oddsFormat}
-                  onChange={(v) => setOddsFormat(v as OddsFormat)}
-                  label="Odds"
-                  options={[
-                    { value: "american", label: "American" },
-                    { value: "decimal", label: "Decimal" },
-                  ]}
-                />
+                <div className="flex items-center gap-2">
+                  <div className="hidden md:flex items-center gap-2">
+                    <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
+                    <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+                    <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                      <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                      <span className={freshness.tone}>{freshness.label}</span>
+                    </div>
+                  </div>
+                  <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
+                </div>
+              </div>
 
-                <SelectPill
-                  value={"all"}
-                  onChange={() => {}}
-                  label="Sportsbooks"
-                  options={[{ value: "all", label: `All (${BOOKS.length})` }]}
-                />
-                <button
-                  type="button"
-                  onClick={handleResetBookOrder}
-                  className="text-[11px] font-semibold text-white/60 hover:text-white"
-                >
-                  Reset order
-                </button>
+              {/* ===========================
+                  FILTERS TOOLBAR
+              =========================== */}
+              <div
+                className="min-h-[56px] w-full"
+                style={{
+                  background: BOARD_BG,
+                  borderBottom: `1px solid ${PRISM_BORDER}`,
+                  backdropFilter: "blur(10px)",
+                }}
+              >
+                <div className="min-h-[56px] flex flex-col md:flex-row md:items-center justify-between gap-3 px-2 md:px-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <SelectPill
+                      value={market}
+                      onChange={(v) => setMarket(v as Market)}
+                      label="Market"
+                      options={[
+                        { value: "spread", label: "Point Spread" },
+                        { value: "total", label: "Total" },
+                        { value: "ml", label: "Moneyline" },
+                      ]}
+                    />
 
-                <Btn
-                  onClick={() => {
-                    setLoading(true);
-                    load();
-                  }}
-                  disabled={loading}
-                >
-                  {loading ? "Refreshing…" : "Refresh"}
-                </Btn>
+                    <div className="flex items-center gap-2">
+                      <div className="text-[11px] text-white/60 font-semibold">View</div>
+                      <SegmentedToggle
+                        value={view}
+                        options={[
+                          { value: "pregame", label: "Pre-Game" },
+                          { value: "live", label: "Live" },
+                        ]}
+                        onChange={(next) => setView(next as BoardView)}
+                      />
+                    </div>
+
+                    <DateReminder label={selectedDateLabel} />
+
+                    <div className="hidden md:block">
+                      <TextInput
+                        value={query}
+                        onChange={setQuery}
+                        placeholder="Search teams..."
+                        onClear={() => setQuery("")}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                    <div className="md:hidden w-full">
+                      <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
+                    </div>
+
+                    <SelectPill
+                      value={oddsFormat}
+                      onChange={(v) => setOddsFormat(v as OddsFormat)}
+                      label="Odds"
+                      options={[
+                        { value: "american", label: "American" },
+                        { value: "decimal", label: "Decimal" },
+                      ]}
+                    />
+
+                    <SelectPill
+                      value={"all"}
+                      onChange={() => {}}
+                      label="Sportsbooks"
+                      options={[{ value: "all", label: `All (${BOOKS.length})` }]}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleResetBookOrder}
+                      className="text-[11px] font-semibold text-white/60 hover:text-white"
+                    >
+                      Reset order
+                    </button>
+
+                    <Btn
+                      onClick={() => {
+                        setLoading(true);
+                        load();
+                      }}
+                      disabled={loading}
+                    >
+                      {loading ? "Refreshing…" : "Refresh"}
+                    </Btn>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-        {/* ===========================
-            BOARD BODY
-        =========================== */}
-        <div className="pt-2.5 pb-6">
-          <div
-            className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
-            style={{
-              borderColor: PRISM_BORDER,
-              background: BOARD_BG,
-              backdropFilter: "blur(6px)",
-            }}
-          >
-            <div className="px-4 py-2 border-b" style={{ borderColor: PRISM_BORDER }}>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-white font-extrabold text-[13px] leading-tight">
-                    {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
-                    <span style={{ color: PRISM_GOLD }}>{topSport}</span>
-                  </div>
-                  <div className="text-[10px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
-                    Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
-                    {oddsFormat === "american" ? "American" : "Decimal"}
-                  </div>
+      {/* ===========================
+          BOARD BODY
+      =========================== */}
+      <div className="pt-2.5 pb-6">
+        <div
+          className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
+          style={{
+            borderColor: PRISM_BORDER,
+            background: BOARD_BG,
+            backdropFilter: "blur(6px)",
+          }}
+        >
+          <div className="px-4 py-2 border-b" style={{ borderColor: PRISM_BORDER }}>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-white font-extrabold text-[13px] leading-tight">
+                  {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
+                  <span style={{ color: PRISM_GOLD }}>{topSport}</span>
                 </div>
+                <div className="text-[10px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
+                  Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
+                  {oddsFormat === "american" ? "American" : "Decimal"}
+                </div>
+              </div>
 
-                <div className="text-right">
-                  <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
-                    {events.length} games
-                  </div>
-                  <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
-                    <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
-                    <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                    <span className={freshness.tone}>{freshness.label}</span>
-                  </div>
+              <div className="text-right">
+                <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
+                  {events.length} games
+                </div>
+                <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
+                  <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
+                  <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                  <span className={freshness.tone}>{freshness.label}</span>
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* MOBILE */}
-            <div className="md:hidden p-3">
-              {loading ? (
-                <div className="p-3 text-xs text-white/60">Loading odds…</div>
-              ) : error ? (
-                <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
-              ) : !events.length ? (
-                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-              ) : (
-                <div className="space-y-3">
-                  {eventsByDaySection.map((sec) => (
-                    <div key={sec.ymd} className="space-y-3">
-                      <div
-                        className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
-                        style={{ background: BOARD_STICKY_BG, boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
-                      >
-                        <div className="text-[12px] font-extrabold text-white/90">
-                          {sec.label}
-                          <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
-                        </div>
+          {/* MOBILE */}
+          <div className="md:hidden p-3">
+            {loading ? (
+              <div className="p-3 text-xs text-white/60">Loading odds…</div>
+            ) : error ? (
+              <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
+            ) : !events.length ? (
+              <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+            ) : (
+              <div className="space-y-3">
+                {eventsByDaySection.map((sec) => (
+                  <div key={sec.ymd} className="space-y-3">
+                    <div
+                      className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
+                      style={{ background: BOARD_STICKY_BG, boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
+                    >
+                      <div className="text-[12px] font-extrabold text-white/90">
+                        {sec.label}
+                        <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
                       </div>
-                      {sec.events.map((ev) => (
-                        <EventCardMobile
-                          key={ev.eventId}
-                          ev={ev}
-                          market={market}
-                          oddsFormat={oddsFormat}
-                          displayBooks={bookOrder}
-                          booksOpen={!!mobileOpenMap[ev.eventId]}
-                          onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
-                          onOpenDetails={openDetails}
-                        />
-                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    {sec.events.map((ev) => (
+                      <EventCardMobile
+                        key={ev.eventId}
+                        ev={ev}
+                        market={market}
+                        oddsFormat={oddsFormat}
+                        displayBooks={bookOrder}
+                        booksOpen={!!mobileOpenMap[ev.eventId]}
+                        onToggleBooks={() =>
+                          setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                        }
+                        onOpenDetails={openDetails}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
-            {/* DESKTOP */}
-            <div className="hidden md:block">
-              {loading ? (
-                <div className="p-6 text-sm text-white/60">Loading odds…</div>
-              ) : error ? (
-                <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
-              ) : !events.length ? (
-                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-              ) : (
-                <div
-                  className="max-h-[calc(100vh-240px)] overflow-auto"
-                  style={{ scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24, background: BOARD_BG }}
-                >
-                  <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
-                    <colgroup>
-                      <col style={{ width: COL_GAME }} />
-                      <col style={{ width: COL_BOOK }} />
-                      {bookOrder.map((_, i) => (
-                        <col key={i} style={{ width: COL_BOOK }} />
-                      ))}
-                    </colgroup>
+          {/* DESKTOP */}
+          <div className="hidden md:block">
+            {loading ? (
+              <div className="p-6 text-sm text-white/60">Loading odds…</div>
+            ) : error ? (
+              <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
+            ) : !events.length ? (
+              <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+            ) : (
+              <div
+                className="max-h-[calc(100vh-240px)] overflow-auto"
+                style={{ scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24, background: BOARD_BG }}
+              >
+                <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
+                  <colgroup>
+                    <col style={{ width: COL_GAME }} />
+                    <col style={{ width: COL_BOOK }} />
+                    {bookOrder.map((_, i) => (
+                      <col key={i} style={{ width: COL_BOOK }} />
+                    ))}
+                  </colgroup>
 
-                    <TableHeaderRow
-                      oddsFormat={oddsFormat}
-                      displayBooks={bookOrder}
-                      draggingKey={draggingBook}
-                      onBookPointerDown={handleBookPointerDown}
-                      onBookPointerUp={handleBookPointerUp}
-                      onBookPointerCancel={handleBookPointerCancel}
-                    />
+                  <TableHeaderRow
+                    oddsFormat={oddsFormat}
+                    displayBooks={bookOrder}
+                    draggingKey={draggingBook}
+                    onBookPointerDown={handleBookPointerDown}
+                    onBookPointerUp={handleBookPointerUp}
+                    onBookPointerCancel={handleBookPointerCancel}
+                  />
 
-                    <tbody>
-                      {eventsByDaySection.map((sec) => (
-                        <React.Fragment key={sec.ymd}>
-                          <DateSectionHeader label={sec.label} count={sec.count} />
-                          {sec.events.map((ev) => (
-                            <EventRowTwoLines
-                              key={ev.eventId}
-                              ev={ev}
-                              market={market}
-                              oddsFormat={oddsFormat}
-                              displayBooks={bookOrder}
-                              onOpenDetails={openDetails}
-                            />
-                          ))}
-                        </React.Fragment>
-                      ))}
-                    </tbody>
-                  </table>
+                  <tbody>
+                    {eventsByDaySection.map((sec) => (
+                      <React.Fragment key={sec.ymd}>
+                        <DateSectionHeader label={sec.label} count={sec.count} />
+                        {sec.events.map((ev) => (
+                          <EventRowTwoLines
+                            key={ev.eventId}
+                            ev={ev}
+                            market={market}
+                            oddsFormat={oddsFormat}
+                            displayBooks={bookOrder}
+                            onOpenDetails={openDetails}
+                          />
+                        ))}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
 
-                  <div className="h-3" />
-                </div>
-              )}
-            </div>
+                <div className="h-3" />
+              </div>
+            )}
           </div>
         </div>
+      </div>
 
-        {/* Modal */}
-        {detailsOpen && activeEvent && (
-          <GameDetailsModal
-            sportKey={sportKey}
-            ev={activeEvent}
-            oddsFormat={oddsFormat}
-            initialTab={detailsTab}
-            mode={detailsTab}
-            showTabs={false}
-            onClose={() => setDetailsOpen(false)}
-          />
-        )}
+      {/* Modal */}
+      {detailsOpen && activeEvent && (
+        <GameDetailsModal
+          sportKey={sportKey}
+          ev={activeEvent}
+          oddsFormat={oddsFormat}
+          initialTab={detailsTab}
+          mode={detailsTab}
+          showTabs={false}
+          onClose={() => setDetailsOpen(false)}
+        />
+      )}
       </div>
     </div>
   );
