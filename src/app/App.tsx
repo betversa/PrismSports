@@ -157,10 +157,6 @@ export default function App() {
               }}
               variant="mobile"
               onClose={() => setSidebarOpen(false)}
-              oddsSportKey={oddsSportKey}
-              onPickOddsSport={handlePickOddsSport}
-              predSportKey={predSportKey}
-              onPickPredSport={handlePickPredSport}
             />
           </div>
         </div>

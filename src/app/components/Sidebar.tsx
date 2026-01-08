@@ -1,10 +1,9 @@
 // components/Sidebar.tsx — FULL REWRITE (adds Parlay + Props + Calculator nav item)
 // ---------------------------------------------------------------------------------------------------
 // ✅ Adds Parlay + Props + NEW Calculator to sidebar nav (desktop + mobile)
-// ✅ Keeps existing Odds/Predictions sport dropdown behavior
 // ✅ Keeps styling + enabled sport logic unchanged
 
-import React, { useState } from "react";
+import React from "react";
 import {
   ChartBar,
   Calculator,
@@ -13,51 +12,16 @@ import {
   Settings,
   House,
   X,
-  ChevronDown,
   Layers,
   User,
 } from "lucide-react";
-import type { Screen, SportKey } from "../App";
+import type { Screen } from "../App";
 
 interface SidebarProps {
   activeScreen: Screen;
   onNavigate: (screen: Screen) => void;
   variant?: "desktop" | "mobile";
   onClose?: () => void;
-
-  // ✅ sport selection state (from App.tsx)
-  oddsSportKey: SportKey;
-  onPickOddsSport: (k: SportKey) => void;
-
-  predSportKey: SportKey;
-  onPickPredSport: (k: SportKey) => void;
-}
-
-type UiSport = "NCAAB" | "NBA" | "NCAAF" | "NFL" | "NHL" | "MLB";
-const SPORTS: UiSport[] = ["NCAAB", "NBA", "NCAAF", "NFL", "NHL", "MLB"];
-
-const GOLD = "#d4af37";
-
-function uiToDbSport(s: UiSport): SportKey {
-  switch (s) {
-    case "NCAAB":
-      return "basketball_ncaab";
-    case "NBA":
-      return "basketball_nba";
-    case "NCAAF":
-      return "football_ncaaf";
-    case "NFL":
-      return "football_nfl";
-    case "NHL":
-      return "icehockey_nhl";
-    case "MLB":
-      return "baseball_mlb";
-  }
-}
-
-function isEnabled(db: SportKey) {
-  // ✅ enable what you actually have live right now
-  return db === "basketball_ncaab" || db === "basketball_nba";
 }
 
 export function Sidebar({
@@ -65,23 +29,12 @@ export function Sidebar({
   onNavigate,
   variant = "desktop",
   onClose,
-
-  oddsSportKey,
-  onPickOddsSport,
-  predSportKey,
-  onPickPredSport,
 }: SidebarProps) {
   const isMobile = variant === "mobile";
 
   const wrapperClass = isMobile
     ? "bg-[#0a0a0a] border-r border-[#2a2a2a] h-full flex flex-col overflow-hidden"
     : "w-64 bg-[#0a0a0a] border-r border-[#2a2a2a] h-screen fixed left-0 top-0 z-20 flex flex-col overflow-hidden";
-
-  const [openOdds, setOpenOdds] = useState(false);
-  const [openPreds, setOpenPreds] = useState(false);
-
-  const oddsActive = activeScreen === "odds";
-  const predsActive = activeScreen === "monte-carlo";
 
   const baseItemClasses = (active: boolean) =>
     [
@@ -91,30 +44,7 @@ export function Sidebar({
         : "text-[#b0b0b0] hover:bg-[#1a1a1a] hover:text-white",
     ].join(" ");
 
-  const subItemClasses = (enabled: boolean, selected: boolean) =>
-    [
-      "w-full flex items-center justify-between px-4 py-2 rounded",
-      "transition-colors",
-      enabled
-        ? selected
-          ? "bg-[#141414] text-white"
-          : "text-[#cfcfcf] hover:bg-[#141414] hover:text-white"
-        : "text-[#6f6f6f] cursor-not-allowed",
-    ].join(" ");
-
   const SectionDivider = () => <div className="my-2 h-px bg-[#1a1a1a]" />;
-
-  const pickOddsSport = (db: SportKey) => {
-    onPickOddsSport(db);
-    onNavigate("odds");
-    if (isMobile) onClose?.();
-  };
-
-  const pickPredSport = (db: SportKey) => {
-    onPickPredSport(db);
-    onNavigate("monte-carlo");
-    if (isMobile) onClose?.();
-  };
 
   return (
     <div className={wrapperClass}>
@@ -223,114 +153,38 @@ export function Sidebar({
 
           <SectionDivider />
 
-          {/* Predictions dropdown */}
+          {/* Predictions */}
           <li>
             <button
-              type="button"
               onClick={() => {
-                setOpenOdds(false);
-                setOpenPreds((v) => !v);
+                onNavigate("monte-carlo");
+                if (isMobile) onClose?.();
               }}
-              className={baseItemClasses(predsActive)}
-              aria-expanded={openPreds}
+              className={baseItemClasses(activeScreen === "monte-carlo")}
+              type="button"
             >
               <div className="flex items-center gap-3">
                 <Calculator className="w-4 h-4" />
                 <span className="text-sm">Predictions</span>
               </div>
-
-              <ChevronDown
-                className={[
-                  "w-4 h-4 transition-transform",
-                  openPreds ? "rotate-180" : "rotate-0",
-                  predsActive ? "text-black" : "text-[#9a9a9a]",
-                ].join(" ")}
-              />
             </button>
-
-            {openPreds && (
-              <div className="mt-2 ml-7 space-y-1">
-                {SPORTS.map((ui) => {
-                  const db = uiToDbSport(ui);
-                  const enabled = isEnabled(db);
-                  const selected = predSportKey === db;
-
-                  return (
-                    <button
-                      key={`preds-${ui}`}
-                      type="button"
-                      disabled={!enabled}
-                      onClick={() => enabled && pickPredSport(db)}
-                      className={subItemClasses(enabled, selected)}
-                      title={enabled ? `${ui} Predictions` : "Coming soon"}
-                    >
-                      <span className="text-[13px] font-medium">{ui} Predictions</span>
-
-                      {!enabled ? (
-                        <span className="text-[10px] font-semibold" style={{ color: GOLD }}>
-                          COMING SOON
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
           </li>
 
-          {/* Odds dropdown */}
+          {/* Odds */}
           <li>
             <button
-              type="button"
               onClick={() => {
-                setOpenPreds(false);
-                setOpenOdds((v) => !v);
+                onNavigate("odds");
+                if (isMobile) onClose?.();
               }}
-              className={baseItemClasses(oddsActive)}
-              aria-expanded={openOdds}
+              className={baseItemClasses(activeScreen === "odds")}
+              type="button"
             >
               <div className="flex items-center gap-3">
                 <ChartBar className="w-4 h-4" />
                 <span className="text-sm">Odds</span>
               </div>
-
-              <ChevronDown
-                className={[
-                  "w-4 h-4 transition-transform",
-                  openOdds ? "rotate-180" : "rotate-0",
-                  oddsActive ? "text-black" : "text-[#9a9a9a]",
-                ].join(" ")}
-              />
             </button>
-
-            {openOdds && (
-              <div className="mt-2 ml-7 space-y-1">
-                {SPORTS.map((ui) => {
-                  const db = uiToDbSport(ui);
-                  const enabled = isEnabled(db);
-                  const selected = oddsSportKey === db;
-
-                  return (
-                    <button
-                      key={`odds-${ui}`}
-                      type="button"
-                      disabled={!enabled}
-                      onClick={() => enabled && pickOddsSport(db)}
-                      className={subItemClasses(enabled, selected)}
-                      title={enabled ? `${ui} Odds` : "Coming soon"}
-                    >
-                      <span className="text-[13px] font-medium">{ui} Odds</span>
-
-                      {!enabled ? (
-                        <span className="text-[10px] font-semibold" style={{ color: GOLD }}>
-                          COMING SOON
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
           </li>
 
           <SectionDivider />
@@ -381,4 +235,3 @@ export function Sidebar({
     </div>
   );
 }
-

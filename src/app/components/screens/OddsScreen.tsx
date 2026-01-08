@@ -86,7 +86,7 @@ const TABLE_HEADER_BG = "#0b0b0b";
 const FILTER_ROW_HEIGHT = 48;
 const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
 const DATE_BAR_HEIGHT = 44;
-const HEADER_ROW_HEIGHT = 44;
+const HEADER_ROW_HEIGHT = 40;
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
@@ -2372,12 +2372,19 @@ function sportLabelForKey(sportKey: string) {
 function DateSectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <tr>
-      <td colSpan={BOOKS.length + 2} className="p-0">
+      <td
+        colSpan={BOOKS.length + 2}
+        className="p-0"
+        style={{
+          position: "sticky",
+          top: "var(--thead-h, 0px)",
+          zIndex: 60,
+          background: BOARD_STICKY_BG,
+        }}
+      >
         <div
-          className="sticky px-4 py-2 flex items-center justify-between border-y"
+          className="px-4 py-2 flex items-center justify-between border-y"
           style={{
-            top: "var(--props-thead-h, 0px)",
-            zIndex: 60,
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
             height: DATE_BAR_HEIGHT,
@@ -2438,7 +2445,7 @@ function TableHeaderRow({
         }}
       >
         <th
-          className="text-left px-4 py-2 text-[11px] font-extrabold text-white/80"
+          className="text-left px-4 py-2.5 text-[11px] font-extrabold text-white/80 align-middle"
           style={{ ...stickyCellStyle, width: COL_GAME }}
         >
           Game
@@ -2446,7 +2453,7 @@ function TableHeaderRow({
 
         {/* Consensus column like reference (subtle) */}
         <th
-          className="text-center px-2 py-2 text-[11px] font-extrabold text-white/70"
+          className="text-center px-2 py-2.5 text-[11px] font-extrabold text-white/70 align-middle"
           style={{ ...stickyCellStyle, width: COL_BOOK }}
         >
           Cons
@@ -2456,7 +2463,11 @@ function TableHeaderRow({
         </th>
 
         {displayBooks.map((bk) => (
-          <th key={bk} className="text-center px-2 py-2" style={{ ...stickyCellStyle, width: COL_BOOK }}>
+          <th
+            key={bk}
+            className="text-center px-2 py-2.5 align-middle"
+            style={{ ...stickyCellStyle, width: COL_BOOK }}
+          >
             <div className="flex items-center justify-center">
               <button
                 type="button"
@@ -2828,7 +2839,7 @@ export function OddsScreen({
 
     const update = () => {
       const height = headEl.getBoundingClientRect().height;
-      scrollEl.style.setProperty("--props-thead-h", `${height}px`);
+      scrollEl.style.setProperty("--thead-h", `${height}px`);
     };
 
     update();
