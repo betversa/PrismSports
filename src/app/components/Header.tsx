@@ -54,7 +54,7 @@ function NavItem({
       type="button"
       onClick={onClick}
       className={[
-        "relative px-1 py-1 text-[14px] md:text-[15px] font-medium tracking-normal",
+        "relative px-1.5 py-1 text-[14px] md:text-[15px] font-medium tracking-normal",
         "transition-colors",
         active ? "text-white" : "text-[#cfcfcf] hover:text-white",
       ].join(" ")}
@@ -135,7 +135,7 @@ export function Header({
         />
       </div>
 
-      <div className="relative w-full px-3 md:px-6 pt-2 md:pt-2 pb-2 md:pb-1">
+      <div className="relative w-full px-3 md:px-6 pt-2 md:pt-2.5 pb-2 md:pb-1.5">
         <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center gap-2">
           {/* LEFT */}
           <div className="flex items-start min-w-0">
@@ -200,7 +200,7 @@ export function Header({
 
           {/* CENTER */}
           <div className="hidden md:flex justify-center">
-            <nav className="flex items-center gap-7 pb-1 pt-0.5">
+            <nav className="flex items-center gap-6 pb-1 pt-0.5">
               <NavItem label="Odds" active={activeScreen === "odds"} onClick={() => onNavigate?.("odds")} />
               <NavItem
                 label="Predictions"

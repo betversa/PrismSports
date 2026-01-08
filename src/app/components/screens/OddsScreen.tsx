@@ -492,7 +492,7 @@ function OddsChip({
 }) {
   // chip like reference: gray box, two-line
   return (
-    <div className="w-[104px] h-[44px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
+    <div className="w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
       <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
         {parts.top}
       </div>
@@ -2831,7 +2831,7 @@ export function OddsScreen({
         =========================== */}
         <div className="sticky top-0 z-50">
           <div
-            className="h-[44px] flex items-center justify-between px-2 md:px-0"
+            className="h-[42px] flex items-center justify-between px-2 md:px-0"
             style={{
               background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
               borderBottom: `1px solid ${PRISM_BORDER}`,
@@ -2895,7 +2895,7 @@ export function OddsScreen({
               FILTERS TOOLBAR
           =========================== */}
           <div
-            className="h-[60px] flex items-center justify-between gap-3 px-2 md:px-0"
+            className="h-[56px] flex items-center justify-between gap-3 px-2 md:px-0"
             style={{
               background: "linear-gradient(180deg, rgba(12,12,12,0.85), rgba(9,9,9,0.78))",
               borderBottom: `1px solid ${PRISM_BORDER}`,
@@ -2978,7 +2978,7 @@ export function OddsScreen({
         {/* ===========================
             BOARD BODY
         =========================== */}
-        <div className="pt-3 pb-8">
+        <div className="pt-2.5 pb-6">
           <div
             className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
             style={{
@@ -3047,7 +3047,7 @@ export function OddsScreen({
               ) : !events.length ? (
                 <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
-                <div className="max-h-[calc(100vh-300px)] overflow-auto" style={{ scrollPaddingTop: 56 }}>
+                <div className="max-h-[calc(100vh-240px)] overflow-auto" style={{ scrollPaddingTop: 56 }}>
                   <table className="w-full table-fixed min-w-[1080px]">
                     <colgroup>
                       <col style={{ width: COL_GAME }} />
