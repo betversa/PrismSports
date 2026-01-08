@@ -552,7 +552,7 @@ function TextInput({
   return (
     <div className="relative">
       <input
-        className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className="h-9 w-full md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -604,8 +604,8 @@ function Btn({
 function DateReminder({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <div className="text-[11px] text-white/60 font-semibold">Selected date</div>
-      <div className="h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold flex items-center">
+      <div className="text-[10px] md:text-[11px] text-white/60 font-semibold">Selected date</div>
+      <div className="h-8 md:h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-xs md:text-sm font-extrabold flex items-center">
         {label}
       </div>
     </div>
@@ -631,7 +631,7 @@ function SegmentedToggle<T extends string>({
             type="button"
             onClick={() => onChange(opt.value)}
             className={[
-              "h-7 px-3 rounded-md text-[11px] font-extrabold transition-colors",
+              "h-6 md:h-7 px-3 rounded-md text-[10px] md:text-[11px] font-extrabold transition-colors",
               active
                 ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
                 : "text-white/70 hover:text-white",
@@ -3093,14 +3093,14 @@ export function OddsScreen({
               FILTERS TOOLBAR
           =========================== */}
           <div
-            className="h-[56px] flex items-center justify-between gap-3 px-2 md:px-0"
+            className="min-h-[56px] flex flex-col md:flex-row md:items-center justify-between gap-3 px-2 md:px-0"
             style={{
               background: "linear-gradient(180deg, rgba(12,12,12,0.85), rgba(9,9,9,0.78))",
               borderBottom: `1px solid ${PRISM_BORDER}`,
               backdropFilter: "blur(10px)",
             }}
           >
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+            <div className="flex flex-wrap items-center gap-2">
               <SelectPill
                 value={market}
                 onChange={(v) => setMarket(v as Market)}
@@ -3131,8 +3131,8 @@ export function OddsScreen({
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="md:hidden">
+            <div className="flex flex-wrap items-center gap-2 md:justify-end">
+              <div className="md:hidden w-full">
                 <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
               </div>
 
