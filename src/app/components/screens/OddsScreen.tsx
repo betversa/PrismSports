@@ -1486,19 +1486,24 @@ function GameDetailsModal({
   ev,
   oddsFormat,
   initialTab = "pred",
+  mode,
+  showTabs = true,
   onClose,
 }: {
   sportKey: string;
   ev: EventOdds;
   oddsFormat: OddsFormat;
   initialTab?: DetailsTab;
+  mode?: DetailsTab;
+  showTabs?: boolean;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<DetailsTab>(initialTab);
+  const forcedTab = mode ?? initialTab;
+  const [tab, setTab] = useState<DetailsTab>(forcedTab);
 
   useEffect(() => {
-    setTab(initialTab);
-  }, [initialTab]);
+    setTab(forcedTab);
+  }, [forcedTab]);
 
   // line movement state
   const [lmMarket, setLmMarket] = useState<Market>("ml");
@@ -1853,24 +1858,29 @@ function GameDetailsModal({
   const consTotOver = consensusPartsForRow(ev, "total", "AWAY", oddsFormat);
   const consTotUnder = consensusPartsForRow(ev, "total", "HOME", oddsFormat);
 
+  const modalTitle =
+    mode === "line" ? "Line Movement" : mode === "props" ? "Player Props" : "Game Details";
+
   return (
-    <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      <div
-        className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-white/10
-                   bg-black/70 backdrop-blur-[8px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
-      >
-        <div ref={tabsBarRef} className="flex flex-wrap items-center gap-2">
-          <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
-            Predictions
-          </TabBtn>
-          <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
-            Line Movement
-          </TabBtn>
-          <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
-            Player Props
-          </TabBtn>
+    <ModalShell title={modalTitle} subtitle={subtitle} onClose={onClose}>
+      {showTabs ? (
+        <div
+          className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-white/10
+                     bg-black/70 backdrop-blur-[8px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
+        >
+          <div ref={tabsBarRef} className="flex flex-wrap items-center gap-2">
+            <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
+              Predictions
+            </TabBtn>
+            <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
+              Line Movement
+            </TabBtn>
+            <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
+              Player Props
+            </TabBtn>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* LINE MOVEMENT */}
       {tab === "line" && (
@@ -3304,6 +3314,8 @@ export function OddsScreen({
             ev={activeEvent}
             oddsFormat={oddsFormat}
             initialTab={detailsTab}
+            mode={detailsTab}
+            showTabs={false}
             onClose={() => setDetailsOpen(false)}
           />
         )}
