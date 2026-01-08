@@ -3169,142 +3169,141 @@ export function OddsScreen({
                 BOARD BODY
             =========================== */}
             <div className="pt-2.5 pb-6">
-                <div
-                  className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
-                  style={{
-                    borderColor: PRISM_BORDER,
-                    background: BOARD_BG,
-                    backdropFilter: "blur(6px)",
-                  }}
-                >
-                  <div className="px-4 py-2 border-b" style={{ borderColor: PRISM_BORDER }}>
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-white font-extrabold text-[13px] leading-tight">
-                          {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
-                          <span style={{ color: PRISM_GOLD }}>{topSport}</span>
-                        </div>
-                        <div className="text-[10px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
-                          Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
-                          {oddsFormat === "american" ? "American" : "Decimal"}
-                        </div>
+              <div
+                className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
+                style={{
+                  borderColor: PRISM_BORDER,
+                  background: BOARD_BG,
+                  backdropFilter: "blur(6px)",
+                }}
+              >
+                <div className="px-4 py-2 border-b" style={{ borderColor: PRISM_BORDER }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-white font-extrabold text-[13px] leading-tight">
+                        {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
+                        <span style={{ color: PRISM_GOLD }}>{topSport}</span>
                       </div>
+                      <div className="text-[10px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
+                        Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
+                        {oddsFormat === "american" ? "American" : "Decimal"}
+                      </div>
+                    </div>
 
-                      <div className="text-right">
-                        <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
-                          {events.length} games
-                        </div>
-                        <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
-                          <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
-                          <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                          <span className={freshness.tone}>{freshness.label}</span>
-                        </div>
+                    <div className="text-right">
+                      <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
+                        {events.length} games
+                      </div>
+                      <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
+                        <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
+                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                        <span className={freshness.tone}>{freshness.label}</span>
                       </div>
                     </div>
                   </div>
+                </div>
 
                 {/* MOBILE */}
                 <div className="md:hidden p-3">
-                    {loading ? (
-                      <div className="p-3 text-xs text-white/60">Loading odds…</div>
-                    ) : error ? (
-                      <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
-                    ) : !events.length ? (
-                      <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-                    ) : (
-                      <div className="space-y-3">
-                        {eventsByDaySection.map((sec) => (
-                          <div key={sec.ymd} className="space-y-3">
-                            <div
-                              className="sticky z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
-                              style={{
-                                top: 0,
-                                background: BOARD_STICKY_BG,
-                                boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
-                              }}
-                            >
-                              <div className="text-[12px] font-extrabold text-white/90">
-                                {sec.label}
-                                <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
-                              </div>
+                  {loading ? (
+                    <div className="p-3 text-xs text-white/60">Loading odds…</div>
+                  ) : error ? (
+                    <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
+                  ) : !events.length ? (
+                    <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+                  ) : (
+                    <div className="space-y-3">
+                      {eventsByDaySection.map((sec) => (
+                        <div key={sec.ymd} className="space-y-3">
+                          <div
+                            className="sticky z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
+                            style={{
+                              top: 0,
+                              background: BOARD_STICKY_BG,
+                              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+                            }}
+                          >
+                            <div className="text-[12px] font-extrabold text-white/90">
+                              {sec.label}
+                              <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
                             </div>
-                            {sec.events.map((ev) => (
-                              <EventCardMobile
-                                key={ev.eventId}
-                                ev={ev}
-                                market={market}
-                                oddsFormat={oddsFormat}
-                                displayBooks={bookOrder}
-                                booksOpen={!!mobileOpenMap[ev.eventId]}
-                                onToggleBooks={() =>
-                                  setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
-                                }
-                                onOpenDetails={openDetails}
-                              />
-                            ))}
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                          {sec.events.map((ev) => (
+                            <EventCardMobile
+                              key={ev.eventId}
+                              ev={ev}
+                              market={market}
+                              oddsFormat={oddsFormat}
+                              displayBooks={bookOrder}
+                              booksOpen={!!mobileOpenMap[ev.eventId]}
+                              onToggleBooks={() =>
+                                setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                              }
+                              onOpenDetails={openDetails}
+                            />
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {/* DESKTOP */}
                 <div className="hidden md:block">
-                    {loading ? (
-                      <div className="p-6 text-sm text-white/60">Loading odds…</div>
-                    ) : error ? (
-                      <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
-                    ) : !events.length ? (
-                      <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-                    ) : (
-                      <div
-                        className="max-h-[calc(100vh-240px)] overflow-auto"
-                        style={{
-                          scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24,
-                          background: BOARD_BG,
-                        }}
-                      >
-                        <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
-                          <colgroup>
-                            <col style={{ width: COL_GAME }} />
-                            <col style={{ width: COL_BOOK }} />
-                            {bookOrder.map((_, i) => (
-                              <col key={i} style={{ width: COL_BOOK }} />
-                            ))}
-                          </colgroup>
+                  {loading ? (
+                    <div className="p-6 text-sm text-white/60">Loading odds…</div>
+                  ) : error ? (
+                    <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
+                  ) : !events.length ? (
+                    <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+                  ) : (
+                    <div
+                      className="max-h-[calc(100vh-240px)] overflow-auto"
+                      style={{
+                        scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24,
+                        background: BOARD_BG,
+                      }}
+                    >
+                      <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
+                        <colgroup>
+                          <col style={{ width: COL_GAME }} />
+                          <col style={{ width: COL_BOOK }} />
+                          {bookOrder.map((_, i) => (
+                            <col key={i} style={{ width: COL_BOOK }} />
+                          ))}
+                        </colgroup>
 
-                          <TableHeaderRow
-                            oddsFormat={oddsFormat}
-                            displayBooks={bookOrder}
-                            draggingKey={draggingBook}
-                            onBookPointerDown={handleBookPointerDown}
-                            onBookPointerUp={handleBookPointerUp}
-                            onBookPointerCancel={handleBookPointerCancel}
-                          />
+                        <TableHeaderRow
+                          oddsFormat={oddsFormat}
+                          displayBooks={bookOrder}
+                          draggingKey={draggingBook}
+                          onBookPointerDown={handleBookPointerDown}
+                          onBookPointerUp={handleBookPointerUp}
+                          onBookPointerCancel={handleBookPointerCancel}
+                        />
 
-                          <tbody>
-                            {eventsByDaySection.map((sec) => (
-                              <React.Fragment key={sec.ymd}>
-                                <DateSectionHeader label={sec.label} count={sec.count} />
-                                {sec.events.map((ev) => (
-                                  <EventRowTwoLines
-                                    key={ev.eventId}
-                                    ev={ev}
-                                    market={market}
-                                    oddsFormat={oddsFormat}
-                                    displayBooks={bookOrder}
-                                    onOpenDetails={openDetails}
-                                  />
-                                ))}
-                              </React.Fragment>
-                            ))}
-                          </tbody>
-                        </table>
+                        <tbody>
+                          {eventsByDaySection.map((sec) => (
+                            <React.Fragment key={sec.ymd}>
+                              <DateSectionHeader label={sec.label} count={sec.count} />
+                              {sec.events.map((ev) => (
+                                <EventRowTwoLines
+                                  key={ev.eventId}
+                                  ev={ev}
+                                  market={market}
+                                  oddsFormat={oddsFormat}
+                                  displayBooks={bookOrder}
+                                  onOpenDetails={openDetails}
+                                />
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
 
-                        <div className="h-3" />
-                      </div>
-                    )}
-                  </div>
+                      <div className="h-3" />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
