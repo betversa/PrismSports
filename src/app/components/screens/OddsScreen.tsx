@@ -2376,8 +2376,8 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
         <div
           className="sticky px-4 py-2 flex items-center justify-between border-y"
           style={{
-            top: HEADER_ROW_HEIGHT,
-            zIndex: 20,
+            top: "var(--props-thead-h, 0px)",
+            zIndex: 60,
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
             height: DATE_BAR_HEIGHT,
@@ -2402,6 +2402,7 @@ function TableHeaderRow({
   onBookPointerDown,
   onBookPointerUp,
   onBookPointerCancel,
+  headerRef,
 }: {
   oddsFormat: OddsFormat;
   displayBooks: BookKey[];
@@ -2409,6 +2410,7 @@ function TableHeaderRow({
   onBookPointerDown: (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => void;
   onBookPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
   onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  headerRef?: React.RefObject<HTMLTableSectionElement>;
 }) {
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
@@ -2419,6 +2421,7 @@ function TableHeaderRow({
   };
   return (
     <thead
+      ref={headerRef}
       style={{
         position: "sticky",
         top: 0,
@@ -2697,6 +2700,8 @@ export function OddsScreen({
   const [bookOrder, setBookOrder] = useState<BookKey[]>(BOOKS);
   const [draggingBook, setDraggingBook] = useState<BookKey | null>(null);
   const dragBookRef = useRef<BookKey | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const tableHeadRef = useRef<HTMLTableSectionElement>(null);
 
   async function load() {
     setError("");
@@ -2815,6 +2820,28 @@ export function OddsScreen({
       // ignore
     }
   }, [bookOrder]);
+
+  useLayoutEffect(() => {
+    if (!tableScrollRef.current || !tableHeadRef.current) return;
+    const scrollEl = tableScrollRef.current;
+    const headEl = tableHeadRef.current;
+
+    const update = () => {
+      const height = headEl.getBoundingClientRect().height;
+      scrollEl.style.setProperty("--props-thead-h", `${height}px`);
+    };
+
+    update();
+
+    const ro = new ResizeObserver(update);
+    ro.observe(headEl);
+    window.addEventListener("resize", update);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
 
   const availableDates = useMemo(() => {
     const todayCt = ctTodayYmd();
@@ -3265,6 +3292,7 @@ export function OddsScreen({
                     <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
                   ) : (
                     <div
+                      ref={tableScrollRef}
                       className="max-h-[calc(100vh-240px)] overflow-auto"
                       style={{
                         scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24,
@@ -3290,6 +3318,7 @@ export function OddsScreen({
                           onBookPointerDown={handleBookPointerDown}
                           onBookPointerUp={handleBookPointerUp}
                           onBookPointerCancel={handleBookPointerCancel}
+                          headerRef={tableHeadRef}
                         />
 
                         <tbody>
