@@ -3014,18 +3014,18 @@ export function OddsScreen({
   }, [selectedDate]);
 
   return (
-    <div
-      className="w-full min-h-screen"
-      style={{
-        background:
-          `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-          "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
-          "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
-      }}
-    >
-      <div className="w-full" style={{ background: BOARD_BG }}>
+    <div className="w-full min-h-screen" style={{ background: BOARD_BG }}>
+      <div className="w-full">
         <div className={`${PAGE_X} relative`}>
-          <div className={`${PAGE_MAX_W} mx-auto`}>
+          <div
+            className={`${PAGE_MAX_W} mx-auto`}
+            style={{
+              background:
+                `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
+                "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
+                "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
+            }}
+          >
             {/* ===========================
                 TOP SPORTS TABS BAR
             =========================== */}
