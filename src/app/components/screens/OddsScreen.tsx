@@ -211,6 +211,16 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
+function minutesSinceIso(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const n = normalizeIso(iso);
+  if (!n) return null;
+  const ts = new Date(n).getTime();
+  if (!Number.isFinite(ts)) return null;
+  const diffMs = Date.now() - ts;
+  return diffMs >= 0 ? Math.round(diffMs / 60000) : 0;
+}
+
 /* =========================================================
    PICKERS (wide table)
 ========================================================= */
@@ -531,18 +541,33 @@ function TextInput({
   value,
   onChange,
   placeholder,
+  onClear,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
+  onClear?: () => void;
 }) {
+  const showClear = Boolean(onClear && value);
   return (
-    <input
-      className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 outline-none focus:border-[rgba(212,175,55,0.55)]"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-    />
+    <div className="relative">
+      <input
+        className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {showClear ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="absolute right-2 top-1/2 -translate-y-1/2 h-6 w-6 rounded-md text-white/70 hover:text-white hover:bg-white/10 border border-transparent hover:border-white/10 text-xs font-bold"
+          aria-label="Clear search"
+        >
+          ✕
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -550,10 +575,12 @@ function Btn({
   onClick,
   children,
   variant = "gold",
+  disabled = false,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   variant?: "gold" | "ghost";
+  disabled?: boolean;
 }) {
   const base =
     "h-9 px-3 rounded-lg border text-sm font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
@@ -561,10 +588,31 @@ function Btn({
     "bg-[#d4af37] text-black border-[#d4af37] hover:bg-[#e2c257] hover:border-[#e2c257]";
   const ghost =
     "bg-black/30 text-white border-white/10 hover:border-white/20 hover:bg-black/40";
+  const disabledStyles = "opacity-60 cursor-not-allowed hover:bg-[#d4af37] hover:border-[#d4af37]";
   return (
-    <button className={`${base} ${variant === "gold" ? gold : ghost}`} onClick={onClick} type="button">
+    <button
+      className={`${base} ${variant === "gold" ? gold : ghost} ${disabled ? disabledStyles : ""}`}
+      onClick={onClick}
+      type="button"
+      disabled={disabled}
+    >
       {children}
     </button>
+  );
+}
+
+function EmptyState({
+  title,
+  subtitle,
+}: {
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <div className="p-6 text-center text-white/70">
+      <div className="text-sm font-extrabold text-white">{title}</div>
+      {subtitle ? <div className="text-xs mt-1 text-white/60">{subtitle}</div> : null}
+    </div>
   );
 }
 
@@ -2654,6 +2702,44 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
   // - Filters bar ~ 60px
   // => sticky header row uses top-[104px] in TableHeaderRow.
   const topSport = sportLabelForKey(sportKey);
+  const lastUpdatedAge = useMemo(() => minutesSinceIso(lastUpdatedIso), [lastUpdatedIso]);
+  const freshness = useMemo(() => {
+    if (lastUpdatedAge == null) {
+      return { label: "No recent update", tone: "text-white/50", dot: "bg-white/30" };
+    }
+    if (lastUpdatedAge <= 5) {
+      return { label: `${lastUpdatedAge}m ago`, tone: "text-emerald-300", dot: "bg-emerald-400" };
+    }
+    if (lastUpdatedAge <= 15) {
+      return { label: `${lastUpdatedAge}m ago`, tone: "text-amber-300", dot: "bg-amber-400" };
+    }
+    return { label: `${lastUpdatedAge}m ago`, tone: "text-red-300", dot: "bg-red-400" };
+  }, [lastUpdatedAge]);
+
+  const emptyState = useMemo(() => {
+    if (view === "live") {
+      return {
+        title: "No live games available yet.",
+        subtitle: "Live odds will appear when your feed supports in-game updates.",
+      };
+    }
+    if (!availableDates.length) {
+      return {
+        title: "No upcoming games.",
+        subtitle: "Check back later for the next slate.",
+      };
+    }
+    if (query.trim() && !events.length && eventsForDate.length) {
+      return {
+        title: `No matches for “${query.trim()}”.`,
+        subtitle: "Try a different team name or clear the search.",
+      };
+    }
+    return {
+      title: `No games for ${selectedDate || "this date"}.`,
+      subtitle: "Pick another date or refresh the feed.",
+    };
+  }, [availableDates.length, events.length, eventsForDate.length, query, selectedDate, view]);
 
   return (
     <div
@@ -2705,6 +2791,10 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               <div className="hidden md:flex items-center gap-2">
                 <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
                 <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                  <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                  <span className={freshness.tone}>{freshness.label}</span>
+                </div>
               </div>
               <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
             </div>
@@ -2755,13 +2845,13 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               />
 
               <div className="hidden md:block">
-                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." />
+                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." onClear={() => setQuery("")} />
               </div>
             </div>
 
             <div className="flex items-center gap-2">
               <div className="md:hidden">
-                <TextInput value={query} onChange={setQuery} placeholder="Search..." />
+                <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
               </div>
 
               <SelectPill
@@ -2786,8 +2876,9 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                   setLoading(true);
                   load();
                 }}
+                disabled={loading}
               >
-                Refresh
+                {loading ? "Refreshing…" : "Refresh"}
               </Btn>
             </div>
           </div>
@@ -2822,8 +2913,10 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
                   <div className="text-[11px] font-semibold" style={{ color: PRISM_MUTED }}>
                     {events.length} games
                   </div>
-                  <div className="text-[11px] font-extrabold text-white">
-                    Updated: {fmtCTDateTime(lastUpdatedIso)}
+                  <div className="flex items-center justify-end gap-2 text-[11px] font-extrabold text-white">
+                    <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
+                    <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                    <span className={freshness.tone}>{freshness.label}</span>
                   </div>
                 </div>
               </div>
@@ -2836,7 +2929,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               ) : error ? (
                 <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
               ) : !events.length ? (
-                <div className="p-3 text-xs text-white/60">No games for {selectedDate || "—"}.</div>
+                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
                 <div className="space-y-3">
                   {events.map((ev) => (
@@ -2861,7 +2954,7 @@ export function OddsScreen({ sportKey }: { sportKey: string }) {
               ) : error ? (
                 <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
               ) : !events.length ? (
-                <div className="p-6 text-sm text-white/60">No games for {selectedDate || "—"}.</div>
+                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full table-fixed min-w-[1180px]">
