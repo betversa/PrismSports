@@ -3023,7 +3023,8 @@ export function OddsScreen({
           "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
       }}
     >
-      <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X} relative`}>
+      <div className={`${PAGE_X} relative`}>
+        <div className={`${PAGE_MAX_W} mx-auto`}>
         {/* ===========================
             TOP SPORTS TABS BAR
         =========================== */}
@@ -3172,6 +3173,7 @@ export function OddsScreen({
             </div>
           </div>
         </div>
+      </div>
 
         {/* ===========================
             BOARD BODY
