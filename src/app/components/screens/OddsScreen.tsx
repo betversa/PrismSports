@@ -2375,7 +2375,7 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
         <div
           className="sticky px-4 py-2 flex items-center justify-between border-y"
           style={{
-            top: `calc(var(--app-header-h, 0px) + ${FILTERS_BAR_HEIGHT}px)`,
+            top: 0,
             zIndex: 60,
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
@@ -2412,7 +2412,7 @@ function TableHeaderRow({
 }) {
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
-    top: `calc(var(--app-header-h, 0px) + ${FILTERS_BAR_HEIGHT + DATE_BAR_HEIGHT}px)`,
+    top: DATE_BAR_HEIGHT,
     zIndex: 55,
     background: BOARD_BG,
   };
@@ -3010,174 +3010,165 @@ export function OddsScreen({
                 "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
             }}
           >
-            <div
-              className="overflow-y-auto"
-              style={{
-                maxHeight: "calc(100vh - var(--app-header-h, 0px) - 48px)",
-                scrollPaddingTop: `calc(${FILTERS_BAR_HEIGHT + DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24}px)`,
-              }}
-            >
-              {/* ===========================
-                  TOP SPORTS + FILTERS BAR
-              =========================== */}
-              <div className="sticky z-50" style={{ top: "var(--app-header-h, 0px)" }}>
-                <div className="flex flex-col" style={{ height: FILTERS_BAR_HEIGHT }}>
-                  <div
-                    className="px-2 md:px-0"
-                    style={{
-                      height: FILTER_ROW_HEIGHT,
-                      background: BOARD_BG,
-                      borderBottom: `1px solid ${PRISM_BORDER}`,
-                      backdropFilter: "blur(10px)",
-                    }}
-                  >
-                    <div className="h-full flex flex-col md:flex-row md:items-center gap-2">
-                      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                        {SPORT_TABS.map((t) => {
-                          const active =
-                            t.key === sportKey ||
-                            (t.key === "soccer" && sportKey.includes("soccer")) ||
-                            (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
-                          const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
-                          return (
-                            <button
-                              key={t.key}
-                              type="button"
-                              onClick={() => {
-                                if (enabled && onPickSport) onPickSport(t.key);
-                              }}
-                              disabled={!enabled}
-                              className={[
-                                "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
-                                enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                                active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
-                              ].join(" ")}
-                              style={{
-                                borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                                background: active ? "rgba(212,175,55,0.16)" : "transparent",
-                                color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
-                              }}
-                              title={
-                                !enabled
-                                  ? `${t.label} (not wired)`
-                                  : active
-                                    ? `${t.label} (active)`
-                                    : `Switch to ${t.label}`
-                              }
-                            >
-                              {t.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      <div className="flex flex-1 items-center gap-2 md:ml-auto">
-                        <div className="w-full md:w-auto">
-                          <TextInput
-                            value={query}
-                            onChange={setQuery}
-                            placeholder="Search teams..."
-                            onClear={() => setQuery("")}
-                          />
-                        </div>
-                        <div className="hidden lg:flex items-center gap-2">
-                          <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
-                          <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                          <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                            <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                            <span className={freshness.tone}>{freshness.label}</span>
-                          </div>
-                          <div className="h-7 w-7 rounded-full border border-white/10 bg-white/5" />
-                        </div>
-                      </div>
-                    </div>
+            {/* ===========================
+                TOP SPORTS + FILTERS BAR
+            =========================== */}
+            <div className="flex flex-col" style={{ height: FILTERS_BAR_HEIGHT }}>
+              <div
+                className="px-2 md:px-0"
+                style={{
+                  height: FILTER_ROW_HEIGHT,
+                  background: BOARD_BG,
+                  borderBottom: `1px solid ${PRISM_BORDER}`,
+                  backdropFilter: "blur(10px)",
+                }}
+              >
+                <div className="h-full flex flex-col md:flex-row md:items-center gap-2">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                    {SPORT_TABS.map((t) => {
+                      const active =
+                        t.key === sportKey ||
+                        (t.key === "soccer" && sportKey.includes("soccer")) ||
+                        (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                      const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => {
+                            if (enabled && onPickSport) onPickSport(t.key);
+                          }}
+                          disabled={!enabled}
+                          className={[
+                            "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
+                            enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+                            active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                          ].join(" ")}
+                          style={{
+                            borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
+                            background: active ? "rgba(212,175,55,0.16)" : "transparent",
+                            color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
+                          }}
+                          title={
+                            !enabled
+                              ? `${t.label} (not wired)`
+                              : active
+                                ? `${t.label} (active)`
+                                : `Switch to ${t.label}`
+                          }
+                        >
+                          {t.label}
+                        </button>
+                      );
+                    })}
                   </div>
 
-                  <div
-                    className="px-2 md:px-0"
-                    style={{
-                      height: FILTER_ROW_HEIGHT,
-                      background: BOARD_BG,
-                      borderBottom: `1px solid ${PRISM_BORDER}`,
-                      backdropFilter: "blur(10px)",
-                    }}
-                  >
-                    <div className="h-full flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <SelectPill
-                          value={market}
-                          onChange={(v) => setMarket(v as Market)}
-                          label="Market"
-                          options={[
-                            { value: "spread", label: "Point Spread" },
-                            { value: "total", label: "Total" },
-                            { value: "ml", label: "Moneyline" },
-                          ]}
-                        />
-
-                        <div className="flex items-center gap-2">
-                          <div className="text-[12px] text-white/55 font-semibold">View</div>
-                          <SegmentedToggle
-                            value={view}
-                            options={[
-                              { value: "pregame", label: "Pre-Game" },
-                              { value: "live", label: "Live" },
-                            ]}
-                            onChange={(next) => setView(next as BoardView)}
-                          />
-                        </div>
-
-                        <DateReminder label={selectedDateLabel} />
+                  <div className="flex flex-1 items-center gap-2 md:ml-auto">
+                    <div className="w-full md:w-auto">
+                      <TextInput
+                        value={query}
+                        onChange={setQuery}
+                        placeholder="Search teams..."
+                        onClear={() => setQuery("")}
+                      />
+                    </div>
+                    <div className="hidden lg:flex items-center gap-2">
+                      <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
+                      <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                        <span className={freshness.tone}>{freshness.label}</span>
                       </div>
-
-                      <div className="flex flex-wrap items-center gap-3 md:justify-end">
-                        <SelectPill
-                          value={oddsFormat}
-                          onChange={(v) => setOddsFormat(v as OddsFormat)}
-                          label="Odds"
-                          options={[
-                            { value: "american", label: "American" },
-                            { value: "decimal", label: "Decimal" },
-                          ]}
-                        />
-
-                        <SelectPill
-                          value={"all"}
-                          onChange={() => {}}
-                          label="Sportsbooks"
-                          options={[{ value: "all", label: `All (${BOOKS.length})` }]}
-                        />
-
-                        <div className="flex items-center gap-2 md:ml-1">
-                          <button
-                            type="button"
-                            onClick={handleResetBookOrder}
-                            className="text-[11px] font-semibold text-white/50 hover:text-white"
-                          >
-                            Reset order
-                          </button>
-
-                          <Btn
-                            onClick={() => {
-                              setLoading(true);
-                              load();
-                            }}
-                            disabled={loading}
-                          >
-                            {loading ? "Refreshing…" : "Refresh"}
-                          </Btn>
-                        </div>
-                      </div>
+                      <div className="h-7 w-7 rounded-full border border-white/10 bg-white/5" />
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* ===========================
-                  BOARD BODY
-              =========================== */}
-              <div className="pt-2.5 pb-6">
+              <div
+                className="px-2 md:px-0"
+                style={{
+                  height: FILTER_ROW_HEIGHT,
+                  background: BOARD_BG,
+                  borderBottom: `1px solid ${PRISM_BORDER}`,
+                  backdropFilter: "blur(10px)",
+                }}
+              >
+                <div className="h-full flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <SelectPill
+                      value={market}
+                      onChange={(v) => setMarket(v as Market)}
+                      label="Market"
+                      options={[
+                        { value: "spread", label: "Point Spread" },
+                        { value: "total", label: "Total" },
+                        { value: "ml", label: "Moneyline" },
+                      ]}
+                    />
+
+                    <div className="flex items-center gap-2">
+                      <div className="text-[12px] text-white/55 font-semibold">View</div>
+                      <SegmentedToggle
+                        value={view}
+                        options={[
+                          { value: "pregame", label: "Pre-Game" },
+                          { value: "live", label: "Live" },
+                        ]}
+                        onChange={(next) => setView(next as BoardView)}
+                      />
+                    </div>
+
+                    <DateReminder label={selectedDateLabel} />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                    <SelectPill
+                      value={oddsFormat}
+                      onChange={(v) => setOddsFormat(v as OddsFormat)}
+                      label="Odds"
+                      options={[
+                        { value: "american", label: "American" },
+                        { value: "decimal", label: "Decimal" },
+                      ]}
+                    />
+
+                    <SelectPill
+                      value={"all"}
+                      onChange={() => {}}
+                      label="Sportsbooks"
+                      options={[{ value: "all", label: `All (${BOOKS.length})` }]}
+                    />
+
+                    <div className="flex items-center gap-2 md:ml-1">
+                      <button
+                        type="button"
+                        onClick={handleResetBookOrder}
+                        className="text-[11px] font-semibold text-white/50 hover:text-white"
+                      >
+                        Reset order
+                      </button>
+
+                      <Btn
+                        onClick={() => {
+                          setLoading(true);
+                          load();
+                        }}
+                        disabled={loading}
+                      >
+                        {loading ? "Refreshing…" : "Refresh"}
+                      </Btn>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* ===========================
+                BOARD BODY
+            =========================== */}
+            <div className="pt-2.5 pb-6">
                 <div
                   className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
                   style={{
@@ -3212,8 +3203,8 @@ export function OddsScreen({
                     </div>
                   </div>
 
-                  {/* MOBILE */}
-                  <div className="md:hidden p-3">
+                {/* MOBILE */}
+                <div className="md:hidden p-3">
                     {loading ? (
                       <div className="p-3 text-xs text-white/60">Loading odds…</div>
                     ) : error ? (
@@ -3227,7 +3218,7 @@ export function OddsScreen({
                             <div
                               className="sticky z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
                               style={{
-                                top: `calc(var(--app-header-h, 0px) + ${FILTERS_BAR_HEIGHT}px)`,
+                                top: 0,
                                 background: BOARD_STICKY_BG,
                                 boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
                               }}
@@ -3257,8 +3248,8 @@ export function OddsScreen({
                     )}
                   </div>
 
-                  {/* DESKTOP */}
-                  <div className="hidden md:block">
+                {/* DESKTOP */}
+                <div className="hidden md:block">
                     {loading ? (
                       <div className="p-6 text-sm text-white/60">Loading odds…</div>
                     ) : error ? (
@@ -3266,7 +3257,13 @@ export function OddsScreen({
                     ) : !events.length ? (
                       <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
                     ) : (
-                      <div style={{ background: BOARD_BG }}>
+                      <div
+                        className="max-h-[calc(100vh-240px)] overflow-auto"
+                        style={{
+                          scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24,
+                          background: BOARD_BG,
+                        }}
+                      >
                         <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
                           <colgroup>
                             <col style={{ width: COL_GAME }} />
