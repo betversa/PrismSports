@@ -2408,8 +2408,14 @@ function TableHeaderRow({
   onBookPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
   onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
 }) {
+  const stickyCellStyle: React.CSSProperties = {
+    position: "sticky",
+    top: DATE_BAR_HEIGHT,
+    zIndex: 20,
+    background: BOARD_BG,
+  };
   return (
-    <thead style={{ position: "sticky", top: DATE_BAR_HEIGHT, zIndex: 20, background: BOARD_BG }}>
+    <thead>
       <tr
         className="border-y"
         style={{
@@ -2418,12 +2424,18 @@ function TableHeaderRow({
           backdropFilter: "blur(10px)",
         }}
       >
-        <th className="text-left px-4 py-2 text-[11px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
+        <th
+          className="text-left px-4 py-2 text-[11px] font-extrabold text-white/80"
+          style={{ ...stickyCellStyle, width: COL_GAME }}
+        >
           Game
         </th>
 
         {/* Consensus column like reference (subtle) */}
-        <th className="text-center px-2 py-2 text-[11px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
+        <th
+          className="text-center px-2 py-2 text-[11px] font-extrabold text-white/70"
+          style={{ ...stickyCellStyle, width: COL_BOOK }}
+        >
           Cons
           <div className="text-[9px] font-semibold text-white/45 mt-0.5">
             {oddsFormat === "american" ? "AM" : "DEC"}
@@ -2433,7 +2445,7 @@ function TableHeaderRow({
         {displayBooks.map((bk) => {
           const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
           return (
-            <th key={bk} className="text-center px-2 py-2" style={{ width: COL_BOOK }}>
+            <th key={bk} className="text-center px-2 py-2" style={{ ...stickyCellStyle, width: COL_BOOK }}>
               <div className="flex items-center justify-center">
                 <button
                   type="button"
