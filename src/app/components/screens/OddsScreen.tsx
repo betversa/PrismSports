@@ -3094,14 +3094,15 @@ export function OddsScreen({
               FILTERS TOOLBAR
           =========================== */}
           <div
-            className="min-h-[56px] flex flex-col md:flex-row md:items-center justify-between gap-3 px-2 md:px-0"
+            className="min-h-[56px] w-full"
             style={{
-              background: "linear-gradient(180deg, rgba(12,12,12,0.85), rgba(9,9,9,0.78))",
+              background: BOARD_BG,
               borderBottom: `1px solid ${PRISM_BORDER}`,
               backdropFilter: "blur(10px)",
             }}
           >
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="min-h-[56px] flex flex-col md:flex-row md:items-center justify-between gap-3 px-2 md:px-0">
+              <div className="flex flex-wrap items-center gap-2">
               <SelectPill
                 value={market}
                 onChange={(v) => setMarket(v as Market)}
@@ -3132,44 +3133,45 @@ export function OddsScreen({
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 md:justify-end">
-              <div className="md:hidden w-full">
-                <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
+              <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                <div className="md:hidden w-full">
+                  <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
+                </div>
+
+                <SelectPill
+                  value={oddsFormat}
+                  onChange={(v) => setOddsFormat(v as OddsFormat)}
+                  label="Odds"
+                  options={[
+                    { value: "american", label: "American" },
+                    { value: "decimal", label: "Decimal" },
+                  ]}
+                />
+
+                <SelectPill
+                  value={"all"}
+                  onChange={() => {}}
+                  label="Sportsbooks"
+                  options={[{ value: "all", label: `All (${BOOKS.length})` }]}
+                />
+                <button
+                  type="button"
+                  onClick={handleResetBookOrder}
+                  className="text-[11px] font-semibold text-white/60 hover:text-white"
+                >
+                  Reset order
+                </button>
+
+                <Btn
+                  onClick={() => {
+                    setLoading(true);
+                    load();
+                  }}
+                  disabled={loading}
+                >
+                  {loading ? "Refreshing…" : "Refresh"}
+                </Btn>
               </div>
-
-              <SelectPill
-                value={oddsFormat}
-                onChange={(v) => setOddsFormat(v as OddsFormat)}
-                label="Odds"
-                options={[
-                  { value: "american", label: "American" },
-                  { value: "decimal", label: "Decimal" },
-                ]}
-              />
-
-              <SelectPill
-                value={"all"}
-                onChange={() => {}}
-                label="Sportsbooks"
-                options={[{ value: "all", label: `All (${BOOKS.length})` }]}
-              />
-              <button
-                type="button"
-                onClick={handleResetBookOrder}
-                className="text-[11px] font-semibold text-white/60 hover:text-white"
-              >
-                Reset order
-              </button>
-
-              <Btn
-                onClick={() => {
-                  setLoading(true);
-                  load();
-                }}
-                disabled={loading}
-              >
-                {loading ? "Refreshing…" : "Refresh"}
-              </Btn>
             </div>
           </div>
         </div>
