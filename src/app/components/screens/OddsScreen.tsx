@@ -2375,8 +2375,8 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
         <div
           className="sticky px-4 py-2 flex items-center justify-between border-y"
           style={{
-            top: 0,
-            zIndex: 60,
+            top: HEADER_ROW_HEIGHT,
+            zIndex: 70,
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
             backdropFilter: "blur(10px)",
@@ -2412,8 +2412,8 @@ function TableHeaderRow({
 }) {
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
-    top: DATE_BAR_HEIGHT,
-    zIndex: 55,
+    top: 0,
+    zIndex: 80,
     background: BOARD_BG,
   };
   return (
