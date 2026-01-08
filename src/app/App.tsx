@@ -178,7 +178,10 @@ export default function App() {
       />
 
       {/* Main Content scroll container */}
-      <div className="h-screen overflow-y-auto overflow-x-hidden" style={{ paddingTop: headerH }}>
+      <div
+        className="h-screen overflow-y-auto overflow-x-hidden"
+        style={{ paddingTop: headerH, "--app-header-h": `${headerH}px` } as React.CSSProperties}
+      >
         <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
       </div>
     </div>

@@ -423,11 +423,11 @@ function partsForBookSide(
 function headerFallbackPillDataUri(label: string) {
   const svg = `
   <svg xmlns="http://www.w3.org/2000/svg" width="88" height="22">
-    <rect x="0" y="0" width="88" height="22" rx="11" ry="11" fill="#FFFFFF"/>
-    <rect x="0.5" y="0.5" width="87" height="21" rx="11" ry="11" fill="none" stroke="#E5E5E5"/>
+    <rect x="0" y="0" width="88" height="22" rx="8" ry="8" fill="#111111"/>
+    <rect x="0.5" y="0.5" width="87" height="21" rx="8" ry="8" fill="none" stroke="#3a3a3a"/>
     <text x="44" y="15"
-      font-family="Arial, sans-serif" font-size="12" font-weight="700"
-      text-anchor="middle" fill="#111111">${label}</text>
+      font-family="Arial, sans-serif" font-size="11" font-weight="700"
+      text-anchor="middle" fill="#d4af37">${label}</text>
   </svg>`;
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
 }
@@ -443,13 +443,13 @@ function BookLogoPill({
 }) {
   return (
     <div
-      className="h-7 w-[92px] rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+      className="h-7 w-[92px] rounded-lg bg-black/40 border border-white/10 px-3 flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]"
       title={alt}
     >
       <img
         src={src}
         alt={alt}
-        className="h-4 w-auto object-contain"
+        className="h-4 w-auto object-contain opacity-85"
         loading="lazy"
         onError={(e) => {
           (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
@@ -521,9 +521,9 @@ function SelectPill({
 }) {
   return (
     <div className="flex items-center gap-2">
-      {label ? <div className="text-[11px] text-white/60 font-semibold">{label}</div> : null}
+      {label ? <div className="text-[12px] text-white/55 font-semibold">{label}</div> : null}
       <select
-        className="h-9 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold px-3 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className="h-8 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-2.5 outline-none focus:border-[rgba(212,175,55,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -552,7 +552,7 @@ function TextInput({
   return (
     <div className="relative">
       <input
-        className="h-9 w-full md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className="h-8 w-full md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-semibold px-2.5 pr-9 outline-none focus:border-[rgba(212,175,55,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -583,7 +583,7 @@ function Btn({
   disabled?: boolean;
 }) {
   const base =
-    "h-9 px-3 rounded-lg border text-sm font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
+    "h-8 px-3 rounded-lg border text-[12px] font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
   const gold =
     "bg-[#d4af37] text-black border-[#d4af37] hover:bg-[#e2c257] hover:border-[#e2c257]";
   const ghost =
@@ -604,8 +604,8 @@ function Btn({
 function DateReminder({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <div className="text-[10px] md:text-[11px] text-white/60 font-semibold">Selected date</div>
-      <div className="h-8 md:h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-xs md:text-sm font-extrabold flex items-center">
+      <div className="text-[12px] text-white/55 font-semibold">Selected date</div>
+      <div className="h-8 px-2.5 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold flex items-center">
         {label}
       </div>
     </div>
@@ -631,7 +631,7 @@ function SegmentedToggle<T extends string>({
             type="button"
             onClick={() => onChange(opt.value)}
             className={[
-              "h-6 md:h-7 px-3 rounded-md text-[10px] md:text-[11px] font-extrabold transition-colors",
+              "h-7 px-3 rounded-md text-[12px] font-extrabold transition-colors",
               active
                 ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
                 : "text-white/70 hover:text-white",
@@ -2386,7 +2386,7 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
         <div
           className="sticky z-20 px-4 py-2 flex items-center justify-between border-y"
           style={{
-            top: HEADER_ROW_HEIGHT,
+            top: `calc(var(--app-header-h, 0px) + ${HEADER_ROW_HEIGHT}px)`,
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
             backdropFilter: "blur(10px)",
@@ -2422,7 +2422,7 @@ function TableHeaderRow({
 }) {
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
-    top: 0,
+    top: "var(--app-header-h, 0px)",
     zIndex: 30,
     background: BOARD_BG,
   };
@@ -2467,7 +2467,7 @@ function TableHeaderRow({
                   onPointerUp={onBookPointerUp}
                   onPointerCancel={onBookPointerCancel}
                   className={[
-                    "rounded-full transition-colors",
+                    "rounded-lg transition-colors",
                     draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
                   ].join(" ")}
                   style={{ touchAction: "none" }}
@@ -3027,67 +3027,72 @@ export function OddsScreen({
             }}
           >
             {/* ===========================
-                TOP SPORTS TABS BAR
+                TOP SPORTS + SEARCH
             =========================== */}
-            <div className="sticky top-0 z-50">
+            <div className="sticky z-50" style={{ top: "var(--app-header-h, 0px)" }}>
               <div
-                className="h-[42px] flex items-center justify-between px-2 md:px-0"
+                className="px-2 md:px-0 py-2"
                 style={{
                   background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
                   borderBottom: `1px solid ${PRISM_BORDER}`,
                   backdropFilter: "blur(10px)",
                 }}
               >
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                  {SPORT_TABS.map((t) => {
-                    const active =
-                      t.key === sportKey ||
-                      (t.key === "soccer" && sportKey.includes("soccer")) ||
-                      (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
-                    const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
-                    return (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => {
-                          if (enabled && onPickSport) onPickSport(t.key);
-                        }}
-                        disabled={!enabled}
-                        className={[
-                          "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
-                          enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                          active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
-                        ].join(" ")}
-                        style={{
-                          borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                          background: active ? "rgba(212,175,55,0.16)" : "transparent",
-                          color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
-                        }}
-                        title={
-                          !enabled
-                            ? `${t.label} (not wired)`
-                            : active
-                              ? `${t.label} (active)`
-                              : `Switch to ${t.label}`
-                        }
-                      >
-                        {t.label}
-                      </button>
-                    );
-                  })}
-                </div>
+                <div className="flex flex-col md:flex-row md:items-center gap-2">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                    {SPORT_TABS.map((t) => {
+                      const active =
+                        t.key === sportKey ||
+                        (t.key === "soccer" && sportKey.includes("soccer")) ||
+                        (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                      const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => {
+                            if (enabled && onPickSport) onPickSport(t.key);
+                          }}
+                          disabled={!enabled}
+                          className={[
+                            "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
+                            enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+                            active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                          ].join(" ")}
+                          style={{
+                            borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
+                            background: active ? "rgba(212,175,55,0.16)" : "transparent",
+                            color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
+                          }}
+                          title={
+                            !enabled
+                              ? `${t.label} (not wired)`
+                              : active
+                                ? `${t.label} (active)`
+                                : `Switch to ${t.label}`
+                          }
+                        >
+                          {t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                <div className="flex items-center gap-2">
-                  <div className="hidden md:flex items-center gap-2">
-                    <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
-                    <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                    <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                      <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                      <span className={freshness.tone}>{freshness.label}</span>
+                  <div className="flex flex-1 items-center gap-2 md:ml-auto">
+                    <div className="w-full md:w-auto">
+                      <TextInput value={query} onChange={setQuery} placeholder="Search teams..." onClear={() => setQuery("")} />
+                    </div>
+                    <div className="hidden lg:flex items-center gap-2">
+                      <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
+                      <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                        <span className={freshness.tone}>{freshness.label}</span>
+                      </div>
+                      <div className="h-7 w-7 rounded-full border border-white/10 bg-white/5" />
                     </div>
                   </div>
-                  <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
                 </div>
               </div>
 
@@ -3095,88 +3100,80 @@ export function OddsScreen({
                   FILTERS TOOLBAR
               =========================== */}
               <div
-                className="min-h-[56px] w-full"
+                className="w-full"
                 style={{
                   background: BOARD_BG,
                   borderBottom: `1px solid ${PRISM_BORDER}`,
                   backdropFilter: "blur(10px)",
                 }}
               >
-                <div className="min-h-[56px] flex flex-col md:flex-row md:items-center justify-between gap-3 px-2 md:px-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <SelectPill
-                      value={market}
-                      onChange={(v) => setMarket(v as Market)}
-                      label="Market"
-                      options={[
-                        { value: "spread", label: "Point Spread" },
-                        { value: "total", label: "Total" },
-                        { value: "ml", label: "Moneyline" },
-                      ]}
-                    />
-
-                    <div className="flex items-center gap-2">
-                      <div className="text-[11px] text-white/60 font-semibold">View</div>
-                      <SegmentedToggle
-                        value={view}
+                <div className="px-2 md:px-0 py-2 flex flex-col gap-2">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <SelectPill
+                        value={market}
+                        onChange={(v) => setMarket(v as Market)}
+                        label="Market"
                         options={[
-                          { value: "pregame", label: "Pre-Game" },
-                          { value: "live", label: "Live" },
+                          { value: "spread", label: "Point Spread" },
+                          { value: "total", label: "Total" },
+                          { value: "ml", label: "Moneyline" },
                         ]}
-                        onChange={(next) => setView(next as BoardView)}
                       />
+
+                      <div className="flex items-center gap-2">
+                        <div className="text-[12px] text-white/55 font-semibold">View</div>
+                        <SegmentedToggle
+                          value={view}
+                          options={[
+                            { value: "pregame", label: "Pre-Game" },
+                            { value: "live", label: "Live" },
+                          ]}
+                          onChange={(next) => setView(next as BoardView)}
+                        />
+                      </div>
+
+                      <DateReminder label={selectedDateLabel} />
                     </div>
 
-                    <DateReminder label={selectedDateLabel} />
-
-                    <div className="hidden md:block">
-                      <TextInput
-                        value={query}
-                        onChange={setQuery}
-                        placeholder="Search teams..."
-                        onClear={() => setQuery("")}
+                    <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                      <SelectPill
+                        value={oddsFormat}
+                        onChange={(v) => setOddsFormat(v as OddsFormat)}
+                        label="Odds"
+                        options={[
+                          { value: "american", label: "American" },
+                          { value: "decimal", label: "Decimal" },
+                        ]}
                       />
+
+                      <SelectPill
+                        value={"all"}
+                        onChange={() => {}}
+                        label="Sportsbooks"
+                        options={[{ value: "all", label: `All (${BOOKS.length})` }]}
+                      />
+
+                      <div className="flex items-center gap-2 md:ml-1">
+                        <button
+                          type="button"
+                          onClick={handleResetBookOrder}
+                          className="text-[11px] font-semibold text-white/50 hover:text-white"
+                        >
+                          Reset order
+                        </button>
+
+                        <Btn
+                          onClick={() => {
+                            setLoading(true);
+                            load();
+                          }}
+                          disabled={loading}
+                        >
+                          {loading ? "Refreshing…" : "Refresh"}
+                        </Btn>
+                      </div>
                     </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                    <div className="md:hidden w-full">
-                      <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
-                    </div>
-
-                    <SelectPill
-                      value={oddsFormat}
-                      onChange={(v) => setOddsFormat(v as OddsFormat)}
-                      label="Odds"
-                      options={[
-                        { value: "american", label: "American" },
-                        { value: "decimal", label: "Decimal" },
-                      ]}
-                    />
-
-                    <SelectPill
-                      value={"all"}
-                      onChange={() => {}}
-                      label="Sportsbooks"
-                      options={[{ value: "all", label: `All (${BOOKS.length})` }]}
-                    />
-                    <button
-                      type="button"
-                      onClick={handleResetBookOrder}
-                      className="text-[11px] font-semibold text-white/60 hover:text-white"
-                    >
-                      Reset order
-                    </button>
-
-                    <Btn
-                      onClick={() => {
-                        setLoading(true);
-                        load();
-                      }}
-                      disabled={loading}
-                    >
-                      {loading ? "Refreshing…" : "Refresh"}
-                    </Btn>
                   </div>
                 </div>
               </div>
@@ -3235,10 +3232,14 @@ export function OddsScreen({
               <div className="space-y-3">
                 {eventsByDaySection.map((sec) => (
                   <div key={sec.ymd} className="space-y-3">
-                    <div
-                      className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
-                      style={{ background: BOARD_STICKY_BG, boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
-                    >
+                      <div
+                        className="sticky z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
+                        style={{
+                          top: "calc(var(--app-header-h, 0px) + 96px)",
+                          background: BOARD_STICKY_BG,
+                          boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+                        }}
+                      >
                       <div className="text-[12px] font-extrabold text-white/90">
                         {sec.label}
                         <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
@@ -3275,7 +3276,10 @@ export function OddsScreen({
             ) : (
               <div
                 className="max-h-[calc(100vh-240px)] overflow-auto"
-                style={{ scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24, background: BOARD_BG }}
+                style={{
+                  scrollPaddingTop: `calc(var(--app-header-h, 0px) + ${DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24}px)`,
+                  background: BOARD_BG,
+                }}
               >
                 <table className="w-full table-fixed min-w-[1080px]" style={{ background: BOARD_BG }}>
                   <colgroup>
