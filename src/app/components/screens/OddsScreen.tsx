@@ -3267,7 +3267,7 @@ export function OddsScreen({
                     <colgroup>
                       <col style={{ width: COL_GAME }} />
                       <col style={{ width: COL_BOOK }} />
-                      {BOOKS.map((_, i) => (
+                      {bookOrder.map((_, i) => (
                         <col key={i} style={{ width: COL_BOOK }} />
                       ))}
                     </colgroup>
