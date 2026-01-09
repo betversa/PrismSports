@@ -44,6 +44,21 @@ export type SportKey =
   | "baseball_mlb";
 
 const CT_TZ = "America/Chicago";
+const ROUTE_MAP: Record<Screen, string> = {
+  overview: "/",
+  model: "/model",
+  props: "/props",
+  parlay: "/parlay",
+  calculator: "/calculator",
+  "monte-carlo": "/monte-carlo",
+  odds: "/odds",
+  results: "/results",
+  calibration: "/calibration",
+  settings: "/settings",
+};
+const PATH_TO_SCREEN: Record<string, Screen> = Object.fromEntries(
+  Object.entries(ROUTE_MAP).map(([screen, path]) => [path, screen as Screen])
+) as Record<string, Screen>;
 
 // YYYY-MM-DD in Central Time
 function ctYmd(d: Date) {
@@ -86,6 +101,30 @@ export default function App() {
     };
   }, [sidebarOpen]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const applyPath = () => {
+      const path = window.location.pathname || "/";
+      const next = PATH_TO_SCREEN[path] ?? "overview";
+      setActiveScreen(next);
+    };
+    applyPath();
+    window.addEventListener("popstate", applyPath);
+    return () => {
+      window.removeEventListener("popstate", applyPath);
+    };
+  }, []);
+
+  const navigateTo = (screen: Screen) => {
+    setActiveScreen(screen);
+    if (typeof window === "undefined") return;
+    const nextPath = ROUTE_MAP[screen] ?? "/";
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }
+  };
+
   // --- Sport pick handlers (IMPORTANT: do NOT force wrong screen) ---
   const handlePickOddsSport = (k: SportKey) => {
     setOddsSportKey(k);
@@ -95,7 +134,7 @@ export default function App() {
 
     // If user is on Overview/Results/etc and picks Odds sport from header,
     // it's reasonable to take them to Odds.
-    if (!isPredScreen(activeScreen)) setActiveScreen("odds");
+    if (!isPredScreen(activeScreen)) navigateTo("odds");
   };
 
   const handlePickPredSport = (k: SportKey) => {
@@ -105,7 +144,7 @@ export default function App() {
     if (isPredScreen(activeScreen)) return;
 
     // If user is on Overview/Odds/etc and picks Predictions sport, take them to Monte Carlo
-    setActiveScreen("monte-carlo");
+    navigateTo("monte-carlo");
   };
 
   const screens = useMemo<Record<Screen, JSX.Element>>(
@@ -152,7 +191,7 @@ export default function App() {
             <Sidebar
               activeScreen={activeScreen}
               onNavigate={(s) => {
-                setActiveScreen(s);
+                navigateTo(s);
                 setSidebarOpen(false);
               }}
               variant="mobile"
@@ -166,7 +205,7 @@ export default function App() {
       <Header
         onOpenMenu={() => setSidebarOpen(true)}
         onNavigate={(screen) => {
-          setActiveScreen(screen);
+          navigateTo(screen);
           setSidebarOpen(false);
         }}
         activeScreen={activeScreen}
