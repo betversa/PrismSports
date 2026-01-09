@@ -426,25 +426,39 @@ function partsForBookSide(
 function BookLogoPill({
   src,
   alt,
+  className,
+  imgClassName,
+  textClassName,
 }: {
   src: string;
   alt: string;
+  className?: string;
+  imgClassName?: string;
+  textClassName?: string;
 }) {
   return (
     <div
-      className="h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center gap-2 shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]"
+      className={[
+        "h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center gap-2 shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]",
+        className ?? "",
+      ].join(" ")}
       title={alt}
     >
       <img
         src={src}
         alt={alt}
-        className="h-5 w-5 rounded-md object-contain bg-black/50 p-0.5 opacity-85"
+        className={[
+          "h-5 w-5 rounded-md object-contain bg-black/50 p-0.5 opacity-85",
+          imgClassName ?? "",
+        ].join(" ")}
         loading="lazy"
         onError={(e) => {
           (e.currentTarget as HTMLImageElement).style.display = "none";
         }}
       />
-      <span className="text-[11px] font-semibold text-white/75 truncate">{alt}</span>
+      <span className={["text-[11px] font-semibold text-white/75 truncate", textClassName ?? ""].join(" ")}>
+        {alt}
+      </span>
     </div>
   );
 }
@@ -482,12 +496,19 @@ function TeamCell({
 
 function OddsChip({
   parts,
+  className,
 }: {
   parts: CellParts;
+  className?: string;
 }) {
   // chip like reference: gray box, two-line
   return (
-    <div className="w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
+    <div
+      className={[
+        "w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]",
+        className ?? "",
+      ].join(" ")}
+    >
       <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
         {parts.top}
       </div>
@@ -2636,10 +2657,10 @@ function EventCardMobile({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
-              <OddsChip parts={awayCons} />
+              <OddsChip parts={awayCons} className="w-full max-w-[140px]" />
             </div>
             <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
-              <OddsChip parts={homeCons} />
+              <OddsChip parts={homeCons} className="w-full max-w-[140px]" />
             </div>
           </div>
         </div>
@@ -2648,7 +2669,7 @@ function EventCardMobile({
           <div className="mt-3 rounded-xl border border-white/10 bg-black/25 overflow-hidden">
             <div className="px-3 py-2 border-b border-white/10 bg-black/30">
               <div className="text-[12px] text-white font-extrabold">Books</div>
-              <div className="mt-2 grid grid-cols-[100px_1fr_1fr] gap-3 items-center">
+              <div className="mt-2 grid grid-cols-[88px_1fr_1fr] gap-2 items-center">
                 <div />
                 <div className="text-[10px] text-white/60 font-semibold text-center">{leftLabel}</div>
                 <div className="text-[10px] text-white/60 font-semibold text-center">{rightLabel}</div>
@@ -2658,16 +2679,22 @@ function EventCardMobile({
             <div className="px-3">
               {displayBooks.map((bk) => (
                 <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
-                  <div className="grid grid-cols-[120px_1fr_1fr] items-center gap-3">
+                  <div className="grid grid-cols-[96px_1fr_1fr] items-center gap-2">
                     <div className="flex justify-start">
-                      <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} />
+                      <BookLogoPill
+                        src={BOOK_LOGOS[bk]}
+                        alt={BOOK_LABEL[bk]}
+                        className="h-6 max-w-[96px] px-1.5"
+                        imgClassName="h-4 w-4"
+                        textClassName="text-[10px]"
+                      />
                     </div>
 
                     <div className="flex justify-center">
-                      <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
+                      <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} className="w-full max-w-[120px]" />
                     </div>
                     <div className="flex justify-center">
-                      <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
+                      <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} className="w-full max-w-[120px]" />
                     </div>
                   </div>
                 </div>
