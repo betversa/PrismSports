@@ -7,7 +7,7 @@
 // ✅ Keeps Sidebar/Header prop contracts (no extra props)
 // ✅ Leaves selectedDate in place for ModelScreen (as your code expects)
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useCallback } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
 
@@ -115,7 +115,7 @@ export default function App() {
     };
   }, []);
 
-  const navigateTo = (screen: Screen) => {
+  const navigateTo = useCallback((screen: Screen) => {
     setActiveScreen(screen);
     if (typeof window === "undefined") return;
     const nextPath = ROUTE_MAP[screen] ?? "/";
@@ -123,29 +123,35 @@ export default function App() {
       window.history.pushState({}, "", nextPath);
       window.dispatchEvent(new PopStateEvent("popstate"));
     }
-  };
+  }, []);
 
   // --- Sport pick handlers (IMPORTANT: do NOT force wrong screen) ---
-  const handlePickOddsSport = (k: SportKey) => {
-    setOddsSportKey(k);
+  const handlePickOddsSport = useCallback(
+    (k: SportKey) => {
+      setOddsSportKey(k);
 
-    // If you're on Odds already, stay.
-    if (activeScreen === "odds") return;
+      // If you're on Odds already, stay.
+      if (activeScreen === "odds") return;
 
-    // If user is on Overview/Results/etc and picks Odds sport from header,
-    // it's reasonable to take them to Odds.
-    if (!isPredScreen(activeScreen)) navigateTo("odds");
-  };
+      // If user is on Overview/Results/etc and picks Odds sport from header,
+      // it's reasonable to take them to Odds.
+      if (!isPredScreen(activeScreen)) navigateTo("odds");
+    },
+    [activeScreen, navigateTo]
+  );
 
-  const handlePickPredSport = (k: SportKey) => {
-    setPredSportKey(k);
+  const handlePickPredSport = useCallback(
+    (k: SportKey) => {
+      setPredSportKey(k);
 
-    // If you're already on a prediction screen, stay on it (Model stays Model)
-    if (isPredScreen(activeScreen)) return;
+      // If you're already on a prediction screen, stay on it (Model stays Model)
+      if (isPredScreen(activeScreen)) return;
 
-    // If user is on Overview/Odds/etc and picks Predictions sport, take them to Monte Carlo
-    navigateTo("monte-carlo");
-  };
+      // If user is on Overview/Odds/etc and picks Predictions sport, take them to Monte Carlo
+      navigateTo("monte-carlo");
+    },
+    [activeScreen, navigateTo]
+  );
 
   const screens = useMemo<Record<Screen, JSX.Element>>(
     () => ({
@@ -173,7 +179,7 @@ export default function App() {
       calibration: <CalibrationScreen />,
       settings: <SettingsScreen />,
     }),
-    [selectedDate, oddsSportKey, predSportKey]
+    [selectedDate, oddsSportKey, predSportKey, handlePickOddsSport]
   );
 
   return (
