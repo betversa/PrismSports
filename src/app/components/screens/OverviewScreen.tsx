@@ -23,10 +23,11 @@ import {
   Database,
   Flame,
   RefreshCw,
-  Sparkles,
+  Search,
   Target,
   Trophy,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 /* =========================================================
@@ -120,9 +121,12 @@ type PropEvRow = {
 ========================================================= */
 
 const GOLD = "#d89211";
-const PANEL = "#0b0b0b";
-const BORDER = "#2a2a2a";
+const BORDER = "#252525";
 const SLATE = "rgba(87,90,98,0.26)";
+const SURFACE = "#070707";
+
+const LABEL_CLASS = "text-[10px] tracking-[0.16em] uppercase text-[#8a8a8a] font-semibold";
+const VALUE_CLASS = "text-white font-extrabold tabular-nums";
 
 type PlayTab = "all" | "game" | "props";
 
@@ -136,6 +140,13 @@ const TOP_MAX_ODDS = 200;
 
 // Soft-book filter options ONLY
 type SoftBookFilter = "any" | "draftkings" | "fanduel" | "betmgm";
+
+const lineClamp2Style: React.CSSProperties = {
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+};
 
 /* =========================================================
    HELPERS
@@ -392,6 +403,12 @@ function abbreviateMatchup(
   return abbreviateTeamName(raw, abbrevMap) || raw;
 }
 
+function matchesSearchQuery(haystack: Array<string | null | undefined>, query: string) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return haystack.some((item) => (item ?? "").toLowerCase().includes(q));
+}
+
 /* =========================================================
    DEDUPE
 ========================================================= */
@@ -493,48 +510,71 @@ function propSubtitle(r: PropEvRow) {
    UI BITS
 ========================================================= */
 
+function PremiumPanel({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={[
+        "relative overflow-hidden rounded-2xl border bg-[#0b0b0b] p-4 md:p-5",
+        className ?? "",
+      ].join(" ")}
+      style={{ borderColor: BORDER }}
+    >
+      <div className="pointer-events-none absolute inset-0">
+        <div
+          className="absolute inset-0"
+          style={{
+            background: [
+              "radial-gradient(900px 280px at 18% 0%, rgba(216,146,17,0.15), transparent 60%)",
+              `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
+              "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
+              "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.88) 100%)",
+            ].join(", "),
+          }}
+        />
+        <div
+          className="absolute left-0 right-0 top-0 h-[1px] opacity-80"
+          style={{
+            background:
+              "linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.10), rgba(255,255,255,0.0))",
+          }}
+        />
+      </div>
+      <div className="relative">{children}</div>
+    </div>
+  );
+}
+
 function QuickAction({
   title,
-  sub,
   icon: Icon,
-  href,
+  onClick,
 }: {
   title: string;
-  sub: string;
   icon: any;
-  href: string;
+  onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      onClick={() => (window.location.href = href)}
+      onClick={onClick}
       className={[
-        "text-left rounded-xl border p-4 transition-colors",
-        "hover:border-[#3a3a3a]",
+        "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold",
+        "transition-colors hover:text-white",
       ].join(" ")}
       style={{
         borderColor: BORDER,
-        background:
-          "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
+        background: "rgba(0,0,0,0.35)",
+        color: "rgba(242,241,243,0.8)",
       }}
     >
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-sm text-white">{title}</div>
-          <div className="text-xs text-[#a7a7a7] mt-0.5">{sub}</div>
-        </div>
-
-        <div
-          className="w-9 h-9 rounded-lg border flex items-center justify-center shrink-0"
-          style={{
-            borderColor: "rgba(216,146,17,0.22)",
-            background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.10))",
-            boxShadow: "0 10px 28px rgba(0,0,0,0.35)",
-          }}
-        >
-          <Icon className="w-4 h-4" style={{ color: GOLD }} />
-        </div>
-      </div>
+      <Icon className="w-3.5 h-3.5" style={{ color: GOLD }} />
+      {title}
     </button>
   );
 }
@@ -547,14 +587,14 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
         type="button"
         onClick={() => onChange(v)}
         className={[
-          "px-3 py-2 rounded-lg text-xs border transition-colors w-full sm:w-auto",
+          "px-3 py-2 rounded-full text-[11px] border transition-colors min-h-[40px]",
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
         style={{
           borderColor: active ? "rgba(216,146,17,0.34)" : BORDER,
           background: active
-            ? "linear-gradient(180deg, rgba(216,146,17,0.10), rgba(0,0,0,0.25))"
-            : "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.12))",
+            ? "linear-gradient(180deg, rgba(216,146,17,0.14), rgba(0,0,0,0.25))"
+            : "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
         }}
       >
         {label}
@@ -563,38 +603,10 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
   };
 
   return (
-    <div className="grid grid-cols-3 gap-2 sm:inline-flex sm:items-center sm:gap-2">
+    <div className="flex items-center gap-2">
       {btn("all", "All")}
       {btn("game", "Games")}
       {btn("props", "Props")}
-    </div>
-  );
-}
-
-function HowStep({ icon: Icon, label, sub }: { icon: any; label: string; sub: string }) {
-  return (
-    <div
-      className="rounded-xl border p-3"
-      style={{
-        borderColor: BORDER,
-        background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.14))",
-      }}
-    >
-      <div className="flex items-center gap-3">
-        <div
-          className="w-10 h-10 rounded-lg border flex items-center justify-center shrink-0"
-          style={{
-            borderColor: "rgba(216,146,17,0.18)",
-            background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.10))",
-          }}
-        >
-          <Icon className="w-4 h-4" style={{ color: GOLD }} />
-        </div>
-        <div className="min-w-0">
-          <div className="text-xs text-white">{label}</div>
-          <div className="text-[11px] text-[#a7a7a7]">{sub}</div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -615,13 +627,13 @@ function Chip({
       type="button"
       onClick={onClick}
       className={[
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] transition-colors",
+        "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-[11px] transition-colors min-h-[40px]",
         active ? "text-white" : "text-[#cfcfcf] hover:text-white",
       ].join(" ")}
       style={{
-        borderColor: active ? "rgba(216,146,17,0.34)" : "rgba(255,255,255,0.10)",
+        borderColor: active ? "rgba(216,146,17,0.34)" : BORDER,
         background: active
-          ? "linear-gradient(180deg, rgba(216,146,17,0.10), rgba(0,0,0,0.25))"
+          ? "linear-gradient(180deg, rgba(216,146,17,0.14), rgba(0,0,0,0.24))"
           : "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
       }}
     >
@@ -663,19 +675,17 @@ function MiniStat({
 
   return (
     <div
-      className={["rounded-lg border overflow-hidden text-center aspect-square", "p-1.5", "sm:p-2.5"].join(" ")}
+      className={["rounded-lg border overflow-hidden text-center aspect-square", "p-1", "sm:p-2.5"].join(" ")}
       style={{
         borderColor: BORDER,
         background: [
-          "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.18))",
-          `radial-gradient(280px 120px at 50% 0%, rgba(216,146,17,0.06), transparent 60%)`,
+          "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.20))",
+          `radial-gradient(240px 120px at 50% 0%, rgba(216,146,17,0.06), transparent 60%)`,
         ].join(", "),
       }}
     >
       <div className="h-full flex flex-col items-center justify-center gap-0.5 sm:gap-1">
-        <div className="text-[9px] sm:text-[10px] text-[#a9a9a9] whitespace-normal leading-snug">
-          {label}
-        </div>
+        <div className={LABEL_CLASS}>{label}</div>
 
         {iconBelowLabelSrc ? (
           <div className="flex justify-center">
@@ -713,21 +723,49 @@ function MiniStat({
 function SkeletonCard() {
   return (
     <div
-      className="rounded-xl border p-4"
+      className="rounded-xl border p-3 sm:p-4"
       style={{
         borderColor: BORDER,
-        background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.16))",
+        background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.20))",
       }}
     >
       <div className="animate-pulse space-y-3">
-        <div className="h-4 w-2/3 bg-[#1a1a1a] rounded mx-auto" />
-        <div className="h-3 w-1/2 bg-[#1a1a1a] rounded mx-auto" />
+        <div className="h-4 w-2/3 bg-[#141414] rounded mx-auto" />
+        <div className="h-3 w-1/2 bg-[#141414] rounded mx-auto" />
         <div className="grid grid-cols-4 gap-2">
-          <div className="h-10 bg-[#1a1a1a] rounded" />
-          <div className="h-10 bg-[#1a1a1a] rounded" />
-          <div className="h-10 bg-[#1a1a1a] rounded" />
-          <div className="h-10 bg-[#1a1a1a] rounded" />
+          <div className="h-10 bg-[#141414] rounded" />
+          <div className="h-10 bg-[#141414] rounded" />
+          <div className="h-10 bg-[#141414] rounded" />
+          <div className="h-10 bg-[#141414] rounded" />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function HowRow({
+  icon: Icon,
+  title,
+  sub,
+}: {
+  icon: any;
+  title: string;
+  sub: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border px-3 py-2" style={{ borderColor: BORDER }}>
+      <div
+        className="w-9 h-9 rounded-lg border flex items-center justify-center shrink-0"
+        style={{
+          borderColor: "rgba(216,146,17,0.18)",
+          background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
+        }}
+      >
+        <Icon className="w-4 h-4" style={{ color: GOLD }} />
+      </div>
+      <div className="min-w-0">
+        <div className="text-sm text-white font-semibold">{title}</div>
+        <div className="text-xs text-[#a7a7a7]">{sub}</div>
       </div>
     </div>
   );
@@ -773,23 +811,20 @@ function TopPlayCard({
     <div
       className="relative overflow-hidden rounded-xl border p-3 sm:p-4"
       style={{
-        borderColor: BORDER,
+        borderColor: isTop3 ? "rgba(216,146,17,0.55)" : BORDER,
+        boxShadow: isTop3 ? "0 0 0 1px rgba(216,146,17,0.15), 0 16px 40px rgba(0,0,0,0.35)" : undefined,
         background: [
           "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.014) 55%, rgba(0,0,0,0.20))",
-          `radial-gradient(680px 240px at 50% 0%, rgba(216,146,17,${isTop3 ? "0.16" : "0.10"}), transparent 62%)`,
+          `radial-gradient(680px 240px at 50% 0%, rgba(216,146,17,${isTop3 ? "0.18" : "0.10"}), transparent 62%)`,
           `radial-gradient(720px 260px at 85% 20%, ${SLATE}, transparent 64%)`,
           "linear-gradient(180deg, rgba(0,0,0,0.22), rgba(0,0,0,0.62) 55%, rgba(0,0,0,0.82) 100%)",
         ].join(", "),
       }}
     >
       <div className="pointer-events-none absolute left-0 right-0 top-0 h-[1px] bg-white/10" />
-      <div
-        className="pointer-events-none absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
-        style={{
-          background:
-            "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
-        }}
-      />
+      {isTop3 ? (
+        <div className="pointer-events-none absolute left-0 right-0 top-0 h-[2px] bg-[#d89211]/60" />
+      ) : null}
 
       <div className="absolute top-2 left-2">
         <div
@@ -803,6 +838,15 @@ function TopPlayCard({
           #{rank}
         </div>
       </div>
+
+      {isTop3 ? (
+        <div
+          className="absolute top-2 right-2 text-[10px] px-2 py-0.5 rounded-full border bg-black/40"
+          style={{ borderColor: "rgba(216,146,17,0.30)", color: "#f2d08a" }}
+        >
+          🔥 Top 3
+        </div>
+      ) : null}
 
       <div className="relative space-y-2 sm:space-y-3">
         <div className="flex items-start gap-2.5 sm:gap-3">
@@ -857,11 +901,17 @@ function TopPlayCard({
               ) : null}
             </div>
 
-            <div className="text-[13px] sm:text-sm text-white leading-snug whitespace-normal break-words">
+            <div
+              className="text-[13px] sm:text-sm text-white leading-snug whitespace-normal break-words font-semibold"
+              style={lineClamp2Style}
+            >
               {title}
             </div>
 
-            <div className="text-[11px] sm:text-xs text-[#c7c7c7] leading-snug sm:leading-relaxed mt-0.5 sm:mt-1 whitespace-normal break-words">
+            <div
+              className="text-[11px] sm:text-xs text-[#c7c7c7] leading-snug sm:leading-relaxed mt-0.5 sm:mt-1 whitespace-normal break-words"
+              style={lineClamp2Style}
+            >
               {subtitle}
             </div>
 
@@ -871,12 +921,12 @@ function TopPlayCard({
           </div>
 
           <div className="shrink-0 text-right">
-            <div className="text-[9px] sm:text-[10px] text-[#a7a7a7]">Score</div>
-            <div className="text-[13px] sm:text-sm text-white leading-none">{scoreText}</div>
+            <div className={LABEL_CLASS}>Score</div>
+            <div className="text-[13px] sm:text-sm text-white leading-none font-bold">{scoreText}</div>
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-1.5 sm:gap-2 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2 text-xs">
           <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
           <MiniStat label="Book" iconBelowLabelSrc={bookLogoSrc} showValue={false} />
           <MiniStat label="Book price" value={fmtOdds(odds)} />
@@ -892,6 +942,7 @@ function TopPlayCard({
 ========================================================= */
 
 export function OverviewScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [loadingSoft, setLoadingSoft] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -910,6 +961,9 @@ export function OverviewScreen() {
 
   // ✅ Soft-book filter ONLY
   const [bookFilter, setBookFilter] = useState<SoftBookFilter>("any");
+  const [search, setSearch] = useState("");
+
+  const go = (href: string) => router.push(href);
 
   async function loadAll({ soft }: { soft?: boolean } = {}) {
     try {
@@ -1141,148 +1195,164 @@ export function OverviewScreen() {
     return topAll;
   }, [tab, topAll, topGamesByBook, topPropsByBook]);
 
+  const searchQuery = useMemo(() => search.trim(), [search]);
+
+  const visiblePlays = useMemo(() => {
+    return playsToRender.filter((p) => {
+      if (p.kind === "game") {
+        const r = p.row as EvPlayRow;
+        const matchupAbbrev = abbreviateMatchup(r.matchup ?? "", abbrevMap);
+        const teamAbbrev = abbreviateTeamName(r.team ?? "", abbrevMap);
+        return matchesSearchQuery(
+          [r.matchup, matchupAbbrev, r.team, teamAbbrev],
+          searchQuery
+        );
+      }
+
+      const r = p.row as PropEvRow;
+      const teamAbbrev = abbreviateTeamName(r.team ?? "", abbrevMap);
+      const opponentAbbrev = abbreviateTeamName(r.opponent ?? "", abbrevMap);
+      return matchesSearchQuery(
+        [r.player_name, r.team, teamAbbrev, r.opponent, opponentAbbrev],
+        searchQuery
+      );
+    });
+  }, [playsToRender, searchQuery, abbrevMap]);
+
+  const lastUpdatedLabel = latestVersion?.updated_at
+    ? formatTsShort(latestVersion.updated_at)
+    : latestRun?.created_at
+    ? formatTsShort(latestRun.created_at)
+    : "—";
+
   return (
-    <div className="space-y-8 sm:space-y-10">
-      {/* HERO */}
-      <div
-        className="relative overflow-hidden rounded-2xl border p-4 sm:p-6"
-        style={{
-          borderColor: "rgba(255,255,255,0.08)",
-          background: PANEL,
-        }}
-      >
-        <div className="pointer-events-none absolute inset-0">
-          <div
-            className="absolute inset-0"
-            style={{
-              background: [
-                "radial-gradient(900px 260px at 18% 0%, rgba(216,146,17,0.16), transparent 60%)",
-                `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
-                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
-                "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.86) 100%)",
-              ].join(", "),
-            }}
-          />
-
-          <div
-            className="absolute left-0 right-0 top-0 h-[1px] opacity-75"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.10), rgba(255,255,255,0.0))",
-            }}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
-            }}
-          />
-        </div>
-
-        <div className="relative space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-            <div className="min-w-0">
-              <div
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
-                style={{
-                  borderColor: "rgba(216,146,17,0.22)",
-                  background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                  color: "rgba(255,255,255,0.82)",
-                }}
-              >
-                <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
-                Prism Command Center
-              </div>
-
-              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
-                Best Plays Today <span className="text-[#7b7b7b]">—</span> Live
-              </h2>
-
-              <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl">
-                Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
-              </p>
-
-              <div className="text-[11px] text-[#a7a7a7] mt-2">
-                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
-                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
-              </div>
+    <div className="px-3 md:px-5 py-4 md:py-6 space-y-4 md:space-y-5">
+      {/* COMPACT HEADER */}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-[18px] md:text-[20px] font-semibold text-white">Overview</h2>
+            <div
+              className="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px]"
+              style={{ borderColor: BORDER, background: "rgba(0,0,0,0.35)" }}
+            >
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              <span className="uppercase tracking-[0.16em] text-[#cfcfcf]">Live</span>
             </div>
-
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#a7a7a7]">
+            <span>
+              Last updated: <span className="text-white font-semibold">{lastUpdatedLabel}</span>
+            </span>
             <button
               type="button"
               onClick={() => loadAll({ soft: false })}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors w-full sm:w-auto"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[11px] transition-colors"
               style={{
-                borderColor: "rgba(255,255,255,0.10)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.18))",
+                borderColor: BORDER,
+                background: "rgba(0,0,0,0.35)",
                 color: "rgba(255,255,255,0.86)",
               }}
               title="Refresh"
             >
-              <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
+              <RefreshCw className={["w-3.5 h-3.5", loadingSoft ? "animate-spin" : ""].join(" ")} />
               Refresh
             </button>
           </div>
+        </div>
+        {error ? <div className="text-[11px] text-[#ff9f9f]">Supabase error: {error}</div> : null}
+      </div>
 
-          {error ? (
-            <div
-              className="rounded-lg border p-3 text-xs"
-              style={{
-                borderColor: "rgba(255,255,255,0.10)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                color: "rgba(255,140,140,0.92)",
-              }}
-            >
-              Supabase error: {error}
+      {/* QUICK LINKS */}
+      <div className="flex flex-wrap gap-2">
+        <QuickAction title="Odds" icon={Database} onClick={() => go("/odds")} />
+        <QuickAction title="Projections" icon={Target} onClick={() => go("/monte-carlo")} />
+        <QuickAction title="All Plays" icon={Trophy} onClick={() => go("/model")} />
+      </div>
+
+      {/* STICKY CONTROLS */}
+      <div
+        className="sticky top-0 z-40 rounded-2xl border px-3 py-2 backdrop-blur"
+        style={{ borderColor: BORDER, background: "rgba(11,11,11,0.92)" }}
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented value={tab} onChange={setTab} />
+            <div className="h-5 w-px bg-[#141414] hidden sm:block" />
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-2.5">
+              <Chip active={bookFilter === "any"} label="Any" onClick={() => setBookFilter("any")} />
+              <Chip
+                active={bookFilter === "draftkings"}
+                label="DraftKings"
+                leftIconSrc="/books/dksquare.png"
+                onClick={() => setBookFilter("draftkings")}
+              />
+              <Chip
+                active={bookFilter === "fanduel"}
+                label="FanDuel"
+                leftIconSrc="/books/fdsquare.png"
+                onClick={() => setBookFilter("fanduel")}
+              />
+              <Chip
+                active={bookFilter === "betmgm"}
+                label="BetMGM"
+                leftIconSrc="/books/mgmsquare.png"
+                onClick={() => setBookFilter("betmgm")}
+              />
             </div>
-          ) : null}
+          </div>
 
-          <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-            <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
-            <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
-            <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
+          <div className="flex flex-1 flex-col sm:flex-row items-stretch gap-2">
+            <div
+              className="flex items-center gap-2 rounded-xl border px-3 py-2 flex-1"
+              style={{ borderColor: BORDER, background: SURFACE }}
+            >
+              <Search className="w-4 h-4 text-[#8a8a8a]" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search matchup, team, or player"
+                className="bg-transparent text-sm text-white placeholder:text-[#6f6f6f] outline-none w-full"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setTab("all");
+                setBookFilter("any");
+              }}
+              className="rounded-xl border px-3 py-2 text-xs text-[#cfcfcf] hover:text-white transition-colors"
+              style={{ borderColor: BORDER, background: "rgba(255,255,255,0.02)" }}
+            >
+              Reset
+            </button>
           </div>
         </div>
       </div>
 
       {/* TOP PLAYS */}
-      <section>
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3 sm:mb-4">
+      <PremiumPanel>
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-4">
           <div>
-            <h3 className="text-base text-white">Top Plays</h3>
+            <h3 className="text-base text-white font-semibold">Top Plays</h3>
             <div className="text-xs text-[#b0b0b0]">One card per play (best book shown).</div>
           </div>
 
-          <div className="w-full sm:w-auto space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-2">
-            <Segmented value={tab} onChange={setTab} />
+          <div
+            className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px]"
+            style={{
+              borderColor: "rgba(216,146,17,0.26)",
+              background: "rgba(0,0,0,0.35)",
+              color: "rgba(255,255,255,0.78)",
+            }}
+            title={`Odds ${TOP_MIN_ODDS}..${TOP_MAX_ODDS} • Score ≥ ${TOP_SCORE_MIN} • Games EV ≤ ${TOP_MAX_EV_PCT}% • Props EV ${TOP_MIN_EV_PCT_PROPS}–${TOP_MAX_EV_PCT}%`}
+          >
+            Gates
           </div>
         </div>
 
-        {/* Book filter: ONLY soft options */}
-        <div className="flex flex-wrap gap-2 mb-3 sm:mb-4">
-          <Chip active={bookFilter === "any"} label="Any" onClick={() => setBookFilter("any")} />
-          <Chip
-            active={bookFilter === "draftkings"}
-            label="DraftKings"
-            leftIconSrc="/books/dksquare.png"
-            onClick={() => setBookFilter("draftkings")}
-          />
-          <Chip
-            active={bookFilter === "fanduel"}
-            label="FanDuel"
-            leftIconSrc="/books/fdsquare.png"
-            onClick={() => setBookFilter("fanduel")}
-          />
-          <Chip
-            active={bookFilter === "betmgm"}
-            label="BetMGM"
-            leftIconSrc="/books/mgmsquare.png"
-            onClick={() => setBookFilter("betmgm")}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2 sm:gap-3">
           {loading ? (
             <>
               <SkeletonCard />
@@ -1290,9 +1360,9 @@ export function OverviewScreen() {
               <SkeletonCard />
               <SkeletonCard />
             </>
-          ) : playsToRender.length === 0 ? (
+          ) : visiblePlays.length === 0 ? (
             <div
-              className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border p-5 text-sm"
+              className="col-span-1 md:col-span-2 xl:col-span-4 rounded-xl border p-5 text-sm"
               style={{
                 borderColor: "rgba(255,255,255,0.10)",
                 background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
@@ -1302,7 +1372,7 @@ export function OverviewScreen() {
               No plays found for this filter.
             </div>
           ) : (
-            playsToRender.map((p, idx) => {
+            visiblePlays.map((p, idx) => {
               const isTop3 = idx < 3;
 
               if (p.kind === "game") {
@@ -1351,13 +1421,22 @@ export function OverviewScreen() {
             })
           )}
         </div>
-      </section>
+      </PremiumPanel>
 
-      {/* FOOTER SECTION KEPT MINIMAL */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <HowStep icon={Target} label="What is “Edge”?" sub="How much better the price is vs fair." />
-        <HowStep icon={Activity} label="What is “Score”?" sub="0–100 strength rating." />
-      </section>
+      {/* HOW IT WORKS */}
+      <PremiumPanel>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <div className="text-sm text-white font-semibold">How it works</div>
+            <div className="text-xs text-[#a7a7a7]">Understand the core signals behind each play.</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 sm:gap-3">
+          <HowRow icon={Target} title="Edge" sub="Price edge vs fair odds." />
+          <HowRow icon={Activity} title="Score" sub="0–100 strength rating." />
+          <HowRow icon={Calculator} title="Fair Price" sub="Model-implied value." />
+        </div>
+      </PremiumPanel>
     </div>
   );
 }
