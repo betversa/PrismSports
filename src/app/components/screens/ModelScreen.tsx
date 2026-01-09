@@ -396,6 +396,18 @@ function formatMoney(n: number) {
   }).format(n);
 }
 
+function fmtMatchupInline(matchup: string | null) {
+  if (!matchup) return "—";
+  const sep = matchup.includes("@") ? "@" : matchup.includes(" vs ") ? "vs" : "vs";
+  const parts = matchup.includes("@") ? matchup.split("@") : matchup.split(" vs ");
+  if (parts.length >= 2) {
+    const away = parts[0].trim().toUpperCase();
+    const home = parts.slice(1).join(" ").trim().toUpperCase();
+    return `${away} ${sep} ${home}`;
+  }
+  return matchup.toUpperCase();
+}
+
 function fmtTimeCentral(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -1542,9 +1554,7 @@ export const ModelScreen = () => {
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
                 <tr className="bg-[#0a0a0a]/95 border-b border-[#1f1f1f] backdrop-blur">
-                  <th className="text-left px-4 py-3 text-[#8a8a8a] sticky left-0 bg-[#0a0a0a]/95 z-30 min-w-[340px]">Matchup</th>
-                  <th className="text-left px-3 py-3 text-[#8a8a8a] min-w-[120px]">Market</th>
-                  <th className="text-left px-3 py-3 text-[#8a8a8a] min-w-[360px]">Pick</th>
+                  <th className="text-left px-4 py-3 text-[#8a8a8a] sticky left-0 bg-[#0a0a0a]/95 z-30 min-w-[420px]">Pick</th>
                   <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[84px]">Line</th>
                   <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[110px]">Fair</th>
                   <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[120px]">DK</th>
@@ -1570,7 +1580,7 @@ export const ModelScreen = () => {
                     <FragmentRow
                       key={p.playKey}
                       showDivider={showDivider}
-                      dividerColSpan={11}
+                      dividerColSpan={9}
                       dividerLabel={p.matchup ?? "—"}
                       dividerTime={p.commence_time ? fmtDateTimeCT(p.commence_time) : "—"}
                     >
@@ -1590,7 +1600,7 @@ export const ModelScreen = () => {
 
                 {!loading && !filtered.length ? (
                   <tr>
-                    <td colSpan={11} className="p-10 text-center text-xs text-[#808080]">
+                    <td colSpan={9} className="p-10 text-center text-xs text-[#808080]">
                       No plays found after gates.
                       <div className="text-[11px] text-[#606060] mt-1">
                         Check odds ({ODDS_MIN}..+{ODDS_MAX}) and EV caps (Games ≤ {MAX_EV_PCT}%, Props {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}%).
@@ -1906,7 +1916,6 @@ function PlayRow({
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : NaN;
   const score = Math.round(safeNum(play.bestScore, 0));
   const sTone = scoreTone(score);
-  const bestOffer = play.bestBook ? play.offers[play.bestBook] : null;
 
   const isGame = play.kind === "game";
   const isTotal = isGame && play.gameMeta?.market === "totals";
@@ -1934,73 +1943,44 @@ function PlayRow({
       </div>
     ) : null;
 
+  const selectionText = buildSelectionText(play);
+  const matchupText = buildMatchupLine(play);
+  const bestBook = play.bestBook ?? null;
+
   return (
     <tr className="transition-colors hover:bg-white/[0.03]">
-      <td className="px-4 py-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[340px]">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-white truncate">
-              {play.matchup ?? "—"}
-              <span className="text-[#404040]"> · </span>
-              <span className="text-[#b0b0b0]">{fmtDateCentral(play.commence_time)}</span>
-              <span className="text-[#404040]"> </span>
-              <span className="text-[#b0b0b0]">{fmtTimeCentral(play.commence_time)}</span>
-
-              {play.kind === "prop" ? (
-                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
-                  PROP
-                </span>
-              ) : null}
-            </div>
-
-            {steamBadge}
-          </div>
-
-          {bestOffer ? (
-            <div
-              className="shrink-0 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2 py-1"
-              title={`Best book: ${bestOffer.book.toUpperCase()} (${pct(bestOffer.ev_pct, 1)})`}
-            >
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[bestOffer.book as AnyBookHistory] }} />
-              <span className="text-[10px] text-[#b0b0b0]">
-                {bestOffer.book === "betmgm" ? "MGM" : bestOffer.book === "fanduel" ? "FD" : "DK"}
-              </span>
-            </div>
-          ) : null}
-        </div>
-      </td>
-
-      <td className="px-3 py-3 text-left">
-        <div className="text-white">{play.marketLabel}</div>
-        <div className="text-[10px] text-[#606060] mt-0.5">{play.sideLabel}</div>
-      </td>
-
       {/* PICK (clickable) */}
-      <td className="px-3 py-3 text-left">
+      <td className="px-4 py-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[420px]">
         <button
           type="button"
           onClick={onOpenDetails}
           className="w-full text-left rounded-xl border border-[#1f1f1f] bg-[#0b0b0b]/70 px-3 py-2 transition hover:border-[#2a2a2a] hover:bg-[#111] hover:shadow-[0_0_0_1px_rgba(212,175,55,0.15)]"
           title="Open details"
         >
-          {play.kind === "prop" ? (
-            <PropPickInline
-              name={play.pickLabel}
-              position={play.propMeta?.position ?? null}
-              picture_url={play.propMeta?.picture_url ?? null}
-              sub={`${play.marketLabel} · ${play.sideLabel} ${play.lineLabel}`}
-              mu={play.propMeta?.mu ?? null}
-            />
-          ) : (
-            <GamePickInline
-              showLogo={!!teamLogoUrl}
-              logoUrl={teamLogoUrl}
-              title={play.pickLabel}
-              sub={`${play.marketLabel} · ${play.sideLabel}${play.lineLabel !== "—" ? ` ${play.lineLabel}` : ""}`}
-              steamInfo={steamInfo}
-              play={play}
-            />
-          )}
+          <div className="flex items-center gap-3">
+            {play.kind === "prop" ? (
+              <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
+            ) : showTeamLogo && teamLogoUrl ? (
+              <TeamLogo url={teamLogoUrl} alt={play.pickLabel} />
+            ) : (
+              <TeamLogoPlaceholder />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <div className="text-white text-sm font-medium truncate">{selectionText}</div>
+                {bestBook ? <BestBookBadge book={bestBook} /> : null}
+                {play.kind === "prop" ? (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                    PROP
+                  </span>
+                ) : null}
+              </div>
+              <div className="text-[11px] text-[#808080] mt-1 truncate">
+                {matchupText} · {fmtDateCentral(play.commence_time)} {fmtTimeCentral(play.commence_time)}
+              </div>
+              {steamInfo ? <div className="mt-1">{steamBadge}</div> : null}
+            </div>
+          </div>
         </button>
       </td>
 
@@ -2082,7 +2062,6 @@ function PlayCard({
   oddsRange: { min: number; max: number };
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
-  const mu = play.propMeta?.mu ?? null;
   const score = Math.round(safeNum(play.bestScore, 0));
   const sTone = scoreTone(score);
 
@@ -2106,26 +2085,24 @@ function PlayCard({
       </div>
     ) : null;
 
+  const selectionText = buildSelectionText(play);
+  const matchupText = buildMatchupLine(play);
+  const bestBook = play.bestBook ?? null;
+
   return (
     <div className="bg-[#0f0f0f] border border-[#1f1f1f] rounded-2xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-white text-sm truncate">
-            {play.matchup ?? "—"}
-            {play.kind === "prop" ? (
-              <span className="ml-2 align-middle inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
-                PROP
-              </span>
-            ) : null}
-          </div>
+          <div className="text-white text-sm truncate">{selectionText}</div>
           <div className="text-[11px] text-[#808080] mt-1">
-            {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)}
+            {matchupText} · {fmtDateCentral(play.commence_time)} {fmtTimeCentral(play.commence_time)}
           </div>
           {steamBadge}
         </div>
 
         <div className="shrink-0 text-right">
           <div className="inline-flex items-center gap-2">
+            {bestBook ? <BestBookBadge book={bestBook} /> : null}
             <div
               className={[
                 "inline-flex items-center justify-center px-2 py-0.5 rounded-full border text-[11px] tabular-nums",
@@ -2153,49 +2130,27 @@ function PlayCard({
         className="mt-3 w-full text-left rounded-xl border border-[#1f1f1f] bg-[#0b0b0b] px-3 py-3 transition hover:border-[#2a2a2a] hover:bg-[#111]"
         title="Open details"
       >
-        {play.kind === "prop" ? (
-          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3">
+          {play.kind === "prop" ? (
             <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
-            <div className="min-w-0">
-              <div className="text-white text-sm truncate">
-                {play.pickLabel}
-                {play.propMeta?.position ? <span className="text-[#808080]"> · {play.propMeta.position}</span> : null}
-              </div>
-              <div className="text-[11px] text-[#808080] mt-0.5 truncate">
-                {play.marketLabel} · {play.sideLabel} {play.lineLabel}
-              </div>
-              <div className="text-[11px] text-[#b0b0b0] mt-0.5">
-                Projection: <span className="text-white tabular-nums">{fmtMu(mu)}</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center gap-3">
-            {teamLogoUrl ? <TeamLogo url={teamLogoUrl} alt={teamCanonical ?? play.pickLabel} /> : <TeamLogoPlaceholder />}
-            <div className="min-w-0">
-              <div className="text-white text-sm truncate">{play.pickLabel}</div>
-              <div className="text-[11px] text-[#808080] mt-0.5 truncate">
-                {play.marketLabel} · {play.sideLabel}
-                {play.lineLabel !== "—" ? ` ${play.lineLabel}` : ""}
-              </div>
-
-              {steamInfo ? (
-                <div className="text-[11px] text-[#808080] mt-1 truncate">
-                  Soft better:{" "}
-                  <span className="text-white">
-                    {Object.entries(steamInfo.lagging)
-                      .map(([b, q]) => {
-                        const tag = b === "draftkings" ? "DK" : b === "fanduel" ? "FD" : "MGM";
-                        const line = q?.line != null ? fmtLineGame(play.gameMeta!.market, q.line) + " " : "";
-                        return `${tag} ${line}${american(q!.odds)}`;
-                      })
-                      .join(" · ")}
-                  </span>
-                </div>
+          ) : teamLogoUrl ? (
+            <TeamLogo url={teamLogoUrl} alt={teamCanonical ?? play.pickLabel} />
+          ) : (
+            <TeamLogoPlaceholder />
+          )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="text-white text-sm truncate">{selectionText}</div>
+              {play.kind === "prop" ? (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                  PROP
+                </span>
               ) : null}
             </div>
+            <div className="text-[11px] text-[#808080] mt-1 truncate">{matchupText}</div>
+            {steamBadge ? <div className="mt-1">{steamBadge}</div> : null}
           </div>
-        )}
+        </div>
       </button>
 
       {/* Offers strip */}
@@ -3567,6 +3522,16 @@ function FilterInput({
   );
 }
 
+function BestBookBadge({ book }: { book: SoftOfferKey }) {
+  const label = book === "draftkings" ? "DK" : book === "fanduel" ? "FD" : "MGM";
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-[#2a2a2a] bg-[#0a0a0a] px-2 py-0.5 text-[10px] text-[#b0b0b0]">
+      <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[book as AnyBookHistory] }} />
+      {label}
+    </span>
+  );
+}
+
 function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/50 px-3 py-1">
@@ -3753,6 +3718,33 @@ function PropPickInline({
       </div>
     </div>
   );
+}
+
+function buildMatchupLine(play: AggregatedPlay) {
+  if (play.kind === "prop") {
+    const team = play.matchup ? play.matchup.split(" vs ")[0]?.trim() : "";
+    const opp = play.matchup?.includes(" vs ") ? play.matchup.split(" vs ")[1]?.trim() : "";
+    if (team && opp) return `${play.pickLabel} (${team} vs ${opp})`;
+    if (team) return `${play.pickLabel} (${team})`;
+    return play.pickLabel;
+  }
+  return fmtMatchupInline(play.matchup ?? null);
+}
+
+function buildSelectionText(play: AggregatedPlay) {
+  if (play.kind === "prop") {
+    return `${play.marketLabel} ${play.sideLabel} ${play.lineLabel}`;
+  }
+
+  if (play.gameMeta?.market === "totals") {
+    return `${play.sideLabel} ${play.lineLabel}`;
+  }
+
+  if (play.gameMeta?.market === "spreads") {
+    return `${play.pickLabel} ${play.lineLabel}`;
+  }
+
+  return `${play.pickLabel} ML`;
 }
 
 function GamePickInline({
