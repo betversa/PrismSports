@@ -344,6 +344,29 @@ function safeNum(n: any, fallback = 0) {
   return Number.isFinite(x) ? x : fallback;
 }
 
+function parseInputNumber(value: string) {
+  if (value == null || value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeRange(
+  minRaw: number | null,
+  maxRaw: number | null,
+  defaults: { min: number; max: number }
+) {
+  let min = minRaw ?? defaults.min;
+  let max = maxRaw ?? defaults.max;
+  if (!Number.isFinite(min)) min = defaults.min;
+  if (!Number.isFinite(max)) max = defaults.max;
+  if (min > max) {
+    const next = min;
+    min = max;
+    max = next;
+  }
+  return { min, max };
+}
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
@@ -873,6 +896,14 @@ export const ModelScreen = () => {
   // ✅ Team logos for ML/Spread list rows
   const [teamUi, setTeamUi] = useState<Record<string, TeamUi>>({});
 
+  // Filters (client-side only)
+  const [oddsMinInput, setOddsMinInput] = useState<string>(String(ODDS_MIN));
+  const [oddsMaxInput, setOddsMaxInput] = useState<string>(String(ODDS_MAX));
+  const [evMinInput, setEvMinInput] = useState<string>("");
+  const [evMaxInput, setEvMaxInput] = useState<string>("");
+  const [bestBookFilter, setBestBookFilter] = useState<SoftOfferKey | "any">("any");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
   const [selected, setSelected] = useState<AggregatedPlay | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -1351,7 +1382,35 @@ export const ModelScreen = () => {
     };
   }, [aggregated]);
 
-  const filtered = useMemo(() => aggregated, [aggregated]);
+  const oddsRange = useMemo(() => {
+    return normalizeRange(parseInputNumber(oddsMinInput), parseInputNumber(oddsMaxInput), {
+      min: ODDS_MIN,
+      max: ODDS_MAX,
+    });
+  }, [oddsMinInput, oddsMaxInput]);
+
+  const filtered = useMemo(() => {
+    const oddsMin = oddsRange.min;
+    const oddsMax = oddsRange.max;
+
+    return aggregated.filter((p) => {
+      const evDefaults = p.kind === "prop" ? { min: MIN_EV_PCT_PROPS, max: MAX_EV_PCT } : { min: 0, max: MAX_EV_PCT };
+      const evRange = normalizeRange(parseInputNumber(evMinInput), parseInputNumber(evMaxInput), evDefaults);
+
+      const evOk = p.bestEvPct >= evRange.min && p.bestEvPct <= evRange.max;
+      if (!evOk) return false;
+
+      if (bestBookFilter !== "any" && p.bestBook !== bestBookFilter) return false;
+
+      const offers = Object.values(p.offers);
+      const oddsOk = offers.some((offer) => {
+        if (!offer) return false;
+        return offer.odds >= oddsMin && offer.odds <= oddsMax;
+      });
+
+      return oddsOk;
+    });
+  }, [aggregated, oddsRange.min, oddsRange.max, evMinInput, evMaxInput, bestBookFilter]);
 
   const bankroll = safeNum(settings?.bankroll, 0);
   const kellyFactor = clamp(safeNum(settings?.kelly_factor, 0), 0, 1);
@@ -1365,6 +1424,15 @@ export const ModelScreen = () => {
   }, [filtered]);
 
   const steamCount = useMemo(() => Object.keys(steamEligible).length, [steamEligible]);
+  const totalCount = aggregated.length;
+
+  const handleClearFilters = () => {
+    setOddsMinInput(String(ODDS_MIN));
+    setOddsMaxInput(String(ODDS_MAX));
+    setEvMinInput("");
+    setEvMaxInput("");
+    setBestBookFilter("any");
+  };
 
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
@@ -1428,11 +1496,43 @@ export const ModelScreen = () => {
           </div>
         ) : null}
 
-        {error ? (
-          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/50 border border-red-900/50 rounded-lg">
-            Failed to load ev_plays: {error}
+      {error ? (
+        <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/50 border border-red-900/50 rounded-lg">
+          Failed to load ev_plays: {error}
+        </div>
+      ) : null}
+    </div>
+
+      <FiltersBar
+        oddsMinInput={oddsMinInput}
+        oddsMaxInput={oddsMaxInput}
+        evMinInput={evMinInput}
+        evMaxInput={evMaxInput}
+        bestBookFilter={bestBookFilter}
+        totalCount={totalCount}
+        filteredCount={filtered.length}
+        onOddsMinChange={setOddsMinInput}
+        onOddsMaxChange={setOddsMaxInput}
+        onEvMinChange={setEvMinInput}
+        onEvMaxChange={setEvMaxInput}
+        onBestBookChange={setBestBookFilter}
+        onClear={handleClearFilters}
+      />
+
+      <div className="md:hidden">
+        <div className="flex items-center justify-between gap-2 px-1">
+          <button
+            type="button"
+            onClick={() => setFiltersOpen(true)}
+            className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 text-[11px] text-[#d0d0d0]"
+          >
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
+            Filters
+          </button>
+          <div className="text-[11px] text-[#808080]">
+            Showing <span className="text-white">{filtered.length}</span> of {totalCount} plays
           </div>
-        ) : null}
+        </div>
       </div>
 
       {/* Desktop table */}
@@ -1482,6 +1582,7 @@ export const ModelScreen = () => {
                         onOpenDetails={() => openDetails(p)}
                         steamInfo={sInfo}
                         teamUi={teamUi}
+                        oddsRange={oddsRange}
                       />
                     </FragmentRow>
                   );
@@ -1527,15 +1628,222 @@ export const ModelScreen = () => {
               onOpenDetails={() => openDetails(p)}
               steamInfo={sInfo}
               teamUi={teamUi}
+              oddsRange={oddsRange}
             />
           );
         })}
       </div>
 
+      <FiltersDrawer
+        open={filtersOpen}
+        onClose={() => setFiltersOpen(false)}
+        oddsMinInput={oddsMinInput}
+        oddsMaxInput={oddsMaxInput}
+        evMinInput={evMinInput}
+        evMaxInput={evMaxInput}
+        bestBookFilter={bestBookFilter}
+        totalCount={totalCount}
+        filteredCount={filtered.length}
+        onOddsMinChange={setOddsMinInput}
+        onOddsMaxChange={setOddsMaxInput}
+        onEvMinChange={setEvMinInput}
+        onEvMaxChange={setEvMaxInput}
+        onBestBookChange={setBestBookFilter}
+        onClear={handleClearFilters}
+      />
+
       <PlayDetailsModal open={detailsOpen} play={selected} onClose={closeDetails} />
     </div>
   );
 };
+
+/* =========================================================
+   Filters (toolbar + mobile drawer)
+========================================================= */
+
+type BestBookFilter = SoftOfferKey | "any";
+
+function FiltersBar({
+  oddsMinInput,
+  oddsMaxInput,
+  evMinInput,
+  evMaxInput,
+  bestBookFilter,
+  totalCount,
+  filteredCount,
+  onOddsMinChange,
+  onOddsMaxChange,
+  onEvMinChange,
+  onEvMaxChange,
+  onBestBookChange,
+  onClear,
+}: {
+  oddsMinInput: string;
+  oddsMaxInput: string;
+  evMinInput: string;
+  evMaxInput: string;
+  bestBookFilter: BestBookFilter;
+  totalCount: number;
+  filteredCount: number;
+  onOddsMinChange: (v: string) => void;
+  onOddsMaxChange: (v: string) => void;
+  onEvMinChange: (v: string) => void;
+  onEvMaxChange: (v: string) => void;
+  onBestBookChange: (v: BestBookFilter) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="hidden md:block">
+      <div className="rounded-2xl border border-[#1f1f1f] bg-[#0f0f0f] p-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
+        <div className="flex items-center justify-between gap-4">
+          <div className="text-xs text-[#b0b0b0]">
+            Showing <span className="text-white">{filteredCount}</span> of {totalCount} plays
+          </div>
+          <button
+            type="button"
+            onClick={onClear}
+            className="text-[11px] text-[#d0d0d0] hover:text-white inline-flex items-center gap-1"
+          >
+            <span className="text-[#d4af37]">×</span> Clear
+          </button>
+        </div>
+
+        <div className="mt-3 grid grid-cols-12 gap-3 items-end">
+          <div className="col-span-3">
+            <div className="text-[10px] text-[#808080] mb-1">Odds Range (American)</div>
+            <div className="grid grid-cols-2 gap-2">
+              <FilterInput value={oddsMinInput} onChange={onOddsMinChange} placeholder={String(ODDS_MIN)} />
+              <FilterInput value={oddsMaxInput} onChange={onOddsMaxChange} placeholder={String(ODDS_MAX)} />
+            </div>
+          </div>
+
+          <div className="col-span-3">
+            <div className="text-[10px] text-[#808080] mb-1">EV% Range</div>
+            <div className="grid grid-cols-2 gap-2">
+              <FilterInput value={evMinInput} onChange={onEvMinChange} placeholder="Game 0 / Prop 2" />
+              <FilterInput value={evMaxInput} onChange={onEvMaxChange} placeholder="15" />
+            </div>
+          </div>
+
+          <div className="col-span-3">
+            <div className="text-[10px] text-[#808080] mb-1">Best EV Book</div>
+            <select
+              value={bestBookFilter}
+              onChange={(e) => onBestBookChange(e.target.value as BestBookFilter)}
+              className="w-full rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-white"
+            >
+              <option value="any">Any</option>
+              <option value="draftkings">DraftKings</option>
+              <option value="fanduel">FanDuel</option>
+              <option value="betmgm">BetMGM</option>
+            </select>
+          </div>
+
+          <div className="col-span-3">
+            <div className="text-[10px] text-[#808080] mb-1">Notes</div>
+            <div className="text-[11px] text-[#606060]">
+              Odds filter dims out-of-range offers; EV filter uses best EV%.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FiltersDrawer({
+  open,
+  onClose,
+  oddsMinInput,
+  oddsMaxInput,
+  evMinInput,
+  evMaxInput,
+  bestBookFilter,
+  totalCount,
+  filteredCount,
+  onOddsMinChange,
+  onOddsMaxChange,
+  onEvMinChange,
+  onEvMaxChange,
+  onBestBookChange,
+  onClear,
+}: {
+  open: boolean;
+  onClose: () => void;
+  oddsMinInput: string;
+  oddsMaxInput: string;
+  evMinInput: string;
+  evMaxInput: string;
+  bestBookFilter: BestBookFilter;
+  totalCount: number;
+  filteredCount: number;
+  onOddsMinChange: (v: string) => void;
+  onOddsMaxChange: (v: string) => void;
+  onEvMinChange: (v: string) => void;
+  onEvMaxChange: (v: string) => void;
+  onBestBookChange: (v: BestBookFilter) => void;
+  onClear: () => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[90] md:hidden">
+      <button type="button" className="absolute inset-0 bg-black/70" onClick={onClose} aria-label="Close filters" />
+      <div className="absolute inset-x-0 bottom-0 rounded-t-2xl border border-[#1f1f1f] bg-[#0f0f0f] p-4">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-white">Filters</div>
+          <button type="button" onClick={onClose} className="text-[12px] text-[#b0b0b0]">
+            Done
+          </button>
+        </div>
+
+        <div className="mt-2 text-[11px] text-[#808080]">
+          Showing <span className="text-white">{filteredCount}</span> of {totalCount} plays
+        </div>
+
+        <div className="mt-4 space-y-3">
+          <div>
+            <div className="text-[10px] text-[#808080] mb-1">Odds Range (American)</div>
+            <div className="grid grid-cols-2 gap-2">
+              <FilterInput value={oddsMinInput} onChange={onOddsMinChange} placeholder={String(ODDS_MIN)} />
+              <FilterInput value={oddsMaxInput} onChange={onOddsMaxChange} placeholder={String(ODDS_MAX)} />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] text-[#808080] mb-1">EV% Range</div>
+            <div className="grid grid-cols-2 gap-2">
+              <FilterInput value={evMinInput} onChange={onEvMinChange} placeholder="Game 0 / Prop 2" />
+              <FilterInput value={evMaxInput} onChange={onEvMaxChange} placeholder="15" />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] text-[#808080] mb-1">Best EV Book</div>
+            <select
+              value={bestBookFilter}
+              onChange={(e) => onBestBookChange(e.target.value as BestBookFilter)}
+              className="w-full rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-white"
+            >
+              <option value="any">Any</option>
+              <option value="draftkings">DraftKings</option>
+              <option value="fanduel">FanDuel</option>
+              <option value="betmgm">BetMGM</option>
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClear}
+            className="w-full rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-[#d0d0d0]"
+          >
+            × Clear Filters
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* =========================================================
    Premium divider fragment (desktop grouping)
@@ -1584,6 +1892,7 @@ function PlayRow({
   onOpenDetails,
   steamInfo,
   teamUi,
+  oddsRange,
 }: {
   play: AggregatedPlay;
   bankroll: number;
@@ -1592,6 +1901,7 @@ function PlayRow({
   onOpenDetails: () => void;
   steamInfo?: SteamInfo;
   teamUi: Record<string, TeamUi>;
+  oddsRange: { min: number; max: number };
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : NaN;
   const score = Math.round(safeNum(play.bestScore, 0));
@@ -1703,13 +2013,25 @@ function PlayRow({
       </td>
 
       <td className="px-3 py-3 text-center">
-        <BookOfferCell offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
+        <BookOfferCell
+          offer={play.offers.draftkings}
+          isBest={play.bestBook === "draftkings"}
+          dimmed={!!play.offers.draftkings && (play.offers.draftkings!.odds < oddsRange.min || play.offers.draftkings!.odds > oddsRange.max)}
+        />
       </td>
       <td className="px-3 py-3 text-center">
-        <BookOfferCell offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
+        <BookOfferCell
+          offer={play.offers.fanduel}
+          isBest={play.bestBook === "fanduel"}
+          dimmed={!!play.offers.fanduel && (play.offers.fanduel!.odds < oddsRange.min || play.offers.fanduel!.odds > oddsRange.max)}
+        />
       </td>
       <td className="px-3 py-3 text-center">
-        <BookOfferCell offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
+        <BookOfferCell
+          offer={play.offers.betmgm}
+          isBest={play.bestBook === "betmgm"}
+          dimmed={!!play.offers.betmgm && (play.offers.betmgm!.odds < oddsRange.min || play.offers.betmgm!.odds > oddsRange.max)}
+        />
       </td>
 
       <td className="px-3 py-3 text-center">
@@ -1748,6 +2070,7 @@ function PlayCard({
   onOpenDetails,
   steamInfo,
   teamUi,
+  oddsRange,
 }: {
   play: AggregatedPlay;
   bankroll: number;
@@ -1756,6 +2079,7 @@ function PlayCard({
   onOpenDetails: () => void;
   steamInfo?: SteamInfo;
   teamUi: Record<string, TeamUi>;
+  oddsRange: { min: number; max: number };
 }) {
   const betAmount = settingsReady ? calcBetAmount(bankroll, play.bestBetFraction, kellyFactor) : 0;
   const mu = play.propMeta?.mu ?? null;
@@ -1877,9 +2201,21 @@ function PlayCard({
       {/* Offers strip */}
       <div className="mt-3 grid grid-cols-4 gap-2 items-stretch">
         <StatChip label="Fair" value={american(play.quantum_odds)} accent />
-        <BookChip offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
-        <BookChip offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
-        <BookChip offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
+        <BookChip
+          offer={play.offers.draftkings}
+          isBest={play.bestBook === "draftkings"}
+          dimmed={!!play.offers.draftkings && (play.offers.draftkings!.odds < oddsRange.min || play.offers.draftkings!.odds > oddsRange.max)}
+        />
+        <BookChip
+          offer={play.offers.fanduel}
+          isBest={play.bestBook === "fanduel"}
+          dimmed={!!play.offers.fanduel && (play.offers.fanduel!.odds < oddsRange.min || play.offers.fanduel!.odds > oddsRange.max)}
+        />
+        <BookChip
+          offer={play.offers.betmgm}
+          isBest={play.bestBook === "betmgm"}
+          dimmed={!!play.offers.betmgm && (play.offers.betmgm!.odds < oddsRange.min || play.offers.betmgm!.odds > oddsRange.max)}
+        />
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-3">
@@ -3210,6 +3546,27 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
    UI atoms + Pick blocks
 ========================================================= */
 
+function FilterInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] px-3 py-2 text-xs text-white placeholder:text-[#5a5a5a]"
+    />
+  );
+}
+
 function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/50 px-3 py-1">
@@ -3247,7 +3604,7 @@ function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
   return <div className="text-[#d4af37] font-semibold tabular-nums">{formatMoney(amount)}</div>;
 }
 
-function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
+function BookOfferCell({ offer, isBest, dimmed }: { offer?: BookOffer; isBest?: boolean; dimmed?: boolean }) {
   if (!offer) return <div className="text-[#404040]">—</div>;
 
   const logo = bookLogoSrc(offer.book);
@@ -3258,6 +3615,7 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
       className={[
         "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border",
         isBest ? "bg-[#15120a] border-[#d4af37]/60" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        dimmed ? "opacity-40" : "opacity-100",
         ring,
       ].join(" ")}
     >
@@ -3277,7 +3635,7 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   );
 }
 
-function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
+function BookChip({ offer, isBest, dimmed }: { offer?: BookOffer; isBest?: boolean; dimmed?: boolean }) {
   if (!offer) {
     return (
       <div className="bg-[#0a0a0a] border border-[#1f1f1f] rounded-lg p-2 text-center">
@@ -3291,7 +3649,14 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   const ring = isBest ? "shadow-[0_0_0_1px_rgba(212,175,55,0.7),0_0_12px_rgba(212,175,55,0.2)]" : "shadow-none";
 
   return (
-    <div className={["rounded-lg p-2 text-center border", isBest ? "bg-[#15120a] border-[#d4af37]/60" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
+    <div
+      className={[
+        "rounded-lg p-2 text-center border",
+        isBest ? "bg-[#15120a] border-[#d4af37]/60" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        dimmed ? "opacity-45" : "opacity-100",
+        ring,
+      ].join(" ")}
+    >
       <div className="flex items-center justify-center gap-2">
         {logo ? <img src={logo} alt={offer.book} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
