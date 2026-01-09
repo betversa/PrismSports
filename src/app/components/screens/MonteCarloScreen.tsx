@@ -407,14 +407,12 @@ function ProbBarDual({
       <div>
         <div className="flex items-center justify-between text-[10px] text-[#8a8a8a] font-semibold tracking-wide mb-1">
           <span>{topLabel}</span>
-          <span className="tabular-nums text-[#cfcfcf]">{top == null || !Number.isFinite(top) ? "—" : `${(top * 100).toFixed(1)}%`}</span>
         </div>
         <ProbBar p={top} tone={topTone} />
       </div>
       <div>
         <div className="flex items-center justify-between text-[10px] text-[#8a8a8a] font-semibold tracking-wide mb-1">
           <span>{bottomLabel}</span>
-          <span className="tabular-nums text-[#cfcfcf]">{bottom == null || !Number.isFinite(bottom) ? "—" : `${(bottom * 100).toFixed(1)}%`}</span>
         </div>
         <ProbBar p={bottom} tone={bottomTone} />
       </div>
@@ -1601,7 +1599,6 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         consSpreadOddsTeam: c?.spread_home_odds ?? null,
         consTotalLine: consTotal == null ? null : Math.round(consTotal * 10) / 10,
         consTotalOverOdds: c?.total_over_odds ?? null,
-        consTotalTotal: undefined as any, // (ignored; keeps TS happy if you had old fields elsewhere)
         consTotalUnderOdds: c?.total_under_odds ?? null,
         isProjectedWinner: homeIsWinner,
       } as TeamRow;
@@ -1849,4 +1846,3 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 };
 
 export default MonteCarloScreen;
-
