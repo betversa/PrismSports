@@ -20,6 +20,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Calculator,
+  ChevronRight,
   Database,
   Flame,
   RefreshCw,
@@ -28,8 +29,8 @@ import {
   Target,
   Trophy,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
-import type { Screen } from "../../App";
 
 /* =========================================================
    TYPES
@@ -122,7 +123,6 @@ type PropEvRow = {
 ========================================================= */
 
 const GOLD = "#d89211";
-const PANEL = "#0b0b0b";
 const BORDER = "#252525";
 const SLATE = "rgba(87,90,98,0.26)";
 const SURFACE = "#070707";
@@ -142,6 +142,13 @@ const TOP_MAX_ODDS = 200;
 
 // Soft-book filter options ONLY
 type SoftBookFilter = "any" | "draftkings" | "fanduel" | "betmgm";
+
+const lineClamp2Style: React.CSSProperties = {
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+};
 
 /* =========================================================
    HELPERS
@@ -515,20 +522,20 @@ function PremiumPanel({
   return (
     <div
       className={[
-        "relative overflow-hidden rounded-2xl border p-4 md:p-5",
+        "relative overflow-hidden rounded-2xl border bg-[#0b0b0b] p-4 md:p-5",
         className ?? "",
       ].join(" ")}
-      style={{ borderColor: BORDER, background: PANEL }}
+      style={{ borderColor: BORDER }}
     >
       <div className="pointer-events-none absolute inset-0">
         <div
           className="absolute inset-0"
           style={{
             background: [
-              "radial-gradient(800px 260px at 18% 0%, rgba(216,146,17,0.14), transparent 60%)",
+              "radial-gradient(900px 280px at 18% 0%, rgba(216,146,17,0.15), transparent 60%)",
               `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
-              "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
-              "linear-gradient(180deg, rgba(0,0,0,0.22), rgba(0,0,0,0.62) 55%, rgba(0,0,0,0.86) 100%)",
+              "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
+              "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.88) 100%)",
             ].join(", "),
           }}
         />
@@ -561,8 +568,8 @@ function QuickAction({
       type="button"
       onClick={onClick}
       className={[
-        "group text-left rounded-xl border p-4 transition-all min-h-[48px]",
-        "hover:border-[#3b3b3b] hover:-translate-y-0.5",
+        "group w-full text-left rounded-2xl border p-4 sm:p-5 transition-all min-h-[56px]",
+        "hover:border-[#3b3b3b] hover:-translate-y-0.5 active:translate-y-0",
       ].join(" ")}
       style={{
         borderColor: BORDER,
@@ -570,31 +577,33 @@ function QuickAction({
       }}
     >
       <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <div className="text-sm text-white font-semibold">{title}</div>
+        <div className="flex items-center gap-3 min-w-0">
           <div
-            className="text-xs text-[#a7a7a7] mt-0.5"
+            className="w-11 h-11 rounded-xl border flex items-center justify-center shrink-0"
             style={{
-              display: "-webkit-box",
-              WebkitLineClamp: 1,
-              WebkitBoxOrient: "vertical",
-              overflow: "hidden",
+              borderColor: "rgba(216,146,17,0.22)",
+              background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.35)",
             }}
           >
-            {sub}
+            <Icon className="w-4 h-4" style={{ color: GOLD }} />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm sm:text-base text-white font-semibold">{title}</div>
+            <div
+              className="text-xs text-[#a7a7a7] mt-0.5"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 1,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
+              {sub}
+            </div>
           </div>
         </div>
-
-        <div
-          className="w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 transition-colors"
-          style={{
-            borderColor: "rgba(216,146,17,0.22)",
-            background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
-            boxShadow: "0 10px 28px rgba(0,0,0,0.35)",
-          }}
-        >
-          <Icon className="w-4 h-4" style={{ color: GOLD }} />
-        </div>
+        <ChevronRight className="w-4 h-4 text-[#7b7b7b] group-hover:text-white transition-colors" />
       </div>
     </button>
   );
@@ -608,7 +617,7 @@ function Segmented({ value, onChange }: { value: PlayTab; onChange: (v: PlayTab)
         type="button"
         onClick={() => onChange(v)}
         className={[
-          "px-3 py-1.5 rounded-full text-[11px] border transition-colors",
+          "px-3 py-2 rounded-full text-[11px] border transition-colors min-h-[40px]",
           active ? "text-white" : "text-[#cfcfcf] hover:text-white",
         ].join(" ")}
         style={{
@@ -648,7 +657,7 @@ function Chip({
       type="button"
       onClick={onClick}
       className={[
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] transition-colors",
+        "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-[11px] transition-colors min-h-[40px]",
         active ? "text-white" : "text-[#cfcfcf] hover:text-white",
       ].join(" ")}
       style={{
@@ -873,7 +882,10 @@ function TopPlayCard({
       </div>
 
       {isTop3 ? (
-        <div className="absolute top-2 right-2 text-[10px] px-2 py-0.5 rounded-full border bg-black/40" style={{ borderColor: "rgba(216,146,17,0.30)", color: "#f2d08a" }}>
+        <div
+          className="absolute top-2 right-2 text-[10px] px-2 py-0.5 rounded-full border bg-black/40"
+          style={{ borderColor: "rgba(216,146,17,0.30)", color: "#f2d08a" }}
+        >
           🔥 Top 3
         </div>
       ) : null}
@@ -933,24 +945,14 @@ function TopPlayCard({
 
             <div
               className="text-[13px] sm:text-sm text-white leading-snug whitespace-normal break-words font-semibold"
-              style={{
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-              }}
+              style={lineClamp2Style}
             >
               {title}
             </div>
 
             <div
               className="text-[11px] sm:text-xs text-[#c7c7c7] leading-snug sm:leading-relaxed mt-0.5 sm:mt-1 whitespace-normal break-words"
-              style={{
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-              }}
+              style={lineClamp2Style}
             >
               {subtitle}
             </div>
@@ -981,11 +983,8 @@ function TopPlayCard({
    SCREEN
 ========================================================= */
 
-type OverviewScreenProps = {
-  onNavigate?: (screen: Screen) => void;
-};
-
-export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
+export function OverviewScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [loadingSoft, setLoadingSoft] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1005,6 +1004,8 @@ export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
   // ✅ Soft-book filter ONLY
   const [bookFilter, setBookFilter] = useState<SoftBookFilter>("any");
   const [search, setSearch] = useState("");
+
+  const go = (href: string) => router.push(href);
 
   async function loadAll({ soft }: { soft?: boolean } = {}) {
     try {
@@ -1355,19 +1356,19 @@ export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
               <Chip active={bookFilter === "any"} label="Any" onClick={() => setBookFilter("any")} />
               <Chip
                 active={bookFilter === "draftkings"}
-                label="DK"
+                label="DraftKings"
                 leftIconSrc="/books/dksquare.png"
                 onClick={() => setBookFilter("draftkings")}
               />
               <Chip
                 active={bookFilter === "fanduel"}
-                label="FD"
+                label="FanDuel"
                 leftIconSrc="/books/fdsquare.png"
                 onClick={() => setBookFilter("fanduel")}
               />
               <Chip
                 active={bookFilter === "betmgm"}
-                label="MGM"
+                label="BetMGM"
                 leftIconSrc="/books/mgmsquare.png"
                 onClick={() => setBookFilter("betmgm")}
               />
@@ -1403,33 +1404,23 @@ export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
         </div>
       </div>
 
-      {/* QUICK ACTIONS */}
+      {/* QUICK LINKS */}
       <PremiumPanel>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <div className="text-sm text-white font-semibold">Quick Actions</div>
+            <div className="text-sm text-white font-semibold">Quick Links</div>
             <div className="text-xs text-[#a7a7a7]">Jump into core workflows.</div>
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-          <QuickAction
-            title="Odds"
-            sub="See lines + history"
-            icon={Database}
-            onClick={() => onNavigate?.("odds")}
-          />
+          <QuickAction title="Odds" sub="See lines + history" icon={Database} onClick={() => go("/odds")} />
           <QuickAction
             title="Projections"
             sub="Scores + win%"
             icon={Calculator}
-            onClick={() => onNavigate?.("monte-carlo")}
+            onClick={() => go("/monte-carlo")}
           />
-          <QuickAction
-            title="All Plays"
-            sub="Full list of picks"
-            icon={Trophy}
-            onClick={() => onNavigate?.("model")}
-          />
+          <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} onClick={() => go("/model")} />
         </div>
       </PremiumPanel>
 
