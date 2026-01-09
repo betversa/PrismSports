@@ -28,8 +28,8 @@ import {
   Target,
   Trophy,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
+import type { Screen } from "../../App";
 
 /* =========================================================
    TYPES
@@ -955,8 +955,11 @@ function TopPlayCard({
    SCREEN
 ========================================================= */
 
-export function OverviewScreen() {
-  const router = useRouter();
+type OverviewScreenProps = {
+  onNavigate?: (screen: Screen) => void;
+};
+
+export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
   const [loading, setLoading] = useState(true);
   const [loadingSoft, setLoadingSoft] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -976,8 +979,6 @@ export function OverviewScreen() {
   // ✅ Soft-book filter ONLY
   const [bookFilter, setBookFilter] = useState<SoftBookFilter>("any");
   const [search, setSearch] = useState("");
-
-  const go = (href: string) => router.push(href);
 
   async function loadAll({ soft }: { soft?: boolean } = {}) {
     try {
@@ -1381,14 +1382,24 @@ export function OverviewScreen() {
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-          <QuickAction title="Odds" sub="See lines + history" icon={Database} onClick={() => go("/odds")} />
+          <QuickAction
+            title="Odds"
+            sub="See lines + history"
+            icon={Database}
+            onClick={() => onNavigate?.("odds")}
+          />
           <QuickAction
             title="Projections"
             sub="Scores + win%"
             icon={Calculator}
-            onClick={() => go("/monte-carlo")}
+            onClick={() => onNavigate?.("monte-carlo")}
           />
-          <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} onClick={() => go("/model")} />
+          <QuickAction
+            title="All Plays"
+            sub="Full list of picks"
+            icon={Trophy}
+            onClick={() => onNavigate?.("model")}
+          />
         </div>
       </PremiumPanel>
 
