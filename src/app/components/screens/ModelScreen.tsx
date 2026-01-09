@@ -1369,36 +1369,43 @@ export const ModelScreen = () => {
   return (
     <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
       {/* HERO / HEADER */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 md:p-5">
+      <div className="relative overflow-hidden rounded-2xl border border-[#1f1f1f] bg-[#0b0b0b] p-4 md:p-6 shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
         <div
           className="pointer-events-none absolute inset-0 opacity-100"
           style={{
             background:
-              "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
+              "radial-gradient(900px 320px at 12% 0%, rgba(212,175,55,0.2), transparent 55%), radial-gradient(520px 260px at 85% 0%, rgba(255,255,255,0.05), transparent 60%), linear-gradient(120deg, rgba(255,255,255,0.02), rgba(255,255,255,0))",
+          }}
+        />
+        <div
+          className="pointer-events-none absolute inset-0 opacity-30 mix-blend-soft-light"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, rgba(255,255,255,0.03), rgba(255,255,255,0.03) 1px, transparent 1px, transparent 3px)",
           }}
         />
 
         <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/50 px-3 py-1 text-[11px] text-[#b0b0b0]">
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
               Prism Model Picks
             </div>
 
-            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Best +EV Plays</h2>
+            <h2 className="text-xl md:text-2xl text-white mt-3 tracking-tight font-semibold">Best +EV Plays</h2>
 
-            <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
+            <div className="text-xs text-[#a8a8a8] mt-2 leading-relaxed">
               Aggregated to 1 row per play. Tap/click the <span className="text-white">Pick</span> to open details.
               <span className="text-[#404040]"> · </span>
               Steam is <span className="text-white">detected and annotated</span> (never filters).
             </div>
 
-            <div className="text-[11px] text-[#9a9a9a] mt-2 leading-relaxed">
+            <div className="text-[11px] text-[#8f8f8f] mt-2 leading-relaxed">
               Gates: Odds {ODDS_MIN} to +{ODDS_MAX} • Games EV ≤ {MAX_EV_PCT}% • Props EV {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}% • Steam lookback{" "}
               {STEAM_LOOKBACK_HOURS}h
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
               <Pill label="Plays" value={loading ? "…" : String(filtered.length)} />
               <Pill label="Best EV" value={loading ? "…" : pct(headerStats.bestEv, 1)} tone={evTone(headerStats.bestEv)} />
               <Pill label="Best Score" value={loading ? "…" : String(Math.round(headerStats.bestScore))} />
@@ -1410,42 +1417,42 @@ export const ModelScreen = () => {
         </div>
 
         {loading ? (
-          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg">
+          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-black/50 border border-[#2a2a2a] rounded-lg">
             Loading EV plays…
           </div>
         ) : null}
 
         {steamLoading ? (
-          <div className="relative mt-2 text-xs text-[#808080] px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg">
+          <div className="relative mt-2 text-xs text-[#808080] px-3 py-2 bg-black/50 border border-[#2a2a2a] rounded-lg">
             Computing steam signals from odds_snapshot_history (line + price)…
           </div>
         ) : null}
 
         {error ? (
-          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/40 border border-red-900/50 rounded-lg">
+          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/50 border border-red-900/50 rounded-lg">
             Failed to load ev_plays: {error}
           </div>
         ) : null}
       </div>
 
       {/* Desktop table */}
-      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
+      <div className="hidden md:block bg-[#0f0f0f] border border-[#1f1f1f] rounded-2xl overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
         <div className="max-h-[72vh] overflow-y-auto">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-20">
-                <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">Matchup</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[360px]">Pick</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[84px]">Line</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">Fair</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">DK</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">FD</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">MGM</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[100px]">EV</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[80px]">Score</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">Bet $</th>
+                <tr className="bg-[#0a0a0a]/95 border-b border-[#1f1f1f] backdrop-blur">
+                  <th className="text-left px-4 py-3 text-[#8a8a8a] sticky left-0 bg-[#0a0a0a]/95 z-30 min-w-[340px]">Matchup</th>
+                  <th className="text-left px-3 py-3 text-[#8a8a8a] min-w-[120px]">Market</th>
+                  <th className="text-left px-3 py-3 text-[#8a8a8a] min-w-[360px]">Pick</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[84px]">Line</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[110px]">Fair</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[120px]">DK</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[120px]">FD</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[120px]">MGM</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[100px]">EV</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[80px]">Score</th>
+                  <th className="text-center px-3 py-3 text-[#8a8a8a] min-w-[110px]">Bet $</th>
                 </tr>
               </thead>
 
@@ -1499,7 +1506,7 @@ export const ModelScreen = () => {
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
         {!loading && !filtered.length ? (
-          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
+          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#1f1f1f] rounded-2xl text-center">
             No plays found after gates.
           </div>
         ) : null}
@@ -1552,8 +1559,8 @@ function FragmentRow({
       {showDivider ? (
         <tr>
           <td colSpan={dividerColSpan} className="p-0">
-            <div className="h-[1px] bg-gradient-to-r from-transparent via-[#2a2a2a] to-transparent" />
-            <div className="px-3 py-2 bg-[#0a0a0a] border-y border-[#141414] text-[10px] text-[#707070] flex items-center justify-between">
+            <div className="h-[1px] bg-gradient-to-r from-transparent via-[#3a3a3a] to-transparent" />
+            <div className="px-4 py-2 bg-[#0a0a0a] border-y border-[#141414] text-[10px] text-[#707070] flex items-center justify-between">
               <span className="truncate">{dividerLabel}</span>
               <span className="shrink-0 text-[#505050]">{dividerTime}</span>
             </div>
@@ -1600,7 +1607,7 @@ function PlayRow({
   const steamBadge =
     play.kind === "game" && steamInfo ? (
       <div
-        className="mt-1 inline-flex items-center gap-2 rounded-md border border-[#a855f7]/30 bg-[#a855f7]/10 px-2 py-0.5 text-[10px] text-[#d8b4fe]"
+        className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#a855f7]/40 bg-[#a855f7]/10 px-2 py-0.5 text-[10px] text-[#d8b4fe]"
         title={`PIN moved (${steamInfo.pinMove}). PIN: ${
           steamInfo.pinPrev.line != null ? fmtLineGame(play.gameMeta!.market, steamInfo.pinPrev.line) + " " : ""
         }${american(steamInfo.pinPrev.odds)} → ${
@@ -1618,9 +1625,9 @@ function PlayRow({
     ) : null;
 
   return (
-    <tr className="transition-colors hover:bg-white/[0.02]">
-      <td className="p-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[340px]">
-        <div className="flex items-start justify-between gap-2">
+    <tr className="transition-colors hover:bg-white/[0.03]">
+      <td className="px-4 py-3 sticky left-0 bg-[#0f0f0f] z-10 min-w-[340px]">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-white truncate">
               {play.matchup ?? "—"}
@@ -1641,7 +1648,7 @@ function PlayRow({
 
           {bestOffer ? (
             <div
-              className="shrink-0 inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1"
+              className="shrink-0 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2 py-1"
               title={`Best book: ${bestOffer.book.toUpperCase()} (${pct(bestOffer.ev_pct, 1)})`}
             >
               <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR[bestOffer.book as AnyBookHistory] }} />
@@ -1653,14 +1660,19 @@ function PlayRow({
         </div>
       </td>
 
-      <td className="p-3 text-left">
+      <td className="px-3 py-3 text-left">
         <div className="text-white">{play.marketLabel}</div>
         <div className="text-[10px] text-[#606060] mt-0.5">{play.sideLabel}</div>
       </td>
 
       {/* PICK (clickable) */}
-      <td className="p-3 text-left">
-        <button type="button" onClick={onOpenDetails} className="w-full text-left hover:opacity-90" title="Open details">
+      <td className="px-3 py-3 text-left">
+        <button
+          type="button"
+          onClick={onOpenDetails}
+          className="w-full text-left rounded-xl border border-[#1f1f1f] bg-[#0b0b0b]/70 px-3 py-2 transition hover:border-[#2a2a2a] hover:bg-[#111] hover:shadow-[0_0_0_1px_rgba(212,175,55,0.15)]"
+          title="Open details"
+        >
           {play.kind === "prop" ? (
             <PropPickInline
               name={play.pickLabel}
@@ -1682,32 +1694,32 @@ function PlayRow({
         </button>
       </td>
 
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <div className="text-white tabular-nums">{play.lineLabel}</div>
       </td>
 
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <div className="text-white font-semibold tabular-nums">{american(play.quantum_odds)}</div>
       </td>
 
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <BookOfferCell offer={play.offers.draftkings} isBest={play.bestBook === "draftkings"} />
       </td>
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <BookOfferCell offer={play.offers.fanduel} isBest={play.bestBook === "fanduel"} />
       </td>
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <BookOfferCell offer={play.offers.betmgm} isBest={play.bestBook === "betmgm"} />
       </td>
 
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <div className={["font-semibold tabular-nums", evTone(play.bestEvPct)].join(" ")}>{pct(play.bestEvPct, 1)}</div>
       </td>
 
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <div
           className={[
-            "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+            "inline-flex items-center justify-center px-2 py-0.5 rounded-full border text-[11px] tabular-nums",
             sTone.bg,
             sTone.border,
             sTone.text,
@@ -1717,7 +1729,7 @@ function PlayRow({
         </div>
       </td>
 
-      <td className="p-3 text-center">
+      <td className="px-3 py-3 text-center">
         <BetAmountValue amount={betAmount} ready={settingsReady} />
       </td>
     </tr>
@@ -1758,7 +1770,7 @@ function PlayCard({
 
   const steamBadge =
     play.kind === "game" && steamInfo ? (
-      <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-[#a855f7]/30 bg-[#a855f7]/10 px-2 py-1 text-[11px] text-[#d8b4fe]">
+      <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#a855f7]/40 bg-[#a855f7]/10 px-2 py-1 text-[11px] text-[#d8b4fe]">
         <span className="inline-block h-2 w-2 rounded-full" style={{ background: BOOK_COLOR.pinnacle }} />
         <span>
           Steam: PIN moved ({steamInfo.pinMove}) to{" "}
@@ -1771,7 +1783,7 @@ function PlayCard({
     ) : null;
 
   return (
-    <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4">
+    <div className="bg-[#0f0f0f] border border-[#1f1f1f] rounded-2xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-white text-sm truncate">
@@ -1792,7 +1804,7 @@ function PlayCard({
           <div className="inline-flex items-center gap-2">
             <div
               className={[
-                "inline-flex items-center justify-center px-2 py-0.5 rounded border text-[11px] tabular-nums",
+                "inline-flex items-center justify-center px-2 py-0.5 rounded-full border text-[11px] tabular-nums",
                 sTone.bg,
                 sTone.border,
                 sTone.text,
@@ -1811,7 +1823,12 @@ function PlayCard({
       </div>
 
       {/* PICK (clickable) */}
-      <button type="button" onClick={onOpenDetails} className="mt-3 w-full text-left hover:opacity-90" title="Open details">
+      <button
+        type="button"
+        onClick={onOpenDetails}
+        className="mt-3 w-full text-left rounded-xl border border-[#1f1f1f] bg-[#0b0b0b] px-3 py-3 transition hover:border-[#2a2a2a] hover:bg-[#111]"
+        title="Open details"
+      >
         {play.kind === "prop" ? (
           <div className="flex items-center gap-3">
             <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
@@ -2297,47 +2314,69 @@ function PlayDetailsModal({
         }}
       >
         <div
-          className="relative w-full md:max-w-5xl bg-[#0b0b0b] border border-[#2a2a2a] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col"
+          className="relative w-full md:max-w-5xl bg-[#0b0b0b] border border-[#1f1f1f] md:rounded-2xl rounded-t-2xl overflow-hidden flex flex-col shadow-[0_30px_80px_rgba(0,0,0,0.6)]"
           style={{ maxHeight: "min(92vh, 940px)" }}
         >
+          <div
+            className="pointer-events-none absolute inset-0 opacity-80"
+            style={{
+              background:
+                "radial-gradient(500px 220px at 15% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 90% 0%, rgba(255,255,255,0.04), transparent 60%)",
+            }}
+          />
+
           {/* Header */}
-          <div className="shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
+          <div className="relative shrink-0 p-4 border-b border-[#1f1f1f] bg-[#0a0a0a]">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 w-full">
-                <div className="text-white text-sm md:text-base truncate">
-                  {play.matchup ?? "—"}{" "}
-                  {play.kind === "prop" ? (
-                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
-                      PROP
+              <div className="min-w-0 w-full flex items-start gap-3">
+                {play.kind === "prop" ? (
+                  <PropAvatar url={play.propMeta?.picture_url ?? null} name={play.pickLabel} />
+                ) : modalTeams.away && modalTeams.home ? (
+                  <div className="flex items-center gap-2">
+                    <TeamLogoSmall url={modalTeams.away.logo_url} alt={modalTeams.away.canonical} />
+                    <span className="text-[#606060] text-xs">@</span>
+                    <TeamLogoSmall url={modalTeams.home.logo_url} alt={modalTeams.home.canonical} />
+                  </div>
+                ) : (
+                  <div className="h-10 w-20 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f]" />
+                )}
+
+                <div className="min-w-0">
+                  <div className="text-white text-sm md:text-base truncate">
+                    {play.matchup ?? "—"}{" "}
+                    {play.kind === "prop" ? (
+                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                        PROP
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* ✅ Event ID removed */}
+                  <div className="text-[11px] text-[#808080] mt-1">
+                    {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)}
+                  </div>
+
+                  <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-[#d4af37]">{play.marketLabel}</span>
+                    <span className="text-[#404040]">·</span>
+                    <span className="text-white">{play.pickLabel}</span>
+                    <span className="text-[#808080]">
+                      · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
                     </span>
+                  </div>
+
+                  {play.kind === "prop" ? (
+                    <div className="mt-1 text-[11px] text-[#b0b0b0]">
+                      Projection: <span className="text-white tabular-nums">{fmtMu(play.propMeta?.mu ?? null)}</span>
+                    </div>
                   ) : null}
                 </div>
-
-                {/* ✅ Event ID removed */}
-                <div className="text-[11px] text-[#808080] mt-1">
-                  {fmtDateCentral(play.commence_time)} · {fmtTimeCentral(play.commence_time)}
-                </div>
-
-                <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-[#d4af37]">{play.marketLabel}</span>
-                  <span className="text-[#404040]">·</span>
-                  <span className="text-white">{play.pickLabel}</span>
-                  <span className="text-[#808080]">
-                    · {play.sideLabel} {play.lineLabel !== "—" ? play.lineLabel : ""}
-                  </span>
-                </div>
-
-                {play.kind === "prop" ? (
-                  <div className="mt-1 text-[11px] text-[#b0b0b0]">
-                    Projection: <span className="text-white tabular-nums">{fmtMu(play.propMeta?.mu ?? null)}</span>
-                  </div>
-                ) : null}
               </div>
             </div>
 
             {/* Tabs */}
-            <div className="mt-3 flex items-center justify-between gap-3">
-              <div className="inline-flex items-center rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <div className="inline-flex items-center rounded-full border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
                 <TabButton active={tab === "details"} onClick={() => setTab("details")} label="Details" />
                 <TabButton active={tab === "line"} onClick={() => setTab("line")} label="Line History" />
                 <TabButton active={tab === "hit"} onClick={() => setTab("hit")} label="Hit Rate" disabled={!canShowHitRate} />
@@ -2353,7 +2392,7 @@ function PlayDetailsModal({
           </div>
 
           {/* Body */}
-          <div className="flex-1 min-h-0 p-4">
+          <div className="relative flex-1 min-h-0 p-4 overflow-y-auto">
             {tab === "details" ? (
               play.kind === "game" ? (
                 <GameDetailsPanel
@@ -2384,7 +2423,7 @@ function PlayDetailsModal({
           </div>
 
           {/* Footer */}
-          <div className="shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a]">
+          <div className="relative shrink-0 p-4 border-t border-[#1f1f1f] bg-[#0a0a0a]">
             <button
               type="button"
               onClick={onClose}
@@ -2483,13 +2522,13 @@ function RatingsCompareBlock({ away, home }: { away: ModalTeam; home: ModalTeam 
   ];
 
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+    <div className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
       <div className="grid grid-cols-2 gap-0 border-b border-[#1f1f1f]">
         <TeamHeaderCell team={away} sideLabel="AWAY" />
         <TeamHeaderCell team={home} sideLabel="HOME" />
       </div>
 
-      <div className="p-3">
+      <div className="p-4">
         <div className="text-[10px] text-[#606060] mb-2">Team Ratings (team_ratings)</div>
         <div className="grid grid-cols-3 gap-2 text-[11px]">
           <div className="text-[#606060]">Metric</div>
@@ -2535,20 +2574,22 @@ function StatsCompareBlock({
   }, [keys, statsBundle]);
 
   return (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
-      <div className="p-3 border-b border-[#1f1f1f] flex items-center justify-between gap-3">
+    <div className="rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+      <div className="p-4 border-b border-[#1f1f1f] flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] text-[#606060]">Matchup Stats (ncaab_stats)</div>
           <div className="text-[11px] text-[#808080] mt-0.5">Toggle Offense / Defense</div>
         </div>
 
-        <div className="inline-flex items-center rounded-lg border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
+        <div className="inline-flex items-center rounded-full border border-[#2a2a2a] bg-[#0b0b0b] overflow-hidden">
           <button
             type="button"
             onClick={() => onSetStatsMode("offense")}
             className={[
               "px-3 py-2 text-xs transition-colors",
-              statsMode === "offense" ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+              statsMode === "offense"
+                ? "bg-[#141414] text-white border-b-2 border-[#d4af37]"
+                : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
             ].join(" ")}
           >
             Offense
@@ -2558,7 +2599,9 @@ function StatsCompareBlock({
             onClick={() => onSetStatsMode("defense")}
             className={[
               "px-3 py-2 text-xs transition-colors",
-              statsMode === "defense" ? "bg-[#141414] text-white" : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+              statsMode === "defense"
+                ? "bg-[#141414] text-white border-b-2 border-[#d4af37]"
+                : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
             ].join(" ")}
           >
             Defense
@@ -2566,7 +2609,7 @@ function StatsCompareBlock({
         </div>
       </div>
 
-      <div className="p-3">
+      <div className="p-4">
         <div className="grid grid-cols-3 gap-2 text-[11px]">
           <div className="text-[#606060]">Stat</div>
           <div className="text-center text-[#808080]">{away.abbr}</div>
@@ -2646,7 +2689,7 @@ function TeamHeaderCell({ team, sideLabel }: { team: ModalTeam; sideLabel: strin
   const hasRank = rank != null && Number.isFinite(rank);
 
   return (
-    <div className="p-3">
+    <div className="p-4">
       <div className="text-[10px] text-[#606060] flex items-center justify-between gap-2">
         <span>{sideLabel}</span>
         {hasRank ? <span className="text-[#808080]">Rank #{Math.round(rank as number)}</span> : null}
@@ -2656,14 +2699,14 @@ function TeamHeaderCell({ team, sideLabel }: { team: ModalTeam; sideLabel: strin
           <img
             src={team.logo_url}
             alt={team.canonical}
-            className="h-7 w-7 rounded-md object-contain bg-[#0a0a0a] border border-[#1f1f1f] p-0.5 shrink-0"
+            className="h-8 w-8 rounded-md object-contain bg-[#0a0a0a] border border-[#1f1f1f] p-0.5 shrink-0"
             draggable={false}
             loading="lazy"
             referrerPolicy="no-referrer"
             onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
           />
         ) : (
-          <div className="h-7 w-7 rounded-md bg-[#0a0a0a] border border-[#1f1f1f] shrink-0" />
+          <div className="h-8 w-8 rounded-md bg-[#0a0a0a] border border-[#1f1f1f] shrink-0" />
         )}
         <div className="min-w-0">
           <div className="text-white text-xs font-medium truncate">{team.canonical}</div>
@@ -2695,12 +2738,12 @@ function TabButton({ active, onClick, label, disabled }: { active: boolean; onCl
       onClick={onClick}
       disabled={!!disabled}
       className={[
-        "px-3 py-2 text-xs transition-colors",
+        "px-4 py-2 text-xs transition-colors border-b-2",
         disabled
-          ? "text-[#4a4a4a] cursor-not-allowed"
+          ? "text-[#4a4a4a] cursor-not-allowed border-transparent"
           : active
-          ? "bg-[#141414] text-white"
-          : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111]",
+          ? "bg-[#141414] text-white border-[#d4af37]"
+          : "bg-transparent text-[#808080] hover:text-white hover:bg-[#111] border-transparent",
       ].join(" ")}
       title={disabled ? "Hit Rate available for props only" : label}
     >
@@ -2736,7 +2779,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
 
           if (!player_name || !marketKey || !["over", "under"].includes(sideCanon)) {
             if (mounted) {
-              setDebug(`props keys missing: player="${player_name || "—"}" marketKey="${marketKey || "null"}" side="${sideCanon || "null"}"`);
+              setDebug(`props keys missing: player=\"${player_name || "—"}\" marketKey=\"${marketKey || "null"}\" side=\"${sideCanon || "null"}\"`);
             }
             return;
           }
@@ -2769,7 +2812,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
           setSeries(pts);
 
           if (!pts.length) {
-            setDebug(`no rows (props): player="${player_name}" marketKey="${marketKey}" side="${sideCanon}" books=${HISTORY_BOOKS.join(",")}`);
+            setDebug(`no rows (props): player=\"${player_name}\" marketKey=\"${marketKey}\" side=\"${sideCanon}\" books=${HISTORY_BOOKS.join(",")}`);
           }
           return;
         }
@@ -2807,7 +2850,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
         setSeries(pts);
 
         if (!pts.length) {
-          setDebug(`no rows: sport_key="${sport_key}" event_id="${event_id}" market="${market}" side="${side}" books=${HISTORY_BOOKS.join(",")}`);
+          setDebug(`no rows: sport_key=\"${sport_key}\" event_id=\"${event_id}\" market=\"${market}\" side=\"${side}\" books=${HISTORY_BOOKS.join(",")}`);
         }
       } finally {
         if (mounted) setLoading(false);
@@ -3169,7 +3212,7 @@ function FantasyProsGameLogs({ play }: { play: AggregatedPlay }) {
 
 function Pill({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1">
+    <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/50 px-3 py-1">
       <div className="text-[11px] text-[#808080]">{label}</div>
       <div className={["text-[11px] font-medium tabular-nums", tone ? tone : "text-white"].join(" ")}>{value}</div>
     </div>
@@ -3187,7 +3230,12 @@ function LegendDot({ label, color }: { label: string; color: string }) {
 
 function StatChip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className={["rounded-lg border px-2 py-2 text-center", accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f]"].join(" ")}>
+    <div
+      className={[
+        "rounded-lg border px-2 py-2 text-center",
+        accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f]",
+      ].join(" ")}
+    >
       <div className="text-[10px] text-[#606060]">{label}</div>
       <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
     </div>
@@ -3203,13 +3251,13 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
   if (!offer) return <div className="text-[#404040]">—</div>;
 
   const logo = bookLogoSrc(offer.book);
-  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book as AnyBookHistory]}]` : "shadow-none";
+  const ring = isBest ? "shadow-[0_0_0_1px_rgba(212,175,55,0.7),0_0_12px_rgba(212,175,55,0.2)]" : "shadow-none";
 
   return (
     <div
       className={[
         "inline-flex flex-col items-center justify-center gap-1 px-2 py-1 rounded-lg border",
-        isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]",
+        isBest ? "bg-[#15120a] border-[#d4af37]/60" : "bg-[#0a0a0a] border-[#1f1f1f]",
         ring,
       ].join(" ")}
     >
@@ -3240,10 +3288,10 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
   }
 
   const logo = bookLogoSrc(offer.book);
-  const ring = isBest ? `shadow-[0_0_0_1px_${BOOK_COLOR[offer.book as AnyBookHistory]}]` : "shadow-none";
+  const ring = isBest ? "shadow-[0_0_0_1px_rgba(212,175,55,0.7),0_0_12px_rgba(212,175,55,0.2)]" : "shadow-none";
 
   return (
-    <div className={["rounded-lg p-2 text-center border", isBest ? "bg-white/5 border-white/10" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
+    <div className={["rounded-lg p-2 text-center border", isBest ? "bg-[#15120a] border-[#d4af37]/60" : "bg-[#0a0a0a] border-[#1f1f1f]", ring].join(" ")}>
       <div className="flex items-center justify-center gap-2">
         {logo ? <img src={logo} alt={offer.book} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
@@ -3261,6 +3309,23 @@ function TeamLogo({ url, alt }: { url: string; alt: string }) {
       src={url}
       alt={alt}
       className="h-10 w-10 rounded-lg object-contain bg-[#0a0a0a] border border-[#1f1f1f] p-1 shrink-0"
+      draggable={false}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+    />
+  );
+}
+
+function TeamLogoSmall({ url, alt }: { url: string | null; alt: string }) {
+  if (!url) {
+    return <div className="h-8 w-8 rounded-lg bg-[#0a0a0a] border border-[#1f1f1f]" />;
+  }
+  return (
+    <img
+      src={url}
+      alt={alt}
+      className="h-8 w-8 rounded-lg object-contain bg-[#0a0a0a] border border-[#1f1f1f] p-1"
       draggable={false}
       loading="lazy"
       referrerPolicy="no-referrer"
@@ -3364,7 +3429,7 @@ function GamePickInline({
       </div>
 
       <div className="ml-auto shrink-0">
-        <div className="inline-flex items-center gap-2 px-2 py-1 rounded-md border border-white/10 bg-white/5">
+        <div className="inline-flex items-center gap-2 px-2 py-1 rounded-full border border-[#2a2a2a] bg-[#0a0a0a]">
           <span className="text-[10px] text-[#808080]">MODEL</span>
         </div>
       </div>
@@ -3374,5 +3439,3 @@ function GamePickInline({
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
 export default ModelScreen;
-
-
