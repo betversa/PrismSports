@@ -20,12 +20,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Calculator,
-  ChevronRight,
   Database,
   Flame,
   RefreshCw,
   Search,
-  Sparkles,
   Target,
   Trophy,
 } from "lucide-react";
@@ -554,12 +552,10 @@ function PremiumPanel({
 
 function QuickAction({
   title,
-  sub,
   icon: Icon,
   onClick,
 }: {
   title: string;
-  sub: string;
   icon: any;
   onClick: () => void;
 }) {
@@ -568,43 +564,17 @@ function QuickAction({
       type="button"
       onClick={onClick}
       className={[
-        "group w-full text-left rounded-2xl border p-4 sm:p-5 transition-all min-h-[56px]",
-        "hover:border-[#3b3b3b] hover:-translate-y-0.5 active:translate-y-0",
+        "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold",
+        "transition-colors hover:text-white",
       ].join(" ")}
       style={{
         borderColor: BORDER,
-        background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.22))",
+        background: "rgba(0,0,0,0.35)",
+        color: "rgba(242,241,243,0.8)",
       }}
     >
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <div
-            className="w-11 h-11 rounded-xl border flex items-center justify-center shrink-0"
-            style={{
-              borderColor: "rgba(216,146,17,0.22)",
-              background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.12))",
-              boxShadow: "0 10px 28px rgba(0,0,0,0.35)",
-            }}
-          >
-            <Icon className="w-4 h-4" style={{ color: GOLD }} />
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm sm:text-base text-white font-semibold">{title}</div>
-            <div
-              className="text-xs text-[#a7a7a7] mt-0.5"
-              style={{
-                display: "-webkit-box",
-                WebkitLineClamp: 1,
-                WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-              }}
-            >
-              {sub}
-            </div>
-          </div>
-        </div>
-        <ChevronRight className="w-4 h-4 text-[#7b7b7b] group-hover:text-white transition-colors" />
-      </div>
+      <Icon className="w-3.5 h-3.5" style={{ color: GOLD }} />
+      {title}
     </button>
   );
 }
@@ -678,18 +648,6 @@ function Chip({
       ) : null}
       {label}
     </button>
-  );
-}
-
-function StatTile({ label, value }: { label: string; value?: string }) {
-  return (
-    <div
-      className="rounded-xl border bg-black/30 px-3 py-2"
-      style={{ borderColor: BORDER }}
-    >
-      <div className={LABEL_CLASS}>{label}</div>
-      <div className={[VALUE_CLASS, "text-sm"].join(" ")}>{value ?? "—"}</div>
-    </div>
   );
 }
 
@@ -1261,11 +1219,6 @@ export function OverviewScreen() {
     });
   }, [playsToRender, searchQuery, abbrevMap]);
 
-  const activeSportLabel = latestRun?.sport_key ?? "—";
-  const mcRunLabel = latestRun?.created_at ? formatTsShort(latestRun.created_at) : "—";
-  const modelLabel = latestVersion?.version
-    ? `${latestVersion.version}${latestVersion.status ? ` • ${latestVersion.status}` : ""}`
-    : "—";
   const lastUpdatedLabel = latestVersion?.updated_at
     ? formatTsShort(latestVersion.updated_at)
     : latestRun?.created_at
@@ -1274,74 +1227,48 @@ export function OverviewScreen() {
 
   return (
     <div className="px-3 md:px-5 py-4 md:py-6 space-y-4 md:space-y-5">
-      {/* HERO */}
-      <PremiumPanel className="p-3 md:p-5">
-        <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-          <div className="min-w-0 space-y-3">
+      {/* COMPACT HEADER */}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-[18px] md:text-[20px] font-semibold text-white">Overview</h2>
             <div
-              className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
-              style={{
-                borderColor: "rgba(216,146,17,0.22)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                color: "rgba(255,255,255,0.82)",
-              }}
+              className="inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px]"
+              style={{ borderColor: BORDER, background: "rgba(0,0,0,0.35)" }}
             >
-              <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
-              Prism Command Center
-            </div>
-
-            <div>
-              <h2 className="text-[22px] md:text-[28px] font-black tracking-tight text-white">
-                Command Center
-              </h2>
-              <p className="text-sm text-[#bdbdbd] leading-relaxed mt-2 max-w-2xl">
-                A premium snapshot of live model edges, score strength, and fair pricing across the board.
-              </p>
-              <p className="text-[10px] sm:text-xs text-[#8a8a8a] leading-relaxed mt-2">
-                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
-                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-2.5">
-              <button
-                type="button"
-                onClick={() => loadAll({ soft: false })}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors"
-                style={{
-                  borderColor: BORDER,
-                  background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.18))",
-                  color: "rgba(255,255,255,0.86)",
-                }}
-                title="Refresh"
-              >
-                <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
-                Refresh
-              </button>
-
-              {error ? (
-                <div
-                  className="rounded-lg border px-3 py-2 text-xs"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.10)",
-                    background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                    color: "rgba(255,140,140,0.92)",
-                  }}
-                >
-                  Supabase error: {error}
-                </div>
-              ) : null}
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              <span className="uppercase tracking-[0.16em] text-[#cfcfcf]">Live</span>
             </div>
           </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
-            <StatTile label="Active Sport" value={activeSportLabel} />
-            <StatTile label="MC Run" value={mcRunLabel} />
-            <StatTile label="Model Version" value={modelLabel} />
-            <StatTile label="Last Updated" value={lastUpdatedLabel} />
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#a7a7a7]">
+            <span>
+              Last updated: <span className="text-white font-semibold">{lastUpdatedLabel}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => loadAll({ soft: false })}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-[11px] transition-colors"
+              style={{
+                borderColor: BORDER,
+                background: "rgba(0,0,0,0.35)",
+                color: "rgba(255,255,255,0.86)",
+              }}
+              title="Refresh"
+            >
+              <RefreshCw className={["w-3.5 h-3.5", loadingSoft ? "animate-spin" : ""].join(" ")} />
+              Refresh
+            </button>
           </div>
         </div>
-      </PremiumPanel>
+        {error ? <div className="text-[11px] text-[#ff9f9f]">Supabase error: {error}</div> : null}
+      </div>
+
+      {/* QUICK LINKS */}
+      <div className="flex flex-wrap gap-2">
+        <QuickAction title="Odds" icon={Database} onClick={() => go("/odds")} />
+        <QuickAction title="Projections" icon={Target} onClick={() => go("/monte-carlo")} />
+        <QuickAction title="All Plays" icon={Trophy} onClick={() => go("/model")} />
+      </div>
 
       {/* STICKY CONTROLS */}
       <div
@@ -1403,26 +1330,6 @@ export function OverviewScreen() {
           </div>
         </div>
       </div>
-
-      {/* QUICK LINKS */}
-      <PremiumPanel>
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <div className="text-sm text-white font-semibold">Quick Links</div>
-            <div className="text-xs text-[#a7a7a7]">Jump into core workflows.</div>
-          </div>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-          <QuickAction title="Odds" sub="See lines + history" icon={Database} onClick={() => go("/odds")} />
-          <QuickAction
-            title="Projections"
-            sub="Scores + win%"
-            icon={Calculator}
-            onClick={() => go("/monte-carlo")}
-          />
-          <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} onClick={() => go("/model")} />
-        </div>
-      </PremiumPanel>
 
       {/* TOP PLAYS */}
       <PremiumPanel>
