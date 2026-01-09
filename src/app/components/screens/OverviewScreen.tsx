@@ -561,7 +561,7 @@ function QuickAction({
       type="button"
       onClick={onClick}
       className={[
-        "group text-left rounded-xl border p-4 transition-all",
+        "group text-left rounded-xl border p-4 transition-all min-h-[48px]",
         "hover:border-[#3b3b3b] hover:-translate-y-0.5",
       ].join(" ")}
       style={{
@@ -572,7 +572,17 @@ function QuickAction({
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <div className="text-sm text-white font-semibold">{title}</div>
-          <div className="text-xs text-[#a7a7a7] mt-0.5">{sub}</div>
+          <div
+            className="text-xs text-[#a7a7a7] mt-0.5"
+            style={{
+              display: "-webkit-box",
+              WebkitLineClamp: 1,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {sub}
+          </div>
         </div>
 
         <div
@@ -698,7 +708,7 @@ function MiniStat({
 
   return (
     <div
-      className={["rounded-lg border overflow-hidden text-center aspect-square", "p-1.5", "sm:p-2.5"].join(" ")}
+      className={["rounded-lg border overflow-hidden text-center aspect-square", "p-1", "sm:p-2.5"].join(" ")}
       style={{
         borderColor: BORDER,
         background: [
@@ -921,11 +931,27 @@ function TopPlayCard({
               ) : null}
             </div>
 
-            <div className="text-[13px] sm:text-sm text-white leading-snug whitespace-normal break-words font-semibold">
+            <div
+              className="text-[13px] sm:text-sm text-white leading-snug whitespace-normal break-words font-semibold"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
               {title}
             </div>
 
-            <div className="text-[11px] sm:text-xs text-[#c7c7c7] leading-snug sm:leading-relaxed mt-0.5 sm:mt-1 whitespace-normal break-words">
+            <div
+              className="text-[11px] sm:text-xs text-[#c7c7c7] leading-snug sm:leading-relaxed mt-0.5 sm:mt-1 whitespace-normal break-words"
+              style={{
+                display: "-webkit-box",
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
+            >
               {subtitle}
             </div>
 
@@ -940,7 +966,7 @@ function TopPlayCard({
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-1.5 sm:gap-2 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2 text-xs">
           <MiniStat label="Edge" value={evText} valueClassName={evTextClass(ev)} barValue={ev} />
           <MiniStat label="Book" iconBelowLabelSrc={bookLogoSrc} showValue={false} />
           <MiniStat label="Book price" value={fmtOdds(odds)} />
@@ -1248,7 +1274,7 @@ export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
   return (
     <div className="px-3 md:px-5 py-4 md:py-6 space-y-4 md:space-y-5">
       {/* HERO */}
-      <PremiumPanel>
+      <PremiumPanel className="p-3 md:p-5">
         <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
           <div className="min-w-0 space-y-3">
             <div
@@ -1270,9 +1296,13 @@ export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
               <p className="text-sm text-[#bdbdbd] leading-relaxed mt-2 max-w-2xl">
                 A premium snapshot of live model edges, score strength, and fair pricing across the board.
               </p>
+              <p className="text-[10px] sm:text-xs text-[#8a8a8a] leading-relaxed mt-2">
+                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
+                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
+              </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-2.5">
               <button
                 type="button"
                 onClick={() => loadAll({ soft: false })}
@@ -1321,7 +1351,7 @@ export function OverviewScreen({ onNavigate }: OverviewScreenProps) {
           <div className="flex flex-wrap items-center gap-2">
             <Segmented value={tab} onChange={setTab} />
             <div className="h-5 w-px bg-[#141414] hidden sm:block" />
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-2.5">
               <Chip active={bookFilter === "any"} label="Any" onClick={() => setBookFilter("any")} />
               <Chip
                 active={bookFilter === "draftkings"}
