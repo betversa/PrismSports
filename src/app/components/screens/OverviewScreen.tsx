@@ -28,6 +28,7 @@ import {
   Target,
   Trophy,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 /* =========================================================
@@ -548,17 +549,17 @@ function QuickAction({
   title,
   sub,
   icon: Icon,
-  href,
+  onClick,
 }: {
   title: string;
   sub: string;
   icon: any;
-  href: string;
+  onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      onClick={() => (window.location.href = href)}
+      onClick={onClick}
       className={[
         "group text-left rounded-xl border p-4 transition-all",
         "hover:border-[#3b3b3b] hover:-translate-y-0.5",
@@ -955,6 +956,7 @@ function TopPlayCard({
 ========================================================= */
 
 export function OverviewScreen() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [loadingSoft, setLoadingSoft] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -974,6 +976,8 @@ export function OverviewScreen() {
   // ✅ Soft-book filter ONLY
   const [bookFilter, setBookFilter] = useState<SoftBookFilter>("any");
   const [search, setSearch] = useState("");
+
+  const go = (href: string) => router.push(href);
 
   async function loadAll({ soft }: { soft?: boolean } = {}) {
     try {
@@ -1377,9 +1381,14 @@ export function OverviewScreen() {
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-          <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
-          <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
-          <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
+          <QuickAction title="Odds" sub="See lines + history" icon={Database} onClick={() => go("/odds")} />
+          <QuickAction
+            title="Projections"
+            sub="Scores + win%"
+            icon={Calculator}
+            onClick={() => go("/monte-carlo")}
+          />
+          <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} onClick={() => go("/model")} />
         </div>
       </PremiumPanel>
 
