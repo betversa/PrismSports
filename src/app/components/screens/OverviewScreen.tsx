@@ -23,7 +23,6 @@ import {
   Database,
   Flame,
   RefreshCw,
-  Sparkles,
   Target,
   Trophy,
 } from "lucide-react";
@@ -505,17 +504,16 @@ function QuickAction({
   href: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={() => (window.location.href = href)}
+    <a
+      href={href}
       className={[
-        "text-left rounded-xl border p-4 transition-colors",
-        "hover:border-[#3a3a3a]",
+        "group text-left rounded-2xl border p-4 transition-colors",
+        "hover:border-[#3a3a3a] hover:bg-white/5",
       ].join(" ")}
       style={{
         borderColor: BORDER,
         background:
-          "linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012))",
+          "linear-gradient(160deg, rgba(255,255,255,0.05), rgba(255,255,255,0.012))",
       }}
     >
       <div className="flex items-center justify-between gap-4">
@@ -525,17 +523,17 @@ function QuickAction({
         </div>
 
         <div
-          className="w-9 h-9 rounded-lg border flex items-center justify-center shrink-0"
+          className="w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 transition-transform group-hover:-translate-y-0.5"
           style={{
             borderColor: "rgba(216,146,17,0.22)",
             background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.10))",
-            boxShadow: "0 10px 28px rgba(0,0,0,0.35)",
+            boxShadow: "0 12px 28px rgba(0,0,0,0.4)",
           }}
         >
           <Icon className="w-4 h-4" style={{ color: GOLD }} />
         </div>
       </div>
-    </button>
+    </a>
   );
 }
 
@@ -1143,108 +1141,96 @@ export function OverviewScreen() {
 
   return (
     <div className="space-y-8 sm:space-y-10">
-      {/* HERO */}
-      <div
-        className="relative overflow-hidden rounded-2xl border p-4 sm:p-6"
+      <section
+        className="rounded-2xl border p-4 sm:p-6"
         style={{
           borderColor: "rgba(255,255,255,0.08)",
-          background: PANEL,
+          background: "linear-gradient(140deg, rgba(255,255,255,0.04), rgba(0,0,0,0.5))",
         }}
       >
-        <div className="pointer-events-none absolute inset-0">
-          <div
-            className="absolute inset-0"
-            style={{
-              background: [
-                "radial-gradient(900px 260px at 18% 0%, rgba(216,146,17,0.16), transparent 60%)",
-                `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
-                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
-                "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.86) 100%)",
-              ].join(", "),
-            }}
-          />
-
-          <div
-            className="absolute left-0 right-0 top-0 h-[1px] opacity-75"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.10), rgba(255,255,255,0.0))",
-            }}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
-            }}
-          />
-        </div>
-
-        <div className="relative space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-            <div className="min-w-0">
-              <div
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
-                style={{
-                  borderColor: "rgba(216,146,17,0.22)",
-                  background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                  color: "rgba(255,255,255,0.82)",
-                }}
-              >
-                <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
-                Prism Command Center
-              </div>
-
-              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
-                Best Plays Today <span className="text-[#7b7b7b]">—</span> Live
-              </h2>
-
-              <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl">
-                Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
-              </p>
-
-              <div className="text-[11px] text-[#a7a7a7] mt-2">
-                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
-                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
-              </div>
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div className="min-w-0 space-y-3">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.3em] text-[#9c9c9c]">
+              <span className="inline-flex h-2 w-2 rounded-full" style={{ background: GOLD }} />
+              Overview
             </div>
+            <div>
+              <h2 className="text-2xl sm:text-3xl text-white tracking-tight">Top Plays Hub</h2>
+              <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl mt-1">
+                Track high-value opportunities with book vs fair odds, confidence scoring, and filtered EV gates.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[11px] text-[#a7a7a7]">
+              <span className="rounded-full border px-2.5 py-1" style={{ borderColor: BORDER }}>
+                Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS}
+              </span>
+              <span className="rounded-full border px-2.5 py-1" style={{ borderColor: BORDER }}>
+                Score ≥ {TOP_SCORE_MIN}
+              </span>
+              <span className="rounded-full border px-2.5 py-1" style={{ borderColor: BORDER }}>
+                Games EV ≤ {TOP_MAX_EV_PCT}%
+              </span>
+              <span className="rounded-full border px-2.5 py-1" style={{ borderColor: BORDER }}>
+                Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
+              </span>
+            </div>
+          </div>
 
+          <div className="flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
             <button
               type="button"
               onClick={() => loadAll({ soft: false })}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors w-full sm:w-auto"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-xs transition-colors w-full sm:w-auto"
               style={{
-                borderColor: "rgba(255,255,255,0.10)",
+                borderColor: "rgba(255,255,255,0.12)",
                 background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.18))",
-                color: "rgba(255,255,255,0.86)",
+                color: "rgba(255,255,255,0.9)",
               }}
               title="Refresh"
             >
               <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
-              Refresh
+              Refresh data
             </button>
-          </div>
-
-          {error ? (
             <div
-              className="rounded-lg border p-3 text-xs"
+              className="rounded-lg border px-4 py-2 text-xs text-[#bdbdbd] flex items-center justify-between gap-2"
               style={{
-                borderColor: "rgba(255,255,255,0.10)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                color: "rgba(255,140,140,0.92)",
+                borderColor: BORDER,
+                background: "linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.25))",
               }}
             >
-              Supabase error: {error}
+              <span className="uppercase tracking-[0.2em] text-[#7c7c7c]">Mode</span>
+              <span className="text-white/90">Live</span>
             </div>
-          ) : null}
-
-          <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-            <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
-            <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
-            <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
           </div>
         </div>
-      </div>
+
+        {error ? (
+          <div
+            className="mt-4 rounded-lg border p-3 text-xs"
+            style={{
+              borderColor: "rgba(255,255,255,0.10)",
+              background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
+              color: "rgba(255,140,140,0.92)",
+            }}
+          >
+            Supabase error: {error}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm text-white">Quick Links</h3>
+            <div className="text-xs text-[#9a9a9a]">Jump straight to other workspaces.</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
+          <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
+          <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
+          <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
+        </div>
+      </section>
 
       {/* TOP PLAYS */}
       <section>
