@@ -83,8 +83,6 @@ const PRISM_MUTED = "rgba(232,232,232,0.60)";
 const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
 const BOARD_STICKY_BG = BOARD_BG;
 const TABLE_HEADER_BG = "#0b0b0b";
-const FILTER_ROW_HEIGHT = 48;
-const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
 const DATE_BAR_HEIGHT = 44;
 const HEADER_ROW_HEIGHT = 40;
 
@@ -2398,7 +2396,7 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
         className="p-0"
         style={{
           position: "sticky",
-          top: "var(--thead-h, 0px)",
+          top: "calc(var(--topbar-h, 0px) + var(--thead-h, 0px))",
           zIndex: 60,
           background: BOARD_STICKY_BG,
         }}
@@ -2442,7 +2440,7 @@ function TableHeaderRow({
 }) {
   const stickyCellStyle: React.CSSProperties = {
     position: "sticky",
-    top: 0,
+    top: "var(--topbar-h, 0px)",
     zIndex: 101,
     background: TABLE_HEADER_BG,
     backgroundClip: "padding-box",
@@ -2452,7 +2450,7 @@ function TableHeaderRow({
       ref={headerRef}
       style={{
         position: "sticky",
-        top: 0,
+        top: "var(--topbar-h, 0px)",
         zIndex: 100,
         background: TABLE_HEADER_BG,
       }}
@@ -2735,9 +2733,11 @@ export function OddsScreen({
   const [detailsTab, setDetailsTab] = useState<DetailsTab>("pred");
 
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
+  const [topBarH, setTopBarH] = useState(0);
   const [bookOrder, setBookOrder] = useState<BookKey[]>(BOOKS);
   const [draggingBook, setDraggingBook] = useState<BookKey | null>(null);
   const dragBookRef = useRef<BookKey | null>(null);
+  const topBarRef = useRef<HTMLDivElement>(null);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const tableHeadRef = useRef<HTMLTableSectionElement>(null);
 
@@ -2858,6 +2858,26 @@ export function OddsScreen({
       // ignore
     }
   }, [bookOrder]);
+
+  useLayoutEffect(() => {
+    if (!topBarRef.current) return;
+    const barEl = topBarRef.current;
+
+    const update = () => {
+      const height = barEl.getBoundingClientRect().height;
+      setTopBarH(height);
+    };
+
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(barEl);
+    window.addEventListener("resize", update);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!tableScrollRef.current || !tableHeadRef.current) return;
@@ -3020,10 +3040,6 @@ export function OddsScreen({
     }
   };
 
-  // “Top bar” height for sticky header computations:
-  // - Sports tabs bar ~ 44px
-  // - Filters bar ~ 60px
-  // => sticky header row uses top-[104px] in TableHeaderRow.
   const topSport = sportLabelForKey(sportKey);
   const lastUpdatedAge = useMemo(() => minutesSinceIso(lastUpdatedIso), [lastUpdatedIso]);
   const freshness = useMemo(() => {
@@ -3085,17 +3101,16 @@ export function OddsScreen({
             {/* ===========================
                 TOP SPORTS + FILTERS BAR
             =========================== */}
-            <div className="flex flex-col" style={{ height: FILTERS_BAR_HEIGHT }}>
+            <div ref={topBarRef} className="flex flex-col">
               <div
-                className="px-2 md:px-0"
+                className="px-3 py-2 md:px-0 md:py-0 md:h-12"
                 style={{
-                  height: FILTER_ROW_HEIGHT,
                   background: BOARD_BG,
                   borderBottom: `1px solid ${PRISM_BORDER}`,
                   backdropFilter: "blur(10px)",
                 }}
               >
-                <div className="h-full flex flex-col md:flex-row md:items-center gap-2">
+                <div className="flex flex-col md:flex-row md:items-center gap-y-2 gap-x-2">
                   <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                     {SPORT_TABS.map((t) => {
                       const active =
@@ -3136,7 +3151,7 @@ export function OddsScreen({
                     })}
                   </div>
 
-                  <div className="flex flex-1 items-center gap-2 md:ml-auto">
+                  <div className="flex flex-1 flex-col md:flex-row md:items-center gap-2 md:ml-auto">
                     <div className="w-full md:w-auto">
                       <TextInput
                         value={query}
@@ -3159,16 +3174,15 @@ export function OddsScreen({
               </div>
 
               <div
-                className="px-2 md:px-0"
+                className="px-3 py-2 md:px-0 md:py-0 md:h-12"
                 style={{
-                  height: FILTER_ROW_HEIGHT,
                   background: BOARD_BG,
                   borderBottom: `1px solid ${PRISM_BORDER}`,
                   backdropFilter: "blur(10px)",
                 }}
               >
-                <div className="h-full flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-y-2 gap-x-3">
+                  <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                     <SelectPill
                       value={market}
                       onChange={(v) => setMarket(v as Market)}
@@ -3195,7 +3209,7 @@ export function OddsScreen({
                     <DateReminder label={selectedDateLabel} />
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                  <div className="flex flex-wrap items-center gap-2 w-full md:w-auto md:justify-end">
                     <SelectPill
                       value={oddsFormat}
                       onChange={(v) => setOddsFormat(v as OddsFormat)}
@@ -3331,11 +3345,14 @@ export function OddsScreen({
                   ) : (
                     <div
                       ref={tableScrollRef}
-                      className="max-h-[calc(100vh-240px)] overflow-auto"
-                      style={{
-                        scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24,
-                        background: BOARD_BG,
-                      }}
+                      className="max-h-[calc(100vh-240px)] overflow-auto md:[--topbar-h:0px]"
+                      style={
+                        {
+                          scrollPaddingTop: "calc(var(--topbar-h, 0px) + var(--thead-h, 0px) + 24px)",
+                          background: BOARD_BG,
+                          "--topbar-h": `${topBarH}px`,
+                        } as React.CSSProperties
+                      }
                     >
                       <table
                         className="w-full table-fixed min-w-[1080px]"
