@@ -19,6 +19,9 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { calcBetAmount } from "../../../lib/odds/bet";
+import { clampNumber, safeNumber } from "../../../lib/odds/math";
+import { formatAmerican, formatMoney, formatPercent } from "../../../lib/odds/format";
 import {
   ResponsiveContainer,
   LineChart,
@@ -164,33 +167,15 @@ const UNDER_RED = "#ef4444";
    Helpers
 ========================================================= */
 
-function safeNum(n: any, fallback = 0) {
-  const x = Number(n);
-  return Number.isFinite(x) ? x : fallback;
-}
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, n));
-}
-
-function american(odds: number) {
-  if (!Number.isFinite(odds)) return "—";
-  return odds > 0 ? `+${Math.round(odds)}` : `${Math.round(odds)}`;
-}
-
-function pct(n: number, digits = 1) {
+const safeNum = safeNumber;
+const clamp = clampNumber;
+const american = (odds: number) => formatAmerican(odds);
+const pct = (n: number, digits = 1) => {
   const x = safeNum(n, 0);
-  return `${x > 0 ? "+" : ""}${x.toFixed(digits)}%`;
-}
-
-function formatMoney(n: number) {
-  if (!Number.isFinite(n)) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(n);
-}
+  const formatted = formatPercent(Math.abs(x), digits);
+  const sign = x < 0 ? "-" : x > 0 ? "+" : "";
+  return `${sign}${formatted}`;
+};
 
 function normCanon(s?: string | null) {
   return (s ?? "").trim().toLowerCase();
@@ -315,13 +300,6 @@ function uiMarketFromRaw(raw: string | null): UiMarket {
   if (k === "player_rebounds") return "Rebounds";
   if (k === "player_assists") return "Assists";
   return "3PM";
-}
-
-function calcBetAmount(bankroll: number, kellyFraction: number, kellyFactor: number) {
-  const b = Math.max(0, safeNum(bankroll, 0));
-  const f = clamp(safeNum(kellyFraction, 0), 0, 1);
-  const k = clamp(safeNum(kellyFactor, 0), 0, 1);
-  return b * f * k;
 }
 
 /* =========================================================
@@ -637,7 +615,7 @@ export function PropsScreen() {
             <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
               Bankroll:{" "}
               <span className="text-white">
-                {bankroll ? formatMoney(bankroll) : "—"}
+                {bankroll ? formatMoney(bankroll, 0) : "—"}
               </span>
             </div>
             <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
@@ -896,7 +874,7 @@ function PropRowDesktop({
       <td className="p-3 text-center">
         <span className="px-2 py-1 rounded border text-[10px] bg-[#0b0b0b] border-[#2a2a2a] text-white tabular-nums">
           {settingsReady && Number.isFinite(betAmount) && betAmount > 0
-            ? formatMoney(betAmount)
+            ? formatMoney(betAmount, 0)
             : "—"}
         </span>
       </td>
@@ -1013,7 +991,7 @@ function PropCardMobile({
           <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-2">
             <div className="text-[10px] text-[#6e6e6e]">Bet $</div>
             <div className="text-[12px] text-[#d4af37] tabular-nums mt-0.5">
-              {settingsReady && Number.isFinite(betAmount) && betAmount > 0 ? formatMoney(betAmount) : "—"}
+              {settingsReady && Number.isFinite(betAmount) && betAmount > 0 ? formatMoney(betAmount, 0) : "—"}
             </div>
           </div>
 
@@ -1146,7 +1124,7 @@ function PropDetailsModal({
 
                 <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
                 <div className="text-[#d4af37] font-semibold tabular-nums">
-                  {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
+                  {settingsReady && betAmount > 0 ? formatMoney(betAmount, 0) : "—"}
                 </div>
               </div>
             </div>
@@ -1656,4 +1634,3 @@ function PropHitRatePanel({ prop }: { prop: AggregatedProp }) {
     </div>
   );
 }
-

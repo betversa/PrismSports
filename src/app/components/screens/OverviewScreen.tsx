@@ -28,6 +28,9 @@ import {
   Trophy,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+import { clampNumber, safeNumberOrNull } from "../../../lib/odds/math";
+import { formatOddsLine, formatOddsShort } from "../../../lib/odds/format";
+import { normalizeEvPct, withinOddsGate } from "../../../lib/odds/overview";
 
 /* =========================================================
    TYPES
@@ -141,14 +144,7 @@ type SoftBookFilter = "any" | "draftkings" | "fanduel" | "betmgm";
    HELPERS
 ========================================================= */
 
-function safeNum(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function clamp(n: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, n));
-}
+const safeNum = safeNumberOrNull;
 
 function isFutureish(ts?: string | null) {
   if (!ts) return true;
@@ -208,18 +204,8 @@ function titleCase(s: string) {
     .join(" ");
 }
 
-function fmtOdds(odds?: number | null) {
-  if (odds == null) return "—";
-  const n = Math.trunc(Number(odds));
-  if (!Number.isFinite(n) || n === 0) return "—";
-  return n > 0 ? `+${n}` : `${n}`;
-}
-
-function fmtLine(line?: number | null) {
-  const n = safeNum(line);
-  if (n == null) return "";
-  return n > 0 ? `+${n}` : `${n}`;
-}
+const fmtOdds = formatOddsShort;
+const fmtLine = formatOddsLine;
 
 function formatTsShort(ts: string) {
   const d = new Date(ts);
@@ -232,27 +218,20 @@ function formatTsShort(ts: string) {
   });
 }
 
-function getEvPct(row: { ev_pct?: number | null; ev?: number | null }) {
-  const v = row.ev_pct ?? row.ev ?? null;
-  if (v == null) return null;
-  const n = safeNum(v);
-  if (n == null) return null;
-  if (Math.abs(n) <= 1) return n * 100; // supports 0.0212
-  return n;
-}
+const getEvPct = normalizeEvPct;
 
 function getGameScore(row: EvPlayRow) {
   const s = row.confidence_score ?? row.score ?? null;
   const n = safeNum(s);
   if (n == null) return null;
-  return clamp(n, 0, 100);
+  return clampNumber(n, 0, 100);
 }
 
 function getPropScore(row: PropEvRow) {
   const s = row.score ?? null;
   const n = safeNum(s);
   if (n == null) return null;
-  return clamp(n, 0, 100);
+  return clampNumber(n, 0, 100);
 }
 
 function getGameOdds(row: EvPlayRow) {
@@ -291,7 +270,7 @@ function evTextClass(ev: number | null) {
 
 function evBarStyle(ev: number | null): React.CSSProperties {
   if (ev == null) return { width: "0%" };
-  const mag = clamp(ev, 0, 12);
+  const mag = clampNumber(ev, 0, 12);
   const w = (mag / 12) * 100;
 
   const color =
@@ -304,10 +283,7 @@ function evBarStyle(ev: number | null): React.CSSProperties {
   return { width: `${w}%`, background: color };
 }
 
-function withinOddsGate(odds: number | null) {
-  if (odds == null) return false;
-  return odds >= TOP_MIN_ODDS && odds <= TOP_MAX_ODDS;
-}
+const withinOddsGateLocal = (odds: number | null) => withinOddsGate(odds, TOP_MIN_ODDS, TOP_MAX_ODDS);
 
 function withinMaxEvGate(ev: number | null) {
   if (ev == null) return false;
@@ -1050,7 +1026,7 @@ export function OverviewScreen() {
       const ev = getEvPct(r);
       const odds = getGameOdds(r);
 
-      if (!withinOddsGate(odds)) continue;
+      if (!withinOddsGateLocal(odds)) continue;
       if (!withinMaxEvGate(ev)) continue;
 
       const k = keyGamePlay(r);
@@ -1080,7 +1056,7 @@ export function OverviewScreen() {
       const ev = getEvPct(r);
       const odds = getPropOdds(r);
 
-      if (!withinOddsGate(odds)) continue;
+      if (!withinOddsGateLocal(odds)) continue;
       if (!withinPropEvRange(ev)) continue;
 
       const k = keyPropPlay(r);

@@ -15,6 +15,15 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../lib/supabaseClient";
 import type { SportKey } from "../../App";
+import { medianOrNull, safeNumber } from "../../../lib/odds/math";
+import {
+  formatAmerican,
+  formatLinePlain,
+  formatMaybeInt,
+  formatMaybeNumber,
+  formatOuLine,
+  formatSignedNumber,
+} from "../../../lib/odds/format";
 
 /* =========================================================
    Types
@@ -143,34 +152,7 @@ function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
 
-function safeNum(n: any, fallback = 0) {
-  const x = Number(n);
-  return Number.isFinite(x) ? x : fallback;
-}
-
-function american(odds: number | null) {
-  if (odds == null || !Number.isFinite(odds)) return "—";
-  const v = Math.round(odds);
-  return v > 0 ? `+${v}` : `${v}`;
-}
-
-function fmtSigned1(x: number | null) {
-  if (x == null || !Number.isFinite(x)) return "—";
-  const v = Math.round(x * 10) / 10;
-  return `${v > 0 ? "+" : ""}${v.toFixed(1)}`;
-}
-
-function fmtOU(line: number | null, kind: "o" | "u") {
-  if (line == null || !Number.isFinite(line)) return "—";
-  const v = Math.round(line * 10) / 10;
-  return `${kind}${v.toFixed(1)}`;
-}
-
-function fmtLinePlain(line: number | null) {
-  if (line == null || !Number.isFinite(line)) return "—";
-  const v = Math.round(line * 10) / 10;
-  return v.toFixed(1);
-}
+const fmtAmerican = (odds: number | null) => formatAmerican(odds ?? NaN);
 
 function fmtDateCentral(iso: string | null) {
   if (!iso) return "—";
@@ -200,17 +182,6 @@ function formatTs(ts: string | null) {
   return d.toLocaleString();
 }
 
-function fmtMaybeNumber(v: any, digits = 2) {
-  const x = Number(v);
-  if (!Number.isFinite(x)) return "—";
-  return x.toFixed(digits);
-}
-
-function fmtMaybeInt(v: any) {
-  const x = Number(v);
-  if (!Number.isFinite(x)) return "—";
-  return String(Math.round(x));
-}
 
 const normKey = (s: string) =>
   (s ?? "")
@@ -242,13 +213,6 @@ function pushMap(map: Map<string, number[]>, key: string, v: number) {
   map.set(key, arr);
 }
 
-function medianOrNull(nums: number[]) {
-  const arr = nums.filter((n) => Number.isFinite(n)).slice().sort((a, b) => a - b);
-  if (!arr.length) return null;
-  const mid = Math.floor(arr.length / 2);
-  if (arr.length % 2 === 1) return arr[mid];
-  return (arr[mid - 1] + arr[mid]) / 2;
-}
 
 /* =========================================================
    UI atoms
@@ -494,8 +458,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
         {/* Cover% is BAR-ONLY: no cover% text; margin stays as number */}
         <Row
           label="Margin"
-          aTop={fmtSigned1(away.projMarginTeam)}
-          hTop={fmtSigned1(home.projMarginTeam)}
+          aTop={formatSignedNumber(away.projMarginTeam)}
+          hTop={formatSignedNumber(home.projMarginTeam)}
           aBar={away.coverProbTeam}
           hBar={home.coverProbTeam}
           aTone={winnerToneAway}
@@ -505,9 +469,9 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
         {/* Total: over/under are BAR-ONLY; projected total stays as number */}
         <Row
           label="Total"
-          aTop={fmtLinePlain(away.projTotal)}
+          aTop={formatLinePlain(away.projTotal)}
           aBottom="Over"
-          hTop={fmtLinePlain(home.projTotal)}
+          hTop={formatLinePlain(home.projTotal)}
           hBottom="Under"
           aBar={away.overProb}
           hBar={home.underProb}
@@ -518,19 +482,19 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
         {/* Consensus spread */}
         <Row
           label="Spread"
-          aTop={away.consSpreadLineTeam == null ? "—" : fmtSigned1(away.consSpreadLineTeam)}
-          aBottom={away.consSpreadLineTeam == null ? undefined : american(away.consSpreadOddsTeam)}
-          hTop={home.consSpreadLineTeam == null ? "—" : fmtSigned1(home.consSpreadLineTeam)}
-          hBottom={home.consSpreadLineTeam == null ? undefined : american(home.consSpreadOddsTeam)}
+          aTop={away.consSpreadLineTeam == null ? "—" : formatSignedNumber(away.consSpreadLineTeam)}
+          aBottom={away.consSpreadLineTeam == null ? undefined : fmtAmerican(away.consSpreadOddsTeam)}
+          hTop={home.consSpreadLineTeam == null ? "—" : formatSignedNumber(home.consSpreadLineTeam)}
+          hBottom={home.consSpreadLineTeam == null ? undefined : fmtAmerican(home.consSpreadOddsTeam)}
         />
 
         {/* Consensus total */}
         <Row
           label="Total"
-          aTop={away.consTotalLine == null ? "—" : fmtOU(away.consTotalLine, "o")}
-          aBottom={away.consTotalLine == null ? undefined : american(away.consTotalOverOdds)}
-          hTop={home.consTotalLine == null ? "—" : fmtOU(home.consTotalLine, "u")}
-          hBottom={home.consTotalLine == null ? undefined : american(home.consTotalUnderOdds)}
+          aTop={away.consTotalLine == null ? "—" : formatOuLine(away.consTotalLine, "o")}
+          aBottom={away.consTotalLine == null ? undefined : fmtAmerican(away.consTotalOverOdds)}
+          hTop={home.consTotalLine == null ? "—" : formatOuLine(home.consTotalLine, "u")}
+          hBottom={home.consTotalLine == null ? undefined : fmtAmerican(home.consTotalUnderOdds)}
         />
       </div>
     </div>
@@ -562,14 +526,14 @@ type ModelModalState = {
 };
 
 const TEAM_RATINGS_FIELDS: Array<{ key: string; label: string; fmt?: (v: any) => string }> = [
-  { key: "power_rank", label: "Power Rank", fmt: (v) => fmtMaybeInt(v) },
-  { key: "engine_power", label: "Net Rating", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "engine_adj_off", label: "Adj Off", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "engine_adj_def", label: "Adj Def", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "pace", label: "Pace", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "true_hca", label: "True HCA", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "sigma_margin_100", label: "Sigma Margin", fmt: (v) => fmtMaybeNumber(v, 2) },
-  { key: "sigma_total_100", label: "Sigma Total", fmt: (v) => fmtMaybeNumber(v, 2) },
+  { key: "power_rank", label: "Power Rank", fmt: (v) => formatMaybeInt(v) },
+  { key: "engine_power", label: "Net Rating", fmt: (v) => formatMaybeNumber(v, 2) },
+  { key: "engine_adj_off", label: "Adj Off", fmt: (v) => formatMaybeNumber(v, 2) },
+  { key: "engine_adj_def", label: "Adj Def", fmt: (v) => formatMaybeNumber(v, 2) },
+  { key: "pace", label: "Pace", fmt: (v) => formatMaybeNumber(v, 2) },
+  { key: "true_hca", label: "True HCA", fmt: (v) => formatMaybeNumber(v, 2) },
+  { key: "sigma_margin_100", label: "Sigma Margin", fmt: (v) => formatMaybeNumber(v, 2) },
+  { key: "sigma_total_100", label: "Sigma Total", fmt: (v) => formatMaybeNumber(v, 2) },
 ];
 
 // NCAAB % stored as .456 => render 45.6%
@@ -1082,17 +1046,19 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
   const underTone: BarTone = (ev.home.underProb ?? 0) >= (ev.away.overProb ?? 0) ? "green" : "red";
 
   // Consensus stacks (text is fine here)
-  const consSpreadAwayTop = ev.away.consSpreadLineTeam == null ? "—" : fmtSigned1(ev.away.consSpreadLineTeam);
-  const consSpreadAwayBottom = ev.away.consSpreadLineTeam == null ? undefined : american(ev.away.consSpreadOddsTeam);
+  const consSpreadAwayTop =
+    ev.away.consSpreadLineTeam == null ? "—" : formatSignedNumber(ev.away.consSpreadLineTeam);
+  const consSpreadAwayBottom = ev.away.consSpreadLineTeam == null ? undefined : fmtAmerican(ev.away.consSpreadOddsTeam);
 
-  const consSpreadHomeTop = ev.home.consSpreadLineTeam == null ? "—" : fmtSigned1(ev.home.consSpreadLineTeam);
-  const consSpreadHomeBottom = ev.home.consSpreadLineTeam == null ? undefined : american(ev.home.consSpreadOddsTeam);
+  const consSpreadHomeTop =
+    ev.home.consSpreadLineTeam == null ? "—" : formatSignedNumber(ev.home.consSpreadLineTeam);
+  const consSpreadHomeBottom = ev.home.consSpreadLineTeam == null ? undefined : fmtAmerican(ev.home.consSpreadOddsTeam);
 
-  const consTotalOverTop = ev.away.consTotalLine == null ? "—" : fmtOU(ev.away.consTotalLine, "o");
-  const consTotalOverBottom = ev.away.consTotalLine == null ? undefined : american(ev.away.consTotalOverOdds);
+  const consTotalOverTop = ev.away.consTotalLine == null ? "—" : formatOuLine(ev.away.consTotalLine, "o");
+  const consTotalOverBottom = ev.away.consTotalLine == null ? undefined : fmtAmerican(ev.away.consTotalOverOdds);
 
-  const consTotalUnderTop = ev.home.consTotalLine == null ? "—" : fmtOU(ev.home.consTotalLine, "u");
-  const consTotalUnderBottom = ev.home.consTotalLine == null ? undefined : american(ev.home.consTotalUnderOdds);
+  const consTotalUnderTop = ev.home.consTotalLine == null ? "—" : formatOuLine(ev.home.consTotalLine, "u");
+  const consTotalUnderBottom = ev.home.consTotalLine == null ? undefined : fmtAmerican(ev.home.consTotalUnderOdds);
 
   return (
     <div
@@ -1186,8 +1152,8 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
         {/* Margin (margin numbers still useful; cover% is BAR-ONLY) */}
         <MetricStack
           title="Margin"
-          top={fmtSigned1(ev.away.projMarginTeam)}
-          bottom={fmtSigned1(ev.home.projMarginTeam)}
+          top={formatSignedNumber(ev.away.projMarginTeam)}
+          bottom={formatSignedNumber(ev.home.projMarginTeam)}
           hintTop={ev.away.teamAbbr}
           hintBottom={ev.home.teamAbbr}
           bars={{
@@ -1203,8 +1169,8 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
         {/* Total (projected total stays; over/under is BAR-ONLY) */}
         <MetricStack
           title="Total"
-          top={fmtLinePlain(ev.home.projTotal)}
-          bottom={fmtLinePlain(ev.away.projTotal)}
+          top={formatLinePlain(ev.home.projTotal)}
+          bottom={formatLinePlain(ev.away.projTotal)}
           hintTop="Over"
           hintBottom="Under"
           bars={{
@@ -1531,8 +1497,8 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const homeAbbr = abbrMap.get(homeKey) ?? "HOME";
       const awayAbbr = abbrMap.get(awayKey) ?? "AWAY";
 
-      const marginHome = safeNum(r.projected_margin_home, 0);
-      const totalProj = safeNum(r.projected_total, 0);
+      const marginHome = safeNumber(r.projected_margin_home, 0);
+      const totalProj = safeNumber(r.projected_total, 0);
 
       const homePtsStored = Number(r.projected_home_points);
       const awayPtsStored = Number(r.projected_away_points);
@@ -1849,4 +1815,3 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 };
 
 export default MonteCarloScreen;
-

@@ -29,6 +29,8 @@ import React, {
   useState,
 } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { americanToDecimal, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
+import { formatOddsPrice, formatPercent } from "../../../lib/odds/format";
 import {
   ResponsiveContainer,
   LineChart,
@@ -301,29 +303,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
    ODDS FORMATTERS
 ========================================================= */
 
-function americanToDecimal(american: number): number {
-  if (!Number.isFinite(american) || american === 0) return NaN;
-  if (american > 0) return 1 + american / 100;
-  return 1 + 100 / Math.abs(american);
-}
-function fmtPrice(odds: number | null, fmt: OddsFormat) {
-  if (odds == null) return "—";
-  if (fmt === "american") return String(odds);
-  const dec = americanToDecimal(odds);
-  if (!Number.isFinite(dec)) return "—";
-  return dec.toFixed(2);
-}
+const fmtPrice = (odds: number | null, fmt: OddsFormat) => formatOddsPrice(odds, fmt);
 
 /* =========================================================
    CONSENSUS HELPERS
 ========================================================= */
-
-function median(nums: number[]) {
-  const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
-  if (!a.length) return null;
-  const mid = Math.floor(a.length / 2);
-  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
-}
 
 type CellParts = { top: string; bottom?: string };
 
@@ -1143,30 +1127,7 @@ type MonteCarloRow = {
   under_prob?: number | null;
 };
 
-function toNum(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-function toProb01(v: number | null | undefined): number | null {
-  if (v == null) return null;
-  const x = v > 1.5 ? v / 100 : v; // supports 0-100 or 0-1
-  if (!Number.isFinite(x)) return null;
-  return Math.max(0, Math.min(1, x));
-}
-function pct(v01: number | null | undefined) {
-  if (v01 == null) return "—";
-  return `${(v01 * 100).toFixed(1)}%`;
-}
-function probToAmerican(p: number | null): string {
-  if (p == null || p <= 0 || p >= 1) return "—";
-  if (p >= 0.5) {
-    const a = -Math.round((p / (1 - p)) * 100);
-    return String(a);
-  } else {
-    const a = Math.round(((1 - p) / p) * 100);
-    return `+${a}`;
-  }
-}
+const pct = (v01: number | null | undefined) => (v01 == null ? "—" : formatPercent(v01 * 100, 1));
 function winColors(awayP: number | null, homeP: number | null) {
   if (awayP == null || homeP == null) return { awayHex: "rgba(255,255,255,0.85)", homeHex: "rgba(255,255,255,0.85)" };
   if (awayP > homeP) return { awayHex: "#34d399", homeHex: "#f87171" };
@@ -1630,24 +1591,24 @@ function GameDetailsModal({
         home_team: r.home_team ?? r.homeTeam ?? null,
         away_team: r.away_team ?? r.awayTeam ?? null,
 
-        projected_home_points: toNum(r.projected_home_points),
-        projected_away_points: toNum(r.projected_away_points),
+        projected_home_points: safeNumberOrNull(r.projected_home_points),
+        projected_away_points: safeNumberOrNull(r.projected_away_points),
 
-        home_win_prob: toNum(r.home_win_prob),
-        away_win_prob: toNum(r.away_win_prob),
+        home_win_prob: safeNumberOrNull(r.home_win_prob),
+        away_win_prob: safeNumberOrNull(r.away_win_prob),
 
-        projected_margin_home: toNum(r.projected_margin_home),
-        projected_total: toNum(r.projected_total),
+        projected_margin_home: safeNumberOrNull(r.projected_margin_home),
+        projected_total: safeNumberOrNull(r.projected_total),
 
-        spread_line_home: toNum(r.spread_line_home),
-        home_cover_prob: toNum(r.home_cover_prob),
-        cover_push_prob: toNum(r.cover_push_prob),
-        away_cover_prob: toNum(r.away_cover_prob),
+        spread_line_home: safeNumberOrNull(r.spread_line_home),
+        home_cover_prob: safeNumberOrNull(r.home_cover_prob),
+        cover_push_prob: safeNumberOrNull(r.cover_push_prob),
+        away_cover_prob: safeNumberOrNull(r.away_cover_prob),
 
-        total_line: toNum(r.total_line),
-        over_prob: toNum(r.over_prob),
-        total_push_prob: toNum(r.total_push_prob),
-        under_prob: toNum(r.under_prob),
+        total_line: safeNumberOrNull(r.total_line),
+        over_prob: safeNumberOrNull(r.over_prob),
+        total_push_prob: safeNumberOrNull(r.total_push_prob),
+        under_prob: safeNumberOrNull(r.under_prob),
       };
 
       setPredRow(row);
