@@ -56,15 +56,21 @@ type MonteCarloResultRow = {
   away_win_prob: number | null;
 };
 
-type AiAdjustedRow = {
+type MlAdjustmentRow = {
   event_id: string;
   run_id: string;
-  ai_home_win_prob: number | null;
-  ai_away_win_prob: number | null;
-  ai_home_cover_prob: number | null;
-  ai_away_cover_prob: number | null;
-  ai_over_prob: number | null;
-  ai_under_prob: number | null;
+  base_home_win_prob: number | null;
+  base_away_win_prob: number | null;
+  adj_home_win_prob: number | null;
+  adj_away_win_prob: number | null;
+  base_home_cover_prob: number | null;
+  base_away_cover_prob: number | null;
+  adj_home_cover_prob: number | null;
+  adj_away_cover_prob: number | null;
+  base_over_prob: number | null;
+  base_under_prob: number | null;
+  adj_over_prob: number | null;
+  adj_under_prob: number | null;
 };
 
 type TeamMapRow = {
@@ -130,12 +136,20 @@ type TeamRow = {
 
   projMarginTeam: number;
   coverProbTeam: number | null;
+  baseCoverProbTeam: number | null;
+  adjCoverProbTeam: number | null;
 
   projTotal: number;
   overProb: number | null;
   underProb: number | null;
+  baseOverProb: number | null;
+  adjOverProb: number | null;
+  baseUnderProb: number | null;
+  adjUnderProb: number | null;
 
   winProbTeam: number | null;
+  baseWinProbTeam: number | null;
+  adjWinProbTeam: number | null;
 
   consSpreadLineTeam: number | null;
   consSpreadOddsTeam: number | null;
@@ -191,6 +205,17 @@ function formatTs(ts: string | null) {
   const d = new Date(ts);
   if (!Number.isFinite(d.getTime())) return ts;
   return d.toLocaleString();
+}
+
+function fmtPct01(p: number | null) {
+  if (p == null || !Number.isFinite(p)) return "—";
+  return `${(p * 100).toFixed(1)}%`;
+}
+
+function formatBaseAdjLabel(base: number | null, adj: number | null) {
+  const baseTxt = fmtPct01(base);
+  if (adj == null || !Number.isFinite(adj)) return `Base ${baseTxt}`;
+  return `Base ${baseTxt} • AI ${fmtPct01(adj)}`;
 }
 
 
@@ -420,6 +445,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
     hBar,
     aTone,
     hTone,
+    aMeta,
+    hMeta,
   }: {
     label: string;
     aTop: React.ReactNode;
@@ -430,6 +457,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
     hBar?: number | null;
     aTone?: BarTone;
     hTone?: BarTone;
+    aMeta?: React.ReactNode;
+    hMeta?: React.ReactNode;
   }) => (
     <div className="grid grid-cols-3 gap-2 py-2 border-b border-[#141414] last:border-b-0 items-start">
       <div className="text-[10px] tracking-[0.14em] uppercase text-[#8a8a8a] font-semibold pt-0.5">{label}</div>
@@ -437,12 +466,14 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
       <div className="text-right">
         <div className="text-[11px] text-white font-extrabold tabular-nums leading-tight">{aTop}</div>
         {aBottom != null ? <div className="text-[10px] text-[#9a9a9a] font-semibold mt-1">{aBottom}</div> : null}
+        {aMeta != null ? <div className="text-[10px] text-[#7a7a7a] font-semibold mt-1">{aMeta}</div> : null}
         {aBar != null ? <ProbBar p={aBar} tone={aTone ?? "gold"} /> : null}
       </div>
 
       <div className="text-right">
         <div className="text-[11px] text-white font-extrabold tabular-nums leading-tight">{hTop}</div>
         {hBottom != null ? <div className="text-[10px] text-[#9a9a9a] font-semibold mt-1">{hBottom}</div> : null}
+        {hMeta != null ? <div className="text-[10px] text-[#7a7a7a] font-semibold mt-1">{hMeta}</div> : null}
         {hBar != null ? <ProbBar p={hBar} tone={hTone ?? "gold"} /> : null}
       </div>
     </div>
@@ -464,6 +495,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
           hBar={home.winProbTeam}
           aTone={winnerToneAway}
           hTone={winnerToneHome}
+          aMeta={formatBaseAdjLabel(away.baseWinProbTeam, away.adjWinProbTeam)}
+          hMeta={formatBaseAdjLabel(home.baseWinProbTeam, home.adjWinProbTeam)}
         />
 
         {/* Cover% is BAR-ONLY: no cover% text; margin stays as number */}
@@ -475,6 +508,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
           hBar={home.coverProbTeam}
           aTone={winnerToneAway}
           hTone={winnerToneHome}
+          aMeta={formatBaseAdjLabel(away.baseCoverProbTeam, away.adjCoverProbTeam)}
+          hMeta={formatBaseAdjLabel(home.baseCoverProbTeam, home.adjCoverProbTeam)}
         />
 
         {/* Total: over/under are BAR-ONLY; projected total stays as number */}
@@ -488,6 +523,8 @@ function MobileDetailsBlock({ away, home }: { away: TeamRow; home: TeamRow }) {
           hBar={home.underProb}
           aTone={overTone}
           hTone={underTone}
+          aMeta={formatBaseAdjLabel(away.baseOverProb, away.adjOverProb)}
+          hMeta={formatBaseAdjLabel(home.baseUnderProb, home.adjUnderProb)}
         />
 
         {/* Consensus spread */}
@@ -982,6 +1019,8 @@ function MetricStack({
   bottom,
   hintTop,
   hintBottom,
+  metaTop,
+  metaBottom,
   bars,
 }: {
   title: string;
@@ -989,6 +1028,8 @@ function MetricStack({
   bottom?: string;
   hintTop?: string;
   hintBottom?: string;
+  metaTop?: string;
+  metaBottom?: string;
 
   // If provided: shows bar-only % data (with labels + % inside bar block)
   bars?: {
@@ -1004,12 +1045,14 @@ function MetricStack({
     <div className="px-3 py-4 text-center flex flex-col items-center justify-center">
       <div className="text-[15px] font-black tabular-nums leading-none tracking-tight text-white">{top}</div>
       {hintTop ? <div className="mt-1 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{hintTop}</div> : null}
+      {metaTop ? <div className="mt-1 text-[10px] text-[#7a7a7a] font-semibold tabular-nums">{metaTop}</div> : null}
 
       {bottom ? (
         <>
           <div className="mt-3 h-px w-10 bg-[#202020]" />
           <div className="mt-3 text-[15px] font-black tabular-nums leading-none tracking-tight text-white">{bottom}</div>
           {hintBottom ? <div className="mt-1 text-[10px] text-[#9a9a9a] font-semibold tabular-nums">{hintBottom}</div> : null}
+          {metaBottom ? <div className="mt-1 text-[10px] text-[#7a7a7a] font-semibold tabular-nums">{metaBottom}</div> : null}
         </>
       ) : null}
 
@@ -1150,6 +1193,8 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
           bottom="—"
           hintTop={ev.away.teamAbbr}
           hintBottom={ev.home.teamAbbr}
+          metaTop={formatBaseAdjLabel(ev.away.baseWinProbTeam, ev.away.adjWinProbTeam)}
+          metaBottom={formatBaseAdjLabel(ev.home.baseWinProbTeam, ev.home.adjWinProbTeam)}
           bars={{
             top: ev.away.winProbTeam,
             bottom: ev.home.winProbTeam,
@@ -1167,6 +1212,8 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
           bottom={formatSignedNumber(ev.home.projMarginTeam)}
           hintTop={ev.away.teamAbbr}
           hintBottom={ev.home.teamAbbr}
+          metaTop={formatBaseAdjLabel(ev.away.baseCoverProbTeam, ev.away.adjCoverProbTeam)}
+          metaBottom={formatBaseAdjLabel(ev.home.baseCoverProbTeam, ev.home.adjCoverProbTeam)}
           bars={{
             top: ev.away.coverProbTeam,
             bottom: ev.home.coverProbTeam,
@@ -1184,6 +1231,8 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
           bottom={formatLinePlain(ev.away.projTotal)}
           hintTop="Over"
           hintBottom="Under"
+          metaTop={formatBaseAdjLabel(ev.away.baseOverProb, ev.away.adjOverProb)}
+          metaBottom={formatBaseAdjLabel(ev.home.baseUnderProb, ev.home.adjUnderProb)}
           bars={{
             top: ev.away.overProb,
             bottom: ev.home.underProb,
@@ -1224,7 +1273,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
   const [loadingResults, setLoadingResults] = useState(false);
   const [loadingConsensus, setLoadingConsensus] = useState(false);
   const [loadingAi, setLoadingAi] = useState(false);
-  const [aiMap, setAiMap] = useState<Map<string, AiAdjustedRow>>(new Map());
+  const [mlMap, setMlMap] = useState<Map<string, MlAdjustmentRow>>(new Map());
   const [useAiAdjusted, setUseAiAdjusted] = useState(false);
 
   // Modal
@@ -1501,7 +1550,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
     async function loadAiAdjustments(eventIds: string[]) {
       if (!run?.id || !eventIds.length) {
-        setAiMap(new Map());
+        setMlMap(new Map());
         setLoadingAi(false);
         return;
       }
@@ -1509,9 +1558,24 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       setLoadingAi(true);
 
       const { data, error } = await supabase
-        .from("ai_adjusted_results")
+        .from("model_ml_adjustments")
         .select(
-          "event_id,run_id,ai_home_win_prob,ai_away_win_prob,ai_home_cover_prob,ai_away_cover_prob,ai_over_prob,ai_under_prob"
+          [
+            "event_id",
+            "run_id",
+            "base_home_win_prob",
+            "base_away_win_prob",
+            "adj_home_win_prob",
+            "adj_away_win_prob",
+            "base_home_cover_prob",
+            "base_away_cover_prob",
+            "adj_home_cover_prob",
+            "adj_away_cover_prob",
+            "base_over_prob",
+            "base_under_prob",
+            "adj_over_prob",
+            "adj_under_prob",
+          ].join(",")
         )
         .eq("run_id", run.id)
         .in("event_id", eventIds);
@@ -1519,19 +1583,19 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       if (!mounted) return;
 
       if (error) {
-        console.warn("[MonteCarloScreen] ai_adjusted_results error:", error.message);
-        setAiMap(new Map());
+        console.warn("[MonteCarloScreen] model_ml_adjustments error:", error.message);
+        setMlMap(new Map());
         setLoadingAi(false);
         return;
       }
 
-      const next = new Map<string, AiAdjustedRow>();
-      for (const row of (data ?? []) as AiAdjustedRow[]) {
+      const next = new Map<string, MlAdjustmentRow>();
+      for (const row of (data ?? []) as MlAdjustmentRow[]) {
         if (!row.event_id) continue;
         next.set(row.event_id, row);
       }
 
-      setAiMap(next);
+      setMlMap(next);
       setLoadingAi(false);
     }
 
@@ -1576,14 +1640,20 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const pHomeWin = r.home_win_prob != null ? Number(r.home_win_prob) : null;
       const pAwayWin = r.away_win_prob != null ? Number(r.away_win_prob) : null;
 
-      const ai = useAiAdjusted ? aiMap.get(r.event_id) ?? null : null;
+      const mlAdj = mlMap.get(r.event_id) ?? null;
+      const adjHomeCover = mlAdj?.adj_home_cover_prob ?? null;
+      const adjAwayCover = mlAdj?.adj_away_cover_prob ?? null;
+      const adjOver = mlAdj?.adj_over_prob ?? null;
+      const adjUnder = mlAdj?.adj_under_prob ?? null;
+      const adjHomeWin = mlAdj?.adj_home_win_prob ?? null;
+      const adjAwayWin = mlAdj?.adj_away_win_prob ?? null;
 
-      const finalHomeCover = ai?.ai_home_cover_prob ?? pHomeCover;
-      const finalAwayCover = ai?.ai_away_cover_prob ?? pAwayCover;
-      const finalOver = ai?.ai_over_prob ?? pOver;
-      const finalUnder = ai?.ai_under_prob ?? pUnder;
-      const finalHomeWinInput = ai?.ai_home_win_prob ?? pHomeWin;
-      const finalAwayWinInput = ai?.ai_away_win_prob ?? pAwayWin;
+      const finalHomeCover = useAiAdjusted ? adjHomeCover ?? pHomeCover : pHomeCover;
+      const finalAwayCover = useAiAdjusted ? adjAwayCover ?? pAwayCover : pAwayCover;
+      const finalOver = useAiAdjusted ? adjOver ?? pOver : pOver;
+      const finalUnder = useAiAdjusted ? adjUnder ?? pUnder : pUnder;
+      const finalHomeWinInput = useAiAdjusted ? adjHomeWin ?? pHomeWin : pHomeWin;
+      const finalAwayWinInput = useAiAdjusted ? adjAwayWin ?? pAwayWin : pAwayWin;
 
       const finalHomeWin = finalHomeWinInput ?? (finalAwayWinInput != null ? 1 - finalAwayWinInput : null);
       const finalAwayWin = finalAwayWinInput ?? (finalHomeWin != null ? 1 - finalHomeWin : null);
@@ -1606,10 +1676,18 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         projPoints: Math.round(awayPts * 10) / 10,
         projMarginTeam: Math.round(-marginHome * 10) / 10,
         coverProbTeam: finalAwayCover,
+        baseCoverProbTeam: pAwayCover,
+        adjCoverProbTeam: adjAwayCover,
         projTotal: Math.round(totalProj * 10) / 10,
         overProb: finalOver,
         underProb: finalUnder,
+        baseOverProb: pOver,
+        adjOverProb: adjOver,
+        baseUnderProb: pUnder,
+        adjUnderProb: adjUnder,
         winProbTeam: finalAwayWin,
+        baseWinProbTeam: pAwayWin,
+        adjWinProbTeam: adjAwayWin,
         consSpreadLineTeam: consSpreadHome == null ? null : Math.round(-consSpreadHome * 10) / 10,
         consSpreadOddsTeam: c?.spread_away_odds ?? null,
         consTotalLine: consTotal == null ? null : Math.round(consTotal * 10) / 10,
@@ -1629,10 +1707,18 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         projPoints: Math.round(homePts * 10) / 10,
         projMarginTeam: Math.round(marginHome * 10) / 10,
         coverProbTeam: finalHomeCover,
+        baseCoverProbTeam: pHomeCover,
+        adjCoverProbTeam: adjHomeCover,
         projTotal: Math.round(totalProj * 10) / 10,
         overProb: finalOver,
         underProb: finalUnder,
+        baseOverProb: pOver,
+        adjOverProb: adjOver,
+        baseUnderProb: pUnder,
+        adjUnderProb: adjUnder,
         winProbTeam: finalHomeWin,
+        baseWinProbTeam: pHomeWin,
+        adjWinProbTeam: adjHomeWin,
         consSpreadLineTeam: consSpreadHome == null ? null : Math.round(consSpreadHome * 10) / 10,
         consSpreadOddsTeam: c?.spread_home_odds ?? null,
         consTotalLine: consTotal == null ? null : Math.round(consTotal * 10) / 10,
@@ -1652,7 +1738,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     }
 
     return out;
-  }, [results, abbrMap, logoMap, consensusMap, powerRankMap, aiMap, useAiAdjusted]);
+  }, [results, abbrMap, logoMap, consensusMap, powerRankMap, mlMap, useAiAdjusted]);
 
   useEffect(() => {
     setOpenMap((prev) => {
@@ -1734,7 +1820,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                 }}
               >
                 <span className="inline-block h-2 w-2 rounded-full" style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }} />
-                AI Adjusted {loadingAi ? "…" : ""}
+                ML Adjusted {loadingAi ? "…" : ""}
               </button>
             </div>
           </div>
@@ -1861,6 +1947,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                   <div className="mt-1">
                     <ProbBar p={ev.away.winProbTeam} tone={winnerToneAway} />
                   </div>
+                  <div className="mt-1 text-[9px] text-[#7a7a7a] font-semibold">
+                    {formatBaseAdjLabel(ev.away.baseWinProbTeam, ev.away.adjWinProbTeam)}
+                  </div>
                 </div>
               </div>
 
@@ -1882,6 +1971,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
                   </div>
                   <div className="mt-1">
                     <ProbBar p={ev.home.winProbTeam} tone={winnerToneHome} />
+                  </div>
+                  <div className="mt-1 text-[9px] text-[#7a7a7a] font-semibold">
+                    {formatBaseAdjLabel(ev.home.baseWinProbTeam, ev.home.adjWinProbTeam)}
                   </div>
                 </div>
               </div>

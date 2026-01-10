@@ -1128,18 +1128,29 @@ type MonteCarloRow = {
   under_prob?: number | null;
 };
 
-type AiAdjustedRow = {
+type MlAdjustmentRow = {
   event_id: string;
   run_id: string;
-  ai_home_win_prob: number | null;
-  ai_away_win_prob: number | null;
-  ai_home_cover_prob: number | null;
-  ai_away_cover_prob: number | null;
-  ai_over_prob: number | null;
-  ai_under_prob: number | null;
+  base_home_win_prob: number | null;
+  base_away_win_prob: number | null;
+  adj_home_win_prob: number | null;
+  adj_away_win_prob: number | null;
+  base_home_cover_prob: number | null;
+  base_away_cover_prob: number | null;
+  adj_home_cover_prob: number | null;
+  adj_away_cover_prob: number | null;
+  base_over_prob: number | null;
+  base_under_prob: number | null;
+  adj_over_prob: number | null;
+  adj_under_prob: number | null;
 };
 
 const pct = (v01: number | null | undefined) => (v01 == null ? "—" : formatPercent(v01 * 100, 1));
+const fmtBaseAdj = (base: number | null | undefined, adj: number | null | undefined) => {
+  const baseTxt = pct(toProb01(base ?? null));
+  if (adj == null || !Number.isFinite(adj)) return `Base ${baseTxt}`;
+  return `Base ${baseTxt} • AI ${pct(toProb01(adj))}`;
+};
 function winColors(awayP: number | null, homeP: number | null) {
   if (awayP == null || homeP == null) return { awayHex: "rgba(255,255,255,0.85)", homeHex: "rgba(255,255,255,0.85)" };
   if (awayP > homeP) return { awayHex: "#34d399", homeHex: "#f87171" };
@@ -1502,6 +1513,8 @@ function GameDetailsModal({
   const [predLoading, setPredLoading] = useState(true);
   const [predError, setPredError] = useState("");
   const [predRow, setPredRow] = useState<MonteCarloRow | null>(null);
+  const [basePredRow, setBasePredRow] = useState<MonteCarloRow | null>(null);
+  const [adjPredRow, setAdjPredRow] = useState<MonteCarloRow | null>(null);
 
   // last-5 state
   const [l5AwayLoading, setL5AwayLoading] = useState(false);
@@ -1575,6 +1588,8 @@ function GameDetailsModal({
     setPredLoading(true);
     setPredError("");
     setPredRow(null);
+    setBasePredRow(null);
+    setAdjPredRow(null);
 
     (async () => {
       const { data, error } = await supabase
@@ -1626,32 +1641,44 @@ function GameDetailsModal({
         under_prob: safeNumberOrNull(r.under_prob),
       };
 
-      let finalRow = baseRow;
-      if (useAiAdjusted && baseRow.run_id) {
-        const { data: aiData, error: aiErr } = await supabase
-          .from("ai_adjusted_results")
+      setBasePredRow(baseRow);
+
+      let adjustedRow: MonteCarloRow | null = null;
+      if (baseRow.run_id) {
+        const { data: mlData, error: mlErr } = await supabase
+          .from("model_ml_adjustments")
           .select(
-            "event_id,run_id,ai_home_win_prob,ai_away_win_prob,ai_home_cover_prob,ai_away_cover_prob,ai_over_prob,ai_under_prob"
+            [
+              "event_id",
+              "run_id",
+              "adj_home_win_prob",
+              "adj_away_win_prob",
+              "adj_home_cover_prob",
+              "adj_away_cover_prob",
+              "adj_over_prob",
+              "adj_under_prob",
+            ].join(",")
           )
           .eq("event_id", baseRow.event_id)
           .eq("run_id", baseRow.run_id)
           .limit(1);
 
-        if (!aiErr && aiData?.[0]) {
-          const ai = aiData[0] as AiAdjustedRow;
-          finalRow = {
+        if (!mlErr && mlData?.[0]) {
+          const ml = mlData[0] as MlAdjustmentRow;
+          adjustedRow = {
             ...baseRow,
-            home_win_prob: ai.ai_home_win_prob ?? baseRow.home_win_prob,
-            away_win_prob: ai.ai_away_win_prob ?? baseRow.away_win_prob,
-            home_cover_prob: ai.ai_home_cover_prob ?? baseRow.home_cover_prob,
-            away_cover_prob: ai.ai_away_cover_prob ?? baseRow.away_cover_prob,
-            over_prob: ai.ai_over_prob ?? baseRow.over_prob,
-            under_prob: ai.ai_under_prob ?? baseRow.under_prob,
+            home_win_prob: ml.adj_home_win_prob ?? baseRow.home_win_prob,
+            away_win_prob: ml.adj_away_win_prob ?? baseRow.away_win_prob,
+            home_cover_prob: ml.adj_home_cover_prob ?? baseRow.home_cover_prob,
+            away_cover_prob: ml.adj_away_cover_prob ?? baseRow.away_cover_prob,
+            over_prob: ml.adj_over_prob ?? baseRow.over_prob,
+            under_prob: ml.adj_under_prob ?? baseRow.under_prob,
           };
         }
       }
 
-      setPredRow(finalRow);
+      setAdjPredRow(adjustedRow);
+      setPredRow(useAiAdjusted ? adjustedRow ?? baseRow : baseRow);
       setPredLoading(false);
 
       const awayTeam = (ev.away?.team ?? baseRow.away_team ?? "").trim();
@@ -2018,6 +2045,7 @@ function GameDetailsModal({
                             {probToAmerican(awayP)}
                           </span>
                         </div>
+                        <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.away_win_prob, adjPredRow?.away_win_prob)}</div>
                       </div>
                     </div>
 
@@ -2030,6 +2058,7 @@ function GameDetailsModal({
                             {probToAmerican(homeP)}
                           </span>
                         </div>
+                        <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.home_win_prob, adjPredRow?.home_win_prob)}</div>
                       </div>
                       {homeLogo ? (
                         <img
@@ -2078,6 +2107,7 @@ function GameDetailsModal({
                           {probToAmerican(awayP)}
                         </span>
                       </div>
+                      <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.away_win_prob, adjPredRow?.away_win_prob)}</div>
                     </div>
                   </div>
 
@@ -2100,6 +2130,7 @@ function GameDetailsModal({
                           {probToAmerican(homeP)}
                         </span>
                       </div>
+                      <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.home_win_prob, adjPredRow?.home_win_prob)}</div>
                     </div>
                     {homeLogo ? (
                       <img
@@ -2137,14 +2168,17 @@ function GameDetailsModal({
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">{homeTeam}</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.home_cover_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.home_cover_prob, adjPredRow?.home_cover_prob)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Push</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.cover_push_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.cover_push_prob, null)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">{awayTeam}</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.away_cover_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.away_cover_prob, adjPredRow?.away_cover_prob)}</div>
                     </div>
                   </div>
                 </div>
@@ -2168,14 +2202,17 @@ function GameDetailsModal({
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Over</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.over_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.over_prob, adjPredRow?.over_prob)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Push</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.total_push_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.total_push_prob, null)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Under</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.under_prob, adjPredRow?.under_prob)}</div>
                     </div>
                   </div>
                 </div>
@@ -3221,7 +3258,7 @@ export function OddsScreen({
                       }}
                     >
                       <span className="inline-block h-2 w-2 rounded-full" style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }} />
-                      AI Adjusted
+                      ML Adjusted
                     </button>
 
                     <SelectPill

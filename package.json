@@ -9,6 +9,7 @@
     "test:parity": "tsx scripts/mathParity.test.ts",
     "ai:train": "tsx scripts/train_calibration.ts",
     "ai:apply": "tsx scripts/apply_ai.ts",
+    "ml:train": "python scripts/train_ml_adjustments.py",
     "odds:load": "tsx scripts/oddsLoader.ts",
     "ratings:build": "tsx scripts/ratingsBuilder.ts",
     "ratings:build:ncaab": "tsx scripts/ratingsBuilder.ts",
