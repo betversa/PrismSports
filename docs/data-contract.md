@@ -36,6 +36,10 @@ This document enumerates the Supabase tables/columns and the locked calculation 
 ### Results
 - `game_model_results`: columns selected via `baseSelect` / `fallbackSelect` in `ResultsScreen.tsx` (kept unchanged)
 
+### AI calibration (additive layer)
+- `ai_model_versions`: `id`, `sport_key`, `model_type`, `active`, `trained_from`, `trained_to`, `params`, `sample_counts`, `created_at`
+- `ai_adjusted_results`: `sport_key`, `event_id`, `run_id`, `model_version_id`, `ai_home_win_prob`, `ai_away_win_prob`, `ai_home_cover_prob`, `ai_away_cover_prob`, `ai_over_prob`, `ai_under_prob`, `created_at`, `updated_at`
+
 ## Locked calculations (behavior must remain identical)
 
 ### Odds conversions
@@ -59,3 +63,4 @@ This document enumerates the Supabase tables/columns and the locked calculation 
 ## Notes
 - Query semantics, filters, and ordering are preserved as-is.
 - Column names and table names are unchanged.
+- Game model writes use split procedures: projection upserts protect `picked_*` columns while finals/grading updates only touch status + final fields.

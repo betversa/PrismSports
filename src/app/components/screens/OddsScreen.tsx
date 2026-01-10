@@ -1102,6 +1102,7 @@ function SideBySideLineCharts({
 
 type MonteCarloRow = {
   event_id: string;
+  run_id?: string | null;
   commence_time?: string | null;
   matchup?: string | null;
   home_team?: string | null;
@@ -1125,6 +1126,17 @@ type MonteCarloRow = {
   over_prob?: number | null;
   total_push_prob?: number | null;
   under_prob?: number | null;
+};
+
+type AiAdjustedRow = {
+  event_id: string;
+  run_id: string;
+  ai_home_win_prob: number | null;
+  ai_away_win_prob: number | null;
+  ai_home_cover_prob: number | null;
+  ai_away_cover_prob: number | null;
+  ai_over_prob: number | null;
+  ai_under_prob: number | null;
 };
 
 const pct = (v01: number | null | undefined) => (v01 == null ? "—" : formatPercent(v01 * 100, 1));
@@ -1457,6 +1469,7 @@ function GameDetailsModal({
   sportKey,
   ev,
   oddsFormat,
+  useAiAdjusted,
   initialTab = "pred",
   mode,
   showTabs = true,
@@ -1465,6 +1478,7 @@ function GameDetailsModal({
   sportKey: string;
   ev: EventOdds;
   oddsFormat: OddsFormat;
+  useAiAdjusted: boolean;
   initialTab?: DetailsTab;
   mode?: DetailsTab;
   showTabs?: boolean;
@@ -1584,8 +1598,9 @@ function GameDetailsModal({
         return;
       }
 
-      const row: MonteCarloRow = {
+      const baseRow: MonteCarloRow = {
         event_id: String(r.event_id ?? ev.eventId),
+        run_id: r.run_id ?? null,
         commence_time: r.commence_time ?? r.commenceTime ?? null,
         matchup: r.matchup ?? null,
         home_team: r.home_team ?? r.homeTeam ?? null,
@@ -1611,11 +1626,36 @@ function GameDetailsModal({
         under_prob: safeNumberOrNull(r.under_prob),
       };
 
-      setPredRow(row);
+      let finalRow = baseRow;
+      if (useAiAdjusted && baseRow.run_id) {
+        const { data: aiData, error: aiErr } = await supabase
+          .from("ai_adjusted_results")
+          .select(
+            "event_id,run_id,ai_home_win_prob,ai_away_win_prob,ai_home_cover_prob,ai_away_cover_prob,ai_over_prob,ai_under_prob"
+          )
+          .eq("event_id", baseRow.event_id)
+          .eq("run_id", baseRow.run_id)
+          .limit(1);
+
+        if (!aiErr && aiData?.[0]) {
+          const ai = aiData[0] as AiAdjustedRow;
+          finalRow = {
+            ...baseRow,
+            home_win_prob: ai.ai_home_win_prob ?? baseRow.home_win_prob,
+            away_win_prob: ai.ai_away_win_prob ?? baseRow.away_win_prob,
+            home_cover_prob: ai.ai_home_cover_prob ?? baseRow.home_cover_prob,
+            away_cover_prob: ai.ai_away_cover_prob ?? baseRow.away_cover_prob,
+            over_prob: ai.ai_over_prob ?? baseRow.over_prob,
+            under_prob: ai.ai_under_prob ?? baseRow.under_prob,
+          };
+        }
+      }
+
+      setPredRow(finalRow);
       setPredLoading(false);
 
-      const awayTeam = (ev.away?.team ?? row.away_team ?? "").trim();
-      const homeTeam = (ev.home?.team ?? row.home_team ?? "").trim();
+      const awayTeam = (ev.away?.team ?? baseRow.away_team ?? "").trim();
+      const homeTeam = (ev.home?.team ?? baseRow.home_team ?? "").trim();
 
       if (awayTeam) {
         setL5AwayLoading(true);
@@ -1667,7 +1707,7 @@ function GameDetailsModal({
     return () => {
       alive = false;
     };
-  }, [tab, ev.eventId, sportKey, ev.away?.team, ev.home?.team]);
+  }, [tab, ev.eventId, sportKey, ev.away?.team, ev.home?.team, useAiAdjusted]);
 
   // Props fetch
   useEffect(() => {
@@ -2684,6 +2724,7 @@ export function OddsScreen({
   const [market, setMarket] = useState<Market>("spread");
   const [view, setView] = useState<BoardView>("pregame");
   const [oddsFormat, setOddsFormat] = useState<OddsFormat>("american");
+  const [useAiAdjusted, setUseAiAdjusted] = useState(false);
   const [query, setQuery] = useState<string>("");
 
   const [loading, setLoading] = useState(true);
@@ -3167,6 +3208,22 @@ export function OddsScreen({
                       ]}
                     />
 
+                    <button
+                      type="button"
+                      onClick={() => setUseAiAdjusted((prev) => !prev)}
+                      className={[
+                        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] transition",
+                        useAiAdjusted ? "text-[#d4af37]" : "text-white/60",
+                      ].join(" ")}
+                      style={{
+                        borderColor: useAiAdjusted ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.12)",
+                        background: useAiAdjusted ? "rgba(212,175,55,0.12)" : "rgba(0,0,0,0.35)",
+                      }}
+                    >
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }} />
+                      AI Adjusted
+                    </button>
+
                     <SelectPill
                       value={"all"}
                       onChange={() => {}}
@@ -3355,6 +3412,7 @@ export function OddsScreen({
           sportKey={sportKey}
           ev={activeEvent}
           oddsFormat={oddsFormat}
+          useAiAdjusted={useAiAdjusted}
           initialTab={detailsTab}
           mode={detailsTab}
           showTabs={false}

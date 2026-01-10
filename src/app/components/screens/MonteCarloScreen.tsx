@@ -56,6 +56,17 @@ type MonteCarloResultRow = {
   away_win_prob: number | null;
 };
 
+type AiAdjustedRow = {
+  event_id: string;
+  run_id: string;
+  ai_home_win_prob: number | null;
+  ai_away_win_prob: number | null;
+  ai_home_cover_prob: number | null;
+  ai_away_cover_prob: number | null;
+  ai_over_prob: number | null;
+  ai_under_prob: number | null;
+};
+
 type TeamMapRow = {
   canonical: string;
   Abbreviation: string | null;
@@ -1212,6 +1223,9 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
   const [loadingRun, setLoadingRun] = useState(true);
   const [loadingResults, setLoadingResults] = useState(false);
   const [loadingConsensus, setLoadingConsensus] = useState(false);
+  const [loadingAi, setLoadingAi] = useState(false);
+  const [aiMap, setAiMap] = useState<Map<string, AiAdjustedRow>>(new Map());
+  const [useAiAdjusted, setUseAiAdjusted] = useState(false);
 
   // Modal
   const [modelOpen, setModelOpen] = useState(false);
@@ -1482,6 +1496,53 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     };
   }, [results]);
 
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadAiAdjustments(eventIds: string[]) {
+      if (!run?.id || !eventIds.length) {
+        setAiMap(new Map());
+        setLoadingAi(false);
+        return;
+      }
+
+      setLoadingAi(true);
+
+      const { data, error } = await supabase
+        .from("ai_adjusted_results")
+        .select(
+          "event_id,run_id,ai_home_win_prob,ai_away_win_prob,ai_home_cover_prob,ai_away_cover_prob,ai_over_prob,ai_under_prob"
+        )
+        .eq("run_id", run.id)
+        .in("event_id", eventIds);
+
+      if (!mounted) return;
+
+      if (error) {
+        console.warn("[MonteCarloScreen] ai_adjusted_results error:", error.message);
+        setAiMap(new Map());
+        setLoadingAi(false);
+        return;
+      }
+
+      const next = new Map<string, AiAdjustedRow>();
+      for (const row of (data ?? []) as AiAdjustedRow[]) {
+        if (!row.event_id) continue;
+        next.set(row.event_id, row);
+      }
+
+      setAiMap(next);
+      setLoadingAi(false);
+    }
+
+    const ids = Array.from(new Set(results.map((r) => r.event_id).filter(Boolean)));
+    loadAiAdjustments(ids);
+
+    return () => {
+      mounted = false;
+    };
+  }, [results, run?.id]);
+
   /* bundle */
   const events: EventBundle[] = useMemo(() => {
     const out: EventBundle[] = [];
@@ -1515,8 +1576,17 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
       const pHomeWin = r.home_win_prob != null ? Number(r.home_win_prob) : null;
       const pAwayWin = r.away_win_prob != null ? Number(r.away_win_prob) : null;
 
-      const finalHomeWin = pHomeWin ?? (pAwayWin != null ? 1 - pAwayWin : null);
-      const finalAwayWin = pAwayWin ?? (finalHomeWin != null ? 1 - finalHomeWin : null);
+      const ai = useAiAdjusted ? aiMap.get(r.event_id) ?? null : null;
+
+      const finalHomeCover = ai?.ai_home_cover_prob ?? pHomeCover;
+      const finalAwayCover = ai?.ai_away_cover_prob ?? pAwayCover;
+      const finalOver = ai?.ai_over_prob ?? pOver;
+      const finalUnder = ai?.ai_under_prob ?? pUnder;
+      const finalHomeWinInput = ai?.ai_home_win_prob ?? pHomeWin;
+      const finalAwayWinInput = ai?.ai_away_win_prob ?? pAwayWin;
+
+      const finalHomeWin = finalHomeWinInput ?? (finalAwayWinInput != null ? 1 - finalAwayWinInput : null);
+      const finalAwayWin = finalAwayWinInput ?? (finalHomeWin != null ? 1 - finalHomeWin : null);
 
       const c = consensusMap.get(r.event_id) ?? null;
       const consSpreadHome = c?.spread_home_line ?? null;
@@ -1535,10 +1605,10 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         powerRank: powerRankMap.get(awayKey) ?? null,
         projPoints: Math.round(awayPts * 10) / 10,
         projMarginTeam: Math.round(-marginHome * 10) / 10,
-        coverProbTeam: pAwayCover,
+        coverProbTeam: finalAwayCover,
         projTotal: Math.round(totalProj * 10) / 10,
-        overProb: pOver,
-        underProb: pUnder,
+        overProb: finalOver,
+        underProb: finalUnder,
         winProbTeam: finalAwayWin,
         consSpreadLineTeam: consSpreadHome == null ? null : Math.round(-consSpreadHome * 10) / 10,
         consSpreadOddsTeam: c?.spread_away_odds ?? null,
@@ -1558,10 +1628,10 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         powerRank: powerRankMap.get(homeKey) ?? null,
         projPoints: Math.round(homePts * 10) / 10,
         projMarginTeam: Math.round(marginHome * 10) / 10,
-        coverProbTeam: pHomeCover,
+        coverProbTeam: finalHomeCover,
         projTotal: Math.round(totalProj * 10) / 10,
-        overProb: pOver,
-        underProb: pUnder,
+        overProb: finalOver,
+        underProb: finalUnder,
         winProbTeam: finalHomeWin,
         consSpreadLineTeam: consSpreadHome == null ? null : Math.round(consSpreadHome * 10) / 10,
         consSpreadOddsTeam: c?.spread_home_odds ?? null,
@@ -1582,7 +1652,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
     }
 
     return out;
-  }, [results, abbrMap, logoMap, consensusMap, powerRankMap]);
+  }, [results, abbrMap, logoMap, consensusMap, powerRankMap, aiMap, useAiAdjusted]);
 
   useEffect(() => {
     setOpenMap((prev) => {
@@ -1651,6 +1721,21 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
               <StatPill label="Games" value={loading ? "…" : String(events.length)} />
               <StatPill label="Updated" value={run?.created_at ? formatTs(run.created_at) : "—"} />
               <StatPill label="Consensus" value={loadingConsensus ? "…" : consensusStamp ?? "—"} />
+              <button
+                type="button"
+                onClick={() => setUseAiAdjusted((prev) => !prev)}
+                className={[
+                  "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold tracking-[0.18em] uppercase transition",
+                  useAiAdjusted ? "text-[#d4af37]" : "text-[#b0b0b0]",
+                ].join(" ")}
+                style={{
+                  borderColor: useAiAdjusted ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.12)",
+                  background: useAiAdjusted ? "rgba(212,175,55,0.12)" : "rgba(0,0,0,0.35)",
+                }}
+              >
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }} />
+                AI Adjusted {loadingAi ? "…" : ""}
+              </button>
             </div>
           </div>
 

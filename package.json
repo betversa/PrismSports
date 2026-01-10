@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "test:parity": "tsx scripts/mathParity.test.ts",
+    "ai:train": "tsx scripts/train_calibration.ts",
+    "ai:apply": "tsx scripts/apply_ai.ts",
     "odds:load": "tsx scripts/oddsLoader.ts",
     "ratings:build": "tsx scripts/ratingsBuilder.ts",
     "ratings:build:ncaab": "tsx scripts/ratingsBuilder.ts",
