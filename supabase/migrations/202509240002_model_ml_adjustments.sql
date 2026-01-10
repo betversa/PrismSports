@@ -2,7 +2,7 @@ create table if not exists public.model_ml_adjustments (
   sport_key text not null,
   event_id text not null,
   run_id text not null,
-  model_version text,
+  model_version text not null,
   base_home_win_prob double precision,
   base_away_win_prob double precision,
   adj_home_win_prob double precision,
@@ -23,7 +23,7 @@ create table if not exists public.model_ml_adjustments (
   delta_under_prob double precision,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  primary key (sport_key, event_id, run_id)
+  primary key (sport_key, event_id, model_version)
 );
 
 create index if not exists model_ml_adjustments_run_idx

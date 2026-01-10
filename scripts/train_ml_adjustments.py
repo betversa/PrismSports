@@ -1,11 +1,10 @@
 import os
-import math
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from supabase import create_client, Client
+from supabase import Client, create_client
 from xgboost import XGBClassifier
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -45,22 +44,29 @@ def parse_date(value: Any) -> Optional[str]:
         return None
 
 
-def pick_any(row: Dict[str, Any], keys: List[str]) -> Any:
+def parse_ts(value: Any) -> Optional[pd.Timestamp]:
+    if value is None:
+        return None
+    try:
+        return pd.to_datetime(value, utc=True)
+    except Exception:
+        return None
+
+
+def pick_any(row: Dict[str, Any], keys: Iterable[str]) -> Any:
     for key in keys:
         if key in row and row[key] is not None:
             return row[key]
     return None
 
 
-def fetch_table_rows(table: str) -> List[Dict[str, Any]]:
+def fetch_table_rows(table: str, columns: str = "*") -> List[Dict[str, Any]]:
     page_size = 1000
     offset = 0
     all_rows: List[Dict[str, Any]] = []
     while True:
-        resp = supabase.table(table).select("*").range(offset, offset + page_size - 1).execute()
-        if resp.data is None:
-            break
-        rows = resp.data
+        resp = supabase.table(table).select(columns).range(offset, offset + page_size - 1).execute()
+        rows = resp.data or []
         all_rows.extend(rows)
         if len(rows) < page_size:
             break
@@ -114,7 +120,8 @@ def build_label_rows() -> List[Dict[str, Any]]:
 def fetch_mc_rows() -> pd.DataFrame:
     cols = (
         "sport_key,event_id,run_id,commence_time,home_team,away_team,projected_margin_home,projected_total,"
-        "home_win_prob,away_win_prob,home_cover_prob,away_cover_prob,over_prob,under_prob,spread_line_home,total_line"
+        "home_win_prob,away_win_prob,home_cover_prob,away_cover_prob,over_prob,under_prob,spread_line_home,total_line,"
+        "sigma_margin_game,sigma_total_game,pace,home_power,away_power,power_diff"
     )
     resp = supabase.table("monte_carlo_results").select(cols).eq("sport_key", SPORT_KEY).execute()
     rows = resp.data or []
@@ -122,9 +129,98 @@ def fetch_mc_rows() -> pd.DataFrame:
     if df.empty:
         return df
     df["game_date"] = df["commence_time"].apply(parse_date)
+    df["commence_ts"] = df["commence_time"].apply(parse_ts)
     df["home_team_norm"] = df["home_team"].apply(norm_team)
     df["away_team_norm"] = df["away_team"].apply(norm_team)
     return df
+
+
+def fetch_odds_snapshot(event_ids: List[str]) -> pd.DataFrame:
+    if not event_ids:
+        return pd.DataFrame()
+    chunk_size = 800
+    rows: List[Dict[str, Any]] = []
+    for i in range(0, len(event_ids), chunk_size):
+        chunk = event_ids[i : i + chunk_size]
+        resp = (
+            supabase.table("odds_snapshot")
+            .select("event_id,market,side,line,ts,bookmaker")
+            .in_("event_id", chunk)
+            .in_("market", ["spreads", "totals"])
+            .in_("side", ["home", "away", "over", "under"])
+            .execute()
+        )
+        rows.extend(resp.data or [])
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["ts"] = df["ts"].apply(parse_ts)
+    df["market"] = df["market"].str.lower()
+    df["side"] = df["side"].str.lower()
+    df["bookmaker"] = df["bookmaker"].astype(str).str.lower()
+    df["line"] = pd.to_numeric(df["line"], errors="coerce")
+    return df
+
+
+def build_latest_line_map(mc_df: pd.DataFrame, odds_df: pd.DataFrame) -> Dict[Tuple[str, str, str], float]:
+    if mc_df.empty or odds_df.empty:
+        return {}
+
+    line_map: Dict[Tuple[str, str, str], float] = {}
+    odds_df = odds_df.dropna(subset=["line", "ts"])
+
+    for event_id, group in odds_df.groupby("event_id"):
+        commence_ts = mc_df.loc[mc_df["event_id"] == event_id, "commence_ts"].iloc[0]
+        if pd.isna(commence_ts):
+            continue
+        pregame = group[group["ts"] <= commence_ts]
+        if pregame.empty:
+            pregame = group
+
+        pregame = pregame.sort_values("ts", ascending=False)
+        latest_rows = (
+            pregame.drop_duplicates(subset=["market", "side", "bookmaker"])  # latest per book
+        )
+
+        for (market, side), subset in latest_rows.groupby(["market", "side"]):
+            lines = subset["line"].dropna().tolist()
+            if not lines:
+                continue
+            line_map[(event_id, market, side)] = float(np.median(lines))
+
+    for event_id in mc_df["event_id"].dropna().unique():
+        home_key = (event_id, "spreads", "home")
+        away_key = (event_id, "spreads", "away")
+        over_key = (event_id, "totals", "over")
+        under_key = (event_id, "totals", "under")
+
+        if home_key not in line_map and away_key in line_map:
+            line_map[home_key] = -line_map[away_key]
+        if away_key not in line_map and home_key in line_map:
+            line_map[away_key] = -line_map[home_key]
+        if over_key not in line_map and under_key in line_map:
+            line_map[over_key] = line_map[under_key]
+        if under_key not in line_map and over_key in line_map:
+            line_map[under_key] = line_map[over_key]
+
+    return line_map
+
+
+def apply_odds_lines(mc_df: pd.DataFrame, line_map: Dict[Tuple[str, str, str], float]) -> pd.DataFrame:
+    if mc_df.empty:
+        return mc_df
+
+    def lookup(row: pd.Series, market: str, side: str) -> Optional[float]:
+        return line_map.get((row["event_id"], market, side))
+
+    mc_df = mc_df.copy()
+    mc_df["odds_spread_home"] = mc_df.apply(lambda r: lookup(r, "spreads", "home"), axis=1)
+    mc_df["odds_total"] = mc_df.apply(lambda r: lookup(r, "totals", "over"), axis=1)
+
+    mc_df["spread_line_home"] = mc_df["odds_spread_home"].combine_first(mc_df.get("spread_line_home"))
+    mc_df["total_line"] = mc_df["odds_total"].combine_first(mc_df.get("total_line"))
+
+    return mc_df
 
 
 def join_labels(mc_df: pd.DataFrame, labels: List[Dict[str, Any]]) -> pd.DataFrame:
@@ -145,10 +241,19 @@ def join_labels(mc_df: pd.DataFrame, labels: List[Dict[str, Any]]) -> pd.DataFra
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     feats = pd.DataFrame()
     feats["home_win_prob"] = df["home_win_prob"].astype(float)
+    feats["home_cover_prob"] = df["home_cover_prob"].astype(float)
+    feats["over_prob"] = df["over_prob"].astype(float)
     feats["projected_margin_home"] = df["projected_margin_home"].astype(float)
     feats["projected_total"] = df["projected_total"].astype(float)
     feats["spread_line_home"] = df["spread_line_home"].astype(float)
     feats["total_line"] = df["total_line"].astype(float)
+
+    for col in ["sigma_margin_game", "sigma_total_game", "pace", "home_power", "away_power", "power_diff"]:
+        if col in df.columns:
+            feats[col] = df[col].astype(float)
+        else:
+            feats[col] = 0.0
+
     feats = feats.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return feats
 
@@ -157,7 +262,7 @@ def train_model(X: pd.DataFrame, y: pd.Series) -> Optional[XGBClassifier]:
     if X.empty or y.empty:
         return None
     model = XGBClassifier(
-        n_estimators=250,
+        n_estimators=300,
         max_depth=4,
         learning_rate=0.05,
         subsample=0.9,
@@ -237,9 +342,20 @@ def apply_models(target_df: pd.DataFrame, models: Dict[str, XGBClassifier]) -> p
 def main() -> None:
     labels = build_label_rows()
     mc_df = fetch_mc_rows()
+    if mc_df.empty:
+        raise RuntimeError("No monte_carlo_results rows found for training.")
+
+    odds_df = fetch_odds_snapshot(mc_df["event_id"].dropna().astype(str).unique().tolist())
+    line_map = build_latest_line_map(mc_df, odds_df)
+    mc_df = apply_odds_lines(mc_df, line_map)
+
     merged = join_labels(mc_df, labels)
     if merged.empty:
         raise RuntimeError("No matching labeled data to train on.")
+
+    merged = merged.dropna(subset=["spread_line_home", "total_line"])
+    if merged.empty:
+        raise RuntimeError("No labeled rows with spread/total lines.")
 
     merged["home_win_label"] = (merged["home_pts"] > merged["away_pts"]).astype(int)
 
@@ -277,7 +393,9 @@ def main() -> None:
     target_resp = (
         supabase.table("monte_carlo_results")
         .select(
-            "sport_key,event_id,run_id,commence_time,home_team,away_team,projected_margin_home,projected_total,home_win_prob,away_win_prob,home_cover_prob,away_cover_prob,over_prob,under_prob,spread_line_home,total_line"
+            "sport_key,event_id,run_id,commence_time,home_team,away_team,projected_margin_home,projected_total,"
+            "home_win_prob,away_win_prob,home_cover_prob,away_cover_prob,over_prob,under_prob,spread_line_home,total_line,"
+            "sigma_margin_game,sigma_total_game,pace,home_power,away_power,power_diff"
         )
         .eq("sport_key", SPORT_KEY)
         .eq("run_id", target_run_id)
@@ -288,6 +406,12 @@ def main() -> None:
         raise RuntimeError("No monte_carlo_results rows found for target run.")
 
     target_df = pd.DataFrame(target_rows)
+    target_df["commence_ts"] = target_df["commence_time"].apply(parse_ts)
+
+    if not odds_df.empty:
+        target_line_map = build_latest_line_map(target_df, odds_df)
+        target_df = apply_odds_lines(target_df, target_line_map)
+
     adjusted_df = apply_models(
         target_df,
         {
@@ -330,7 +454,7 @@ def main() -> None:
     if not payload:
         raise RuntimeError("No adjustment payload generated.")
 
-    resp = supabase.table("model_ml_adjustments").upsert(payload).execute()
+    resp = supabase.table("model_ml_adjustments").upsert(payload, on_conflict="sport_key,event_id,model_version").execute()
     if resp.data is None:
         raise RuntimeError(f"Failed to upsert model_ml_adjustments: {resp}")
 
