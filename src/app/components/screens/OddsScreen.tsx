@@ -29,6 +29,7 @@ import React, {
   useState,
 } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { theme } from "../theme";
 import {
   ResponsiveContainer,
   LineChart,
@@ -76,13 +77,13 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 // Prism Theme (black / gold)
-const PRISM_BORDER = "rgba(255,255,255,0.08)";
-const PRISM_GOLD = "#d4af37";
-const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
+const PRISM_BORDER = theme.border;
+const PRISM_GOLD = theme.gold;
+const PRISM_GOLD_SOFT = theme.goldSoft;
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
 const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
 const BOARD_STICKY_BG = BOARD_BG;
-const TABLE_HEADER_BG = "#0b0b0b";
+const TABLE_HEADER_BG = theme.panel;
 const FILTER_ROW_HEIGHT = 48;
 const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
 const DATE_BAR_HEIGHT = 44;
@@ -101,7 +102,7 @@ const BOOK_LABEL: Record<BookKey, string> = {
 const BOOK_STROKES: Record<BookKey, string> = {
   dk: "#16a34a",
   fd: "#2563eb",
-  mgm: "#d4af37",
+  mgm: theme.gold,
   pin: "#f97316",
   bol: "#ef4444",
 };
@@ -439,7 +440,7 @@ function BookLogoPill({
   return (
     <div
       className={[
-        "h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center gap-2 shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]",
+        "h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center gap-2 shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(216,146,17,0.45)]",
         className ?? "",
       ].join(" ")}
       title={alt}
@@ -534,7 +535,7 @@ function SelectPill({
     <div className="flex items-center gap-2">
       {label ? <div className="text-[12px] text-white/55 font-semibold">{label}</div> : null}
       <select
-        className="h-8 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-2.5 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className="h-8 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-2.5 outline-none focus:border-[rgba(216,146,17,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -563,7 +564,7 @@ function TextInput({
   return (
     <div className="relative">
       <input
-        className="h-8 w-full md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-semibold px-2.5 pr-9 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className="h-8 w-full md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-semibold px-2.5 pr-9 outline-none focus:border-[rgba(216,146,17,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -596,10 +597,10 @@ function Btn({
   const base =
     "h-8 px-3 rounded-lg border text-[12px] font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
   const gold =
-    "bg-[#d4af37] text-black border-[#d4af37] hover:bg-[#e2c257] hover:border-[#e2c257]";
+    "bg-[#d89211] text-black border-[#d89211] hover:bg-[#e2c257] hover:border-[#e2c257]";
   const ghost =
     "bg-black/30 text-white border-white/10 hover:border-white/20 hover:bg-black/40";
-  const disabledStyles = "opacity-60 cursor-not-allowed hover:bg-[#d4af37] hover:border-[#d4af37]";
+  const disabledStyles = "opacity-60 cursor-not-allowed hover:bg-[#d89211] hover:border-[#d89211]";
   return (
     <button
       className={`${base} ${variant === "gold" ? gold : ghost} ${disabled ? disabledStyles : ""}`}
@@ -644,7 +645,7 @@ function SegmentedToggle<T extends string>({
             className={[
               "h-7 px-3 rounded-md text-[12px] font-extrabold transition-colors",
               active
-                ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
+                ? "bg-[rgba(216,146,17,0.22)] text-white border border-[rgba(216,146,17,0.55)]"
                 : "text-white/70 hover:text-white",
             ].join(" ")}
           >
@@ -676,8 +677,8 @@ function IconButton({
       className={[
         "h-8 w-8 flex items-center justify-center rounded-lg border text-white/80 transition-colors",
         "hover:border-white/30 hover:bg-white/10 hover:text-white",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.35)]",
-        active ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.18)] text-white" : "border-white/10 bg-black/30",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(216,146,17,0.35)]",
+        active ? "border-[rgba(216,146,17,0.6)] bg-[rgba(216,146,17,0.18)] text-white" : "border-white/10 bg-black/30",
       ].join(" ")}
     >
       {icon}
@@ -775,7 +776,7 @@ function ModalShell({
         style={{
           background:
             `radial-gradient(1200px 700px at 15% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-            "radial-gradient(900px 700px at 70% 95%, rgba(212,175,55,0.12), transparent 58%)," +
+            "radial-gradient(900px 700px at 70% 95%, rgba(216,146,17,0.12), transparent 58%)," +
             "linear-gradient(180deg, rgba(15,15,15,0.98), rgba(10,10,10,0.98))",
         }}
       >
@@ -830,7 +831,7 @@ function TabBtn({
         "px-3 py-1.5 text-xs font-extrabold rounded-lg border transition-colors",
         "shadow-[0_10px_35px_rgba(0,0,0,0.35)]",
         active
-          ? "bg-[#d4af37] text-black border-[#d4af37]"
+          ? "bg-[#d89211] text-black border-[#d89211]"
           : "bg-black/30 text-white border-white/10 hover:border-white/20",
       ].join(" ")}
     >
@@ -2205,7 +2206,7 @@ function GameDetailsModal({
                     key={m}
                     type="button"
                     className={`px-3 py-1.5 text-xs font-extrabold ${
-                      propMarket === m ? "bg-[#d4af37] text-black" : "text-white"
+                      propMarket === m ? "bg-[#d89211] text-black" : "text-white"
                     }`}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={(e) => {
@@ -2498,7 +2499,7 @@ function TableHeaderRow({
                 onPointerCancel={onBookPointerCancel}
                 className={[
                   "rounded-lg transition-colors cursor-grab active:cursor-grabbing",
-                  draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
+                  draggingKey === bk ? "ring-2 ring-[rgba(216,146,17,0.5)]" : "",
                 ].join(" ")}
                 style={{ touchAction: "none" }}
                 title="Drag to reorder"
@@ -3114,12 +3115,12 @@ export function OddsScreen({
                           className={[
                             "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
                             enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                            active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                            active ? "shadow-[0_0_0_1px_rgba(216,146,17,0.25)]" : "",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(216,146,17,0.4)]",
                           ].join(" ")}
                           style={{
-                            borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                            background: active ? "rgba(212,175,55,0.16)" : "transparent",
+                            borderColor: active ? "rgba(216,146,17,0.55)" : "rgba(255,255,255,0.10)",
+                            background: active ? "rgba(216,146,17,0.16)" : "transparent",
                             color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
                           }}
                           title={

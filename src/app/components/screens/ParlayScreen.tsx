@@ -10,6 +10,7 @@
 
 import React, { useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { theme } from "../theme";
 import {
   Sparkles,
   Layers,
@@ -75,8 +76,8 @@ type ParlayResult = {
   rank_score: number; // EV minus penalty weighting
 };
 
-const GOLD = "#d89211";
-const BORDER = "#2a2a2a";
+const GOLD = theme.gold;
+const BORDER = theme.border;
 
 const BOOK_OPTIONS: Array<{ key: BookKey; label: string }> = [
   { key: "any", label: "Any" },

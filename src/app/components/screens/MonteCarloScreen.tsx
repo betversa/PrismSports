@@ -257,8 +257,8 @@ function medianOrNull(nums: number[]) {
 function GlowDot() {
   return (
     <span className="relative inline-flex h-2 w-2">
-      <span className="absolute inline-flex h-full w-full rounded-full opacity-60" style={{ background: "rgba(212,175,55,0.35)" }} />
-      <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
+      <span className="absolute inline-flex h-full w-full rounded-full opacity-60" style={{ background: "rgba(216,146,17,0.35)" }} />
+      <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: "#d89211" }} />
     </span>
   );
 }
@@ -305,7 +305,7 @@ function RankBadge({ rank }: { rank: number | null }) {
     <span
       className={cx(
         "ml-2 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-extrabold tabular-nums",
-        top ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]" : "border-[#252525] bg-[#0b0b0b] text-[#d4af37]"
+        top ? "border-[#d89211] bg-[#1a1406] text-[#f5e7b7]" : "border-[#252525] bg-[#0b0b0b] text-[#d89211]"
       )}
     >
       #{r}
@@ -347,7 +347,7 @@ function RecencyDot({ ts }: { ts: string | null }) {
   const ageMs = Date.now() - new Date(ts).getTime();
   const ok = Number.isFinite(ageMs);
   const dot =
-    !ok ? "#3a3a3a" : ageMs <= 5 * 60_000 ? "#22c55e" : ageMs <= 30 * 60_000 ? "#d4af37" : "#6b7280";
+    !ok ? "#3a3a3a" : ageMs <= 5 * 60_000 ? "#22c55e" : ageMs <= 30 * 60_000 ? "#d89211" : "#6b7280";
   const label =
     !ok
       ? "Update: unknown"
@@ -369,7 +369,7 @@ function barColor(tone: BarTone) {
   if (tone === "green") return "#22c55e";
   if (tone === "red") return "#ef4444";
   if (tone === "muted") return "#3a3a3a";
-  return "#d4af37"; // gold
+  return "#d89211"; // gold
 }
 
 function ProbBar({
@@ -743,7 +743,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(1100px 440px at 18% 0%, rgba(212,175,55,0.18), transparent 60%), rgba(0,0,0,0.82)",
+            "radial-gradient(1100px 440px at 18% 0%, rgba(216,146,17,0.18), transparent 60%), rgba(0,0,0,0.82)",
         }}
         onMouseDown={(e) => {
           if (e.target === e.currentTarget) onClose();
@@ -798,7 +798,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
                 className={cx(
                   "rounded-xl border px-3 py-2 text-[10px] font-black tracking-[0.14em] uppercase transition",
                   mode === "off"
-                    ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
+                    ? "border-[#d89211] bg-[#1a1406] text-[#f5e7b7]"
                     : "border-[#252525] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
                 )}
               >
@@ -811,7 +811,7 @@ function ModelModalPortal({ open, onClose, sportKey, event, logoMap, abbrMap }: 
                 className={cx(
                   "rounded-xl border px-3 py-2 text-[10px] font-black tracking-[0.14em] uppercase transition",
                   mode === "def"
-                    ? "border-[#d4af37] bg-[#1a1406] text-[#f5e7b7]"
+                    ? "border-[#d89211] bg-[#1a1406] text-[#f5e7b7]"
                     : "border-[#252525] bg-[#0b0b0b] text-[#cfcfcf] hover:bg-[#121212]"
                 )}
               >
@@ -1104,7 +1104,7 @@ function DesktopMatchupCard({ ev, onOpenModel }: { ev: EventBundle; onOpenModel:
         className="px-4 py-3 border-b border-[#141414]"
         style={{
           background:
-            "radial-gradient(800px 220px at 20% 0%, rgba(212,175,55,0.16), transparent 62%), rgba(0,0,0,0.20)",
+            "radial-gradient(800px 220px at 20% 0%, rgba(216,146,17,0.16), transparent 62%), rgba(0,0,0,0.20)",
         }}
       >
         <div className="flex items-start justify-between gap-3">
@@ -1662,7 +1662,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(1000px 320px at 16% 0%, rgba(212,175,55,0.22), transparent 62%), radial-gradient(700px 240px at 88% 10%, rgba(255,255,255,0.06), transparent 60%)",
+              "radial-gradient(1000px 320px at 16% 0%, rgba(216,146,17,0.22), transparent 62%), radial-gradient(700px 240px at 88% 10%, rgba(255,255,255,0.06), transparent 60%)",
           }}
         />
         <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
@@ -1758,7 +1758,7 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
               className="border border-[#252525] rounded-2xl p-4 overflow-hidden"
               style={{
                 background:
-                  "radial-gradient(700px 220px at 18% 0%, rgba(212,175,55,0.14), transparent 62%), rgba(11,11,11,0.92)",
+                  "radial-gradient(700px 220px at 18% 0%, rgba(216,146,17,0.14), transparent 62%), rgba(11,11,11,0.92)",
                 boxShadow: "0 18px 60px rgba(0,0,0,0.35)",
               }}
             >
@@ -1849,4 +1849,3 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 };
 
 export default MonteCarloScreen;
-

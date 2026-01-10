@@ -28,6 +28,7 @@ import {
   Trophy,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+import { theme } from "../theme";
 
 /* =========================================================
    TYPES
@@ -119,10 +120,10 @@ type PropEvRow = {
    THEME / FILTERS
 ========================================================= */
 
-const GOLD = "#d89211";
-const PANEL = "#0b0b0b";
-const BORDER = "#2a2a2a";
-const SLATE = "rgba(87,90,98,0.26)";
+const GOLD = theme.gold;
+const PANEL = theme.panel;
+const BORDER = theme.border;
+const SLATE = theme.slate;
 
 type PlayTab = "all" | "game" | "props";
 

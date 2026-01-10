@@ -35,7 +35,7 @@ export function CalibrationScreen() {
                     borderRadius: '6px',
                     fontSize: '11px',
                   }}
-                  labelStyle={{ color: '#d4af37' }}
+                  labelStyle={{ color: "#d89211" }}
                   itemStyle={{ color: '#fff' }}
                 />
                 <Legend
@@ -44,9 +44,9 @@ export function CalibrationScreen() {
                 <Line
                   type="monotone"
                   dataKey="marginError"
-                  stroke="#d4af37"
+                  stroke="#d89211"
                   strokeWidth={2}
-                  dot={{ fill: '#d4af37', r: 3 }}
+                  dot={{ fill: "#d89211", r: 3 }}
                   name="Margin Error"
                 />
                 <Line
@@ -90,15 +90,15 @@ export function CalibrationScreen() {
                     borderRadius: '6px',
                     fontSize: '11px',
                   }}
-                  labelStyle={{ color: '#d4af37' }}
+                  labelStyle={{ color: "#d89211" }}
                   itemStyle={{ color: '#fff' }}
                 />
                 <Line
                   type="monotone"
                   dataKey="calibrationSlope"
-                  stroke="#d4af37"
+                  stroke="#d89211"
                   strokeWidth={2}
-                  dot={{ fill: '#d4af37', r: 4 }}
+                  dot={{ fill: "#d89211", r: 4 }}
                   name="Slope"
                 />
                 {/* Reference line at 1.0 */}
@@ -143,7 +143,7 @@ export function CalibrationScreen() {
                     borderRadius: '6px',
                     fontSize: '11px',
                   }}
-                  labelStyle={{ color: '#d4af37' }}
+                  labelStyle={{ color: "#d89211" }}
                   itemStyle={{ color: '#fff' }}
                 />
                 <Line
@@ -170,11 +170,11 @@ export function CalibrationScreen() {
             <thead>
               <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
                 <th className="text-left p-3 text-[#808080]">Window</th>
-                <th className="text-center p-3 text-[#d4af37]">Sample Count</th>
-                <th className="text-center p-3 text-[#d4af37]">Margin Error</th>
-                <th className="text-center p-3 text-[#d4af37]">Total Error</th>
-                <th className="text-center p-3 text-[#d4af37]">Calib Slope</th>
-                <th className="text-center p-3 text-[#d4af37]">Health</th>
+                <th className="text-center p-3 text-[#d89211]">Sample Count</th>
+                <th className="text-center p-3 text-[#d89211]">Margin Error</th>
+                <th className="text-center p-3 text-[#d89211]">Total Error</th>
+                <th className="text-center p-3 text-[#d89211]">Calib Slope</th>
+                <th className="text-center p-3 text-[#d89211]">Health</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1a1a1a]">
@@ -215,19 +215,19 @@ export function CalibrationScreen() {
         <h3 className="text-sm text-white mb-3">Calibration Metrics Guide</h3>
         <div className="grid grid-cols-3 gap-4 text-xs">
           <div>
-            <div className="text-[#d4af37] mb-1">Margin Error</div>
+            <div className="text-[#d89211] mb-1">Margin Error</div>
             <div className="text-[#808080]">
               Mean absolute error for point spreads. Target: {'<'}10.0 pts. Lower is better.
             </div>
           </div>
           <div>
-            <div className="text-[#d4af37] mb-1">Total Error</div>
+            <div className="text-[#d89211] mb-1">Total Error</div>
             <div className="text-[#808080]">
               Mean absolute error for totals. Target: {'<'}11.0 pts. Lower is better.
             </div>
           </div>
           <div>
-            <div className="text-[#d4af37] mb-1">Calibration Slope</div>
+            <div className="text-[#d89211] mb-1">Calibration Slope</div>
             <div className="text-[#808080]">
               Measures model confidence vs reality. Target: 0.90-1.0. 1.0 = perfect calibration.
             </div>

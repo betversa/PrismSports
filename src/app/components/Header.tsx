@@ -9,6 +9,7 @@
 
 import React, { useLayoutEffect, useRef } from "react";
 import { Menu } from "lucide-react";
+import { theme } from "./theme";
 
 type Screen =
   | "overview"
@@ -32,11 +33,11 @@ type HeaderProps = {
 /** =========================
  * THEME (from logo palette)
  * ========================= */
-const GOLD = "#d89211";
-const GOLD_SOFT = "rgba(216, 146, 17, 0.18)";
-const GOLD_GLOW = "rgba(216, 146, 17, 0.32)";
-const PANEL = "#0b0b0b";
-const BORDER = "#2a2a2a";
+const GOLD = theme.gold;
+const GOLD_SOFT = theme.goldSoft;
+const GOLD_GLOW = theme.goldGlow;
+const PANEL = theme.panel;
+const BORDER = theme.border;
 
 const TAGLINE = "Sports Models · Projections · Analysis";
 

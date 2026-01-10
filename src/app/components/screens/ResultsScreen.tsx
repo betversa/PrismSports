@@ -251,7 +251,7 @@ export function ResultsScreen() {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 border border-white/10">
-                <Activity className="h-4 w-4 text-[#d4af37]" />
+                <Activity className="h-4 w-4 text-[#d89211]" />
               </div>
               <h2 className="text-white text-lg md:text-xl font-semibold tracking-tight">Results</h2>
             </div>
@@ -324,9 +324,9 @@ export function ResultsScreen() {
                 <th className="text-center p-3 text-white/50 font-medium">Games</th>
                 <th className="text-center p-3 text-white/50 font-medium">Finals</th>
 
-                <th className="text-center p-3 text-[#d4af37] font-medium border-l border-white/10">ML</th>
-                <th className="text-center p-3 text-[#d4af37] font-medium">Spread</th>
-                <th className="text-center p-3 text-[#d4af37] font-medium">Total</th>
+                <th className="text-center p-3 text-[#d89211] font-medium border-l border-white/10">ML</th>
+                <th className="text-center p-3 text-[#d89211] font-medium">Spread</th>
+                <th className="text-center p-3 text-[#d89211] font-medium">Total</th>
 
                 <th className="text-center p-3 text-white/50 font-medium border-l border-white/10">Picks</th>
                 <th className="text-center p-3 text-white/50 font-medium">Pick ML</th>
@@ -406,13 +406,13 @@ export function ResultsScreen() {
         <h3 className="text-sm text-white font-semibold mb-2">How to read this</h3>
         <div className="text-xs text-white/60 leading-relaxed space-y-2">
           <div>
-            <span className="text-[#d4af37] font-medium">Overall</span> columns include every graded game.
+            <span className="text-[#d89211] font-medium">Overall</span> columns include every graded game.
           </div>
           <div>
-            <span className="text-[#d4af37] font-medium">Pick</span> columns only include games/markets you flagged as picks.
+            <span className="text-[#d89211] font-medium">Pick</span> columns only include games/markets you flagged as picks.
           </div>
           <div>
-            <span className="text-[#d4af37] font-medium">Pick Edge</span> will show “—” until you store an edge field (ev_pct / edge_pct / etc).
+            <span className="text-[#d89211] font-medium">Pick Edge</span> will show “—” until you store an edge field (ev_pct / edge_pct / etc).
           </div>
         </div>
       </div>
@@ -678,7 +678,7 @@ function RangeToggle({ value, onChange }: { value: RangeKey; onChange: (v: Range
             className={[
               "px-3 py-1.5 text-[11px] rounded-md transition-colors",
               active
-                ? "bg-[#d4af37]/15 text-[#d4af37] border border-[#d4af37]/25"
+                ? "bg-[#d89211]/15 text-[#d89211] border border-[#d89211]/25"
                 : "text-white/60 hover:text-white hover:bg-white/[0.04]",
             ].join(" ")}
           >
@@ -724,7 +724,7 @@ function SummaryCard({
       <div
         className={[
           "text-lg md:text-xl font-semibold tracking-tight mb-1",
-          positive === undefined ? "text-white" : positive ? "text-[#d4af37]" : "text-white",
+          positive === undefined ? "text-white" : positive ? "text-[#d89211]" : "text-white",
         ].join(" ")}
       >
         {value}
@@ -742,7 +742,7 @@ function CoveragePill({ coverage, games }: { coverage: number; games: number }) 
     <span
       className={[
         "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] border",
-        good ? "bg-[#d4af37]/10 border-[#d4af37]/25 text-[#d4af37]" : "bg-white/5 border-white/10 text-white/70",
+        good ? "bg-[#d89211]/10 border-[#d89211]/25 text-[#d89211]" : "bg-white/5 border-white/10 text-white/70",
       ].join(" ")}
     >
       {good ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3 text-white/35" />}
@@ -754,7 +754,7 @@ function CoveragePill({ coverage, games }: { coverage: number; games: number }) 
 function PctCell({ value, dimIfNull }: { value: number | null; dimIfNull?: boolean }) {
   if (value == null || !Number.isFinite(value)) return <div className={dimIfNull ? "text-white/25" : "text-white/40"}>—</div>;
   const isGood = value >= 52.38;
-  return <div className={isGood ? "text-[#d4af37] font-semibold" : "text-white"}>{value.toFixed(1)}%</div>;
+  return <div className={isGood ? "text-[#d89211] font-semibold" : "text-white"}>{value.toFixed(1)}%</div>;
 }
 
 /* ===========================
@@ -836,4 +836,3 @@ function formatInt(n: number) {
     return String(n);
   }
 }
-
