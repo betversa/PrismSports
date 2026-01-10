@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { theme } from "../theme";
 
 /**
  * CalculatorScreen.tsx — FULL NEW SCREEN (Prism calculators)
@@ -13,7 +14,7 @@ type CalcKey = "implied" | "convert" | "kelly" | "ev" | "parlay" | "hedge";
 
 type OddsFormat = "american" | "decimal";
 
-const GOLD = "#d4af37";
+const GOLD = theme.gold;
 
 function safeNum(v: any, fallback = 0) {
   const n = Number(v);
@@ -130,7 +131,7 @@ function Card({
         className="pointer-events-none absolute inset-0 opacity-100"
         style={{
           background:
-            "radial-gradient(720px 260px at 20% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 88% 10%, rgba(255,255,255,0.05), transparent 60%)",
+            "radial-gradient(720px 260px at 20% 0%, rgba(216,146,17,0.14), transparent 60%), radial-gradient(520px 220px at 88% 10%, rgba(255,255,255,0.05), transparent 60%)",
         }}
       />
       <div className="relative">
@@ -180,7 +181,7 @@ function Input({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full rounded-lg border border-[#2a2a2a] bg-black/40 px-3 py-2 text-[13px] text-white placeholder:text-[#505050] outline-none focus:border-[#d4af37]/60"
+      className="w-full rounded-lg border border-[#2a2a2a] bg-black/40 px-3 py-2 text-[13px] text-white placeholder:text-[#505050] outline-none focus:border-[#d89211]/60"
     />
   );
 }
@@ -198,7 +199,7 @@ function Select({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-lg border border-[#2a2a2a] bg-black/40 px-3 py-2 text-[13px] text-white outline-none focus:border-[#d4af37]/60"
+      className="w-full rounded-lg border border-[#2a2a2a] bg-black/40 px-3 py-2 text-[13px] text-white outline-none focus:border-[#d89211]/60"
     >
       {options.map((o) => (
         <option key={o.value} value={o.value} className="bg-[#0b0b0b]">
@@ -415,7 +416,7 @@ function OddsConverterCalc() {
           <div className="grid grid-cols-3 gap-2">
             <StatBox label="American" value={formatAmerican(out.american)} />
             <StatBox label="Decimal" value={formatDecimal(out.decimal)} />
-            <StatBox label="Implied %" value={fmtPct(out.impliedPct, 2)} tone="text-[#d4af37]" />
+            <StatBox label="Implied %" value={fmtPct(out.impliedPct, 2)} tone="text-[#d89211]" />
           </div>
         </Field>
       </div>
@@ -483,7 +484,7 @@ function KellyCalc() {
 
         <Field label="Outputs">
           <div className="grid grid-cols-2 gap-2">
-            <StatBox label="Recommended Stake" value={fmtMoney(calc.stake, 2)} tone="text-[#d4af37]" />
+            <StatBox label="Recommended Stake" value={fmtMoney(calc.stake, 2)} tone="text-[#d89211]" />
             <StatBox label="Stake %" value={fmtPct(calc.stakePct, 2)} />
           </div>
         </Field>
@@ -785,7 +786,7 @@ function HedgeCalc() {
       </div>
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-2">
-        <StatBox label="Recommended Hedge Stake (B)" value={fmtMoney(out.hedgeStake, 2)} tone="text-[#d4af37]" />
+        <StatBox label="Recommended Hedge Stake (B)" value={fmtMoney(out.hedgeStake, 2)} tone="text-[#d89211]" />
         <StatBox label="Profit if A wins" value={fmtMoney(out.profitIfA, 2)} tone={toneA} />
         <StatBox label="Profit if B wins" value={fmtMoney(out.profitIfB, 2)} tone={toneB} />
       </div>

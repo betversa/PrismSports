@@ -153,7 +153,7 @@ const HISTORY_BOOKS: AnyBookHistory[] = [
 const BOOK_COLOR: Record<AnyBookHistory, string> = {
   draftkings: "#22c55e",
   fanduel: "#3b82f6",
-  betmgm: "#d4af37",
+  betmgm: "#d89211",
   pinnacle: "#a855f7",
 };
 
@@ -613,7 +613,7 @@ export function PropsScreen() {
           className="pointer-events-none absolute inset-0"
           style={{
             background:
-              "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
+              "radial-gradient(700px 260px at 18% 0%, rgba(216,146,17,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
           }}
         />
         <div className="relative flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
@@ -621,7 +621,7 @@ export function PropsScreen() {
             <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
               <span
                 className="inline-block h-2 w-2 rounded-full"
-                style={{ background: "#d4af37" }}
+                style={{ background: "#d89211" }}
               />
               Player Props
             </div>
@@ -664,7 +664,7 @@ export function PropsScreen() {
                 onClick={() => setSelectedMarket(m)}
                 className={`px-3 py-1.5 text-xs rounded-full transition-colors border ${
                   selectedMarket === m
-                    ? "bg-[#d4af37] text-black border-[#d4af37]"
+                    ? "bg-[#d89211] text-black border-[#d89211]"
                     : "bg-black/40 text-[#b0b0b0] border-[#2a2a2a] hover:bg-[#111] hover:text-white"
                 }`}
                 type="button"
@@ -836,7 +836,7 @@ function PropRowDesktop({
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="text-white group-hover:text-[#d4af37] transition-colors truncate">
+                  <div className="text-white group-hover:text-[#d89211] transition-colors truncate">
                     {row.player_name} — {row.ui_market} {row.side} {row.line}
                   </div>
                   <div className="text-[10px] text-[#606060] mt-0.5 truncate">
@@ -877,7 +877,7 @@ function PropRowDesktop({
                 key={b}
                 className={`px-2 py-1 rounded border text-[10px] ${
                   isBest
-                    ? "bg-[#d4af37]/15 border-[#d4af37]/40 text-[#d4af37]"
+                    ? "bg-[#d89211]/15 border-[#d89211]/40 text-[#d89211]"
                     : "bg-[#101010] border-[#2a2a2a] text-[#777777]"
                 }`}
               >
@@ -1012,7 +1012,7 @@ function PropCardMobile({
 
           <div className="rounded-xl border border-[#2a2a2a] bg-[#0b0b0b] p-2">
             <div className="text-[10px] text-[#6e6e6e]">Bet $</div>
-            <div className="text-[12px] text-[#d4af37] tabular-nums mt-0.5">
+            <div className="text-[12px] text-[#d89211] tabular-nums mt-0.5">
               {settingsReady && Number.isFinite(betAmount) && betAmount > 0 ? formatMoney(betAmount) : "—"}
             </div>
           </div>
@@ -1028,7 +1028,7 @@ function PropCardMobile({
                     key={b}
                     className={`px-2 py-1 rounded border text-[10px] ${
                       isBest
-                        ? "bg-[#d4af37]/15 border-[#d4af37]/40 text-[#d4af37]"
+                        ? "bg-[#d89211]/15 border-[#d89211]/40 text-[#d89211]"
                         : "bg-[#101010] border-[#2a2a2a] text-[#777777]"
                     }`}
                   >
@@ -1104,7 +1104,7 @@ function PropDetailsModal({
               <div className="min-w-0">
                 <div className="text-white text-sm md:text-base truncate">
                   {team} vs {opp}{" "}
-                  <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                  <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d89211]/15 border border-[#d89211]/25 text-[10px] text-[#d89211]">
                     PROP
                   </span>
                 </div>
@@ -1115,7 +1115,7 @@ function PropDetailsModal({
                 </div>
 
                 <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-[#d4af37]">{prop.ui_market}</span>
+                  <span className="text-[#d89211]">{prop.ui_market}</span>
                   <span className="text-[#404040]">·</span>
                   <span className="text-white">{prop.player_name}</span>
                   <span className="text-[#808080]">
@@ -1145,7 +1145,7 @@ function PropDetailsModal({
                 </div>
 
                 <div className="mt-1 text-[10px] text-[#606060]">Bet</div>
-                <div className="text-[#d4af37] font-semibold tabular-nums">
+                <div className="text-[#d89211] font-semibold tabular-nums">
                   {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
                 </div>
               </div>
@@ -1318,7 +1318,7 @@ function PropOddsHistoryPanel({ prop }: { prop: AggregatedProp }) {
         <div style={{ fontSize: 11, color: "#b0b0b0", marginBottom: 8, lineHeight: 1.35 }}>
           <div style={{ color: "#ffffff" }}>{prop.player_name}</div>
           <div>
-            <span style={{ color: "#d4af37" }}>{prop.ui_market}</span>{" "}
+            <span style={{ color: "#d89211" }}>{prop.ui_market}</span>{" "}
             <span style={{ color: "#606060" }}>·</span>{" "}
             <span style={{ color: "#d0d0d0" }}>
               {prop.side} {prop.line}
@@ -1656,4 +1656,3 @@ function PropHitRatePanel({ prop }: { prop: AggregatedProp }) {
     </div>
   );
 }
-

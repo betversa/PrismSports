@@ -32,8 +32,6 @@ type AppSettingsRow = {
   updated_at: string | null;
 };
 
-const GOLD = "#d4af37";
-
 // UI-only convenience options
 const KELLY_OPTIONS: { label: string; value: number }[] = [
   { label: "Full Kelly (1.00)", value: 1.0 },
@@ -261,7 +259,7 @@ export function SettingsScreen() {
       {/* Staking */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
         <div className="flex items-center gap-3 mb-4">
-          <Wallet className="w-5 h-5 text-[#d4af37]" />
+          <Wallet className="w-5 h-5 text-[#d89211]" />
           <h3 className="text-sm text-white">Staking</h3>
         </div>
 
@@ -276,7 +274,7 @@ export function SettingsScreen() {
             </div>
 
             {!app ? (
-              <div className="text-xs text-[#d4af37]">{loading ? "…" : stakingParams.bankroll}</div>
+              <div className="text-xs text-[#d89211]">{loading ? "…" : stakingParams.bankroll}</div>
             ) : (
               <div className="flex items-center gap-2">
                 <select
@@ -315,7 +313,7 @@ export function SettingsScreen() {
             </div>
 
             {!app ? (
-              <div className="text-xs text-[#d4af37]">{loading ? "…" : stakingParams.kelly}</div>
+              <div className="text-xs text-[#d89211]">{loading ? "…" : stakingParams.kelly}</div>
             ) : (
               <div className="flex items-center gap-2">
                 <select
@@ -343,7 +341,7 @@ export function SettingsScreen() {
 
                 <div className="px-2 py-1 bg-[#1a1a1a] rounded text-[#808080] text-xs">
                   <span className="text-[#606060]">=</span>{" "}
-                  <span className="text-[#d4af37]">{stakingParams.kellyPct}</span>
+                  <span className="text-[#d89211]">{stakingParams.kellyPct}</span>
                 </div>
               </div>
             )}
@@ -370,7 +368,7 @@ export function SettingsScreen() {
       {/* Model Parameters */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
         <div className="flex items-center gap-3 mb-4">
-          <SettingsIcon className="w-5 h-5 text-[#d4af37]" />
+          <SettingsIcon className="w-5 h-5 text-[#d89211]" />
           <h3 className="text-sm text-white">Model Parameters</h3>
         </div>
 
@@ -401,7 +399,7 @@ export function SettingsScreen() {
       {/* Data Sources */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
         <div className="flex items-center gap-3 mb-4">
-          <Database className="w-5 h-5 text-[#d4af37]" />
+          <Database className="w-5 h-5 text-[#d89211]" />
           <h3 className="text-sm text-white">Data Sources</h3>
         </div>
 
@@ -426,7 +424,7 @@ export function SettingsScreen() {
       {/* Notifications */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
         <div className="flex items-center gap-3 mb-4">
-          <Bell className="w-5 h-5 text-[#d4af37]" />
+          <Bell className="w-5 h-5 text-[#d89211]" />
           <h3 className="text-sm text-white">Notifications</h3>
         </div>
 
@@ -471,7 +469,7 @@ export function SettingsScreen() {
       {/* System Status */}
       <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-6">
         <div className="flex items-center gap-3 mb-4">
-          <Zap className="w-5 h-5 text-[#d4af37]" />
+          <Zap className="w-5 h-5 text-[#d89211]" />
           <h3 className="text-sm text-white">System Status</h3>
         </div>
 
@@ -533,7 +531,7 @@ function SettingRow({
       </div>
 
       {!editable ? (
-        <div className="text-xs text-[#d4af37]">{value}</div>
+        <div className="text-xs text-[#d89211]">{value}</div>
       ) : (
         <InlineNumber value={value} onCommit={(n) => onEdit?.(n)} />
       )}
@@ -570,7 +568,7 @@ function InlineNumber({ value, onCommit }: { value: string; onCommit: (n: number
   ) : (
     <button
       type="button"
-      className="text-xs text-[#d4af37] hover:opacity-80"
+      className="text-xs text-[#d89211] hover:opacity-80"
       onClick={() => setEditing(true)}
       title="Click to edit"
     >
@@ -597,7 +595,7 @@ function InlineDecimal({
 
   if (disabled) {
     return (
-      <div className="text-xs text-[#d4af37] tabular-nums">
+      <div className="text-xs text-[#d89211] tabular-nums">
         {value == null ? "—" : String(value)}
       </div>
     );
@@ -628,7 +626,7 @@ function InlineDecimal({
   ) : (
     <button
       type="button"
-      className="text-xs text-[#d4af37] hover:opacity-80 tabular-nums"
+      className="text-xs text-[#d89211] hover:opacity-80 tabular-nums"
       onClick={() => setEditing(true)}
       title="Click to edit"
     >
@@ -654,7 +652,7 @@ function InlineMoney({
   useEffect(() => setDraft(value == null ? "" : String(Math.round(value))), [value]);
 
   if (disabled) {
-    return <div className="text-xs text-[#d4af37] tabular-nums">{value == null ? "—" : `$${formatInt(Math.round(value))}`}</div>;
+    return <div className="text-xs text-[#d89211] tabular-nums">{value == null ? "—" : `$${formatInt(Math.round(value))}`}</div>;
   }
 
   return editing ? (
@@ -682,7 +680,7 @@ function InlineMoney({
   ) : (
     <button
       type="button"
-      className="text-xs text-[#d4af37] hover:opacity-80 tabular-nums"
+      className="text-xs text-[#d89211] hover:opacity-80 tabular-nums"
       onClick={() => setEditing(true)}
       title="Click to edit"
     >
@@ -712,7 +710,7 @@ function DataSourceRow({
         <div className={`w-2 h-2 rounded-full ${dotClass}`} />
         <div className="text-white">{name}</div>
         {priority && (
-          <span className="px-2 py-0.5 bg-[#d4af37]/20 text-[#d4af37] rounded text-[10px] border border-[#d4af37]/40">
+          <span className="px-2 py-0.5 bg-[#d89211]/20 text-[#d89211] rounded text-[10px] border border-[#d89211]/40">
             {priority}
           </span>
         )}
@@ -752,7 +750,7 @@ function NotificationRow({
         className={[
           "w-10 h-5 rounded-full relative transition-colors",
           disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
-          enabled ? "bg-[#d4af37]" : "bg-[#2a2a2a]",
+          enabled ? "bg-[#d89211]" : "bg-[#2a2a2a]",
         ].join(" ")}
         aria-label={`${label} toggle`}
       >
@@ -828,4 +826,3 @@ function clampNum(raw: number, min: number, max: number) {
   if (!Number.isFinite(n)) return min;
   return Math.max(min, Math.min(max, n));
 }
-

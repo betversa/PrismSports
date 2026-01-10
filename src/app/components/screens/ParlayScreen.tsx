@@ -10,6 +10,7 @@
 
 import React, { useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { theme } from "../theme";
 import {
   Sparkles,
   Layers,
@@ -75,8 +76,8 @@ type ParlayResult = {
   rank_score: number; // EV minus penalty weighting
 };
 
-const GOLD = "#d89211";
-const BORDER = "#2a2a2a";
+const GOLD = theme.gold;
+const BORDER = theme.border;
 
 const BOOK_OPTIONS: Array<{ key: BookKey; label: string }> = [
   { key: "any", label: "Any" },
@@ -247,8 +248,7 @@ export function ParlayScreen() {
 
   return (
     <div className="space-y-5">
-      {/* Hero */}
-      <div className="rounded-xl border border-white/10 bg-gradient-to-b from-white/[0.08] to-white/[0.03] p-4 md:p-5">
+      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 md:p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -259,7 +259,7 @@ export function ParlayScreen() {
             </div>
 
             <p className="mt-1 text-xs text-white/50">
-              Pick your legs + book — we’ll suggest parlays built from your top +EV plays (with correlation rules).
+              Configure legs and filters, then generate parlays from eligible +EV plays.
             </p>
           </div>
 

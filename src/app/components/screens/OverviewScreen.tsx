@@ -23,11 +23,12 @@ import {
   Database,
   Flame,
   RefreshCw,
-  Sparkles,
   Target,
   Trophy,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+import { theme } from "../theme";
+import type { Screen } from "../../App";
 
 /* =========================================================
    TYPES
@@ -119,10 +120,10 @@ type PropEvRow = {
    THEME / FILTERS
 ========================================================= */
 
-const GOLD = "#d89211";
-const PANEL = "#0b0b0b";
-const BORDER = "#2a2a2a";
-const SLATE = "rgba(87,90,98,0.26)";
+const GOLD = theme.gold;
+const PANEL = theme.panel;
+const BORDER = theme.border;
+const SLATE = theme.slate;
 
 type PlayTab = "all" | "game" | "props";
 
@@ -497,17 +498,19 @@ function QuickAction({
   title,
   sub,
   icon: Icon,
-  href,
+  screen,
+  onNavigate,
 }: {
   title: string;
   sub: string;
-  icon: any;
-  href: string;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  screen: Screen;
+  onNavigate?: (screen: Screen) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={() => (window.location.href = href)}
+      onClick={() => onNavigate?.(screen)}
       className={[
         "text-left rounded-xl border p-4 transition-colors",
         "hover:border-[#3a3a3a]",
@@ -891,7 +894,7 @@ function TopPlayCard({
    SCREEN
 ========================================================= */
 
-export function OverviewScreen() {
+export function OverviewScreen({ onNavigate }: { onNavigate?: (screen: Screen) => void }) {
   const [loading, setLoading] = useState(true);
   const [loadingSoft, setLoadingSoft] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1143,69 +1146,23 @@ export function OverviewScreen() {
 
   return (
     <div className="space-y-8 sm:space-y-10">
-      {/* HERO */}
       <div
-        className="relative overflow-hidden rounded-2xl border p-4 sm:p-6"
+        className="rounded-2xl border p-4 sm:p-6"
         style={{
           borderColor: "rgba(255,255,255,0.08)",
           background: PANEL,
         }}
       >
-        <div className="pointer-events-none absolute inset-0">
-          <div
-            className="absolute inset-0"
-            style={{
-              background: [
-                "radial-gradient(900px 260px at 18% 0%, rgba(216,146,17,0.16), transparent 60%)",
-                `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
-                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
-                "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.86) 100%)",
-              ].join(", "),
-            }}
-          />
-
-          <div
-            className="absolute left-0 right-0 top-0 h-[1px] opacity-75"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.10), rgba(255,255,255,0.0))",
-            }}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
-            }}
-          />
-        </div>
-
-        <div className="relative space-y-4">
+        <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="min-w-0">
-              <div
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
-                style={{
-                  borderColor: "rgba(216,146,17,0.22)",
-                  background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                  color: "rgba(255,255,255,0.82)",
-                }}
-              >
-                <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
-                Prism Command Center
+              <div className="text-sm text-white font-semibold">Overview</div>
+              <div className="text-xs text-[#a7a7a7] mt-1">
+                Top plays, quick links, and live model context for today’s slate.
               </div>
-
-              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
-                Best Plays Today <span className="text-[#7b7b7b]">—</span> Live
-              </h2>
-
-              <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl">
-                Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
-              </p>
-
               <div className="text-[11px] text-[#a7a7a7] mt-2">
-                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
-                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
+                Filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} • Games EV ≤{" "}
+                {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
               </div>
             </div>
 
@@ -1239,9 +1196,9 @@ export function OverviewScreen() {
           ) : null}
 
           <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-            <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
-            <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
-            <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
+            <QuickAction title="Odds" sub="See lines + history" icon={Database} screen="odds" onNavigate={onNavigate} />
+            <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} screen="monte-carlo" onNavigate={onNavigate} />
+            <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} screen="model" onNavigate={onNavigate} />
           </div>
         </div>
       </div>

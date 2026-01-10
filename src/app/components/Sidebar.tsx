@@ -16,6 +16,7 @@ import {
   User,
 } from "lucide-react";
 import type { Screen } from "../App";
+import { theme } from "./theme";
 
 interface SidebarProps {
   activeScreen: Screen;
@@ -39,9 +40,7 @@ export function Sidebar({
   const baseItemClasses = (active: boolean) =>
     [
       "w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded transition-colors",
-      active
-        ? "bg-[#d89211] text-black"
-        : "text-[#b0b0b0] hover:bg-[#151515] hover:text-white",
+      active ? "text-black" : "text-[#b0b0b0] hover:bg-[#151515] hover:text-white",
     ].join(" ");
 
   const SectionDivider = () => <div className="my-2 h-px bg-[#1a1a1a]" />;
@@ -74,6 +73,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "overview")}
+              style={activeScreen === "overview" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -91,6 +91,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "model")}
+              style={activeScreen === "model" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -108,6 +109,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "props")}
+              style={activeScreen === "props" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -125,6 +127,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "parlay")}
+              style={activeScreen === "parlay" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -142,6 +145,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "calculator")}
+              style={activeScreen === "calculator" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -161,6 +165,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "monte-carlo")}
+              style={activeScreen === "monte-carlo" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -178,6 +183,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "odds")}
+              style={activeScreen === "odds" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -197,6 +203,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "results")}
+              style={activeScreen === "results" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">
@@ -214,6 +221,7 @@ export function Sidebar({
                 if (isMobile) onClose?.();
               }}
               className={baseItemClasses(activeScreen === "settings")}
+              style={activeScreen === "settings" ? { background: theme.gold } : undefined}
               type="button"
             >
               <div className="flex items-center gap-3">

@@ -279,7 +279,7 @@ const HISTORY_BOOKS: AnyBookHistory[] = ["draftkings", "fanduel", "betmgm", "pin
 const BOOK_COLOR: Record<AnyBookHistory, string> = {
   draftkings: "#22c55e", // green
   fanduel: "#3b82f6", // blue
-  betmgm: "#d4af37", // gold
+  betmgm: "#d89211", // gold
   pinnacle: "#a855f7", // purple
 };
 
@@ -531,12 +531,12 @@ function fmtPropLine(line: number | null) {
 
 function evTone(ev: number) {
   if (ev >= 7) return "text-emerald-400";
-  if (ev >= 3) return "text-[#d4af37]";
+  if (ev >= 3) return "text-[#d89211]";
   return "text-[#b0b0b0]";
 }
 
 function scoreTone(score: number) {
-  if (score >= 90) return { bg: "bg-[#d4af37]/15", border: "border-[#d4af37]/35", text: "text-[#d4af37]" };
+  if (score >= 90) return { bg: "bg-[#d89211]/15", border: "border-[#d89211]/35", text: "text-[#d89211]" };
   if (score >= 75) return { bg: "bg-white/5", border: "border-white/10", text: "text-white" };
   return { bg: "bg-white/0", border: "border-white/0", text: "text-[#a0a0a0]" };
 }
@@ -1374,14 +1374,14 @@ export const ModelScreen = () => {
           className="pointer-events-none absolute inset-0 opacity-100"
           style={{
             background:
-              "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
+              "radial-gradient(700px 260px at 18% 0%, rgba(216,146,17,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
           }}
         />
 
         <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
           <div className="min-w-0">
             <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d89211" }} />
               Prism Model Picks
             </div>
 
@@ -1630,7 +1630,7 @@ function PlayRow({
               <span className="text-[#b0b0b0]">{fmtTimeCentral(play.commence_time)}</span>
 
               {play.kind === "prop" ? (
-                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d89211]/15 border border-[#d89211]/25 text-[10px] text-[#d89211]">
                   PROP
                 </span>
               ) : null}
@@ -1777,7 +1777,7 @@ function PlayCard({
           <div className="text-white text-sm truncate">
             {play.matchup ?? "—"}
             {play.kind === "prop" ? (
-              <span className="ml-2 align-middle inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+              <span className="ml-2 align-middle inline-flex items-center px-1.5 py-0.5 rounded bg-[#d89211]/15 border border-[#d89211]/25 text-[10px] text-[#d89211]">
                 PROP
               </span>
             ) : null}
@@ -1802,7 +1802,7 @@ function PlayCard({
             </div>
             <div className="text-right">
               <div className="text-[10px] text-[#606060]">Bet</div>
-              <div className="text-[#d4af37] font-semibold tabular-nums">
+              <div className="text-[#d89211] font-semibold tabular-nums">
                 {settingsReady && betAmount > 0 ? formatMoney(betAmount) : "—"}
               </div>
             </div>
@@ -2307,7 +2307,7 @@ function PlayDetailsModal({
                 <div className="text-white text-sm md:text-base truncate">
                   {play.matchup ?? "—"}{" "}
                   {play.kind === "prop" ? (
-                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d4af37]/15 border border-[#d4af37]/25 text-[10px] text-[#d4af37]">
+                    <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded bg-[#d89211]/15 border border-[#d89211]/25 text-[10px] text-[#d89211]">
                       PROP
                     </span>
                   ) : null}
@@ -2319,7 +2319,7 @@ function PlayDetailsModal({
                 </div>
 
                 <div className="mt-2 text-white flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="text-[#d4af37]">{play.marketLabel}</span>
+                  <span className="text-[#d89211]">{play.marketLabel}</span>
                   <span className="text-[#404040]">·</span>
                   <span className="text-white">{play.pickLabel}</span>
                   <span className="text-[#808080]">
@@ -2678,10 +2678,10 @@ function Row3({ label, a, h, accent }: { label: string; a: string; h: string; ac
   return (
     <>
       <div className="text-[#808080]">{label}</div>
-      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>
+      <div className={["text-center tabular-nums", accent ? "text-[#d89211] font-semibold" : "text-white"].join(" ")}>
         {a}
       </div>
-      <div className={["text-center tabular-nums", accent ? "text-[#d4af37] font-semibold" : "text-white"].join(" ")}>
+      <div className={["text-center tabular-nums", accent ? "text-[#d89211] font-semibold" : "text-white"].join(" ")}>
         {h}
       </div>
     </>
@@ -2864,7 +2864,7 @@ function OddsHistoryPanel({ play }: { play: AggregatedPlay }) {
         <div style={{ fontSize: 11, color: "#b0b0b0", marginBottom: 8, lineHeight: 1.35 }}>
           <div style={{ color: "#ffffff" }}>{play.matchup ?? "—"}</div>
           <div>
-            <span style={{ color: "#d4af37" }}>{play.marketLabel}</span> <span style={{ color: "#606060" }}>·</span>{" "}
+            <span style={{ color: "#d89211" }}>{play.marketLabel}</span> <span style={{ color: "#606060" }}>·</span>{" "}
             <span style={{ color: "#d0d0d0" }}>
               {play.sideLabel} {play.kind === "prop" ? play.lineLabel : ""}
             </span>
@@ -3187,16 +3187,16 @@ function LegendDot({ label, color }: { label: string; color: string }) {
 
 function StatChip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className={["rounded-lg border px-2 py-2 text-center", accent ? "bg-[#d4af37]/10 border-[#d4af37]/25" : "bg-[#0a0a0a] border-[#1f1f1f]"].join(" ")}>
+    <div className={["rounded-lg border px-2 py-2 text-center", accent ? "bg-[#d89211]/10 border-[#d89211]/25" : "bg-[#0a0a0a] border-[#1f1f1f]"].join(" ")}>
       <div className="text-[10px] text-[#606060]">{label}</div>
-      <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d4af37]" : "text-white"].join(" ")}>{value}</div>
+      <div className={["mt-0.5 font-semibold tabular-nums", accent ? "text-[#d89211]" : "text-white"].join(" ")}>{value}</div>
     </div>
   );
 }
 
 function BetAmountValue({ amount, ready }: { amount: number; ready: boolean }) {
   if (!ready || !Number.isFinite(amount) || amount <= 0) return <div className="text-[#404040]">—</div>;
-  return <div className="text-[#d4af37] font-semibold tabular-nums">{formatMoney(amount)}</div>;
+  return <div className="text-[#d89211] font-semibold tabular-nums">{formatMoney(amount)}</div>;
 }
 
 function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
@@ -3224,7 +3224,7 @@ function BookOfferCell({ offer, isBest }: { offer?: BookOffer; isBest?: boolean 
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
 
-      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
+      <div className={["text-[10px] tabular-nums", isBest ? "text-[#d89211]" : "text-[#808080]"].join(" ")}>{pct(offer.ev_pct, 1)}</div>
     </div>
   );
 }
@@ -3248,7 +3248,7 @@ function BookChip({ offer, isBest }: { offer?: BookOffer; isBest?: boolean }) {
         {logo ? <img src={logo} alt={offer.book} className="h-4 w-4 opacity-95" draggable={false} /> : null}
         <div className="text-white font-semibold tabular-nums">{american(offer.odds)}</div>
       </div>
-      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d4af37]" : "text-[#808080]"].join(" ")}>
+      <div className={["text-[10px] tabular-nums mt-1", isBest ? "text-[#d89211]" : "text-[#808080]"].join(" ")}>
         {pct(offer.ev_pct, 1)}
       </div>
     </div>
@@ -3374,5 +3374,3 @@ function GamePickInline({
 
 /* ✅ ALSO provide a default export so any default-import usage won't break */
 export default ModelScreen;
-
-
