@@ -23,7 +23,6 @@ import {
   Database,
   Flame,
   RefreshCw,
-  Sparkles,
   Target,
   Trophy,
 } from "lucide-react";
@@ -1147,69 +1146,23 @@ export function OverviewScreen({ onNavigate }: { onNavigate?: (screen: Screen) =
 
   return (
     <div className="space-y-8 sm:space-y-10">
-      {/* HERO */}
       <div
-        className="relative overflow-hidden rounded-2xl border p-4 sm:p-6"
+        className="rounded-2xl border p-4 sm:p-6"
         style={{
           borderColor: "rgba(255,255,255,0.08)",
           background: PANEL,
         }}
       >
-        <div className="pointer-events-none absolute inset-0">
-          <div
-            className="absolute inset-0"
-            style={{
-              background: [
-                "radial-gradient(900px 260px at 18% 0%, rgba(216,146,17,0.16), transparent 60%)",
-                `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
-                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
-                "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.86) 100%)",
-              ].join(", "),
-            }}
-          />
-
-          <div
-            className="absolute left-0 right-0 top-0 h-[1px] opacity-75"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.10), rgba(255,255,255,0.0))",
-            }}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
-            }}
-          />
-        </div>
-
-        <div className="relative space-y-4">
+        <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="min-w-0">
-              <div
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
-                style={{
-                  borderColor: "rgba(216,146,17,0.22)",
-                  background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                  color: "rgba(255,255,255,0.82)",
-                }}
-              >
-                <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
-                Prism Command Center
+              <div className="text-sm text-white font-semibold">Overview</div>
+              <div className="text-xs text-[#a7a7a7] mt-1">
+                Top plays, quick links, and live model context for today’s slate.
               </div>
-
-              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
-                Best Plays Today <span className="text-[#7b7b7b]">—</span> Live
-              </h2>
-
-              <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl">
-                Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
-              </p>
-
               <div className="text-[11px] text-[#a7a7a7] mt-2">
-                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
-                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
+                Filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} • Games EV ≤{" "}
+                {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
               </div>
             </div>
 
