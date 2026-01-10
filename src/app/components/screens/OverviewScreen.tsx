@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import { theme } from "../theme";
+import type { Screen } from "../../App";
 
 /* =========================================================
    TYPES
@@ -498,17 +499,19 @@ function QuickAction({
   title,
   sub,
   icon: Icon,
-  href,
+  screen,
+  onNavigate,
 }: {
   title: string;
   sub: string;
-  icon: any;
-  href: string;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  screen: Screen;
+  onNavigate?: (screen: Screen) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={() => (window.location.href = href)}
+      onClick={() => onNavigate?.(screen)}
       className={[
         "text-left rounded-xl border p-4 transition-colors",
         "hover:border-[#3a3a3a]",
@@ -892,7 +895,7 @@ function TopPlayCard({
    SCREEN
 ========================================================= */
 
-export function OverviewScreen() {
+export function OverviewScreen({ onNavigate }: { onNavigate?: (screen: Screen) => void }) {
   const [loading, setLoading] = useState(true);
   const [loadingSoft, setLoadingSoft] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1240,9 +1243,9 @@ export function OverviewScreen() {
           ) : null}
 
           <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
-            <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
-            <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
-            <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
+            <QuickAction title="Odds" sub="See lines + history" icon={Database} screen="odds" onNavigate={onNavigate} />
+            <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} screen="monte-carlo" onNavigate={onNavigate} />
+            <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} screen="model" onNavigate={onNavigate} />
           </div>
         </div>
       </div>

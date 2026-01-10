@@ -110,7 +110,7 @@ export default function App() {
 
   const screens = useMemo<Record<Screen, JSX.Element>>(
     () => ({
-      overview: <OverviewScreen />,
+      overview: <OverviewScreen onNavigate={(screen) => setActiveScreen(screen)} />,
 
       // ✅ Model uses predSportKey + selectedDate
       model: <ModelScreen selectedDate={selectedDate} sportKey={predSportKey} />,
