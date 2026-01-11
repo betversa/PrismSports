@@ -29,6 +29,8 @@ import React, {
   useState,
 } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { americanToDecimal, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
+import { formatOddsPrice, formatPercent } from "../../../lib/odds/format";
 import {
   ResponsiveContainer,
   LineChart,
@@ -80,6 +82,13 @@ const PRISM_BORDER = "rgba(255,255,255,0.08)";
 const PRISM_GOLD = "#d4af37";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
+const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
+const BOARD_STICKY_BG = BOARD_BG;
+const TABLE_HEADER_BG = "#0b0b0b";
+const FILTER_ROW_HEIGHT = 48;
+const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
+const DATE_BAR_HEIGHT = 44;
+const HEADER_ROW_HEIGHT = 40;
 const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.86), rgba(8,8,8,0.96))";
 const BOARD_STICKY_BG = "linear-gradient(180deg, rgba(12,12,12,0.98), rgba(10,10,10,0.96))";
 
@@ -102,11 +111,11 @@ const BOOK_STROKES: Record<BookKey, string> = {
 };
 
 const BOOK_LOGOS: Record<BookKey, string> = {
-  dk: "/books/dk.png",
-  fd: "/books/fd.png",
-  mgm: "/books/mgm.png",
-  pin: "/books/pin.png",
-  bol: "/books/bol.png",
+  dk: "/books/dksquare.png",
+  fd: "/books/fdsquare.png",
+  mgm: "/books/mgmsquare.png",
+  pin: "/books/pinsquare.png",
+  bol: "/books/bolsquare.png",
 };
 
 const COL_GAME = 380;
@@ -296,29 +305,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
    ODDS FORMATTERS
 ========================================================= */
 
-function americanToDecimal(american: number): number {
-  if (!Number.isFinite(american) || american === 0) return NaN;
-  if (american > 0) return 1 + american / 100;
-  return 1 + 100 / Math.abs(american);
-}
-function fmtPrice(odds: number | null, fmt: OddsFormat) {
-  if (odds == null) return "—";
-  if (fmt === "american") return String(odds);
-  const dec = americanToDecimal(odds);
-  if (!Number.isFinite(dec)) return "—";
-  return dec.toFixed(2);
-}
+const fmtPrice = (odds: number | null, fmt: OddsFormat) => formatOddsPrice(odds, fmt);
 
 /* =========================================================
    CONSENSUS HELPERS
 ========================================================= */
-
-function median(nums: number[]) {
-  const a = nums.filter((n) => Number.isFinite(n)).sort((x, y) => x - y);
-  if (!a.length) return null;
-  const mid = Math.floor(a.length / 2);
-  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
-}
 
 type CellParts = { top: string; bottom?: string };
 
@@ -418,41 +409,42 @@ function partsForBookSide(
    UI PRIMITIVES (board look)
 ========================================================= */
 
-function headerFallbackPillDataUri(label: string) {
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="88" height="22">
-    <rect x="0" y="0" width="88" height="22" rx="11" ry="11" fill="#FFFFFF"/>
-    <rect x="0.5" y="0.5" width="87" height="21" rx="11" ry="11" fill="none" stroke="#E5E5E5"/>
-    <text x="44" y="15"
-      font-family="Arial, sans-serif" font-size="12" font-weight="700"
-      text-anchor="middle" fill="#111111">${label}</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg.trim())}`;
-}
-
 function BookLogoPill({
   src,
   alt,
-  fallbackLabel,
+  className,
+  imgClassName,
+  textClassName,
 }: {
   src: string;
   alt: string;
-  fallbackLabel: string;
+  className?: string;
+  imgClassName?: string;
+  textClassName?: string;
 }) {
   return (
     <div
-      className="h-7 w-[92px] rounded-full bg-white/95 border border-[#e5e5e5] px-3 flex items-center justify-center shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+      className={[
+        "h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center gap-2 shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]",
+        className ?? "",
+      ].join(" ")}
       title={alt}
     >
       <img
         src={src}
         alt={alt}
-        className="h-4 w-auto object-contain"
+        className={[
+          "h-5 w-5 rounded-md object-contain bg-black/50 p-0.5 opacity-85",
+          imgClassName ?? "",
+        ].join(" ")}
         loading="lazy"
         onError={(e) => {
-          (e.currentTarget as HTMLImageElement).src = headerFallbackPillDataUri(fallbackLabel);
+          (e.currentTarget as HTMLImageElement).style.display = "none";
         }}
       />
+      <span className={["text-[11px] font-semibold text-white/75 truncate", textClassName ?? ""].join(" ")}>
+        {alt}
+      </span>
     </div>
   );
 }
@@ -490,11 +482,19 @@ function TeamCell({
 
 function OddsChip({
   parts,
+  className,
 }: {
   parts: CellParts;
+  className?: string;
 }) {
   // chip like reference: gray box, two-line
   return (
+    <div
+      className={[
+        "w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]",
+        className ?? "",
+      ].join(" ")}
+    >
     <div className="w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
       <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
         {parts.top}
@@ -519,9 +519,9 @@ function SelectPill({
 }) {
   return (
     <div className="flex items-center gap-2">
-      {label ? <div className="text-[11px] text-white/60 font-semibold">{label}</div> : null}
+      {label ? <div className="text-[12px] text-white/55 font-semibold">{label}</div> : null}
       <select
-        className="h-9 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold px-3 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className="h-8 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-2.5 outline-none focus:border-[rgba(212,175,55,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -550,6 +550,7 @@ function TextInput({
   return (
     <div className="relative">
       <input
+        className="h-8 w-full md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-semibold px-2.5 pr-9 outline-none focus:border-[rgba(212,175,55,0.55)]"
         className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -581,7 +582,7 @@ function Btn({
   disabled?: boolean;
 }) {
   const base =
-    "h-9 px-3 rounded-lg border text-sm font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
+    "h-8 px-3 rounded-lg border text-[12px] font-extrabold transition-colors shadow-[0_12px_32px_rgba(0,0,0,0.35)]";
   const gold =
     "bg-[#d4af37] text-black border-[#d4af37] hover:bg-[#e2c257] hover:border-[#e2c257]";
   const ghost =
@@ -602,6 +603,8 @@ function Btn({
 function DateReminder({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2">
+      <div className="text-[12px] text-white/55 font-semibold">Selected date</div>
+      <div className="h-8 px-2.5 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold flex items-center">
       <div className="text-[11px] text-white/60 font-semibold">Selected date</div>
       <div className="h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold flex items-center">
         {label}
@@ -629,6 +632,7 @@ function SegmentedToggle<T extends string>({
             type="button"
             onClick={() => onChange(opt.value)}
             className={[
+              "h-7 px-3 rounded-md text-[12px] font-extrabold transition-colors",
               "h-7 px-3 rounded-md text-[11px] font-extrabold transition-colors",
               active
                 ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
@@ -1105,6 +1109,7 @@ function SideBySideLineCharts({
 
 type MonteCarloRow = {
   event_id: string;
+  run_id?: string | null;
   commence_time?: string | null;
   matchup?: string | null;
   home_team?: string | null;
@@ -1130,30 +1135,29 @@ type MonteCarloRow = {
   under_prob?: number | null;
 };
 
-function toNum(v: any): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-function toProb01(v: number | null | undefined): number | null {
-  if (v == null) return null;
-  const x = v > 1.5 ? v / 100 : v; // supports 0-100 or 0-1
-  if (!Number.isFinite(x)) return null;
-  return Math.max(0, Math.min(1, x));
-}
-function pct(v01: number | null | undefined) {
-  if (v01 == null) return "—";
-  return `${(v01 * 100).toFixed(1)}%`;
-}
-function probToAmerican(p: number | null): string {
-  if (p == null || p <= 0 || p >= 1) return "—";
-  if (p >= 0.5) {
-    const a = -Math.round((p / (1 - p)) * 100);
-    return String(a);
-  } else {
-    const a = Math.round(((1 - p) / p) * 100);
-    return `+${a}`;
-  }
-}
+type MlAdjustmentRow = {
+  event_id: string;
+  run_id: string;
+  base_home_win_prob: number | null;
+  base_away_win_prob: number | null;
+  adj_home_win_prob: number | null;
+  adj_away_win_prob: number | null;
+  base_home_cover_prob: number | null;
+  base_away_cover_prob: number | null;
+  adj_home_cover_prob: number | null;
+  adj_away_cover_prob: number | null;
+  base_over_prob: number | null;
+  base_under_prob: number | null;
+  adj_over_prob: number | null;
+  adj_under_prob: number | null;
+};
+
+const pct = (v01: number | null | undefined) => (v01 == null ? "—" : formatPercent(v01 * 100, 1));
+const fmtBaseAdj = (base: number | null | undefined, adj: number | null | undefined) => {
+  const baseTxt = pct(toProb01(base ?? null));
+  if (adj == null || !Number.isFinite(adj)) return `Base ${baseTxt}`;
+  return `Base ${baseTxt} • AI ${pct(toProb01(adj))}`;
+};
 function winColors(awayP: number | null, homeP: number | null) {
   if (awayP == null || homeP == null) return { awayHex: "rgba(255,255,255,0.85)", homeHex: "rgba(255,255,255,0.85)" };
   if (awayP > homeP) return { awayHex: "#34d399", homeHex: "#f87171" };
@@ -1483,12 +1487,28 @@ function GameDetailsModal({
   sportKey,
   ev,
   oddsFormat,
+  useAiAdjusted,
+  initialTab = "pred",
+  mode,
+  showTabs = true,
   initialTab = "pred",
   onClose,
 }: {
   sportKey: string;
   ev: EventOdds;
   oddsFormat: OddsFormat;
+  useAiAdjusted: boolean;
+  initialTab?: DetailsTab;
+  mode?: DetailsTab;
+  showTabs?: boolean;
+  onClose: () => void;
+}) {
+  const forcedTab = mode ?? initialTab;
+  const [tab, setTab] = useState<DetailsTab>(forcedTab);
+
+  useEffect(() => {
+    setTab(forcedTab);
+  }, [forcedTab]);
   initialTab?: DetailsTab;
   onClose: () => void;
 }) {
@@ -1509,6 +1529,8 @@ function GameDetailsModal({
   const [predLoading, setPredLoading] = useState(true);
   const [predError, setPredError] = useState("");
   const [predRow, setPredRow] = useState<MonteCarloRow | null>(null);
+  const [basePredRow, setBasePredRow] = useState<MonteCarloRow | null>(null);
+  const [adjPredRow, setAdjPredRow] = useState<MonteCarloRow | null>(null);
 
   // last-5 state
   const [l5AwayLoading, setL5AwayLoading] = useState(false);
@@ -1582,6 +1604,8 @@ function GameDetailsModal({
     setPredLoading(true);
     setPredError("");
     setPredRow(null);
+    setBasePredRow(null);
+    setAdjPredRow(null);
 
     (async () => {
       const { data, error } = await supabase
@@ -1605,38 +1629,76 @@ function GameDetailsModal({
         return;
       }
 
-      const row: MonteCarloRow = {
+      const baseRow: MonteCarloRow = {
         event_id: String(r.event_id ?? ev.eventId),
+        run_id: r.run_id ?? null,
         commence_time: r.commence_time ?? r.commenceTime ?? null,
         matchup: r.matchup ?? null,
         home_team: r.home_team ?? r.homeTeam ?? null,
         away_team: r.away_team ?? r.awayTeam ?? null,
 
-        projected_home_points: toNum(r.projected_home_points),
-        projected_away_points: toNum(r.projected_away_points),
+        projected_home_points: safeNumberOrNull(r.projected_home_points),
+        projected_away_points: safeNumberOrNull(r.projected_away_points),
 
-        home_win_prob: toNum(r.home_win_prob),
-        away_win_prob: toNum(r.away_win_prob),
+        home_win_prob: safeNumberOrNull(r.home_win_prob),
+        away_win_prob: safeNumberOrNull(r.away_win_prob),
 
-        projected_margin_home: toNum(r.projected_margin_home),
-        projected_total: toNum(r.projected_total),
+        projected_margin_home: safeNumberOrNull(r.projected_margin_home),
+        projected_total: safeNumberOrNull(r.projected_total),
 
-        spread_line_home: toNum(r.spread_line_home),
-        home_cover_prob: toNum(r.home_cover_prob),
-        cover_push_prob: toNum(r.cover_push_prob),
-        away_cover_prob: toNum(r.away_cover_prob),
+        spread_line_home: safeNumberOrNull(r.spread_line_home),
+        home_cover_prob: safeNumberOrNull(r.home_cover_prob),
+        cover_push_prob: safeNumberOrNull(r.cover_push_prob),
+        away_cover_prob: safeNumberOrNull(r.away_cover_prob),
 
-        total_line: toNum(r.total_line),
-        over_prob: toNum(r.over_prob),
-        total_push_prob: toNum(r.total_push_prob),
-        under_prob: toNum(r.under_prob),
+        total_line: safeNumberOrNull(r.total_line),
+        over_prob: safeNumberOrNull(r.over_prob),
+        total_push_prob: safeNumberOrNull(r.total_push_prob),
+        under_prob: safeNumberOrNull(r.under_prob),
       };
 
-      setPredRow(row);
+      setBasePredRow(baseRow);
+
+      let adjustedRow: MonteCarloRow | null = null;
+      if (baseRow.run_id) {
+        const { data: mlData, error: mlErr } = await supabase
+          .from("model_ml_adjustments")
+          .select(
+            [
+              "event_id",
+              "run_id",
+              "adj_home_win_prob",
+              "adj_away_win_prob",
+              "adj_home_cover_prob",
+              "adj_away_cover_prob",
+              "adj_over_prob",
+              "adj_under_prob",
+            ].join(",")
+          )
+          .eq("event_id", baseRow.event_id)
+          .eq("run_id", baseRow.run_id)
+          .limit(1);
+
+        if (!mlErr && mlData?.[0]) {
+          const ml = mlData[0] as MlAdjustmentRow;
+          adjustedRow = {
+            ...baseRow,
+            home_win_prob: ml.adj_home_win_prob ?? baseRow.home_win_prob,
+            away_win_prob: ml.adj_away_win_prob ?? baseRow.away_win_prob,
+            home_cover_prob: ml.adj_home_cover_prob ?? baseRow.home_cover_prob,
+            away_cover_prob: ml.adj_away_cover_prob ?? baseRow.away_cover_prob,
+            over_prob: ml.adj_over_prob ?? baseRow.over_prob,
+            under_prob: ml.adj_under_prob ?? baseRow.under_prob,
+          };
+        }
+      }
+
+      setAdjPredRow(adjustedRow);
+      setPredRow(useAiAdjusted ? adjustedRow ?? baseRow : baseRow);
       setPredLoading(false);
 
-      const awayTeam = (ev.away?.team ?? row.away_team ?? "").trim();
-      const homeTeam = (ev.home?.team ?? row.home_team ?? "").trim();
+      const awayTeam = (ev.away?.team ?? baseRow.away_team ?? "").trim();
+      const homeTeam = (ev.home?.team ?? baseRow.home_team ?? "").trim();
 
       if (awayTeam) {
         setL5AwayLoading(true);
@@ -1688,7 +1750,7 @@ function GameDetailsModal({
     return () => {
       alive = false;
     };
-  }, [tab, ev.eventId, sportKey, ev.away?.team, ev.home?.team]);
+  }, [tab, ev.eventId, sportKey, ev.away?.team, ev.home?.team, useAiAdjusted]);
 
   // Props fetch
   useEffect(() => {
@@ -1851,24 +1913,29 @@ function GameDetailsModal({
   const consTotOver = consensusPartsForRow(ev, "total", "AWAY", oddsFormat);
   const consTotUnder = consensusPartsForRow(ev, "total", "HOME", oddsFormat);
 
+  const modalTitle =
+    mode === "line" ? "Line Movement" : mode === "props" ? "Player Props" : "Game Details";
+
   return (
-    <ModalShell title="Game Details" subtitle={subtitle} onClose={onClose}>
-      <div
-        className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-white/10
-                   bg-black/70 backdrop-blur-[8px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
-      >
-        <div ref={tabsBarRef} className="flex flex-wrap items-center gap-2">
-          <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
-            Predictions
-          </TabBtn>
-          <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
-            Line Movement
-          </TabBtn>
-          <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
-            Player Props
-          </TabBtn>
+    <ModalShell title={modalTitle} subtitle={subtitle} onClose={onClose}>
+      {showTabs ? (
+        <div
+          className="sticky top-0 z-50 -mx-3 sm:-mx-4 px-3 sm:px-4 pt-2 pb-2 border-b border-white/10
+                     bg-black/70 backdrop-blur-[8px] shadow-[0_14px_40px_rgba(0,0,0,0.65)]"
+        >
+          <div ref={tabsBarRef} className="flex flex-wrap items-center gap-2">
+            <TabBtn active={tab === "pred"} onClick={() => setTab("pred")}>
+              Predictions
+            </TabBtn>
+            <TabBtn active={tab === "line"} onClick={() => setTab("line")}>
+              Line Movement
+            </TabBtn>
+            <TabBtn active={tab === "props"} onClick={() => setTab("props")}>
+              Player Props
+            </TabBtn>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* LINE MOVEMENT */}
       {tab === "line" && (
@@ -1994,6 +2061,7 @@ function GameDetailsModal({
                             {probToAmerican(awayP)}
                           </span>
                         </div>
+                        <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.away_win_prob, adjPredRow?.away_win_prob)}</div>
                       </div>
                     </div>
 
@@ -2006,6 +2074,7 @@ function GameDetailsModal({
                             {probToAmerican(homeP)}
                           </span>
                         </div>
+                        <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.home_win_prob, adjPredRow?.home_win_prob)}</div>
                       </div>
                       {homeLogo ? (
                         <img
@@ -2054,6 +2123,7 @@ function GameDetailsModal({
                           {probToAmerican(awayP)}
                         </span>
                       </div>
+                      <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.away_win_prob, adjPredRow?.away_win_prob)}</div>
                     </div>
                   </div>
 
@@ -2076,6 +2146,7 @@ function GameDetailsModal({
                           {probToAmerican(homeP)}
                         </span>
                       </div>
+                      <div className="text-[10px] text-white/50 font-semibold">{fmtBaseAdj(basePredRow?.home_win_prob, adjPredRow?.home_win_prob)}</div>
                     </div>
                     {homeLogo ? (
                       <img
@@ -2113,14 +2184,17 @@ function GameDetailsModal({
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">{homeTeam}</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.home_cover_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.home_cover_prob, adjPredRow?.home_cover_prob)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Push</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.cover_push_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.cover_push_prob, null)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">{awayTeam}</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.away_cover_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.away_cover_prob, adjPredRow?.away_cover_prob)}</div>
                     </div>
                   </div>
                 </div>
@@ -2144,14 +2218,17 @@ function GameDetailsModal({
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Over</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.over_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.over_prob, adjPredRow?.over_prob)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Push</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.total_push_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.total_push_prob, null)}</div>
                     </div>
                     <div className="rounded-md border border-white/10 bg-black/30 p-2 text-center">
                       <div className="text-[10px] text-white/60 font-semibold">Under</div>
                       <div className="text-white font-extrabold tabular-nums text-[12px]">{pct(toProb01(predRow.under_prob))}</div>
+                      <div className="text-[9px] text-white/50 font-semibold mt-1">{fmtBaseAdj(basePredRow?.under_prob, adjPredRow?.under_prob)}</div>
                     </div>
                   </div>
                 </div>
@@ -2370,6 +2447,29 @@ function sportLabelForKey(sportKey: string) {
 function DateSectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <tr>
+      <td
+        colSpan={BOOKS.length + 2}
+        className="p-0"
+        style={{
+          position: "sticky",
+          top: "var(--thead-h, 0px)",
+          zIndex: 60,
+          background: BOARD_STICKY_BG,
+        }}
+      >
+        <div
+          className="px-4 py-2 flex items-center justify-between border-y"
+          style={{
+            borderColor: PRISM_BORDER,
+            background: BOARD_STICKY_BG,
+            height: DATE_BAR_HEIGHT,
+          }}
+        >
+          <div className="text-[11px] font-extrabold text-white/90">
+            {label}
+            <span className="text-white/50 font-semibold ml-2">({count} games)</span>
+          </div>
+          <div className="text-[10px] font-semibold text-white/45">Pre-Game</div>
       <td colSpan={BOOKS.length + 2} className="p-0">
         <div
           className="sticky top-0 z-20 px-4 py-2 flex items-center justify-between border-y"
@@ -2398,6 +2498,7 @@ function TableHeaderRow({
   onBookPointerDown,
   onBookPointerUp,
   onBookPointerCancel,
+  headerRef,
 }: {
   oddsFormat: OddsFormat;
   displayBooks: BookKey[];
@@ -2405,13 +2506,38 @@ function TableHeaderRow({
   onBookPointerDown: (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => void;
   onBookPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
   onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  headerRef?: React.RefObject<HTMLTableSectionElement>;
 }) {
+  const stickyCellStyle: React.CSSProperties = {
+    position: "sticky",
+    top: 0,
+    zIndex: 101,
+    background: TABLE_HEADER_BG,
+    backgroundClip: "padding-box",
+  };
   return (
+    <thead
+      ref={headerRef}
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 100,
+        background: TABLE_HEADER_BG,
+      }}
+    >
     <thead>
       <tr
         className="border-y"
         style={{
           borderColor: PRISM_BORDER,
+          background: TABLE_HEADER_BG,
+          height: HEADER_ROW_HEIGHT,
+        }}
+      >
+        <th
+          className="text-left px-4 py-2.5 text-[11px] font-extrabold text-white/80 align-middle"
+          style={{ ...stickyCellStyle, width: COL_GAME }}
+        >
           background: BOARD_BG,
           backdropFilter: "blur(10px)",
         }}
@@ -2421,13 +2547,43 @@ function TableHeaderRow({
         </th>
 
         {/* Consensus column like reference (subtle) */}
+        <th
+          className="text-center px-2 py-2.5 text-[11px] font-extrabold text-white/70 align-middle"
+          style={{ ...stickyCellStyle, width: COL_BOOK }}
+        >
         <th className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
           Cons
-          <div className="text-[10px] font-semibold text-white/45 mt-0.5">
+          <div className="text-[9px] font-semibold text-white/45 mt-0.5">
             {oddsFormat === "american" ? "AM" : "DEC"}
           </div>
         </th>
 
+        {displayBooks.map((bk) => (
+          <th
+            key={bk}
+            className="text-center px-2 py-2.5 align-middle"
+            style={{ ...stickyCellStyle, width: COL_BOOK }}
+          >
+            <div className="flex items-center justify-center">
+              <button
+                type="button"
+                data-book={bk}
+                onPointerDown={onBookPointerDown(bk)}
+                onPointerUp={onBookPointerUp}
+                onPointerCancel={onBookPointerCancel}
+                className={[
+                  "rounded-lg transition-colors cursor-grab active:cursor-grabbing",
+                  draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
+                ].join(" ")}
+                style={{ touchAction: "none" }}
+                title="Drag to reorder"
+                aria-label={`Reorder ${BOOK_LABEL[bk]}`}
+              >
+                <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} />
+              </button>
+            </div>
+          </th>
+        ))}
         {displayBooks.map((bk) => {
           const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
           return (
@@ -2601,10 +2757,10 @@ function EventCardMobile({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
-              <OddsChip parts={awayCons} />
+              <OddsChip parts={awayCons} className="w-full max-w-[140px]" />
             </div>
             <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
-              <OddsChip parts={homeCons} />
+              <OddsChip parts={homeCons} className="w-full max-w-[140px]" />
             </div>
           </div>
         </div>
@@ -2613,7 +2769,7 @@ function EventCardMobile({
           <div className="mt-3 rounded-xl border border-white/10 bg-black/25 overflow-hidden">
             <div className="px-3 py-2 border-b border-white/10 bg-black/30">
               <div className="text-[12px] text-white font-extrabold">Books</div>
-              <div className="mt-2 grid grid-cols-[100px_1fr_1fr] gap-3 items-center">
+              <div className="mt-2 grid grid-cols-[88px_1fr_1fr] gap-2 items-center">
                 <div />
                 <div className="text-[10px] text-white/60 font-semibold text-center">{leftLabel}</div>
                 <div className="text-[10px] text-white/60 font-semibold text-center">{rightLabel}</div>
@@ -2621,6 +2777,18 @@ function EventCardMobile({
             </div>
 
             <div className="px-3">
+              {displayBooks.map((bk) => (
+                <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
+                  <div className="grid grid-cols-[96px_1fr_1fr] items-center gap-2">
+                    <div className="flex justify-start">
+                      <BookLogoPill
+                        src={BOOK_LOGOS[bk]}
+                        alt={BOOK_LABEL[bk]}
+                        className="h-6 max-w-[96px] px-1.5"
+                        imgClassName="h-4 w-4"
+                        textClassName="text-[10px]"
+                      />
+                    </div>
               {displayBooks.map((bk) => {
                 const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
                 return (
@@ -2630,16 +2798,15 @@ function EventCardMobile({
                         <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
                       </div>
 
-                      <div className="flex justify-center">
-                        <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
-                      </div>
-                      <div className="flex justify-center">
-                        <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
-                      </div>
+                    <div className="flex justify-center">
+                      <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} className="w-full max-w-[120px]" />
+                    </div>
+                    <div className="flex justify-center">
+                      <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} className="w-full max-w-[120px]" />
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -2664,6 +2831,7 @@ export function OddsScreen({
   const [market, setMarket] = useState<Market>("spread");
   const [view, setView] = useState<BoardView>("pregame");
   const [oddsFormat, setOddsFormat] = useState<OddsFormat>("american");
+  const [useAiAdjusted, setUseAiAdjusted] = useState(false);
   const [query, setQuery] = useState<string>("");
 
   const [loading, setLoading] = useState(true);
@@ -2679,6 +2847,8 @@ export function OddsScreen({
   const [bookOrder, setBookOrder] = useState<BookKey[]>(BOOKS);
   const [draggingBook, setDraggingBook] = useState<BookKey | null>(null);
   const dragBookRef = useRef<BookKey | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const tableHeadRef = useRef<HTMLTableSectionElement>(null);
 
   async function load() {
     setError("");
@@ -2797,6 +2967,28 @@ export function OddsScreen({
       // ignore
     }
   }, [bookOrder]);
+
+  useLayoutEffect(() => {
+    if (!tableScrollRef.current || !tableHeadRef.current) return;
+    const scrollEl = tableScrollRef.current;
+    const headEl = tableHeadRef.current;
+
+    const update = () => {
+      const height = headEl.getBoundingClientRect().height;
+      scrollEl.style.setProperty("--thead-h", `${height}px`);
+    };
+
+    update();
+
+    const ro = new ResizeObserver(update);
+    ro.observe(headEl);
+    window.addEventListener("resize", update);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
 
   const availableDates = useMemo(() => {
     const todayCt = ctTodayYmd();
@@ -2987,6 +3179,101 @@ export function OddsScreen({
   }, [selectedDate]);
 
   return (
+    <div className="w-full min-h-screen" style={{ background: BOARD_BG }}>
+      <div className="w-full">
+        <div className={`${PAGE_X} relative`}>
+          <div
+            className={`${PAGE_MAX_W} mx-auto`}
+            style={{
+              background:
+                `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
+                "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
+                "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
+            }}
+          >
+            {/* ===========================
+                TOP SPORTS + FILTERS BAR
+            =========================== */}
+            <div className="flex flex-col" style={{ height: FILTERS_BAR_HEIGHT }}>
+              <div
+                className="px-2 md:px-0"
+                style={{
+                  height: FILTER_ROW_HEIGHT,
+                  background: BOARD_BG,
+                  borderBottom: `1px solid ${PRISM_BORDER}`,
+                  backdropFilter: "blur(10px)",
+                }}
+              >
+                <div className="h-full flex flex-col md:flex-row md:items-center gap-2">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                    {SPORT_TABS.map((t) => {
+                      const active =
+                        t.key === sportKey ||
+                        (t.key === "soccer" && sportKey.includes("soccer")) ||
+                        (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                      const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => {
+                            if (enabled && onPickSport) onPickSport(t.key);
+                          }}
+                          disabled={!enabled}
+                          className={[
+                            "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
+                            enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+                            active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                          ].join(" ")}
+                          style={{
+                            borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
+                            background: active ? "rgba(212,175,55,0.16)" : "transparent",
+                            color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
+                          }}
+                          title={
+                            !enabled
+                              ? `${t.label} (not wired)`
+                              : active
+                                ? `${t.label} (active)`
+                                : `Switch to ${t.label}`
+                          }
+                        >
+                          {t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex flex-1 items-center gap-2 md:ml-auto">
+                    <div className="w-full md:w-auto">
+                      <TextInput
+                        value={query}
+                        onChange={setQuery}
+                        placeholder="Search teams..."
+                        onClear={() => setQuery("")}
+                      />
+                    </div>
+                    <div className="hidden lg:flex items-center gap-2">
+                      <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
+                      <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                        <span className={freshness.tone}>{freshness.label}</span>
+                      </div>
+                      <div className="h-7 w-7 rounded-full border border-white/10 bg-white/5" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className="px-2 md:px-0"
+                style={{
+                  height: FILTER_ROW_HEIGHT,
+                  background: BOARD_BG,
+                  borderBottom: `1px solid ${PRISM_BORDER}`,
+                  backdropFilter: "blur(10px)",
     <div
       className="w-full min-h-screen"
       style={{
@@ -3140,6 +3427,30 @@ export function OddsScreen({
                 }}
                 disabled={loading}
               >
+                <div className="h-full flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <SelectPill
+                      value={market}
+                      onChange={(v) => setMarket(v as Market)}
+                      label="Market"
+                      options={[
+                        { value: "spread", label: "Point Spread" },
+                        { value: "total", label: "Total" },
+                        { value: "ml", label: "Moneyline" },
+                      ]}
+                    />
+
+                    <div className="flex items-center gap-2">
+                      <div className="text-[12px] text-white/55 font-semibold">View</div>
+                      <SegmentedToggle
+                        value={view}
+                        options={[
+                          { value: "pregame", label: "Pre-Game" },
+                          { value: "live", label: "Live" },
+                        ]}
+                        onChange={(next) => setView(next as BoardView)}
+                      />
+                    </div>
                 {loading ? "Refreshing…" : "Refresh"}
               </Btn>
             </div>
@@ -3171,9 +3482,62 @@ export function OddsScreen({
                   </div>
                 </div>
 
-                <div className="text-right">
-                  <div className="text-[11px] font-semibold" style={{ color: PRISM_MUTED }}>
-                    {events.length} games
+                    <DateReminder label={selectedDateLabel} />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                    <SelectPill
+                      value={oddsFormat}
+                      onChange={(v) => setOddsFormat(v as OddsFormat)}
+                      label="Odds"
+                      options={[
+                        { value: "american", label: "American" },
+                        { value: "decimal", label: "Decimal" },
+                      ]}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => setUseAiAdjusted((prev) => !prev)}
+                      className={[
+                        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] transition",
+                        useAiAdjusted ? "text-[#d4af37]" : "text-white/60",
+                      ].join(" ")}
+                      style={{
+                        borderColor: useAiAdjusted ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.12)",
+                        background: useAiAdjusted ? "rgba(212,175,55,0.12)" : "rgba(0,0,0,0.35)",
+                      }}
+                    >
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }} />
+                      ML Adjusted
+                    </button>
+
+                    <SelectPill
+                      value={"all"}
+                      onChange={() => {}}
+                      label="Sportsbooks"
+                      options={[{ value: "all", label: `All (${BOOKS.length})` }]}
+                    />
+
+                    <div className="flex items-center gap-2 md:ml-1">
+                      <button
+                        type="button"
+                        onClick={handleResetBookOrder}
+                        className="text-[11px] font-semibold text-white/50 hover:text-white"
+                      >
+                        Reset order
+                      </button>
+
+                      <Btn
+                        onClick={() => {
+                          setLoading(true);
+                          load();
+                        }}
+                        disabled={loading}
+                      >
+                        {loading ? "Refreshing…" : "Refresh"}
+                      </Btn>
+                    </div>
                   </div>
                   <div className="flex items-center justify-end gap-2 text-[11px] font-extrabold text-white">
                     <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
@@ -3220,9 +3584,46 @@ export function OddsScreen({
                     </div>
                   ))}
                 </div>
-              )}
+              </div>
             </div>
 
+            {/* ===========================
+                BOARD BODY
+            =========================== */}
+            <div className="pt-2.5 pb-6">
+              <div
+                className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
+                style={{
+                  borderColor: PRISM_BORDER,
+                  background: BOARD_BG,
+                  backdropFilter: "blur(6px)",
+                }}
+              >
+                <div className="px-4 py-2 border-b" style={{ borderColor: PRISM_BORDER }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-white font-extrabold text-[13px] leading-tight">
+                        {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
+                        <span style={{ color: PRISM_GOLD }}>{topSport}</span>
+                      </div>
+                      <div className="text-[10px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
+                        Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
+                        {oddsFormat === "american" ? "American" : "Decimal"}
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
+                        {events.length} games
+                      </div>
+                      <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
+                        <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
+                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                        <span className={freshness.tone}>{freshness.label}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
             {/* DESKTOP */}
             <div className="hidden md:block">
               {loading ? (
@@ -3251,28 +3652,116 @@ export function OddsScreen({
                       onBookPointerCancel={handleBookPointerCancel}
                     />
 
-                    <tbody>
+                {/* MOBILE */}
+                <div className="md:hidden p-3">
+                  {loading ? (
+                    <div className="p-3 text-xs text-white/60">Loading odds…</div>
+                  ) : error ? (
+                    <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
+                  ) : !events.length ? (
+                    <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+                  ) : (
+                    <div className="space-y-3">
                       {eventsByDaySection.map((sec) => (
+                        <div key={sec.ymd} className="space-y-3">
+                          <div
+                            className="sticky z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
+                            style={{
+                              top: 0,
+                              background: BOARD_STICKY_BG,
+                              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+                            }}
+                          >
+                            <div className="text-[12px] font-extrabold text-white/90">
+                              {sec.label}
+                              <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
+                            </div>
+                          </div>
                         <React.Fragment key={sec.ymd}>
                           <DateSectionHeader label={sec.label} count={sec.count} />
                           {sec.events.map((ev) => (
-                            <EventRowTwoLines
+                            <EventCardMobile
                               key={ev.eventId}
                               ev={ev}
                               market={market}
                               oddsFormat={oddsFormat}
                               displayBooks={bookOrder}
+                              booksOpen={!!mobileOpenMap[ev.eventId]}
+                              onToggleBooks={() =>
+                                setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                              }
                               onOpenDetails={openDetails}
                             />
                           ))}
-                        </React.Fragment>
+                        </div>
                       ))}
-                    </tbody>
-                  </table>
-
-                  <div className="h-3" />
+                    </div>
+                  )}
                 </div>
-              )}
+
+                {/* DESKTOP */}
+                <div className="hidden md:block">
+                  {loading ? (
+                    <div className="p-6 text-sm text-white/60">Loading odds…</div>
+                  ) : error ? (
+                    <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
+                  ) : !events.length ? (
+                    <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+                  ) : (
+                    <div
+                      ref={tableScrollRef}
+                      className="max-h-[calc(100vh-240px)] overflow-auto"
+                      style={{
+                        scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24,
+                        background: BOARD_BG,
+                      }}
+                    >
+                      <table
+                        className="w-full table-fixed min-w-[1080px]"
+                        style={{ background: BOARD_BG, borderCollapse: "separate", borderSpacing: 0 }}
+                      >
+                        <colgroup>
+                          <col style={{ width: COL_GAME }} />
+                          <col style={{ width: COL_BOOK }} />
+                          {bookOrder.map((_, i) => (
+                            <col key={i} style={{ width: COL_BOOK }} />
+                          ))}
+                        </colgroup>
+
+                        <TableHeaderRow
+                          oddsFormat={oddsFormat}
+                          displayBooks={bookOrder}
+                          draggingKey={draggingBook}
+                          onBookPointerDown={handleBookPointerDown}
+                          onBookPointerUp={handleBookPointerUp}
+                          onBookPointerCancel={handleBookPointerCancel}
+                          headerRef={tableHeadRef}
+                        />
+
+                        <tbody>
+                          {eventsByDaySection.map((sec) => (
+                            <React.Fragment key={sec.ymd}>
+                              <DateSectionHeader label={sec.label} count={sec.count} />
+                              {sec.events.map((ev) => (
+                                <EventRowTwoLines
+                                  key={ev.eventId}
+                                  ev={ev}
+                                  market={market}
+                                  oddsFormat={oddsFormat}
+                                  displayBooks={bookOrder}
+                                  onOpenDetails={openDetails}
+                                />
+                              ))}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+
+                      <div className="h-3" />
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3288,6 +3777,20 @@ export function OddsScreen({
           />
         )}
       </div>
+
+      {/* Modal */}
+      {detailsOpen && activeEvent && (
+        <GameDetailsModal
+          sportKey={sportKey}
+          ev={activeEvent}
+          oddsFormat={oddsFormat}
+          useAiAdjusted={useAiAdjusted}
+          initialTab={detailsTab}
+          mode={detailsTab}
+          showTabs={false}
+          onClose={() => setDetailsOpen(false)}
+        />
+      )}
     </div>
   );
 }
