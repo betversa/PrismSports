@@ -176,6 +176,19 @@ type OddsSnapshotRow = {
   ts: string;
 };
 
+type ModelMlAdjustmentRow = {
+  event_id: string;
+  adj_home_win_prob: number | null;
+  adj_away_win_prob: number | null;
+  adj_home_cover_prob: number | null;
+  adj_away_cover_prob: number | null;
+  adj_over_prob: number | null;
+  adj_under_prob: number | null;
+  delta_home_win_prob: number | null;
+  delta_home_cover_prob: number | null;
+  delta_over_prob: number | null;
+};
+
 type MonteCarloRunInsert = {
   sport_key: string;
   config: Record<string, any>;
@@ -332,6 +345,8 @@ const POSS_SEASON = process.env.POSS_SEASON || SEASON;
 const SIMS = Number(process.env.MC_SIMS ?? "10000");
 const START_GRACE_MINUTES = Number(process.env.MC_START_GRACE_MINUTES ?? "0");
 const WRITE_TRACE = (process.env.MC_WRITE_TRACE ?? "true").toLowerCase() === "true";
+const APPLY_ML_ADJUSTMENTS = (process.env.APPLY_ML_ADJUSTMENTS ?? "false").toLowerCase() === "true";
+const ML_ADJUSTMENT_CAP = Number(process.env.ML_ADJUSTMENT_CAP ?? "0.05");
 
 // Storage convention
 const MARGIN_HOME_WIN_NEGATIVE = (process.env.MARGIN_HOME_WIN_NEGATIVE ?? "true").toLowerCase() === "true";
@@ -1289,6 +1304,41 @@ async function fetchConsensusLinesFromOddsSnapshot(eventIds: string[]): Promise<
   return out;
 }
 
+async function fetchModelMlAdjustments(runId: string, eventIds: string[]): Promise<Map<string, ModelMlAdjustmentRow>> {
+  const out = new Map<string, ModelMlAdjustmentRow>();
+  if (!eventIds.length) return out;
+
+  const { data, error } = await supabase
+    .from("model_ml_adjustments")
+    .select(
+      [
+        "event_id",
+        "adj_home_win_prob",
+        "adj_away_win_prob",
+        "adj_home_cover_prob",
+        "adj_away_cover_prob",
+        "adj_over_prob",
+        "adj_under_prob",
+        "delta_home_win_prob",
+        "delta_home_cover_prob",
+        "delta_over_prob",
+      ].join(",")
+    )
+    .eq("run_id", runId)
+    .in("event_id", eventIds);
+
+  if (error) {
+    console.warn(`[MC] Could not fetch model_ml_adjustments (${error.message}).`);
+    return out;
+  }
+
+  for (const row of (data ?? []) as ModelMlAdjustmentRow[]) {
+    if (row.event_id) out.set(row.event_id, row);
+  }
+
+  return out;
+}
+
 /* =========================================================
    RUN + UPSERT
 ========================================================= */
@@ -2137,6 +2187,38 @@ async function runForSport(sportKey: string, startCutoff: Date) {
     console.log(`[MC] (${sportKey}) Skipped ${skipped.length} events (showing up to 25):`);
     for (const s of skipped.slice(0, 25)) console.log(`  - ${s.event_id}: ${s.reason}`);
     if (skipped.length > 25) console.log(`  ...and ${skipped.length - 25} more`);
+  }
+
+  if (APPLY_ML_ADJUSTMENTS) {
+    const adjMap = await fetchModelMlAdjustments(runId, eventIds);
+    for (const r of results) {
+      const adj = adjMap.get(r.event_id);
+      if (!adj) continue;
+
+      const clampAdj = (base: number, delta?: number | null, adjValue?: number | null) => {
+        if (adjValue != null && Number.isFinite(adjValue)) return clamp01(adjValue);
+        const d = Number.isFinite(Number(delta)) ? Number(delta) : 0;
+        const capped = clamp(d, -ML_ADJUSTMENT_CAP, ML_ADJUSTMENT_CAP);
+        return clamp01(base + capped);
+      };
+
+      const mlAdjusted = {
+        base_home_win_prob: r.home_win_prob,
+        base_away_win_prob: r.away_win_prob,
+        base_home_cover_prob: r.home_cover_prob,
+        base_away_cover_prob: r.away_cover_prob,
+        base_over_prob: r.over_prob,
+        base_under_prob: r.under_prob,
+        adj_home_win_prob: clampAdj(r.home_win_prob, adj.delta_home_win_prob, adj.adj_home_win_prob),
+        adj_away_win_prob: clampAdj(r.away_win_prob, adj.delta_home_win_prob, adj.adj_away_win_prob),
+        adj_home_cover_prob: r.home_cover_prob == null ? null : clampAdj(r.home_cover_prob, adj.delta_home_cover_prob, adj.adj_home_cover_prob),
+        adj_away_cover_prob: r.away_cover_prob == null ? null : clampAdj(r.away_cover_prob, adj.delta_home_cover_prob, adj.adj_away_cover_prob),
+        adj_over_prob: r.over_prob == null ? null : clampAdj(r.over_prob, adj.delta_over_prob, adj.adj_over_prob),
+        adj_under_prob: r.under_prob == null ? null : clampAdj(r.under_prob, adj.delta_over_prob, adj.adj_under_prob),
+      };
+
+      r.trace = { ...(r.trace ?? {}), ml_adjusted: mlAdjusted };
+    }
   }
 
   if (!results.length) {

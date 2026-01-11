@@ -137,6 +137,8 @@ export function Header({
 
       <div className="relative w-full px-3 md:px-6 pt-3 md:pt-3 pb-2 md:pb-2">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div className="relative w-full px-3 md:px-6 pt-2 md:pt-2.5 pb-2 md:pb-1.5">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] items-center gap-2">
           {/* LEFT */}
           <div className="flex items-start min-w-0 flex-1">
             <button
@@ -201,6 +203,8 @@ export function Header({
           {/* CENTER */}
           <div className="hidden md:flex flex-1 items-center justify-center">
             <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 pb-1 pt-0.5">
+          <div className="hidden md:flex justify-center">
+            <nav className="flex items-center gap-6 pb-1 pt-0.5">
               <NavItem label="Odds" active={activeScreen === "odds"} onClick={() => onNavigate?.("odds")} />
               <NavItem
                 label="Predictions"

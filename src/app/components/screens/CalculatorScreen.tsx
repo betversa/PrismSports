@@ -1,4 +1,17 @@
 import React, { useMemo, useState } from "react";
+import {
+  americanToDecimal,
+  clampNumber,
+  decimalToAmerican,
+  evPercentFromDecimal,
+  impliedProbFromAmerican,
+  impliedProbFromDecimal,
+  kellyFraction,
+  payoutFromStakeDecimal,
+  profitFromStakeDecimal,
+  safeNumber,
+} from "../../../lib/odds/math";
+import { formatAmerican, formatDecimal, formatMoney, formatPercent } from "../../../lib/odds/format";
 
 /**
  * CalculatorScreen.tsx — FULL NEW SCREEN (Prism calculators)
@@ -15,104 +28,9 @@ type OddsFormat = "american" | "decimal";
 
 const GOLD = "#d4af37";
 
-function safeNum(v: any, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function fmtPct(n: number, digits = 1) {
-  if (!Number.isFinite(n)) return "—";
-  return `${n.toFixed(digits)}%`;
-}
-
-function fmtMoney(n: number, digits = 2) {
-  if (!Number.isFinite(n)) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: digits,
-    minimumFractionDigits: digits,
-  }).format(n);
-}
-
 function fmtNum(n: number, digits = 4) {
   if (!Number.isFinite(n)) return "—";
   return n.toFixed(digits);
-}
-
-function americanToDecimal(odds: number) {
-  if (!Number.isFinite(odds) || odds === 0) return NaN;
-  if (odds > 0) return 1 + odds / 100;
-  return 1 + 100 / Math.abs(odds);
-}
-
-function decimalToAmerican(dec: number) {
-  if (!Number.isFinite(dec) || dec <= 1) return NaN;
-  const profit = dec - 1;
-  // If profit >= 1 => + odds
-  if (profit >= 1) return Math.round(profit * 100);
-  // else negative odds
-  return -Math.round(100 / profit);
-}
-
-function impliedProbFromAmerican(odds: number) {
-  if (!Number.isFinite(odds) || odds === 0) return NaN;
-  if (odds > 0) return 100 / (odds + 100);
-  return Math.abs(odds) / (Math.abs(odds) + 100);
-}
-
-function impliedProbFromDecimal(dec: number) {
-  if (!Number.isFinite(dec) || dec <= 1) return NaN;
-  return 1 / dec;
-}
-
-function formatAmerican(odds: number) {
-  if (!Number.isFinite(odds)) return "—";
-  const o = Math.round(odds);
-  return o > 0 ? `+${o}` : `${o}`;
-}
-
-function formatDecimal(dec: number) {
-  if (!Number.isFinite(dec)) return "—";
-  return dec.toFixed(3);
-}
-
-/** EV% per $1 stake using decimal odds:
- * EV = p*(dec-1) - (1-p)
- * EV% = EV * 100
- */
-function evPercentFromDecimal(trueProb: number, dec: number) {
-  if (!Number.isFinite(trueProb) || !Number.isFinite(dec) || dec <= 1) return NaN;
-  const p = clamp(trueProb, 0, 1);
-  const ev = p * (dec - 1) - (1 - p);
-  return ev * 100;
-}
-
-/** Kelly fraction for decimal odds:
- * f* = (bp - q) / b, where b = dec-1, q=1-p
- */
-function kellyFraction(trueProb: number, dec: number) {
-  if (!Number.isFinite(trueProb) || !Number.isFinite(dec) || dec <= 1) return NaN;
-  const p = clamp(trueProb, 0, 1);
-  const q = 1 - p;
-  const b = dec - 1;
-  const f = (b * p - q) / b;
-  return f;
-}
-
-function payoutFromStakeDecimal(stake: number, dec: number) {
-  if (!Number.isFinite(stake) || !Number.isFinite(dec) || dec <= 1) return NaN;
-  return stake * dec;
-}
-
-function profitFromStakeDecimal(stake: number, dec: number) {
-  const pay = payoutFromStakeDecimal(stake, dec);
-  if (!Number.isFinite(pay)) return NaN;
-  return pay - stake;
 }
 
 function Card({
@@ -305,7 +223,7 @@ function ImpliedProbCalc() {
   const [odds, setOdds] = useState<string>("-110");
 
   const result = useMemo(() => {
-    const o = safeNum(odds, NaN);
+    const o = safeNumber(odds, NaN);
 
     if (format === "american") {
       const p = impliedProbFromAmerican(o);
@@ -316,7 +234,7 @@ function ImpliedProbCalc() {
         american: o,
       };
     } else {
-      const d = safeNum(odds, NaN);
+      const d = safeNumber(odds, NaN);
       const p = impliedProbFromDecimal(d);
       const am = decimalToAmerican(d);
       return {
@@ -349,7 +267,7 @@ function ImpliedProbCalc() {
           <div className="grid grid-cols-2 gap-2">
             <StatBox
               label="Implied %"
-              value={fmtPct(result.impliedPct, 2)}
+              value={formatPercent(result.impliedPct, 2)}
               tone={Number.isFinite(result.impliedPct) ? "text-white" : "text-[#404040]"}
             />
             <StatBox
@@ -381,12 +299,12 @@ function OddsConverterCalc() {
 
   const out = useMemo(() => {
     if (from === "american") {
-      const a = safeNum(value, NaN);
+      const a = safeNumber(value, NaN);
       const dec = americanToDecimal(a);
       const imp = impliedProbFromAmerican(a) * 100;
       return { american: a, decimal: dec, impliedPct: imp };
     } else {
-      const d = safeNum(value, NaN);
+      const d = safeNumber(value, NaN);
       const am = decimalToAmerican(d);
       const imp = impliedProbFromDecimal(d) * 100;
       return { american: am, decimal: d, impliedPct: imp };
@@ -415,7 +333,7 @@ function OddsConverterCalc() {
           <div className="grid grid-cols-3 gap-2">
             <StatBox label="American" value={formatAmerican(out.american)} />
             <StatBox label="Decimal" value={formatDecimal(out.decimal)} />
-            <StatBox label="Implied %" value={fmtPct(out.impliedPct, 2)} tone="text-[#d4af37]" />
+            <StatBox label="Implied %" value={formatPercent(out.impliedPct, 2)} tone="text-[#d4af37]" />
           </div>
         </Field>
       </div>
@@ -431,13 +349,13 @@ function KellyCalc() {
   const [trueWinPct, setTrueWinPct] = useState<string>("55"); // in %
 
   const calc = useMemo(() => {
-    const br = safeNum(bankroll, NaN);
-    const kf = clamp(safeNum(kellyFactor, NaN), 0, 1);
-    const p = clamp(safeNum(trueWinPct, NaN) / 100, 0, 1);
+    const br = safeNumber(bankroll, NaN);
+    const kf = clampNumber(safeNumber(kellyFactor, NaN), 0, 1);
+    const p = clampNumber(safeNumber(trueWinPct, NaN) / 100, 0, 1);
 
-    const dec = oddsFormat === "american" ? americanToDecimal(safeNum(odds, NaN)) : safeNum(odds, NaN);
+    const dec = oddsFormat === "american" ? americanToDecimal(safeNumber(odds, NaN)) : safeNumber(odds, NaN);
     const f = kellyFraction(p, dec);
-    const fAdj = clamp(f * kf, 0, 1);
+    const fAdj = clampNumber(f * kf, 0, 1);
 
     const stake = Number.isFinite(br) ? br * fAdj : NaN;
 
@@ -483,17 +401,26 @@ function KellyCalc() {
 
         <Field label="Outputs">
           <div className="grid grid-cols-2 gap-2">
-            <StatBox label="Recommended Stake" value={fmtMoney(calc.stake, 2)} tone="text-[#d4af37]" />
-            <StatBox label="Stake %" value={fmtPct(calc.stakePct, 2)} />
+            <StatBox label="Recommended Stake" value={formatMoney(calc.stake, 2)} tone="text-[#d4af37]" />
+            <StatBox label="Stake %" value={formatPercent(calc.stakePct, 2)} />
           </div>
         </Field>
       </div>
 
       <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
         <StatBox label="Decimal Odds" value={formatDecimal(calc.decimal)} />
-        <StatBox label="Raw Kelly f*" value={fmtPct(calc.rawKelly * 100, 2)} tone="text-white" sub="Before Kelly Factor" />
-        <StatBox label="Adj Kelly" value={fmtPct(calc.adjKelly * 100, 2)} tone="text-white" sub="After Kelly Factor" />
-        <StatBox label="EV%" value={fmtPct(calc.evPct, 2)} tone={Number.isFinite(calc.evPct) ? (calc.evPct >= 0 ? "text-emerald-400" : "text-red-400") : "text-[#404040]"} />
+        <StatBox
+          label="Raw Kelly f*"
+          value={formatPercent(calc.rawKelly * 100, 2)}
+          tone="text-white"
+          sub="Before Kelly Factor"
+        />
+        <StatBox label="Adj Kelly" value={formatPercent(calc.adjKelly * 100, 2)} tone="text-white" sub="After Kelly Factor" />
+        <StatBox
+          label="EV%"
+          value={formatPercent(calc.evPct, 2)}
+          tone={Number.isFinite(calc.evPct) ? (calc.evPct >= 0 ? "text-emerald-400" : "text-red-400") : "text-[#404040]"}
+        />
       </div>
     </Card>
   );
@@ -505,8 +432,8 @@ function EvCalc() {
   const [trueWinPct, setTrueWinPct] = useState<string>("55");
 
   const out = useMemo(() => {
-    const p = clamp(safeNum(trueWinPct, NaN) / 100, 0, 1);
-    const dec = oddsFormat === "american" ? americanToDecimal(safeNum(odds, NaN)) : safeNum(odds, NaN);
+    const p = clampNumber(safeNumber(trueWinPct, NaN) / 100, 0, 1);
+    const dec = oddsFormat === "american" ? americanToDecimal(safeNumber(odds, NaN)) : safeNumber(odds, NaN);
     const ev = evPercentFromDecimal(p, dec);
     const imp = impliedProbFromDecimal(dec) * 100;
     return { dec, evPct: ev, impliedPct: imp };
@@ -537,10 +464,10 @@ function EvCalc() {
 
       <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
         <StatBox label="Decimal Odds" value={formatDecimal(out.dec)} />
-        <StatBox label="Implied %" value={fmtPct(out.impliedPct, 2)} tone="text-[#9a9a9a]" />
+        <StatBox label="Implied %" value={formatPercent(out.impliedPct, 2)} tone="text-[#9a9a9a]" />
         <StatBox
           label="EV%"
-          value={fmtPct(out.evPct, 2)}
+          value={formatPercent(out.evPct, 2)}
           tone={Number.isFinite(out.evPct) ? (out.evPct >= 0 ? "text-emerald-400" : "text-red-400") : "text-[#404040]"}
           sub="Per $1 stake"
         />
@@ -565,9 +492,9 @@ function ParlayCalc() {
   const updateLeg = (idx: number, v: string) => setLegs((prev) => prev.map((x, i) => (i === idx ? v : x)));
 
   const out = useMemo(() => {
-    const s = safeNum(stake, NaN);
+    const s = safeNumber(stake, NaN);
     const decimals = legs
-      .map((x) => safeNum(x, NaN))
+      .map((x) => safeNumber(x, NaN))
       .map((o) => (format === "american" ? americanToDecimal(o) : o))
       .filter((d) => Number.isFinite(d) && d > 1);
 
@@ -641,12 +568,12 @@ function ParlayCalc() {
         <StatBox label="Valid Legs" value={String(out.validCount)} />
         <StatBox label="Parlay (Decimal)" value={formatDecimal(out.parlayDec)} />
         <StatBox label="Parlay (American)" value={formatAmerican(out.parlayAm)} />
-        <StatBox label="Implied %" value={fmtPct(out.impliedPct, 2)} tone="text-[#9a9a9a]" />
+        <StatBox label="Implied %" value={formatPercent(out.impliedPct, 2)} tone="text-[#9a9a9a]" />
       </div>
 
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-        <StatBox label="Total Payout" value={fmtMoney(out.payout, 2)} tone="text-white" />
-        <StatBox label="Profit" value={fmtMoney(out.profit, 2)} tone="text-emerald-400" />
+        <StatBox label="Total Payout" value={formatMoney(out.payout, 2)} tone="text-white" />
+        <StatBox label="Profit" value={formatMoney(out.profit, 2)} tone="text-emerald-400" />
       </div>
     </Card>
   );
@@ -667,9 +594,9 @@ function HedgeCalc() {
   const [targetProfit, setTargetProfit] = useState<string>("10");
 
   const out = useMemo(() => {
-    const sA = safeNum(stakeA, NaN);
-    const decA = formatA === "american" ? americanToDecimal(safeNum(oddsA, NaN)) : safeNum(oddsA, NaN);
-    const decB = formatB === "american" ? americanToDecimal(safeNum(oddsB, NaN)) : safeNum(oddsB, NaN);
+    const sA = safeNumber(stakeA, NaN);
+    const decA = formatA === "american" ? americanToDecimal(safeNumber(oddsA, NaN)) : safeNumber(oddsA, NaN);
+    const decB = formatB === "american" ? americanToDecimal(safeNumber(oddsB, NaN)) : safeNumber(oddsB, NaN);
 
     // If A wins: profitA = sA*(decA-1) - hedgeStake
     // If B wins: profitB = hedgeStake*(decB-1) - sA
@@ -698,7 +625,7 @@ function HedgeCalc() {
     if (mode === "equalize") {
       h = (sA * decA) / decB;
     } else {
-      const t = safeNum(targetProfit, NaN);
+      const t = safeNumber(targetProfit, NaN);
       const denom = decB - 1;
       h = denom > 0 ? (t + sA) / denom : NaN;
     }
@@ -785,9 +712,9 @@ function HedgeCalc() {
       </div>
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-2">
-        <StatBox label="Recommended Hedge Stake (B)" value={fmtMoney(out.hedgeStake, 2)} tone="text-[#d4af37]" />
-        <StatBox label="Profit if A wins" value={fmtMoney(out.profitIfA, 2)} tone={toneA} />
-        <StatBox label="Profit if B wins" value={fmtMoney(out.profitIfB, 2)} tone={toneB} />
+        <StatBox label="Recommended Hedge Stake (B)" value={formatMoney(out.hedgeStake, 2)} tone="text-[#d4af37]" />
+        <StatBox label="Profit if A wins" value={formatMoney(out.profitIfA, 2)} tone={toneA} />
+        <StatBox label="Profit if B wins" value={formatMoney(out.profitIfB, 2)} tone={toneB} />
       </div>
 
       <div className="mt-3 text-[11px] text-[#808080]">

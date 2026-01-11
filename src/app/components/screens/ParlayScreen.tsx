@@ -10,6 +10,7 @@
 
 import React, { useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { americanToDecimalParlay, decimalToAmericanParlay, parlayEvPct } from "../../../lib/odds/parlay";
 import {
   Sparkles,
   Layers,
@@ -766,7 +767,7 @@ function buildParlays(
 
   const scored = combos
     .map((legs) => {
-      const decimals = legs.map((l) => americanToDecimal(l.american_odds!));
+      const decimals = legs.map((l) => americanToDecimalParlay(l.american_odds!));
       const pLegs = legs.map((l) => l.p!);
 
       const parlayDecimal = decimals.reduce((a, b) => a * b, 1);
@@ -779,7 +780,7 @@ function buildParlays(
 
       const commenceMin = earliestCommence(legs.map((l) => l.commence_time ?? null));
       const book = legs[0]?.book ?? "—";
-      const parlayAmerican = decimalToAmerican(parlayDecimal);
+      const parlayAmerican = decimalToAmericanParlay(parlayDecimal);
 
       return {
         id: legs.map((l) => l.id).join("|"),
@@ -1062,25 +1063,6 @@ function dedupeBySemanticKey(legs: CandidateLeg[]) {
 /* =========================================
    Math helpers
 ========================================= */
-
-function americanToDecimal(american: number) {
-  if (!Number.isFinite(american) || american === 0) return 1;
-  if (american > 0) return 1 + american / 100;
-  return 1 + 100 / Math.abs(american);
-}
-
-function decimalToAmerican(decimal: number): number | null {
-  if (!Number.isFinite(decimal) || decimal <= 1) return null;
-  const profit = decimal - 1;
-  if (profit >= 1) return Math.round(profit * 100);
-  return -Math.round(100 / profit);
-}
-
-function parlayEvPct(pWin: number, decimal: number) {
-  // EV (per $1 stake): p*(decimal-1) - (1-p)
-  const ev = pWin * (decimal - 1) - (1 - pWin);
-  return ev * 100;
-}
 
 function earliestCommence(times: Array<string | null>) {
   const parsed = times

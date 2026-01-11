@@ -138,7 +138,14 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a]">
+    <div className="min-h-screen bg-[#070707] text-[#f6f4ef]">
+      <div
+        className="pointer-events-none fixed inset-0"
+        style={{
+          background:
+            "radial-gradient(1200px 420px at 10% -10%, rgba(212,175,55,0.18), transparent 55%), radial-gradient(900px 420px at 88% 0%, rgba(255,255,255,0.05), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(7,7,7,0.98) 50%, rgba(7,7,7,1) 100%)",
+        }}
+      />
       {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">
