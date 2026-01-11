@@ -2,6 +2,7 @@ name: Nightly Models (MC + ML)
 
 on:
   schedule:
+    # 3:15 AM America/Chicago ≈ 09:15 UTC (standard time). If DST shifts, adjust if you care.
     - cron: "15 9 * * *"
   workflow_dispatch:
 
@@ -27,6 +28,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Optional knobs:
           SPORT_KEYS: "basketball_nba,basketball_ncaab"
           MC_SIMS: "10000"
         run: npx tsx scripts/run_monte_carlo.ts
@@ -36,12 +38,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: scripts/requirements-ml.txt
+          cache-dependency-path: scripts/ml_requirements.txt
+
+      - name: Sanity check ML requirements file exists
+        run: |
+          test -f scripts/ml_requirements.txt
+          echo "✅ Found scripts/ml_requirements.txt"
 
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r scripts/requirements-ml.txt
+          pip install -r scripts/ml_requirements.txt
 
       - name: Train ML adjustments + write to Supabase
         env:
@@ -50,4 +57,3 @@ jobs:
           SPORT_KEYS: "basketball_nba,basketball_ncaab"
           MODEL_VERSION: "gbm_v1"
         run: python scripts/train_ml_adjustments.py
-
