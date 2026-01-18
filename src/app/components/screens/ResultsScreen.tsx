@@ -243,6 +243,8 @@ export function ResultsScreen() {
     };
   }, [rows]);
 
+  const filteredRows = useMemo(() => rows, [rows]);
+
   const winRateLabel = summary.pml != null ? `${(summary.pml * 100).toFixed(1)}%` : "—";
   const roiLabel = summary.avgPickEdge != null ? `${summary.avgPickEdge.toFixed(1)}%` : "—";
   const lastRefreshLabel = rows[0]?.day ?? "—";
@@ -255,7 +257,7 @@ export function ResultsScreen() {
         {
           label: "Entries",
           value: loading ? "…" : String(rows.length),
-          helper: `${filtered.length} filtered`,
+          helper: `${filteredRows.length} filtered`,
         },
         {
           label: "Win Rate",

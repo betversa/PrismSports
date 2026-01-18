@@ -252,24 +252,24 @@ export function ParlayScreen() {
       subtitle="Combine correlated edges, monitor risk limits, and validate rules before shipping a ticket."
       status={[
         {
-          label: "Legs Selected",
-          value: String(selected.length),
-          helper: `${eligible.length} eligible plays`,
+          label: "Legs",
+          value: String(legs),
+          helper: "Per parlay",
         },
         {
-          label: "Projected Payout",
-          value: payoutDisplay,
-          helper: oddsLabel,
+          label: "Candidates",
+          value: loading ? "…" : String(candidates.length),
+          helper: `${headerStats.total} ranked`,
         },
         {
-          label: "Bankroll",
-          value: bankroll ? formatMoney(bankroll) : "—",
-          helper: kellyFactor ? `${(kellyFactor * 100).toFixed(1)}% Kelly` : "Kelly not set",
+          label: "Parlays",
+          value: String(parlays.length),
+          helper: `Top ${maxParlays} max`,
         },
         {
           label: "Rules",
-          value: invalid.length ? `${invalid.length} flagged` : "All clear",
-          helper: "Parlay compliance",
+          value: allowSameGame ? "Same-game OK" : "Strict",
+          helper: allowSamePlayer ? "Same-player OK" : "No same-player props",
         },
       ]}
     >

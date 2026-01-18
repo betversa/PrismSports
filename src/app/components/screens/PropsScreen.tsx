@@ -583,6 +583,14 @@ export function PropsScreen() {
     () => filtered.filter((r) => r.bestKelly > 0).length,
     [filtered]
   );
+  const uniqueMarkets = useMemo(() => {
+    const set = new Set(rows.map((row) => row.ui_market));
+    return Array.from(set).filter(Boolean);
+  }, [rows]);
+  const uniqueTeams = useMemo(() => {
+    const set = new Set(rows.map((row) => row.team));
+    return Array.from(set).filter(Boolean);
+  }, [rows]);
 
   return (
     <ScreenShell
