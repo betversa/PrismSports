@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Settings as SettingsIcon, Bell, Database, Zap, Wallet, Percent } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 
 type ModelVersionRow = {
   version: string;
@@ -201,6 +202,13 @@ export function SettingsScreen() {
     };
   }, [lastOddsSync, lastMcRun]);
 
+  const alertsEnabled = !!(
+    app?.notify_high_value ||
+    app?.notify_line_movement ||
+    app?.notify_model_updates ||
+    app?.notify_results_summary
+  );
+
   async function updateSetting(patch: Partial<AppSettingsRow>) {
     if (!app) return; // read-only mode if app_settings not configured
     setSaving(true);
@@ -237,20 +245,40 @@ export function SettingsScreen() {
   }, [app?.bankroll]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h2 className="text-xl text-white mb-1">Settings</h2>
-          <p className="text-xs text-[#808080]">
-            Live configuration & status
-            {saving ? <span className="ml-2 text-[#606060]">· saving…</span> : null}
-          </p>
-        </div>
-
-        <div className="text-xs text-[#606060]">
-          {loading ? "Loading…" : model?.updated_at ? `Model updated ${formatTsShort(model.updated_at)}` : ""}
-        </div>
-      </div>
+    <ScreenShell
+      title="Settings"
+      subtitle="Tune bankroll, data refresh, and notification preferences across the Prism suite."
+      status={[
+        {
+          label: "Bankroll",
+          value: stakingParams.bankroll,
+          helper: "Current bankroll",
+        },
+        {
+          label: "Kelly Factor",
+          value: stakingParams.kellyPct,
+          helper: "Sizing multiplier",
+        },
+        {
+          label: "Alerts",
+          value: alertsEnabled ? "On" : "Off",
+          helper: "Edge notifications",
+        },
+        {
+          label: "Sync",
+          value: system.lastFullSync,
+          helper: "Odds refresh",
+        },
+      ]}
+    >
+      <SectionCard>
+        <SectionHeader title="Preferences" description="Control model defaults, bankroll sizing, and alert behavior." />
+        <div className="mt-4">
+          <div className="space-y-6">
+            <div className="flex items-center justify-between gap-4 text-xs text-white/60">
+              <span>Live configuration & status {saving ? "· saving…" : ""}</span>
+              <span>{loading ? "Loading…" : model?.updated_at ? `Model updated ${formatTsShort(model.updated_at)}` : ""}</span>
+            </div>
 
       {error ? (
         <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-lg p-4 text-xs text-red-300">
@@ -507,8 +535,12 @@ export function SettingsScreen() {
         </div>
       </div>
     </div>
+        </div>
+      </SectionCard>
+    </ScreenShell>
   );
 }
+
 
 /* Components */
 
@@ -828,4 +860,3 @@ function clampNum(raw: number, min: number, max: number) {
   if (!Number.isFinite(n)) return min;
   return Math.max(min, Math.min(max, n));
 }
-

@@ -181,42 +181,90 @@ function Segmented({
 export function CalculatorScreen() {
   const [calc, setCalc] = useState<CalcKey>("implied");
 
+  const modeLabel = useMemo(() => {
+    const map: Record<CalcKey, string> = {
+      implied: "Implied %",
+      convert: "Convert Odds",
+      kelly: "Kelly Bet",
+      ev: "Expected Value",
+      parlay: "Parlay",
+      hedge: "Hedge",
+    };
+    return map[calc] ?? "—";
+  }, [calc]);
+
+  const inputCount = useMemo(() => {
+    const map: Record<CalcKey, string> = {
+      implied: "2 inputs",
+      convert: "2 inputs",
+      kelly: "3 inputs",
+      ev: "3 inputs",
+      parlay: "Multiple",
+      hedge: "4 inputs",
+    };
+    return map[calc] ?? "Varies";
+  }, [calc]);
+
   return (
-    <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      <Card
-        title="Betting Calculators"
-        subtitle="Pick a calculator, enter inputs, and get instant results. Built for quick checks on mobile."
-      >
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
-            <span className="inline-block h-2 w-2 rounded-full" style={{ background: GOLD }} />
-            Prism Tools
-          </div>
-
-          <Segmented
-            value={calc}
-            onChange={(v) => setCalc(v as CalcKey)}
-            items={[
-              { value: "implied", label: "Implied %" },
-              { value: "convert", label: "Convert" },
-              { value: "kelly", label: "Kelly" },
-              { value: "ev", label: "EV%" },
-              { value: "parlay", label: "Parlay" },
-              { value: "hedge", label: "Hedge" },
-            ]}
-          />
+    <ScreenShell
+      title="Betting Calculator"
+      subtitle="Instantly translate odds, implied probabilities, and expected value across formats."
+      status={[
+        {
+          label: "Tools",
+          value: "6 modules",
+          helper: "Edge, odds, and ROI",
+        },
+        {
+          label: "Mode",
+          value: modeLabel,
+          helper: "Active calculator",
+        },
+        {
+          label: "Inputs",
+          value: inputCount,
+          helper: "Per calculation",
+        },
+        {
+          label: "Precision",
+          value: "High",
+          helper: "Decimal + American",
+        },
+      ]}
+    >
+      <SectionCard>
+        <SectionHeader
+          title="Calculation Suite"
+          description="Pick a calculator, enter inputs, and get instant results across formats."
+          action={
+            <Segmented
+              value={calc}
+              onChange={(v) => setCalc(v as CalcKey)}
+              items={[
+                { value: "implied", label: "Implied %" },
+                { value: "convert", label: "Convert" },
+                { value: "kelly", label: "Kelly" },
+                { value: "ev", label: "EV%" },
+                { value: "parlay", label: "Parlay" },
+                { value: "hedge", label: "Hedge" },
+              ]}
+            />
+          }
+        />
+        <div className="mt-6 grid gap-4">
+          {calc === "implied" ? <ImpliedProbCalc /> : null}
+          {calc === "convert" ? <OddsConverterCalc /> : null}
+          {calc === "kelly" ? <KellyCalc /> : null}
+          {calc === "ev" ? <EvCalc /> : null}
+          {calc === "parlay" ? <ParlayCalc /> : null}
+          {calc === "hedge" ? <HedgeCalc /> : null}
         </div>
-      </Card>
-
-      {calc === "implied" ? <ImpliedProbCalc /> : null}
-      {calc === "convert" ? <OddsConverterCalc /> : null}
-      {calc === "kelly" ? <KellyCalc /> : null}
-      {calc === "ev" ? <EvCalc /> : null}
-      {calc === "parlay" ? <ParlayCalc /> : null}
-      {calc === "hedge" ? <HedgeCalc /> : null}
-    </div>
+      </SectionCard>
+    </ScreenShell>
   );
 }
+
+
 
 function ImpliedProbCalc() {
   const [format, setFormat] = useState<OddsFormat>("american");

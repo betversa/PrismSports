@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import {
-  Activity,
   CalendarDays,
   CheckCircle2,
   XCircle,
@@ -243,34 +243,51 @@ export function ResultsScreen() {
     };
   }, [rows]);
 
+  const winRateLabel = summary.pml != null ? `${(summary.pml * 100).toFixed(1)}%` : "—";
+  const roiLabel = summary.avgPickEdge != null ? `${summary.avgPickEdge.toFixed(1)}%` : "—";
+  const lastRefreshLabel = rows[0]?.day ?? "—";
+
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="rounded-xl border border-white/10 bg-gradient-to-b from-white/[0.08] to-white/[0.03] p-4 md:p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 border border-white/10">
-                <Activity className="h-4 w-4 text-[#d4af37]" />
+    <ScreenShell
+      title="Results Archive"
+      subtitle="Track settled outcomes, ROI impact, and closing line performance across your slate."
+      status={[
+        {
+          label: "Entries",
+          value: loading ? "…" : String(rows.length),
+          helper: `${filtered.length} filtered`,
+        },
+        {
+          label: "Win Rate",
+          value: winRateLabel,
+          helper: "All settled",
+        },
+        {
+          label: "ROI",
+          value: roiLabel,
+          helper: "Net performance",
+        },
+        {
+          label: "Updated",
+          value: lastRefreshLabel,
+          helper: "CT timezone",
+        },
+      ]}
+    >
+      <SectionCard>
+        <SectionHeader title="Result Filters" description="Filter by sport, book, or outcome while monitoring bankroll impact." />
+        <div className="mt-4">
+          <div className="space-y-5">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-white/70">
+                <span className="uppercase tracking-[0.2em] text-white/40">Range</span>
+                <RangeToggle value={range} onChange={setRange} />
+                <span className="ml-auto hidden items-center gap-2 text-[10px] text-white/45 md:flex">
+                  <CalendarDays className="h-3.5 w-3.5" />
+                  America/Chicago
+                </span>
               </div>
-              <h2 className="text-white text-lg md:text-xl font-semibold tracking-tight">Results</h2>
             </div>
-
-            <p className="mt-1 text-xs text-white/50">
-              Track accuracy over time — overall performance + pick tracking + diagnostics.
-            </p>
-
-            <div className="mt-3">
-              <RangeToggle value={range} onChange={setRange} />
-            </div>
-          </div>
-
-          <div className="hidden md:flex items-center gap-2 text-[10px] text-white/45 whitespace-nowrap">
-            <CalendarDays className="h-3.5 w-3.5" />
-            <span>America/Chicago</span>
-          </div>
-        </div>
-      </div>
 
       {error ? (
         <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-xs text-red-200">
@@ -417,8 +434,12 @@ export function ResultsScreen() {
         </div>
       </div>
     </div>
+        </div>
+      </SectionCard>
+    </ScreenShell>
   );
 }
+
 
 /* ===========================
    Aggregation
@@ -836,4 +857,3 @@ function formatInt(n: number) {
     return String(n);
   }
 }
-

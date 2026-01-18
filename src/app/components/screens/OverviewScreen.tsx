@@ -31,6 +31,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { clampNumber, safeNumberOrNull } from "../../../lib/odds/math";
 import { formatOddsLine, formatOddsShort } from "../../../lib/odds/format";
 import { normalizeEvPct, withinOddsGate } from "../../../lib/odds/overview";
+import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 
 /* =========================================================
    TYPES
@@ -123,7 +124,6 @@ type PropEvRow = {
 ========================================================= */
 
 const GOLD = "#d89211";
-const PANEL = "#0b0b0b";
 const BORDER = "#2a2a2a";
 const SLATE = "rgba(87,90,98,0.26)";
 
@@ -1117,126 +1117,113 @@ export function OverviewScreen() {
     return topAll;
   }, [tab, topAll, topGamesByBook, topPropsByBook]);
 
+  const lastRunTime = latestRun?.created_at ? formatTsShort(latestRun.created_at) : "—";
+  const modelUpdated = latestVersion?.updated_at ?? latestVersion?.release_date ?? null;
+
   return (
-    <div className="space-y-8 sm:space-y-10">
-      {/* HERO */}
-      <div
-        className="relative overflow-hidden rounded-2xl border p-4 sm:p-6"
-        style={{
-          borderColor: "rgba(255,255,255,0.08)",
-          background: PANEL,
-        }}
-      >
-        <div className="pointer-events-none absolute inset-0">
-          <div
-            className="absolute inset-0"
-            style={{
-              background: [
-                "radial-gradient(900px 260px at 18% 0%, rgba(216,146,17,0.16), transparent 60%)",
-                `radial-gradient(760px 260px at 86% 10%, ${SLATE}, transparent 62%)`,
-                "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.012) 55%, rgba(0,0,0,0.0) 100%)",
-                "linear-gradient(180deg, rgba(0,0,0,0.26), rgba(0,0,0,0.66) 55%, rgba(0,0,0,0.86) 100%)",
-              ].join(", "),
-            }}
+    <ScreenShell
+      title="Command Center"
+      subtitle="Curate your best edges across games, props, and market movement. Every panel refreshes in real time and uses consistent gating."
+      status={[
+        {
+          label: "Top Plays Loaded",
+          value: `${topAll.length}`,
+          helper: `${topGamesByBook.length} games • ${topPropsByBook.length} props`,
+        },
+        {
+          label: "Model Version",
+          value: latestVersion?.version ?? "—",
+          helper: modelUpdated ? `Updated ${formatTsShort(modelUpdated)}` : "Awaiting publish",
+        },
+        {
+          label: "Simulations",
+          value: latestVersion?.simulations ? latestVersion.simulations.toLocaleString() : "—",
+          helper: latestVersion?.status ?? "Status pending",
+        },
+        {
+          label: "Latest Run",
+          value: lastRunTime,
+          helper: latestRun?.sport_key ? titleCase(latestRun.sport_key) : "No run detected",
+        },
+      ]}
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={() => loadAll({ soft: false })}
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/80 transition hover:border-white/30"
+          >
+            <RefreshCw className={["h-4 w-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
+            Refresh Data
+          </button>
+          <button
+            type="button"
+            onClick={() => (window.location.href = "/settings")}
+            className="inline-flex items-center justify-center gap-2 rounded-full border border-[#d4af37]/40 bg-[#d4af37]/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#f5e7b0] transition hover:border-[#d4af37]/70"
+          >
+            <Sparkles className="h-4 w-4" />
+            Configure Models
+          </button>
+        </>
+      }
+    >
+      {error ? (
+        <SectionCard className="border-[#ff6b6b]/40 bg-[#1b0f0f]/70">
+          <SectionHeader title="Connection Warning" description="Live data is partially unavailable." />
+          <p className="mt-3 text-sm text-[#ffb3b3]">Supabase error: {error}</p>
+        </SectionCard>
+      ) : null}
+
+      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <SectionCard>
+          <SectionHeader
+            title="Launch Pad"
+            description="Jump into the most active workspaces or return to your core dashboards."
           />
-
-          <div
-            className="absolute left-0 right-0 top-0 h-[1px] opacity-75"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.10), rgba(255,255,255,0.0))",
-            }}
-          />
-          <div
-            className="absolute left-0 right-0 bottom-0 h-[1px] opacity-70"
-            style={{
-              background:
-                "linear-gradient(90deg, rgba(216,146,17,0.0), rgba(216,146,17,0.42), rgba(216,146,17,0.0))",
-            }}
-          />
-        </div>
-
-        <div className="relative space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-            <div className="min-w-0">
-              <div
-                className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
-                style={{
-                  borderColor: "rgba(216,146,17,0.22)",
-                  background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                  color: "rgba(255,255,255,0.82)",
-                }}
-              >
-                <Sparkles className="w-3 h-3" style={{ color: GOLD }} />
-                Prism Command Center
-              </div>
-
-              <h2 className="text-xl sm:text-2xl text-white mt-3 mb-2 tracking-tight">
-                Best Plays Today <span className="text-[#7b7b7b]">—</span> Live
-              </h2>
-
-              <p className="text-sm text-[#c7c7c7] leading-relaxed max-w-3xl">
-                Each card shows a book price vs a fair price, plus a 0–100 score. Higher score = stronger play.
-              </p>
-
-              <div className="text-[11px] text-[#a7a7a7] mt-2">
-                Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} •
-                Games EV ≤ {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => loadAll({ soft: false })}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs transition-colors w-full sm:w-auto"
-              style={{
-                borderColor: "rgba(255,255,255,0.10)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.18))",
-                color: "rgba(255,255,255,0.86)",
-              }}
-              title="Refresh"
-            >
-              <RefreshCw className={["w-4 h-4", loadingSoft ? "animate-spin" : ""].join(" ")} />
-              Refresh
-            </button>
-          </div>
-
-          {error ? (
-            <div
-              className="rounded-lg border p-3 text-xs"
-              style={{
-                borderColor: "rgba(255,255,255,0.10)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                color: "rgba(255,140,140,0.92)",
-              }}
-            >
-              Supabase error: {error}
-            </div>
-          ) : null}
-
-          <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <QuickAction title="Odds" sub="See lines + history" icon={Database} href="/odds" />
             <QuickAction title="Projections" sub="Scores + win%" icon={Calculator} href="/monte-carlo" />
             <QuickAction title="All Plays" sub="Full list of picks" icon={Trophy} href="/model" />
           </div>
-        </div>
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/60">
+            Top Plays filters: Odds {TOP_MIN_ODDS} to +{TOP_MAX_ODDS} • Score ≥ {TOP_SCORE_MIN} • Games EV ≤
+            {TOP_MAX_EV_PCT}% • Props EV {TOP_MIN_EV_PCT_PROPS}–{TOP_MAX_EV_PCT}%.
+          </div>
+        </SectionCard>
+
+        <SectionCard>
+          <SectionHeader title="Release Notes" description="Latest improvements shipped to the Prism stack." />
+          <div className="mt-4 space-y-3">
+            {changelog.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 px-4 py-4 text-sm text-white/50">
+                No release notes are available yet.
+              </div>
+            ) : (
+              changelog.map((item) => (
+                <div key={`${item.version}-${item.date}`} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="flex items-center justify-between text-xs text-white/50">
+                    <span>v{item.version}</span>
+                    <span>{item.date ?? "Recently"}</span>
+                  </div>
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-white/80">
+                    {(item.changes ?? []).slice(0, 3).map((change) => (
+                      <li key={change}>{change}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))
+            )}
+          </div>
+        </SectionCard>
       </div>
 
-      {/* TOP PLAYS */}
-      <section>
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3 sm:mb-4">
-          <div>
-            <h3 className="text-base text-white">Top Plays</h3>
-            <div className="text-xs text-[#b0b0b0]">One card per play (best book shown).</div>
-          </div>
-
-          <div className="w-full sm:w-auto space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-2">
-            <Segmented value={tab} onChange={setTab} />
-          </div>
-        </div>
-
-        {/* Book filter: ONLY soft options */}
-        <div className="flex flex-wrap gap-2 mb-3 sm:mb-4">
+      <SectionCard>
+        <SectionHeader
+          title="Top Plays"
+          description="One card per play with the best available soft-book price."
+          action={<Segmented value={tab} onChange={setTab} />}
+        />
+        <div className="mt-4 flex flex-wrap gap-2">
           <Chip active={bookFilter === "any"} label="Any" onClick={() => setBookFilter("any")} />
           <Chip
             active={bookFilter === "draftkings"}
@@ -1258,7 +1245,7 @@ export function OverviewScreen() {
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {loading ? (
             <>
               <SkeletonCard />
@@ -1267,14 +1254,7 @@ export function OverviewScreen() {
               <SkeletonCard />
             </>
           ) : playsToRender.length === 0 ? (
-            <div
-              className="col-span-1 sm:col-span-2 lg:col-span-4 rounded-xl border p-5 text-sm"
-              style={{
-                borderColor: "rgba(255,255,255,0.10)",
-                background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.18))",
-                color: "rgba(255,255,255,0.78)",
-              }}
-            >
+            <div className="col-span-1 rounded-2xl border border-white/10 bg-white/5 p-5 text-sm text-white/70 sm:col-span-2 lg:col-span-4">
               No plays found for this filter.
             </div>
           ) : (
@@ -1327,13 +1307,16 @@ export function OverviewScreen() {
             })
           )}
         </div>
-      </section>
+      </SectionCard>
 
-      {/* FOOTER SECTION KEPT MINIMAL */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <HowStep icon={Target} label="What is “Edge”?" sub="How much better the price is vs fair." />
-        <HowStep icon={Activity} label="What is “Score”?" sub="0–100 strength rating." />
-      </section>
-    </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <SectionCard>
+          <HowStep icon={Target} label="What is “Edge”?" sub="How much better the price is vs fair." />
+        </SectionCard>
+        <SectionCard>
+          <HowStep icon={Activity} label="What is “Score”?" sub="0–100 strength rating." />
+        </SectionCard>
+      </div>
+    </ScreenShell>
   );
 }

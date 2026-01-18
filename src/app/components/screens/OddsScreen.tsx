@@ -31,6 +31,7 @@ import React, {
 import { supabase } from "../../lib/supabaseClient";
 import { americanToDecimal, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
 import { formatOddsPrice, formatPercent } from "../../../lib/odds/format";
+import { ScreenShell, SectionCard } from "../ScreenShell";
 import {
   ResponsiveContainer,
   LineChart,
@@ -82,8 +83,6 @@ const PRISM_BORDER = "rgba(255,255,255,0.08)";
 const PRISM_GOLD = "#d4af37";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
-const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
-const BOARD_STICKY_BG = BOARD_BG;
 const TABLE_HEADER_BG = "#0b0b0b";
 const FILTER_ROW_HEIGHT = 48;
 const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
@@ -3179,6 +3178,33 @@ export function OddsScreen({
   }, [selectedDate]);
 
   return (
+    <ScreenShell
+      title="Odds Command Board"
+      subtitle="Track consensus pricing, book movement, and time-sliced matchups in one unified board."
+      status={[
+        {
+          label: "Live Events",
+          value: `${events.length}`,
+          helper: `${availableDates.length} dates loaded`,
+        },
+        {
+          label: "Active Market",
+          value: market.toUpperCase(),
+          helper: view === "live" ? "Live view" : "Pregame view",
+        },
+        {
+          label: "Sportsbooks",
+          value: `${bookOrder.length}`,
+          helper: "Pinned order",
+        },
+        {
+          label: "Refresh Cadence",
+          value: autoRefresh ? `${refreshSec}s` : "Manual",
+          helper: autoRefresh ? "Auto-sync on" : "Auto-sync off",
+        },
+      ]}
+    >
+      <SectionCard className="p-0 overflow-hidden">
     <div className="w-full min-h-screen" style={{ background: BOARD_BG }}>
       <div className="w-full">
         <div className={`${PAGE_X} relative`}>
@@ -3792,6 +3818,9 @@ export function OddsScreen({
         />
       )}
     </div>
+      </SectionCard>
+    </ScreenShell>
   );
 }
+
  
