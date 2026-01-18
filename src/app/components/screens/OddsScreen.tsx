@@ -2475,24 +2475,16 @@ function TableHeaderRow({
   onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
   headerRef?: React.RefObject<HTMLTableSectionElement>;
 }) {
-  const stickyCellStyle: React.CSSProperties = {
-    position: "sticky",
-    top: 0,
-    zIndex: 101,
-    background: TABLE_HEADER_BG,
-    backgroundClip: "padding-box",
-  };
   return (
     <thead
       ref={headerRef}
       style={{
         position: "sticky",
-        top: 0,
-        zIndex: 100,
-        background: TABLE_HEADER_BG,
+        top: DATE_BAR_HEIGHT,
+        zIndex: 70,
+        background: BOARD_STICKY_BG,
       }}
     >
-    <thead>
       <tr
         className="border-y"
         style={{
@@ -2501,23 +2493,10 @@ function TableHeaderRow({
           height: HEADER_ROW_HEIGHT,
         }}
       >
-        <th
-          className="text-left px-4 py-2.5 text-[11px] font-extrabold text-white/80 align-middle"
-          style={{ ...stickyCellStyle, width: COL_GAME }}
-        >
-          background: BOARD_BG,
-          backdropFilter: "blur(10px)",
-        }}
-      >
         <th className="text-left px-4 py-2.5 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
           Game
         </th>
 
-        {/* Consensus column like reference (subtle) */}
-        <th
-          className="text-center px-2 py-2.5 text-[11px] font-extrabold text-white/70 align-middle"
-          style={{ ...stickyCellStyle, width: COL_BOOK }}
-        >
         <th className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
           Cons
           <div className="text-[9px] font-semibold text-white/45 mt-0.5">
@@ -2525,32 +2504,6 @@ function TableHeaderRow({
           </div>
         </th>
 
-        {displayBooks.map((bk) => (
-          <th
-            key={bk}
-            className="text-center px-2 py-2.5 align-middle"
-            style={{ ...stickyCellStyle, width: COL_BOOK }}
-          >
-            <div className="flex items-center justify-center">
-              <button
-                type="button"
-                data-book={bk}
-                onPointerDown={onBookPointerDown(bk)}
-                onPointerUp={onBookPointerUp}
-                onPointerCancel={onBookPointerCancel}
-                className={[
-                  "rounded-lg transition-colors cursor-grab active:cursor-grabbing",
-                  draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
-                ].join(" ")}
-                style={{ touchAction: "none" }}
-                title="Drag to reorder"
-                aria-label={`Reorder ${BOOK_LABEL[bk]}`}
-              >
-                <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} />
-              </button>
-            </div>
-          </th>
-        ))}
         {displayBooks.map((bk) => {
           const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
           return (
