@@ -1486,7 +1486,6 @@ function GameDetailsModal({
   initialTab = "pred",
   mode,
   showTabs = true,
-  initialTab = "pred",
   onClose,
 }: {
   sportKey: string;
@@ -1504,14 +1503,6 @@ function GameDetailsModal({
   useEffect(() => {
     setTab(forcedTab);
   }, [forcedTab]);
-  initialTab?: DetailsTab;
-  onClose: () => void;
-}) {
-  const [tab, setTab] = useState<DetailsTab>(initialTab);
-
-  useEffect(() => {
-    setTab(initialTab);
-  }, [initialTab]);
 
   // line movement state
   const [lmMarket, setLmMarket] = useState<Market>("ml");
