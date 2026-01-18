@@ -18,7 +18,7 @@ type ScreenShellProps = {
 export function ScreenShell({ title, subtitle, status, actions, children }: ScreenShellProps) {
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6">
-      <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-[#0b0b0b]/80 px-5 py-6 md:px-8 md:py-8">
+      <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.02] px-5 py-6 md:px-8 md:py-8">
         <div className="pointer-events-none absolute -left-20 top-0 h-48 w-48 rounded-full bg-[#d4af37]/15 blur-[120px]" />
         <div className="pointer-events-none absolute bottom-0 right-0 h-52 w-52 rounded-full bg-white/10 blur-[120px]" />
         <div className="relative z-10 flex flex-col gap-6">
@@ -87,7 +87,7 @@ type SectionCardProps = {
 export function SectionCard({ children, className }: SectionCardProps) {
   return (
     <section
-      className={`rounded-3xl border border-white/10 bg-[#0b0b0b]/80 p-4 shadow-[0_20px_60px_-40px_rgba(0,0,0,0.8)] md:p-6 ${
+      className={`rounded-3xl border border-white/10 bg-white/[0.02] p-4 shadow-[0_20px_60px_-40px_rgba(0,0,0,0.6)] md:p-6 ${
         className ?? ""
       }`}
     >
