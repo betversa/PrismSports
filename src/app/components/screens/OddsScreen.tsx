@@ -2697,36 +2697,31 @@ function EventCardMobile({
             </div>
 
             <div className="px-3">
-              {displayBooks.map((bk) => (
-                <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
-                  <div className="grid grid-cols-[96px_1fr_1fr] items-center gap-2">
-                    <div className="flex justify-start">
-                      <BookLogoPill
-                        src={BOOK_LOGOS[bk]}
-                        alt={BOOK_LABEL[bk]}
-                        className="h-6 max-w-[96px] px-1.5"
-                        imgClassName="h-4 w-4"
-                        textClassName="text-[10px]"
-                      />
-                    </div>
               {displayBooks.map((bk) => {
                 const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
                 return (
                   <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
                     <div className="grid grid-cols-[100px_1fr_1fr] items-center gap-3">
                       <div className="flex justify-start">
-                        <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+                        <BookLogoPill
+                          src={BOOK_LOGOS[bk]}
+                          alt={BOOK_LABEL[bk]}
+                          fallbackLabel={fb}
+                          className="h-6 max-w-[96px] px-1.5"
+                          imgClassName="h-4 w-4"
+                          textClassName="text-[10px]"
+                        />
                       </div>
-
-                    <div className="flex justify-center">
-                      <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} className="w-full max-w-[120px]" />
-                    </div>
-                    <div className="flex justify-center">
-                      <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} className="w-full max-w-[120px]" />
+                      <div className="flex justify-center">
+                        <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} className="w-full max-w-[120px]" />
+                      </div>
+                      <div className="flex justify-center">
+                        <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} className="w-full max-w-[120px]" />
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
