@@ -3112,11 +3112,6 @@ export function OddsScreen({
           value: `${bookOrder.length}`,
           helper: "Pinned order",
         },
-        {
-          label: "Refresh Cadence",
-          value: autoRefresh ? `${refreshSec}s` : "Manual",
-          helper: autoRefresh ? "Auto-sync on" : "Auto-sync off",
-        },
       ]}
     >
       <SectionCard className="p-0 overflow-hidden">
@@ -3455,6 +3450,12 @@ export function OddsScreen({
                         </div>
                       </div>
                     </div>
+
+                    {error ? (
+                      <div className="border-b px-4 py-3 text-sm text-red-400" style={{ borderColor: PRISM_BORDER }}>
+                        Supabase error: {error}
+                      </div>
+                    ) : null}
 
                     {/* MOBILE */}
                     <div className="md:hidden p-3">

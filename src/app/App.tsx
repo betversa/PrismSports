@@ -138,12 +138,12 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#070707] text-[#f6f4ef]">
+    <div className="relative min-h-screen bg-[#070707] text-[#f6f4ef]">
       <div
-        className="pointer-events-none fixed inset-0"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[520px] -z-10"
         style={{
           background:
-            "radial-gradient(1200px 420px at 10% -10%, rgba(212,175,55,0.18), transparent 55%), radial-gradient(900px 420px at 88% 0%, rgba(255,255,255,0.05), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(7,7,7,0.98) 50%, rgba(7,7,7,1) 100%)",
+            "radial-gradient(1200px 420px at 10% -10%, rgba(212,175,55,0.18), transparent 55%), radial-gradient(900px 420px at 88% 0%, rgba(255,255,255,0.05), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(7,7,7,0.98) 60%, rgba(7,7,7,1) 100%)",
         }}
       />
       {/* Mobile drawer sidebar ONLY */}
@@ -182,7 +182,7 @@ export default function App() {
 
       {/* Main Content scroll container */}
       <div
-        className="h-screen overflow-y-auto overflow-x-hidden"
+        className="relative z-10 h-screen overflow-y-auto overflow-x-hidden"
         style={{ paddingTop: headerH, "--app-header-h": `${headerH}px` } as React.CSSProperties}
       >
         <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
