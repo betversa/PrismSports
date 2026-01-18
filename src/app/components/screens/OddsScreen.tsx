@@ -3216,80 +3216,62 @@ export function OddsScreen({
                   background: BOARD_BG,
                   borderBottom: `1px solid ${PRISM_BORDER}`,
                   backdropFilter: "blur(10px)",
-    <div
-      className="w-full min-h-screen"
-      style={{
-        background:
-          `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-          "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
-          "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
-      }}
-    >
-      <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X} relative`}>
-        {/* ===========================
-            TOP SPORTS TABS BAR
-        =========================== */}
-        <div className="sticky top-0 z-50">
-          <div
-            className="h-[42px] flex items-center justify-between px-2 md:px-0"
-            style={{
-              background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
-              borderBottom: `1px solid ${PRISM_BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-              {SPORT_TABS.map((t) => {
-                const active =
-                  t.key === sportKey ||
-                  (t.key === "soccer" && sportKey.includes("soccer")) ||
-                  (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
-                const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    onClick={() => {
-                      if (enabled && onPickSport) onPickSport(t.key);
-                    }}
-                    disabled={!enabled}
-                    className={[
-                      "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
-                      enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                      active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
-                    ].join(" ")}
-                    style={{
-                      borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                      background: active ? "rgba(212,175,55,0.16)" : "transparent",
-                      color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
-                    }}
-                    title={
-                      !enabled
-                        ? `${t.label} (not wired)`
-                        : active
-                          ? `${t.label} (active)`
-                          : `Switch to ${t.label}`
-                    }
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
+                }}
+              >
+                <div className="h-full flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                    {SPORT_TABS.map((t) => {
+                      const active =
+                        t.key === sportKey ||
+                        (t.key === "soccer" && sportKey.includes("soccer")) ||
+                        (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
+                      const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => {
+                            if (enabled && onPickSport) onPickSport(t.key);
+                          }}
+                          disabled={!enabled}
+                          className={[
+                            "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
+                            enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
+                            active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                          ].join(" ")}
+                          style={{
+                            borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
+                            background: active ? "rgba(212,175,55,0.16)" : "transparent",
+                            color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
+                          }}
+                          title={
+                            !enabled
+                              ? `${t.label} (not wired)`
+                              : active
+                                ? `${t.label} (active)`
+                                : `Switch to ${t.label}`
+                          }
+                        >
+                          {t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-            <div className="flex items-center gap-2">
-              <div className="hidden md:flex items-center gap-2">
-                <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
-                <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                  <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                  <span className={freshness.tone}>{freshness.label}</span>
+                  <div className="flex items-center gap-2">
+                    <div className="hidden md:flex items-center gap-2">
+                      <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
+                      <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                        <span className={freshness.tone}>{freshness.label}</span>
+                      </div>
+                    </div>
+                    <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
+                  </div>
                 </div>
               </div>
-              <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
-            </div>
-          </div>
 
           {/* ===========================
               FILTERS TOOLBAR
