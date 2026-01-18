@@ -601,8 +601,6 @@ function Btn({
 function DateReminder({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <div className="text-[12px] text-white/55 font-semibold">Selected date</div>
-      <div className="h-8 px-2.5 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold flex items-center">
       <div className="text-[11px] text-white/60 font-semibold">Selected date</div>
       <div className="h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold flex items-center">
         {label}
@@ -630,7 +628,6 @@ function SegmentedToggle<T extends string>({
             type="button"
             onClick={() => onChange(opt.value)}
             className={[
-              "h-7 px-3 rounded-md text-[12px] font-extrabold transition-colors",
               "h-7 px-3 rounded-md text-[11px] font-extrabold transition-colors",
               active
                 ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
