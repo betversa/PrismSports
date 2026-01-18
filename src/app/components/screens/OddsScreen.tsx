@@ -2433,29 +2433,6 @@ function sportLabelForKey(sportKey: string) {
 function DateSectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <tr>
-      <td
-        colSpan={BOOKS.length + 2}
-        className="p-0"
-        style={{
-          position: "sticky",
-          top: "var(--thead-h, 0px)",
-          zIndex: 60,
-          background: BOARD_STICKY_BG,
-        }}
-      >
-        <div
-          className="px-4 py-2 flex items-center justify-between border-y"
-          style={{
-            borderColor: PRISM_BORDER,
-            background: BOARD_STICKY_BG,
-            height: DATE_BAR_HEIGHT,
-          }}
-        >
-          <div className="text-[11px] font-extrabold text-white/90">
-            {label}
-            <span className="text-white/50 font-semibold ml-2">({count} games)</span>
-          </div>
-          <div className="text-[10px] font-semibold text-white/45">Pre-Game</div>
       <td colSpan={BOOKS.length + 2} className="p-0">
         <div
           className="sticky top-0 z-20 px-4 py-2 flex items-center justify-between border-y"
@@ -2463,6 +2440,7 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
             borderColor: PRISM_BORDER,
             background: BOARD_STICKY_BG,
             backdropFilter: "blur(10px)",
+            height: DATE_BAR_HEIGHT,
           }}
         >
           <div className="text-[12px] font-extrabold text-white/90">
@@ -2471,7 +2449,10 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
           </div>
           <div className="text-[11px] font-semibold text-white/45">Pre-Game</div>
         </div>
-        <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_GOLD}, transparent)` }} />
+        <div
+          className="h-[2px]"
+          style={{ background: `linear-gradient(90deg, transparent, ${PRISM_GOLD}, transparent)` }}
+        />
       </td>
     </tr>
   );
