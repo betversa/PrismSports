@@ -10,7 +10,7 @@
 import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
-import { PageFrame, SectionCard } from "./components/ScreenShell";
+import { AppShell, PageFrame, Panel } from "./components/ui/PrismUI";
 
 import { OverviewScreen } from "./components/screens/OverviewScreen";
 import { ModelScreen } from "./components/screens/ModelScreen";
@@ -91,7 +91,7 @@ class AppErrorBoundary extends React.Component<
 
     return (
       <PageFrame>
-        <SectionCard>
+        <Panel>
           <div className="space-y-3">
             <div className="text-xs uppercase tracking-[0.2em] text-red-300">Route Error</div>
             <div className="text-lg font-semibold text-white">Something went wrong.</div>
@@ -116,7 +116,7 @@ class AppErrorBoundary extends React.Component<
               Reload
             </button>
           </div>
-        </SectionCard>
+        </Panel>
       </PageFrame>
     );
   }
@@ -125,12 +125,12 @@ class AppErrorBoundary extends React.Component<
 function PrismLoading() {
   return (
     <PageFrame>
-      <SectionCard>
+      <Panel>
         <div className="flex items-center gap-3 text-sm text-white/70">
           <span className="h-2 w-2 animate-pulse rounded-full bg-[#d4af37]" />
           Loading…
         </div>
-      </SectionCard>
+      </Panel>
     </PageFrame>
   );
 }
@@ -209,14 +209,7 @@ export default function App() {
   );
 
   return (
-    <div className="relative min-h-screen bg-[#070707] text-[#f6f4ef]">
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-[520px] -z-10"
-        style={{
-          background:
-            "radial-gradient(1200px 420px at 10% -10%, rgba(212,175,55,0.18), transparent 55%), radial-gradient(900px 420px at 88% 0%, rgba(255,255,255,0.05), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(7,7,7,0.98) 60%, rgba(7,7,7,1) 100%)",
-        }}
-      />
+    <AppShell>
       {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">
@@ -262,6 +255,6 @@ export default function App() {
           </AppErrorBoundary>
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }

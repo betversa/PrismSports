@@ -32,6 +32,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { americanToDecimal, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
 import { formatOddsPrice, formatPercent } from "../../../lib/odds/format";
 import { ScreenShell, SectionCard } from "../ScreenShell";
+import { TableFrame } from "../ui/PrismUI";
 import {
   ResponsiveContainer,
   LineChart,
@@ -79,17 +80,17 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 // Prism Theme (black / gold)
-const PRISM_BORDER = "rgba(255,255,255,0.08)";
-const PRISM_GOLD = "#d4af37";
+const PRISM_BORDER = "var(--border-subtle)";
+const PRISM_GOLD = "var(--gold)";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
-const PRISM_MUTED = "rgba(232,232,232,0.60)";
-const TABLE_HEADER_BG = "#0b0b0b";
+const PRISM_MUTED = "var(--text-muted)";
+const TABLE_HEADER_BG = "rgba(10,10,10,0.9)";
 const FILTER_ROW_HEIGHT = 48;
 const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
 const DATE_BAR_HEIGHT = 44;
 const HEADER_ROW_HEIGHT = 40;
-const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.86), rgba(8,8,8,0.96))";
-const BOARD_STICKY_BG = "linear-gradient(180deg, rgba(12,12,12,0.98), rgba(10,10,10,0.96))";
+const BOARD_BG = "linear-gradient(180deg, rgba(14,14,14,0.92), rgba(10,10,10,0.98))";
+const BOARD_STICKY_BG = "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(10,10,10,0.96))";
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
@@ -3297,14 +3298,13 @@ export function OddsScreen({
                     BOARD BODY
                 =========================== */}
                 <div className="pt-2.5 pb-6">
-                  <div
-                    className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
-                    style={{
-                      borderColor: PRISM_BORDER,
-                      background: BOARD_BG,
-                      backdropFilter: "blur(6px)",
-                    }}
-                  >
+                  <TableFrame>
+                    <div
+                      style={{
+                        background: BOARD_BG,
+                        backdropFilter: "blur(6px)",
+                      }}
+                    >
                     <div className="px-4 py-2.5 border-b" style={{ borderColor: PRISM_BORDER }}>
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div>
@@ -3432,7 +3432,8 @@ export function OddsScreen({
                         </div>
                       )}
                     </div>
-                  </div>
+                    </div>
+                  </TableFrame>
                 </div>
               </div>
             </div>
