@@ -9,7 +9,8 @@
 // ✅ Explains why combos are rejected via internal validator (kept simple, fast)
 
 import React, { useMemo, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { hasSupabaseEnv, missingSupabaseVars, supabase } from "../../lib/supabaseClient";
+import { DataSourceErrorPanel } from "../ui/PrismUI";
 import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import { americanToDecimalParlay, decimalToAmericanParlay, parlayEvPct } from "../../../lib/odds/parlay";
 import {
@@ -87,6 +88,9 @@ const BOOK_OPTIONS: Array<{ key: BookKey; label: string }> = [
 ];
 
 export function ParlayScreen() {
+  if (!hasSupabaseEnv) {
+    return <DataSourceErrorPanel missing={missingSupabaseVars} />;
+  }
   // Controls
   const [legs, setLegs] = useState<LegsCount>(3);
   const [book, setBook] = useState<BookKey>("draftkings");

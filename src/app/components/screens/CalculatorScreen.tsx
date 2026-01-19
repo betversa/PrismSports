@@ -13,6 +13,8 @@ import {
 } from "../../../lib/odds/math";
 import { formatAmerican, formatDecimal, formatMoney, formatPercent } from "../../../lib/odds/format";
 import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
+import { hasSupabaseEnv, missingSupabaseVars } from "../../lib/supabaseClient";
+import { DataSourceErrorPanel } from "../ui/PrismUI";
 
 /**
  * CalculatorScreen.tsx — FULL NEW SCREEN (Prism calculators)
@@ -180,6 +182,9 @@ function Segmented({
 }
 
 export function CalculatorScreen() {
+  if (!hasSupabaseEnv) {
+    return <DataSourceErrorPanel missing={missingSupabaseVars} />;
+  }
   const [calc, setCalc] = useState<CalcKey>("implied");
 
   const modeLabel = useMemo(() => {

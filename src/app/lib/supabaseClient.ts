@@ -3,6 +3,13 @@ import { createClient } from "@supabase/supabase-js";
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+export const missingSupabaseVars = [
+  !url ? "VITE_SUPABASE_URL" : null,
+  !anon ? "VITE_SUPABASE_ANON_KEY" : null,
+].filter(Boolean) as string[];
+
+export const hasSupabaseEnv = missingSupabaseVars.length === 0;
+
 const SUPABASE_ENV_ERROR =
   "Supabase environment variables are missing (VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY).";
 
@@ -117,4 +124,4 @@ function createSupabaseStub() {
   };
 }
 
-export const supabase = url && anon ? createClient(url, anon) : createSupabaseStub();
+export const supabase = hasSupabaseEnv ? createClient(url, anon) : createSupabaseStub();

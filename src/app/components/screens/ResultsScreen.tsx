@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { hasSupabaseEnv, missingSupabaseVars, supabase } from "../../lib/supabaseClient";
+import { DataSourceErrorPanel } from "../ui/PrismUI";
 import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import {
   CalendarDays,
@@ -92,6 +93,9 @@ type DailyRow = {
 };
 
 export function ResultsScreen() {
+  if (!hasSupabaseEnv) {
+    return <DataSourceErrorPanel missing={missingSupabaseVars} />;
+  }
   const [range, setRange] = useState<RangeKey>("7D");
   const [rows, setRows] = useState<DailyRow[]>([]);
   const [loading, setLoading] = useState(true);

@@ -18,7 +18,8 @@
 // - Locks background scroll when modal open
 
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { hasSupabaseEnv, missingSupabaseVars, supabase } from "../../lib/supabaseClient";
+import { DataSourceErrorPanel } from "../ui/PrismUI";
 import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import { calcBetAmount } from "../../../lib/odds/bet";
 import { clampNumber, safeNumber } from "../../../lib/odds/math";
@@ -368,6 +369,9 @@ type FantasyProsApiResponse =
 ========================================================= */
 
 export function PropsScreen() {
+  if (!hasSupabaseEnv) {
+    return <DataSourceErrorPanel missing={missingSupabaseVars} />;
+  }
   const [selectedMarket, setSelectedMarket] = useState<UiMarket>("Points");
   const [selectedBook, setSelectedBook] = useState<BookFilter>("any");
 

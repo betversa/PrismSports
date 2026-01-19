@@ -133,3 +133,27 @@ export function TableFrame({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
+export function DataSourceErrorPanel({ missing }: { missing: string[] }) {
+  return (
+    <PageFrame>
+      <Panel>
+        <div className="space-y-3">
+          <div className="text-xs uppercase tracking-[0.2em] text-[var(--gold)]">Configuration</div>
+          <div className="text-lg font-semibold text-[var(--text)]">
+            Data source not configured. Supabase environment variables missing.
+          </div>
+          <div className="text-sm text-[var(--text-muted)]">
+            Add the following environment variables to enable data-backed screens.
+          </div>
+          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3 text-xs text-white/80">
+            <div className="font-semibold text-[var(--text)]">Missing</div>
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px] text-white/70">
+              {missing.map((item) => `- ${item}`).join("\n")}
+            </pre>
+          </div>
+        </div>
+      </Panel>
+    </PageFrame>
+  );
+}
