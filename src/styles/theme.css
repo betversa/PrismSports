@@ -150,6 +150,8 @@
 
   body {
     @apply bg-background text-foreground;
+    background-color: var(--bg);
+    color: var(--text);
   }
 
   /**
@@ -159,6 +161,8 @@
 
   html {
     font-size: var(--font-size);
+    background-color: var(--bg);
+    color: var(--text);
   }
 
   h1 {
