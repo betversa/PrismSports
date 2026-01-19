@@ -28,7 +28,14 @@ import React, {
   useState,
 } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { americanToDecimal, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
+import {
+  americanToDecimal,
+  impliedProbFromAmerican,
+  median,
+  probToAmerican,
+  safeNumberOrNull,
+  toProb01,
+} from "../../../lib/odds/math";
 import { formatOddsPrice, formatPercent } from "../../../lib/odds/format";
 import { SectionCard } from "../ScreenShell";
 import { PageFrame, TableFrame } from "../ui/PrismUI";
@@ -108,6 +115,14 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   mgm: "/books/mgmsquare.png",
   pin: "/books/pinsquare.png",
   bol: "/books/bolsquare.png",
+};
+
+const BOOK_SHORT: Record<BookKey, string> = {
+  dk: "DK",
+  fd: "FD",
+  mgm: "MGM",
+  pin: "PIN",
+  bol: "BOL",
 };
 
 const ODDS_TABS: Array<{ value: OddsTab; label: string }> = [
@@ -385,62 +400,80 @@ function consensusPartsForRow(
   return cellLineOdds(mLine == null ? null : mLine, fmtPrice(mUnder == null ? null : mUnder, oddsFormat));
 }
 
+function devigProbabilityForSide(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  books: BookKey[]
+): number | null {
+  const otherSide: "AWAY" | "HOME" = side === "AWAY" ? "HOME" : "AWAY";
+  const probs: number[] = [];
+
+  for (const book of books) {
+    const oddsSide = oddsValueForBook(ev, market, side, book);
+    const oddsOther = oddsValueForBook(ev, market, otherSide, book);
+    if (typeof oddsSide !== "number" || typeof oddsOther !== "number") continue;
+    const pSide = impliedProbFromAmerican(oddsSide);
+    const pOther = impliedProbFromAmerican(oddsOther);
+    if (!Number.isFinite(pSide) || !Number.isFinite(pOther) || pSide <= 0 || pOther <= 0) continue;
+    const sum = pSide + pOther;
+    if (sum <= 0) continue;
+    probs.push(pSide / sum);
+  }
+
+  return meanValue(probs);
+}
+
+function blendProbabilities(
+  devigProb: number | null,
+  mcProb: number | null,
+  weightMc: number
+): number | null {
+  const mc = toProb01(mcProb ?? null);
+  const devig = devigProb == null ? null : Math.max(0, Math.min(1, devigProb));
+  if (mc == null && devig == null) return null;
+  if (mc == null) return devig;
+  if (devig == null) return mc;
+  return weightMc * mc + (1 - weightMc) * devig;
+}
+
 function blendPartsForRow(
   ev: EventOdds,
   market: Market,
   side: "AWAY" | "HOME",
-  oddsFormat: OddsFormat
+  oddsFormat: OddsFormat,
+  mcRow: MonteCarloRow | null
 ): CellParts {
-  const src = side === "AWAY" ? ev.away : ev.home;
+  const devigProb = devigProbabilityForSide(ev, market, side, ["pin", "bol"]);
+  const mcProb =
+    market === "ml"
+      ? side === "AWAY"
+        ? mcRow?.away_win_prob ?? null
+        : mcRow?.home_win_prob ?? null
+      : market === "spread"
+        ? side === "AWAY"
+          ? mcRow?.away_cover_prob ?? null
+          : mcRow?.home_cover_prob ?? null
+        : side === "AWAY"
+          ? mcRow?.over_prob ?? null
+          : mcRow?.under_prob ?? null;
+
+  const blendedProb = blendProbabilities(devigProb, mcProb, 0.6);
+  const blendedOdds = blendedProb == null ? null : Number(probToAmerican(blendedProb));
+  const price = fmtPrice(blendedOdds == null || Number.isNaN(blendedOdds) ? null : blendedOdds, oddsFormat);
 
   if (market === "ml") {
-    const odds: number[] = [];
-    if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
-    const avgOdds = meanValue(odds);
-    return cellMl(fmtPrice(avgOdds == null ? null : avgOdds, oddsFormat));
+    return cellMl(price);
   }
 
   if (market === "spread") {
-    const lines: number[] = [];
-    const odds: number[] = [];
-    if (src) {
-      for (const b of BOOKS) {
-        const l = src.spread[b]?.line;
-        const o = src.spread[b]?.odds;
-        if (typeof l === "number") lines.push(l);
-        if (typeof o === "number") odds.push(o);
-      }
-    }
-    const avgLine = meanValue(lines);
-    const avgOdds = meanValue(odds);
-    return cellLineOdds(avgLine == null ? null : avgLine, fmtPrice(avgOdds == null ? null : avgOdds, oddsFormat));
+    const lineHome = safeNumberOrNull(mcRow?.spread_line_home ?? null);
+    const line = lineHome == null ? null : side === "HOME" ? lineHome : -lineHome;
+    return cellLineOdds(line, price);
   }
 
-  const lines: number[] = [];
-  const overOdds: number[] = [];
-  const underOdds: number[] = [];
-
-  if (ev.away) {
-    for (const b of BOOKS) {
-      const l = ev.away.total[b]?.line;
-      const o = ev.away.total[b]?.over;
-      if (typeof l === "number") lines.push(l);
-      if (typeof o === "number") overOdds.push(o);
-    }
-  }
-  if (ev.home) {
-    for (const b of BOOKS) {
-      const u = ev.home.total[b]?.under;
-      if (typeof u === "number") underOdds.push(u);
-    }
-  }
-
-  const avgLine = meanValue(lines);
-  const avgOver = meanValue(overOdds);
-  const avgUnder = meanValue(underOdds);
-
-  if (side === "AWAY") return cellLineOdds(avgLine == null ? null : avgLine, fmtPrice(avgOver == null ? null : avgOver, oddsFormat));
-  return cellLineOdds(avgLine == null ? null : avgLine, fmtPrice(avgUnder == null ? null : avgUnder, oddsFormat));
+  const totalLine = safeNumberOrNull(mcRow?.total_line ?? null);
+  return cellLineOdds(totalLine, price);
 }
 
 function partsForBookSide(
@@ -468,16 +501,19 @@ function partsForBookSide(
   return { top: String(t.line), bottom: fmtPrice(odds, oddsFormat) };
 }
 
-function bestPartsForRow(
+function bestOfferForSide(
   ev: EventOdds,
   market: Market,
   side: "AWAY" | "HOME",
   oddsFormat: OddsFormat,
   books: BookKey[]
-): CellParts {
+): { bookKey: BookKey; parts: CellParts } | null {
   const bestBook = bestBookForSide(ev, market, side, books);
-  if (!bestBook) return { top: "—" };
-  return partsForBookSide(ev, market, side, bestBook, oddsFormat);
+  if (!bestBook) return null;
+  return {
+    bookKey: bestBook,
+    parts: partsForBookSide(ev, market, side, bestBook, oddsFormat),
+  };
 }
 
 function oddsValueForBook(
@@ -2899,6 +2935,7 @@ export function OddsScreen({
   const [activeEvent, setActiveEvent] = useState<EventOdds | null>(null);
   const [detailsTab, setDetailsTab] = useState<DetailsTab>("pred");
 
+  const [mcByEvent, setMcByEvent] = useState<Record<string, MonteCarloRow>>({});
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
   const [bookOrder, setBookOrder] = useState<BookKey[]>(BOOKS);
   const [draggingBook, setDraggingBook] = useState<BookKey | null>(null);
@@ -2955,6 +2992,33 @@ export function OddsScreen({
       const tb = new Date(normalizeIso(b.commenceTime) ?? b.commenceTime).getTime();
       return ta - tb;
     });
+
+    if (list.length) {
+      try {
+        const eventIds = list.map((ev) => ev.eventId);
+        const { data: mcRows, error: mcError } = await supabase
+          .from("monte_carlo_results")
+          .select(
+            "event_id,home_win_prob,away_win_prob,home_cover_prob,away_cover_prob,over_prob,under_prob,spread_line_home,total_line"
+          )
+          .in("event_id", eventIds);
+
+        if (!mcError && mcRows) {
+          const next: Record<string, MonteCarloRow> = {};
+          for (const row of mcRows) {
+            if (!row?.event_id) continue;
+            next[row.event_id] = row as MonteCarloRow;
+          }
+          setMcByEvent(next);
+        } else {
+          setMcByEvent({});
+        }
+      } catch {
+        setMcByEvent({});
+      }
+    } else {
+      setMcByEvent({});
+    }
 
     // include latest props snapshot time if available (non-blocking)
     let propsLatest: string | null = null;
@@ -3318,10 +3382,11 @@ export function OddsScreen({
                               {sec.events.map((ev) => {
                                 const leftLabel = market === "total" ? "Over" : "Away";
                                 const rightLabel = market === "total" ? "Under" : "Home";
-                                const blendAway = blendPartsForRow(ev, market, "AWAY", oddsFormat);
-                                const blendHome = blendPartsForRow(ev, market, "HOME", oddsFormat);
-                                const bestAway = bestPartsForRow(ev, market, "AWAY", oddsFormat, bookOrder);
-                                const bestHome = bestPartsForRow(ev, market, "HOME", oddsFormat, bookOrder);
+                                const mcRow = mcByEvent[ev.eventId] ?? null;
+                                const blendAway = blendPartsForRow(ev, market, "AWAY", oddsFormat, mcRow);
+                                const blendHome = blendPartsForRow(ev, market, "HOME", oddsFormat, mcRow);
+                                const bestAway = bestOfferForSide(ev, market, "AWAY", oddsFormat, bookOrder);
+                                const bestHome = bestOfferForSide(ev, market, "HOME", oddsFormat, bookOrder);
                                 const consensusAway = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
                                 const consensusHome = consensusPartsForRow(ev, market, "HOME", oddsFormat);
 
@@ -3375,14 +3440,44 @@ export function OddsScreen({
 
                                     <div className="px-2 py-3 border-l border-white/5 bg-white/5">
                                       <div className="flex flex-col items-center gap-1.5">
-                                        <OddsChip
-                                          parts={bestAway}
-                                          className="w-[96px] h-[36px] border-white/20"
-                                        />
-                                        <OddsChip
-                                          parts={bestHome}
-                                          className="w-[96px] h-[36px] border-white/20"
-                                        />
+                                        <div className="flex items-center gap-2">
+                                          {bestAway?.bookKey ? (
+                                            BOOK_LOGOS[bestAway.bookKey] ? (
+                                              <img
+                                                src={BOOK_LOGOS[bestAway.bookKey]}
+                                                alt={BOOK_LABEL[bestAway.bookKey]}
+                                                className="h-6 w-6 rounded-md bg-black/50 p-0.5"
+                                              />
+                                            ) : (
+                                              <div className="h-6 w-6 rounded-md border border-white/10 bg-black/40 text-[9px] text-white/70 flex items-center justify-center font-semibold">
+                                                {BOOK_SHORT[bestAway.bookKey]}
+                                              </div>
+                                            )
+                                          ) : null}
+                                          <OddsChip
+                                            parts={bestAway?.parts ?? { top: "—" }}
+                                            className="w-[96px] h-[36px] border-white/20"
+                                          />
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          {bestHome?.bookKey ? (
+                                            BOOK_LOGOS[bestHome.bookKey] ? (
+                                              <img
+                                                src={BOOK_LOGOS[bestHome.bookKey]}
+                                                alt={BOOK_LABEL[bestHome.bookKey]}
+                                                className="h-6 w-6 rounded-md bg-black/50 p-0.5"
+                                              />
+                                            ) : (
+                                              <div className="h-6 w-6 rounded-md border border-white/10 bg-black/40 text-[9px] text-white/70 flex items-center justify-center font-semibold">
+                                                {BOOK_SHORT[bestHome.bookKey]}
+                                              </div>
+                                            )
+                                          ) : null}
+                                          <OddsChip
+                                            parts={bestHome?.parts ?? { top: "—" }}
+                                            className="w-[96px] h-[36px] border-white/20"
+                                          />
+                                        </div>
                                       </div>
                                     </div>
 
