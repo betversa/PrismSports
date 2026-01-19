@@ -52,7 +52,6 @@ type OddsFormat = "american" | "decimal";
 type BoardView = "pregame" | "live";
 type BookKey = "dk" | "fd" | "mgm" | "pin" | "bol";
 type OddsTab = "game-lines" | "player-props" | "game-props" | "team-futures" | "player-futures" | "draft-odds";
-type OddsMode = "open" | "best" | "consensus";
 
 type SpreadCell = { line: number | null; odds: number | null };
 type TotalCell = { line: number | null; over: number | null; under: number | null };
@@ -129,6 +128,7 @@ const ODDS_SCOPES = [
 ];
 
 const COL_GAME = 380;
+const COL_META = 120;
 const COL_BOOK = 120;
 
 const PAGE_MAX_W = "max-w-[1500px]";
@@ -228,16 +228,6 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-function minutesSinceIso(iso: string | null | undefined): number | null {
-  if (!iso) return null;
-  const n = normalizeIso(iso);
-  if (!n) return null;
-  const ts = new Date(n).getTime();
-  if (!Number.isFinite(ts)) return null;
-  const diffMs = Date.now() - ts;
-  return diffMs >= 0 ? Math.round(diffMs / 60000) : 0;
-}
-
 /* =========================================================
    PICKERS (wide table)
 ========================================================= */
@@ -317,6 +307,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
 
 const fmtPrice = (odds: number | null, fmt: OddsFormat) => formatOddsPrice(odds, fmt);
 
+function meanValue(list: number[]) {
+  if (!list.length) return null;
+  return list.reduce((acc, val) => acc + val, 0) / list.length;
+}
+
 /* =========================================================
    CONSENSUS HELPERS
 ========================================================= */
@@ -390,6 +385,64 @@ function consensusPartsForRow(
   return cellLineOdds(mLine == null ? null : mLine, fmtPrice(mUnder == null ? null : mUnder, oddsFormat));
 }
 
+function blendPartsForRow(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  oddsFormat: OddsFormat
+): CellParts {
+  const src = side === "AWAY" ? ev.away : ev.home;
+
+  if (market === "ml") {
+    const odds: number[] = [];
+    if (src) for (const b of BOOKS) if (typeof src.ml[b] === "number") odds.push(src.ml[b] as number);
+    const avgOdds = meanValue(odds);
+    return cellMl(fmtPrice(avgOdds == null ? null : avgOdds, oddsFormat));
+  }
+
+  if (market === "spread") {
+    const lines: number[] = [];
+    const odds: number[] = [];
+    if (src) {
+      for (const b of BOOKS) {
+        const l = src.spread[b]?.line;
+        const o = src.spread[b]?.odds;
+        if (typeof l === "number") lines.push(l);
+        if (typeof o === "number") odds.push(o);
+      }
+    }
+    const avgLine = meanValue(lines);
+    const avgOdds = meanValue(odds);
+    return cellLineOdds(avgLine == null ? null : avgLine, fmtPrice(avgOdds == null ? null : avgOdds, oddsFormat));
+  }
+
+  const lines: number[] = [];
+  const overOdds: number[] = [];
+  const underOdds: number[] = [];
+
+  if (ev.away) {
+    for (const b of BOOKS) {
+      const l = ev.away.total[b]?.line;
+      const o = ev.away.total[b]?.over;
+      if (typeof l === "number") lines.push(l);
+      if (typeof o === "number") overOdds.push(o);
+    }
+  }
+  if (ev.home) {
+    for (const b of BOOKS) {
+      const u = ev.home.total[b]?.under;
+      if (typeof u === "number") underOdds.push(u);
+    }
+  }
+
+  const avgLine = meanValue(lines);
+  const avgOver = meanValue(overOdds);
+  const avgUnder = meanValue(underOdds);
+
+  if (side === "AWAY") return cellLineOdds(avgLine == null ? null : avgLine, fmtPrice(avgOver == null ? null : avgOver, oddsFormat));
+  return cellLineOdds(avgLine == null ? null : avgLine, fmtPrice(avgUnder == null ? null : avgUnder, oddsFormat));
+}
+
 function partsForBookSide(
   ev: EventOdds,
   market: Market,
@@ -413,6 +466,18 @@ function partsForBookSide(
   const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
   if (t?.line == null) return { top: "—" };
   return { top: String(t.line), bottom: fmtPrice(odds, oddsFormat) };
+}
+
+function bestPartsForRow(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  oddsFormat: OddsFormat,
+  books: BookKey[]
+): CellParts {
+  const bestBook = bestBookForSide(ev, market, side, books);
+  if (!bestBook) return { top: "—" };
+  return partsForBookSide(ev, market, side, bestBook, oddsFormat);
 }
 
 function oddsValueForBook(
@@ -864,9 +929,7 @@ function OddsControlsBar({
   );
 }
 
-function OddsModeBar({
-  mode,
-  onModeChange,
+function OddsBoardHeader({
   bookOrder,
   draggingBook,
   onBookPointerDown,
@@ -874,8 +937,6 @@ function OddsModeBar({
   onBookPointerCancel,
   gridTemplateColumns,
 }: {
-  mode: OddsMode;
-  onModeChange: (next: OddsMode) => void;
   bookOrder: BookKey[];
   draggingBook: BookKey | null;
   onBookPointerDown: (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => void;
@@ -890,22 +951,26 @@ function OddsModeBar({
     >
       <div className="px-4 py-2">
         <div className="text-[11px] uppercase tracking-[0.18em] text-white/40">Matchup</div>
-        <div className="mt-2 flex items-center gap-2">
-          {(["open", "best", "consensus"] as OddsMode[]).map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => onModeChange(item)}
-              className={[
-                "rounded-full border px-3 py-1 text-[11px] font-semibold transition",
-                mode === item
-                  ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.2)] text-white"
-                  : "border-white/10 text-white/60 hover:text-white hover:border-white/30",
-              ].join(" ")}
-            >
-              {item === "open" ? "Open" : item === "best" ? "Best Odds" : "Consensus"}
-            </button>
-          ))}
+      </div>
+
+      <div className="px-2 py-2.5 border-l border-white/5">
+        <div className="rounded-lg border border-[rgba(212,175,55,0.35)] bg-[rgba(212,175,55,0.08)] px-2 py-1.5">
+          <div className="text-[11px] font-semibold text-white/90">Custom Blend</div>
+          <div className="text-[10px] text-white/50">Prism</div>
+        </div>
+      </div>
+
+      <div className="px-2 py-2.5 border-l border-white/5">
+        <div className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5">
+          <div className="text-[11px] font-semibold text-white/90">Best Odds</div>
+          <div className="text-[10px] text-white/50">Top book</div>
+        </div>
+      </div>
+
+      <div className="px-2 py-2.5 border-l border-white/5">
+        <div className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5">
+          <div className="text-[11px] font-semibold text-white/90">Consensus</div>
+          <div className="text-[10px] text-white/50">Median</div>
         </div>
       </div>
 
@@ -2707,86 +2772,6 @@ function sportLabelForKey(sportKey: string) {
   return "Sport";
 }
 
-function EventRowTwoLines({
-  ev,
-  market,
-  oddsFormat,
-  displayBooks,
-  onOpenDetails,
-}: {
-  ev: EventOdds;
-  market: Market;
-  oddsFormat: OddsFormat;
-  displayBooks: BookKey[];
-  onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
-}) {
-  const leftLabel = market === "total" ? "Over" : "Away";
-  const rightLabel = market === "total" ? "Under" : "Home";
-
-  const awayCons = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
-  const homeCons = consensusPartsForRow(ev, market, "HOME", oddsFormat);
-
-  return (
-    <>
-      {/* AWAY / OVER */}
-      <tr className="border-b border-white/10 hover:bg-white/6">
-        <td className="px-4 py-2.5 align-middle" rowSpan={2}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
-              <div className="mt-2">
-                <TeamCell team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} sub={rightLabel} />
-              </div>
-            </div>
-
-            <div className="shrink-0 flex flex-col items-end gap-2">
-              <div className="text-[11px] text-white/60 font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-              <div className="flex items-center gap-2">
-                <IconButton label="Game details" onClick={() => onOpenDetails(ev, "pred")} icon={<IconInfo />} />
-                <IconButton label="Line movement" onClick={() => onOpenDetails(ev, "line")} icon={<IconTrend />} />
-                <IconButton label="Player props" onClick={() => onOpenDetails(ev, "props")} icon={<IconPlayers />} />
-              </div>
-            </div>
-          </div>
-        </td>
-
-        {/* Consensus chip */}
-        <td className="px-2 py-2.5">
-          <div className="flex justify-center">
-            <OddsChip parts={awayCons} />
-          </div>
-        </td>
-
-        {/* Books */}
-        {displayBooks.map((bk) => (
-          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-2.5">
-            <div className="flex justify-center">
-              <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
-            </div>
-          </td>
-        ))}
-      </tr>
-
-      {/* HOME / UNDER */}
-      <tr className="border-b border-white/10 hover:bg-white/6">
-        <td className="px-2 py-2.5">
-          <div className="flex justify-center">
-            <OddsChip parts={homeCons} />
-          </div>
-        </td>
-
-        {displayBooks.map((bk) => (
-          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-2.5">
-            <div className="flex justify-center">
-              <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
-            </div>
-          </td>
-        ))}
-      </tr>
-    </>
-  );
-}
-
 /* =========================================================
    MOBILE CARD (simplified)
 ========================================================= */
@@ -2904,7 +2889,6 @@ export function OddsScreen({
   const [query, setQuery] = useState<string>("");
   const [oddsTab, setOddsTab] = useState<OddsTab>("game-lines");
   const [scope, setScope] = useState<string>("full");
-  const [mode, setMode] = useState<OddsMode>("open");
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -3155,20 +3139,6 @@ export function OddsScreen({
   };
 
   const topSport = sportLabelForKey(sportKey);
-  const lastUpdatedAge = useMemo(() => minutesSinceIso(lastUpdatedIso), [lastUpdatedIso]);
-  const freshness = useMemo(() => {
-    if (lastUpdatedAge == null) {
-      return { label: "No recent update", tone: "text-white/50", dot: "bg-white/30" };
-    }
-    if (lastUpdatedAge <= 5) {
-      return { label: `${lastUpdatedAge}m ago`, tone: "text-emerald-300", dot: "bg-emerald-400" };
-    }
-    if (lastUpdatedAge <= 15) {
-      return { label: `${lastUpdatedAge}m ago`, tone: "text-amber-300", dot: "bg-amber-400" };
-    }
-    return { label: `${lastUpdatedAge}m ago`, tone: "text-red-300", dot: "bg-red-400" };
-  }, [lastUpdatedAge]);
-
   const emptyState = useMemo(() => {
     if (view === "live") {
       return {
@@ -3206,11 +3176,15 @@ export function OddsScreen({
   }, [sportKey]);
 
   const gridTemplateColumns = useMemo(
-    () => `minmax(${COL_GAME}px, ${COL_GAME}px) repeat(${bookOrder.length}, ${COL_BOOK}px)`,
+    () =>
+      `minmax(${COL_GAME}px, ${COL_GAME}px) repeat(3, ${COL_META}px) repeat(${bookOrder.length}, ${COL_BOOK}px)`,
     [bookOrder.length]
   );
 
-  const boardMinWidth = useMemo(() => COL_GAME + COL_BOOK * bookOrder.length, [bookOrder.length]);
+  const boardMinWidth = useMemo(
+    () => COL_GAME + COL_META * 3 + COL_BOOK * bookOrder.length,
+    [bookOrder.length]
+  );
 
   return (
     <PageFrame>
@@ -3320,9 +3294,7 @@ export function OddsScreen({
                       >
                         <div className="min-w-full" style={{ minWidth: boardMinWidth }}>
                           <div className="sticky top-0 z-20">
-                            <OddsModeBar
-                              mode={mode}
-                              onModeChange={setMode}
+                            <OddsBoardHeader
                               bookOrder={bookOrder}
                               draggingBook={draggingBook}
                               onBookPointerDown={handleBookPointerDown}
@@ -3346,8 +3318,10 @@ export function OddsScreen({
                               {sec.events.map((ev) => {
                                 const leftLabel = market === "total" ? "Over" : "Away";
                                 const rightLabel = market === "total" ? "Under" : "Home";
-                                const bestAway = mode === "best" ? bestBookForSide(ev, market, "AWAY", bookOrder) : null;
-                                const bestHome = mode === "best" ? bestBookForSide(ev, market, "HOME", bookOrder) : null;
+                                const blendAway = blendPartsForRow(ev, market, "AWAY", oddsFormat);
+                                const blendHome = blendPartsForRow(ev, market, "HOME", oddsFormat);
+                                const bestAway = bestPartsForRow(ev, market, "AWAY", oddsFormat, bookOrder);
+                                const bestHome = bestPartsForRow(ev, market, "HOME", oddsFormat, bookOrder);
                                 const consensusAway = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
                                 const consensusHome = consensusPartsForRow(ev, market, "HOME", oddsFormat);
 
@@ -3375,18 +3349,6 @@ export function OddsScreen({
                                           <div className="mt-2 text-[11px] text-white/50 font-semibold">
                                             {fmtCTTimeOnly(ev.commenceTime)} CT
                                           </div>
-                                          {mode === "consensus" ? (
-                                            <div className="mt-2 flex items-center gap-2">
-                                              <OddsChip
-                                                parts={consensusAway}
-                                                className="w-[96px] h-[36px] border-[rgba(212,175,55,0.5)] bg-[rgba(212,175,55,0.12)]"
-                                              />
-                                              <OddsChip
-                                                parts={consensusHome}
-                                                className="w-[96px] h-[36px] border-[rgba(212,175,55,0.5)] bg-[rgba(212,175,55,0.12)]"
-                                              />
-                                            </div>
-                                          ) : null}
                                         </div>
                                         <div className="shrink-0 flex flex-col items-end gap-2">
                                           <div className="flex items-center gap-2">
@@ -3398,12 +3360,42 @@ export function OddsScreen({
                                       </div>
                                     </div>
 
+                                    <div className="px-2 py-3 border-l border-white/5 bg-[rgba(212,175,55,0.08)]/60">
+                                      <div className="flex flex-col items-center gap-1.5">
+                                        <OddsChip
+                                          parts={blendAway}
+                                          className="w-[96px] h-[36px] border-[rgba(212,175,55,0.4)]"
+                                        />
+                                        <OddsChip
+                                          parts={blendHome}
+                                          className="w-[96px] h-[36px] border-[rgba(212,175,55,0.4)]"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div className="px-2 py-3 border-l border-white/5 bg-white/5">
+                                      <div className="flex flex-col items-center gap-1.5">
+                                        <OddsChip
+                                          parts={bestAway}
+                                          className="w-[96px] h-[36px] border-white/20"
+                                        />
+                                        <OddsChip
+                                          parts={bestHome}
+                                          className="w-[96px] h-[36px] border-white/20"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div className="px-2 py-3 border-l border-white/5">
+                                      <div className="flex flex-col items-center gap-1.5">
+                                        <OddsChip parts={consensusAway} className="w-[96px] h-[36px]" />
+                                        <OddsChip parts={consensusHome} className="w-[96px] h-[36px]" />
+                                      </div>
+                                    </div>
+
                                     {bookOrder.map((bk) => {
                                       const awayParts = partsForBookSide(ev, market, "AWAY", bk, oddsFormat);
                                       const homeParts = partsForBookSide(ev, market, "HOME", bk, oddsFormat);
-                                      const bestAwayCell = mode === "best" && bestAway === bk;
-                                      const bestHomeCell = mode === "best" && bestHome === bk;
-                                      const dimmed = mode === "consensus";
                                       return (
                                         <div key={`${ev.eventId}-${bk}`} className="px-2 py-3 border-l border-white/5">
                                           <div className="flex flex-col items-center gap-1.5">
@@ -3411,16 +3403,12 @@ export function OddsScreen({
                                               parts={awayParts}
                                               className={[
                                                 "w-[96px] h-[36px]",
-                                                bestAwayCell ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.16)]" : "",
-                                                dimmed ? "opacity-45" : "",
                                               ].join(" ")}
                                             />
                                             <OddsChip
                                               parts={homeParts}
                                               className={[
                                                 "w-[96px] h-[36px]",
-                                                bestHomeCell ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.16)]" : "",
-                                                dimmed ? "opacity-45" : "",
                                               ].join(" ")}
                                             />
                                           </div>
