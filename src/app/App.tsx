@@ -135,6 +135,27 @@ function PrismLoading() {
   );
 }
 
+function ThemeProbe() {
+  const [value, setValue] = useState({ body: "", shell: "" });
+
+  useEffect(() => {
+    const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+    const shell = document.querySelector("[data-theme-shell]") as HTMLElement | null;
+    const shellBg = shell ? window.getComputedStyle(shell).backgroundColor : "missing";
+    setValue({ body: bodyBg, shell: shellBg });
+    // eslint-disable-next-line no-console
+    console.log("[ThemeProbe] body:", bodyBg, "shell:", shellBg);
+  }, []);
+
+  if (!import.meta.env.DEV) return null;
+
+  return (
+    <div className="fixed bottom-2 right-2 z-[9999] rounded border border-white/10 bg-black/70 px-2 py-1 text-[10px] text-white/70">
+      body: {value.body} · shell: {value.shell}
+    </div>
+  );
+}
+
 export default function App() {
   const [activeScreen, setActiveScreen] = useState<Screen>("overview");
   const [selectedDate] = useState<string>(() => ctYmd(new Date()));
@@ -210,6 +231,7 @@ export default function App() {
 
   return (
     <AppShell>
+      <ThemeProbe />
       {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">

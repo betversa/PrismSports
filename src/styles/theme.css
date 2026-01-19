@@ -7,6 +7,7 @@
   --surface-2: #0c0c0c;
   --surface-3: #0c0c0c;
   --border-subtle: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.08);
   --text: #f6f4ef;
   --text-muted: rgba(246, 244, 239, 0.62);
   --gold: #d4af37;
@@ -59,6 +60,7 @@
   --surface-2: #0c0c0c;
   --surface-3: #0c0c0c;
   --border-subtle: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.08);
   --text: #f6f4ef;
   --text-muted: rgba(246, 244, 239, 0.62);
   --gold: #d4af37;
@@ -161,6 +163,12 @@
 
   html {
     font-size: var(--font-size);
+    background-color: var(--bg);
+    color: var(--text);
+  }
+
+  #root {
+    min-height: 100vh;
     background-color: var(--bg);
     color: var(--text);
   }

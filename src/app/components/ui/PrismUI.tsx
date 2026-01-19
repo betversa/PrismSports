@@ -3,7 +3,11 @@ import React from "react";
 export type StatusChip = { label: string; value: string };
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]">{children}</div>;
+  return (
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--text)]" data-theme-shell="true">
+      {children}
+    </div>
+  );
 }
 
 export function PageFrame({ children }: { children: React.ReactNode }) {
@@ -22,7 +26,7 @@ export function PageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="border-b border-[var(--border-subtle)] pb-3">
+    <div className="border-b border-[var(--border)] pb-3">
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <h1 className="text-lg font-semibold text-[var(--text)] md:text-xl">{title}</h1>
@@ -43,7 +47,7 @@ export function PageHeader({
 export function Panel({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
     <section
-      className={`rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-1)] p-3 shadow-[var(--shadow-soft)] md:p-4 ${
+      className={`rounded-2xl border border-[var(--border)] bg-[var(--surface-1)] p-3 shadow-[var(--shadow-soft)] md:p-4 ${
         className ?? ""
       }`}
     >
@@ -54,7 +58,7 @@ export function Panel({ children, className }: { children: React.ReactNode; clas
 
 export function Card({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-1)] p-3 ${className ?? ""}`}>
+    <div className={`rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-3 ${className ?? ""}`}>
       {children}
     </div>
   );
@@ -62,7 +66,7 @@ export function Card({ children, className }: { children: React.ReactNode; class
 
 export function Chip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-1)] px-2.5 py-1 text-[11px] text-[var(--text-muted)]">
+    <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface-1)] px-2.5 py-1 text-[11px] text-[var(--text-muted)]">
       <span>{label}</span>
       <span className="font-semibold text-[var(--text)]">{value}</span>
     </div>
@@ -116,7 +120,7 @@ export function IconButton({
 
 export function TableFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-1)] shadow-[var(--shadow-soft)]">
+    <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-1)] shadow-[var(--shadow-soft)]">
       {children}
     </div>
   );
@@ -134,7 +138,7 @@ export function DataSourceErrorPanel({ missing }: { missing: string[] }) {
           <div className="text-sm text-[var(--text-muted)]">
             Add the following environment variables to enable data-backed screens.
           </div>
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3 text-xs text-white/80">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 text-xs text-white/80">
             <div className="font-semibold text-[var(--text)]">Missing</div>
             <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px] text-white/70">
               {missing.map((item) => `- ${item}`).join("\n")}
