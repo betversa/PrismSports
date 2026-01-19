@@ -84,13 +84,13 @@ const PRISM_BORDER = "var(--border-subtle)";
 const PRISM_GOLD = "var(--gold)";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
 const PRISM_MUTED = "var(--text-muted)";
-const TABLE_HEADER_BG = "rgba(10,10,10,0.9)";
+const TABLE_HEADER_BG = "var(--surface-1)";
 const FILTER_ROW_HEIGHT = 48;
 const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
 const DATE_BAR_HEIGHT = 44;
 const HEADER_ROW_HEIGHT = 40;
-const BOARD_BG = "linear-gradient(180deg, rgba(14,14,14,0.92), rgba(10,10,10,0.98))";
-const BOARD_STICKY_BG = "linear-gradient(180deg, rgba(18,18,18,0.98), rgba(10,10,10,0.96))";
+const BOARD_BG = "var(--surface-1)";
+const BOARD_STICKY_BG = "var(--surface-1)";
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
@@ -3119,15 +3119,7 @@ export function OddsScreen({
         <div className="w-full min-h-screen" style={{ background: BOARD_BG }}>
           <div className="w-full">
             <div className={`${PAGE_X} relative`}>
-              <div
-                className={`${PAGE_MAX_W} mx-auto`}
-                style={{
-                  background:
-                    `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-                    "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
-                    "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
-                }}
-              >
+              <div className={`${PAGE_MAX_W} mx-auto`} style={{ background: "var(--bg)" }}>
                 {/* ===========================
                     TOP SPORTS + FILTERS BAR
                 =========================== */}

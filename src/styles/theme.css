@@ -3,9 +3,9 @@
 :root {
   --font-size: 16px;
   --bg: #070707;
-  --surface-1: rgba(12, 12, 12, 0.88);
-  --surface-2: rgba(18, 18, 18, 0.72);
-  --surface-3: rgba(24, 24, 24, 0.6);
+  --surface-1: #0c0c0c;
+  --surface-2: #0c0c0c;
+  --surface-3: #0c0c0c;
   --border-subtle: rgba(255, 255, 255, 0.08);
   --text: #f6f4ef;
   --text-muted: rgba(246, 244, 239, 0.62);
@@ -13,7 +13,7 @@
   --gold-2: #f2cd73;
   --danger: #ef4444;
   --success: #34d399;
-  --shadow-soft: 0 18px 60px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 14px 36px rgba(0, 0, 0, 0.35);
   --background: #070707;
   --foreground: #f6f4ef;
   --card: #0c0c0c;
@@ -55,9 +55,9 @@
 
 .dark {
   --bg: #070707;
-  --surface-1: rgba(12, 12, 12, 0.88);
-  --surface-2: rgba(18, 18, 18, 0.72);
-  --surface-3: rgba(24, 24, 24, 0.6);
+  --surface-1: #0c0c0c;
+  --surface-2: #0c0c0c;
+  --surface-3: #0c0c0c;
   --border-subtle: rgba(255, 255, 255, 0.08);
   --text: #f6f4ef;
   --text-muted: rgba(246, 244, 239, 0.62);
@@ -65,7 +65,7 @@
   --gold-2: #f2cd73;
   --danger: #ef4444;
   --success: #34d399;
-  --shadow-soft: 0 18px 60px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 14px 36px rgba(0, 0, 0, 0.35);
   --background: #070707;
   --foreground: #f6f4ef;
   --card: #0c0c0c;
