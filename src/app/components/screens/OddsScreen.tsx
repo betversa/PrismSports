@@ -724,21 +724,30 @@ function OddsChip({
 
 function BestOddsCell({ offer }: { offer: BestOffer }) {
   return (
-    <div className="flex items-center justify-center gap-2">
-      {offer.book ? (
-        <img
-          src={BOOK_LOGOS[offer.book]}
-          alt={BOOK_LABEL[offer.book]}
-          className="h-5 w-5 rounded-md object-contain bg-black/50 p-0.5"
-          loading="lazy"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = "none";
-          }}
-        />
-      ) : (
-        <div className="h-5 w-5 rounded-md bg-white/5 border border-white/10" />
-      )}
-      <OddsChip parts={offer.parts} className="w-[90px]" />
+    <div className="flex justify-center">
+      <div className="h-[42px] w-[104px] rounded-md border border-white/10 bg-white/5 flex items-center justify-center gap-2 px-2 shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
+        {offer.book ? (
+          <img
+            src={BOOK_LOGOS[offer.book]}
+            alt={BOOK_LABEL[offer.book]}
+            className="h-5 w-5 rounded-md object-contain bg-black/50 p-0.5"
+            loading="lazy"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = "none";
+            }}
+          />
+        ) : (
+          <div className="h-5 w-5 rounded-md bg-white/5 border border-white/10" />
+        )}
+        <div className="flex flex-col items-start leading-none">
+          <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
+            {offer.parts.top}
+          </div>
+          <div className="text-white/70 font-semibold tabular-nums text-[11px] leading-none mt-1">
+            {offer.parts.bottom ?? " "}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
