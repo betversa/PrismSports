@@ -620,6 +620,7 @@ function BookLogoPill({
   textClassName,
   showLabel = true,
   fallbackLabel,
+  variant = "book",
 }: {
   src: string;
   alt: string;
@@ -628,8 +629,13 @@ function BookLogoPill({
   textClassName?: string;
   showLabel?: boolean;
   fallbackLabel?: string;
+  variant?: "book" | "quantum";
 }) {
   const label = fallbackLabel ?? alt;
+  const imageClasses =
+    variant === "quantum"
+      ? "h-[70%] max-h-5 w-auto max-w-[92px] object-contain"
+      : "h-5 w-5 rounded-md object-contain bg-black/50 p-0.5 opacity-85";
   return (
     <div
       className={[
@@ -642,10 +648,7 @@ function BookLogoPill({
       <img
         src={src}
         alt={alt}
-        className={[
-          "h-5 w-5 rounded-md object-contain bg-black/50 p-0.5 opacity-85",
-          imgClassName ?? "",
-        ].join(" ")}
+        className={[imageClasses, imgClassName ?? ""].join(" ")}
         loading="lazy"
         onError={(e) => {
           (e.currentTarget as HTMLImageElement).style.display = "none";
@@ -2752,6 +2755,7 @@ function TableHeaderRow({
               showLabel={false}
               className="bg-black"
               imgClassName="opacity-100"
+              variant="quantum"
             />
           </div>
         </th>
