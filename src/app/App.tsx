@@ -7,9 +7,10 @@
 // ✅ Keeps Sidebar/Header prop contracts (no extra props)
 // ✅ Leaves selectedDate in place for ModelScreen (as your code expects)
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
+import { AppShell, PageFrame, Panel } from "./components/ui/PrismUI";
 
 import { OverviewScreen } from "./components/screens/OverviewScreen";
 import { ModelScreen } from "./components/screens/ModelScreen";
@@ -62,6 +63,97 @@ function ctYmd(d: Date) {
 
 function isPredScreen(s: Screen) {
   return s === "model" || s === "monte-carlo";
+}
+
+class AppErrorBoundary extends React.Component<
+  { routeLabel: string; children: React.ReactNode },
+  { error: Error | null; errorInfo: React.ErrorInfo | null }
+> {
+  state = { error: null, errorInfo: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error, errorInfo: null };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error("[PrismErrorBoundary] Route crash:", error, errorInfo);
+    this.setState({ error, errorInfo });
+  }
+
+  handleReload = () => {
+    window.location.reload();
+  };
+
+  render() {
+    const { error, errorInfo } = this.state;
+    if (!error) return this.props.children;
+
+    return (
+      <PageFrame>
+        <Panel>
+          <div className="space-y-3">
+            <div className="text-xs uppercase tracking-[0.2em] text-red-300">Route Error</div>
+            <div className="text-lg font-semibold text-white">Something went wrong.</div>
+            <div className="text-sm text-white/70">
+              Route: <span className="font-semibold text-white">{this.props.routeLabel}</span>
+            </div>
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-100">
+              <div className="font-semibold">Message</div>
+              <div className="mt-1 whitespace-pre-wrap break-words">{error.message}</div>
+            </div>
+            {errorInfo?.componentStack ? (
+              <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-[11px] text-white/60">
+                <div className="font-semibold text-white/80">Component stack</div>
+                <pre className="mt-2 whitespace-pre-wrap">{errorInfo.componentStack.trim()}</pre>
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={this.handleReload}
+              className="inline-flex items-center rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10"
+            >
+              Reload
+            </button>
+          </div>
+        </Panel>
+      </PageFrame>
+    );
+  }
+}
+
+function PrismLoading() {
+  return (
+    <PageFrame>
+      <Panel>
+        <div className="flex items-center gap-3 text-sm text-white/70">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-[#d4af37]" />
+          Loading…
+        </div>
+      </Panel>
+    </PageFrame>
+  );
+}
+
+function ThemeProbe() {
+  const [value, setValue] = useState({ body: "", shell: "" });
+
+  useEffect(() => {
+    const bodyBg = window.getComputedStyle(document.body).backgroundColor;
+    const shell = document.querySelector("[data-theme-shell]") as HTMLElement | null;
+    const shellBg = shell ? window.getComputedStyle(shell).backgroundColor : "missing";
+    setValue({ body: bodyBg, shell: shellBg });
+    // eslint-disable-next-line no-console
+    console.log("[ThemeProbe] body:", bodyBg, "shell:", shellBg);
+  }, []);
+
+  if (!import.meta.env.DEV) return null;
+
+  return (
+    <div className="fixed bottom-2 right-2 z-[9999] rounded border border-white/10 bg-black/70 px-2 py-1 text-[10px] text-white/70">
+      body: {value.body} · shell: {value.shell}
+    </div>
+  );
 }
 
 export default function App() {
@@ -138,14 +230,8 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-[#070707] text-[#f6f4ef]">
-      <div
-        className="pointer-events-none fixed inset-0"
-        style={{
-          background:
-            "radial-gradient(1200px 420px at 10% -10%, rgba(212,175,55,0.18), transparent 55%), radial-gradient(900px 420px at 88% 0%, rgba(255,255,255,0.05), transparent 60%), linear-gradient(180deg, rgba(255,255,255,0.04), rgba(7,7,7,0.98) 50%, rgba(7,7,7,1) 100%)",
-        }}
-      />
+    <AppShell>
+      <ThemeProbe />
       {/* Mobile drawer sidebar ONLY */}
       {sidebarOpen && (
         <div className="md:hidden fixed inset-0 z-[60]">
@@ -182,11 +268,15 @@ export default function App() {
 
       {/* Main Content scroll container */}
       <div
-        className="h-screen overflow-y-auto overflow-x-hidden"
+        className="relative z-10 h-screen overflow-y-auto overflow-x-hidden"
         style={{ paddingTop: headerH, "--app-header-h": `${headerH}px` } as React.CSSProperties}
       >
-        <div className="p-3 md:p-6 pb-12">{screens[activeScreen]}</div>
+        <div className="p-3 md:p-6 pb-12">
+          <AppErrorBoundary routeLabel={`/${activeScreen}`}>
+            <Suspense fallback={<PrismLoading />}>{screens[activeScreen]}</Suspense>
+          </AppErrorBoundary>
+        </div>
       </div>
-    </div>
+    </AppShell>
   );
 }

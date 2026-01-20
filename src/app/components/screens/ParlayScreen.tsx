@@ -9,13 +9,14 @@
 // ✅ Explains why combos are rejected via internal validator (kept simple, fast)
 
 import React, { useMemo, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { hasSupabaseEnv, missingSupabaseVars, supabase } from "../../lib/supabaseClient";
+import { DataSourceErrorPanel } from "../ui/PrismUI";
+import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import { americanToDecimalParlay, decimalToAmericanParlay, parlayEvPct } from "../../../lib/odds/parlay";
 import {
   Sparkles,
   Layers,
   SlidersHorizontal,
-  Shield,
   AlertTriangle,
   CheckCircle2,
   XCircle,
@@ -87,6 +88,9 @@ const BOOK_OPTIONS: Array<{ key: BookKey; label: string }> = [
 ];
 
 export function ParlayScreen() {
+  if (!hasSupabaseEnv) {
+    return <DataSourceErrorPanel missing={missingSupabaseVars} />;
+  }
   // Controls
   const [legs, setLegs] = useState<LegsCount>(3);
   const [book, setBook] = useState<BookKey>("draftkings");
@@ -247,29 +251,36 @@ export function ParlayScreen() {
   }, [candidates]);
 
   return (
-    <div className="space-y-5">
-      {/* Hero */}
-      <div className="rounded-xl border border-white/10 bg-gradient-to-b from-white/[0.08] to-white/[0.03] p-4 md:p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5 border border-white/10">
-                <Sparkles className="h-4 w-4" style={{ color: GOLD }} />
-              </div>
-              <h2 className="text-white text-lg md:text-xl font-semibold tracking-tight">Parlay Builder</h2>
-            </div>
-
-            <p className="mt-1 text-xs text-white/50">
-              Pick your legs + book — we’ll suggest parlays built from your top +EV plays (with correlation rules).
-            </p>
-          </div>
-
-          <div className="hidden md:flex items-center gap-2 text-[10px] text-white/45 whitespace-nowrap">
-            <Shield className="h-3.5 w-3.5" />
-            <span>Independence EV + Correlation Penalty</span>
-          </div>
-        </div>
-      </div>
+    <ScreenShell
+      title="Parlay Builder"
+      subtitle="Combine correlated edges, monitor risk limits, and validate rules before shipping a ticket."
+      status={[
+        {
+          label: "Legs",
+          value: String(legs),
+          helper: "Per parlay",
+        },
+        {
+          label: "Candidates",
+          value: loading ? "…" : String(candidates.length),
+          helper: `${headerStats.total} ranked`,
+        },
+        {
+          label: "Parlays",
+          value: String(parlays.length),
+          helper: `Top ${maxParlays} max`,
+        },
+        {
+          label: "Rules",
+          value: allowSameGame ? "Same-game OK" : "Strict",
+          helper: allowSamePlayer ? "Same-player OK" : "No same-player props",
+        },
+      ]}
+    >
+      <SectionCard>
+        <SectionHeader title="Ticket Workspace" description="Review eligible plays, build a ticket, and validate parlay rules." />
+        <div className="mt-4">
+          <div className="space-y-5">
 
       {/* Error */}
       {err ? (
@@ -482,8 +493,12 @@ export function ParlayScreen() {
         </div>
       </div>
     </div>
+        </div>
+      </SectionCard>
+    </ScreenShell>
   );
 }
+
 
 /* =========================================
    UI Helpers

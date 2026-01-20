@@ -23,14 +23,22 @@
 
 import React, {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { americanToDecimal, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
+import {
+  americanToDecimal,
+  impliedProbFromAmerican,
+  median,
+  probToAmerican,
+  safeNumberOrNull,
+  toProb01,
+} from "../../../lib/odds/math";
 import { formatOddsPrice, formatPercent } from "../../../lib/odds/format";
+import { SectionCard } from "../ScreenShell";
+import { PageFrame, TableFrame } from "../ui/PrismUI";
 import {
   ResponsiveContainer,
   LineChart,
@@ -50,6 +58,7 @@ type Market = "ml" | "spread" | "total";
 type OddsFormat = "american" | "decimal";
 type BoardView = "pregame" | "live";
 type BookKey = "dk" | "fd" | "mgm" | "pin" | "bol";
+type OddsTab = "game-lines" | "player-props" | "game-props" | "team-futures" | "player-futures" | "draft-odds";
 
 type SpreadCell = { line: number | null; odds: number | null };
 type TotalCell = { line: number | null; over: number | null; under: number | null };
@@ -78,19 +87,9 @@ type EventOdds = {
 const CT_TZ = "America/Chicago";
 
 // Prism Theme (black / gold)
-const PRISM_BORDER = "rgba(255,255,255,0.08)";
-const PRISM_GOLD = "#d4af37";
+const PRISM_BORDER = "var(--border-subtle)";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
-const PRISM_MUTED = "rgba(232,232,232,0.60)";
-const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
-const BOARD_STICKY_BG = BOARD_BG;
-const TABLE_HEADER_BG = "#0b0b0b";
-const FILTER_ROW_HEIGHT = 48;
-const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
-const DATE_BAR_HEIGHT = 44;
-const HEADER_ROW_HEIGHT = 40;
-const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.86), rgba(8,8,8,0.96))";
-const BOARD_STICKY_BG = "linear-gradient(180deg, rgba(12,12,12,0.98), rgba(10,10,10,0.96))";
+const BOARD_BG = "var(--surface-1)";
 
 const BOOKS: BookKey[] = ["dk", "fd", "mgm", "pin", "bol"];
 const BOOK_ORDER_STORAGE_KEY = "prism.odds.bookOrder";
@@ -118,7 +117,33 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   bol: "/books/bolsquare.png",
 };
 
+const BOOK_SHORT: Record<BookKey, string> = {
+  dk: "DK",
+  fd: "FD",
+  mgm: "MGM",
+  pin: "PIN",
+  bol: "BOL",
+};
+
+const ODDS_TABS: Array<{ value: OddsTab; label: string }> = [
+  { value: "game-lines", label: "Game Lines" },
+  { value: "player-props", label: "Player Props" },
+  { value: "game-props", label: "Game Props" },
+  { value: "team-futures", label: "Team Futures" },
+  { value: "player-futures", label: "Player Futures" },
+  { value: "draft-odds", label: "Draft Odds" },
+];
+
+const ODDS_SCOPES = [
+  { value: "full", label: "Full Game" },
+  { value: "1h", label: "1H" },
+  { value: "2h", label: "2H" },
+  { value: "1q", label: "1Q" },
+  { value: "2q", label: "2Q" },
+];
+
 const COL_GAME = 380;
+const COL_META = 120;
 const COL_BOOK = 120;
 
 const PAGE_MAX_W = "max-w-[1500px]";
@@ -218,16 +243,6 @@ function maxIso(a: string | null, b: string | null) {
   return new Date(an).getTime() >= new Date(bn).getTime() ? a : b;
 }
 
-function minutesSinceIso(iso: string | null | undefined): number | null {
-  if (!iso) return null;
-  const n = normalizeIso(iso);
-  if (!n) return null;
-  const ts = new Date(n).getTime();
-  if (!Number.isFinite(ts)) return null;
-  const diffMs = Date.now() - ts;
-  return diffMs >= 0 ? Math.round(diffMs / 60000) : 0;
-}
-
 /* =========================================================
    PICKERS (wide table)
 ========================================================= */
@@ -307,6 +322,11 @@ function mapWideRowToSideOdds(row: any): SideOdds {
 
 const fmtPrice = (odds: number | null, fmt: OddsFormat) => formatOddsPrice(odds, fmt);
 
+function meanValue(list: number[]) {
+  if (!list.length) return null;
+  return list.reduce((acc, val) => acc + val, 0) / list.length;
+}
+
 /* =========================================================
    CONSENSUS HELPERS
 ========================================================= */
@@ -380,6 +400,82 @@ function consensusPartsForRow(
   return cellLineOdds(mLine == null ? null : mLine, fmtPrice(mUnder == null ? null : mUnder, oddsFormat));
 }
 
+function devigProbabilityForSide(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  books: BookKey[]
+): number | null {
+  const otherSide: "AWAY" | "HOME" = side === "AWAY" ? "HOME" : "AWAY";
+  const probs: number[] = [];
+
+  for (const book of books) {
+    const oddsSide = oddsValueForBook(ev, market, side, book);
+    const oddsOther = oddsValueForBook(ev, market, otherSide, book);
+    if (typeof oddsSide !== "number" || typeof oddsOther !== "number") continue;
+    const pSide = impliedProbFromAmerican(oddsSide);
+    const pOther = impliedProbFromAmerican(oddsOther);
+    if (!Number.isFinite(pSide) || !Number.isFinite(pOther) || pSide <= 0 || pOther <= 0) continue;
+    const sum = pSide + pOther;
+    if (sum <= 0) continue;
+    probs.push(pSide / sum);
+  }
+
+  return meanValue(probs);
+}
+
+function blendProbabilities(
+  devigProb: number | null,
+  mcProb: number | null,
+  weightMc: number
+): number | null {
+  const mc = toProb01(mcProb ?? null);
+  const devig = devigProb == null ? null : Math.max(0, Math.min(1, devigProb));
+  if (mc == null && devig == null) return null;
+  if (mc == null) return devig;
+  if (devig == null) return mc;
+  return weightMc * mc + (1 - weightMc) * devig;
+}
+
+function blendPartsForRow(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  oddsFormat: OddsFormat,
+  mcRow: MonteCarloRow | null
+): CellParts {
+  const devigProb = devigProbabilityForSide(ev, market, side, ["pin", "bol"]);
+  const mcProb =
+    market === "ml"
+      ? side === "AWAY"
+        ? mcRow?.away_win_prob ?? null
+        : mcRow?.home_win_prob ?? null
+      : market === "spread"
+        ? side === "AWAY"
+          ? mcRow?.away_cover_prob ?? null
+          : mcRow?.home_cover_prob ?? null
+        : side === "AWAY"
+          ? mcRow?.over_prob ?? null
+          : mcRow?.under_prob ?? null;
+
+  const blendedProb = blendProbabilities(devigProb, mcProb, 0.6);
+  const blendedOdds = blendedProb == null ? null : Number(probToAmerican(blendedProb));
+  const price = fmtPrice(blendedOdds == null || Number.isNaN(blendedOdds) ? null : blendedOdds, oddsFormat);
+
+  if (market === "ml") {
+    return cellMl(price);
+  }
+
+  if (market === "spread") {
+    const lineHome = safeNumberOrNull(mcRow?.spread_line_home ?? null);
+    const line = lineHome == null ? null : side === "HOME" ? lineHome : -lineHome;
+    return cellLineOdds(line, price);
+  }
+
+  const totalLine = safeNumberOrNull(mcRow?.total_line ?? null);
+  return cellLineOdds(totalLine, price);
+}
+
 function partsForBookSide(
   ev: EventOdds,
   market: Market,
@@ -403,6 +499,52 @@ function partsForBookSide(
   const odds = side === "AWAY" ? t?.over ?? null : t?.under ?? null;
   if (t?.line == null) return { top: "—" };
   return { top: String(t.line), bottom: fmtPrice(odds, oddsFormat) };
+}
+
+function bestOfferForSide(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  oddsFormat: OddsFormat,
+  books: BookKey[]
+): { bookKey: BookKey; parts: CellParts } | null {
+  const bestBook = bestBookForSide(ev, market, side, books);
+  if (!bestBook) return null;
+  return {
+    bookKey: bestBook,
+    parts: partsForBookSide(ev, market, side, bestBook, oddsFormat),
+  };
+}
+
+function oddsValueForBook(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  book: BookKey
+): number | null {
+  const src = side === "AWAY" ? ev.away : ev.home;
+  if (!src) return null;
+  if (market === "ml") return typeof src.ml[book] === "number" ? src.ml[book] : null;
+  if (market === "spread") return typeof src.spread[book]?.odds === "number" ? src.spread[book]?.odds ?? null : null;
+  const t = src.total[book];
+  if (side === "AWAY") return typeof t?.over === "number" ? t.over ?? null : null;
+  return typeof t?.under === "number" ? t.under ?? null : null;
+}
+
+function bestBookForSide(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  books: BookKey[]
+): BookKey | null {
+  let best: { book: BookKey; price: number } | null = null;
+  for (const book of books) {
+    const odds = oddsValueForBook(ev, market, side, book);
+    if (typeof odds !== "number") continue;
+    const price = americanToDecimal(odds);
+    if (!best || price > best.price) best = { book, price };
+  }
+  return best?.book ?? null;
 }
 
 /* =========================================================
@@ -495,7 +637,6 @@ function OddsChip({
         className ?? "",
       ].join(" ")}
     >
-    <div className="w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
       <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
         {parts.top}
       </div>
@@ -511,19 +652,25 @@ function SelectPill({
   onChange,
   options,
   label,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
   label?: string;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex items-center gap-2">
       {label ? <div className="text-[12px] text-white/55 font-semibold">{label}</div> : null}
       <select
-        className="h-8 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-2.5 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className={[
+          "h-8 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-2.5 outline-none focus:border-[rgba(212,175,55,0.55)]",
+          disabled ? "opacity-60 cursor-not-allowed" : "",
+        ].join(" ")}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
       >
         {options.map((o) => (
           <option key={o.value} value={o.value} className="bg-[#0b0b0b]">
@@ -551,7 +698,6 @@ function TextInput({
     <div className="relative">
       <input
         className="h-8 w-full md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-semibold px-2.5 pr-9 outline-none focus:border-[rgba(212,175,55,0.55)]"
-        className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -600,19 +746,6 @@ function Btn({
   );
 }
 
-function DateReminder({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="text-[12px] text-white/55 font-semibold">Selected date</div>
-      <div className="h-8 px-2.5 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold flex items-center">
-      <div className="text-[11px] text-white/60 font-semibold">Selected date</div>
-      <div className="h-9 px-3 rounded-lg border border-white/10 bg-black/35 text-white text-sm font-extrabold flex items-center">
-        {label}
-      </div>
-    </div>
-  );
-}
-
 function SegmentedToggle<T extends string>({
   value,
   options,
@@ -632,7 +765,6 @@ function SegmentedToggle<T extends string>({
             type="button"
             onClick={() => onChange(opt.value)}
             className={[
-              "h-7 px-3 rounded-md text-[12px] font-extrabold transition-colors",
               "h-7 px-3 rounded-md text-[11px] font-extrabold transition-colors",
               active
                 ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
@@ -643,6 +775,261 @@ function SegmentedToggle<T extends string>({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function StatChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/35 px-2.5 py-1 text-[11px] text-white/60">
+      <span>{label}</span>
+      <span className="font-semibold text-white">{value}</span>
+    </div>
+  );
+}
+
+function OddsHeaderBar({
+  subtitle,
+  lastUpdated,
+  gamesCount,
+  booksCount,
+  loading,
+  onRefresh,
+}: {
+  subtitle?: string;
+  lastUpdated: string;
+  gamesCount: number;
+  booksCount: number;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div>
+        <div className="text-[11px] uppercase tracking-[0.26em] text-white/40">Odds</div>
+        <div className="text-lg font-semibold text-white">{subtitle ?? "Odds Board"}</div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <StatChip label="Updated" value={lastUpdated} />
+        <StatChip label="Games" value={`${gamesCount}`} />
+        <StatChip label="Books" value={`${booksCount}`} />
+        <Btn onClick={onRefresh} disabled={loading}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
+function OddsTabsRow({
+  active,
+  onChange,
+}: {
+  active: OddsTab;
+  onChange: (next: OddsTab) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+      {ODDS_TABS.map((tab) => {
+        const isActive = tab.value === active;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => onChange(tab.value)}
+            className={[
+              "shrink-0 rounded-full border px-3 py-1 text-[11px] font-semibold transition-colors",
+              isActive
+                ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.18)] text-white"
+                : "border-white/10 text-white/60 hover:text-white hover:border-white/30",
+            ].join(" ")}
+          >
+            {tab.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function OddsControlsBar({
+  sportOptions,
+  sportKey,
+  onPickSport,
+  market,
+  setMarket,
+  scope,
+  setScope,
+  oddsFormat,
+  setOddsFormat,
+  query,
+  setQuery,
+  view,
+  setView,
+  useAiAdjusted,
+  setUseAiAdjusted,
+}: {
+  sportOptions: Array<{ value: string; label: string }>;
+  sportKey: string;
+  onPickSport?: (key: string) => void;
+  market: Market;
+  setMarket: (next: Market) => void;
+  scope: string;
+  setScope: (next: string) => void;
+  oddsFormat: OddsFormat;
+  setOddsFormat: (next: OddsFormat) => void;
+  query: string;
+  setQuery: (next: string) => void;
+  view: BoardView;
+  setView: (next: BoardView) => void;
+  useAiAdjusted: boolean;
+  setUseAiAdjusted: React.Dispatch<React.SetStateAction<boolean>>;
+}) {
+  return (
+    <div className="flex flex-col gap-3 py-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <SelectPill
+          value={sportKey}
+          onChange={(v) => onPickSport?.(v)}
+          options={sportOptions}
+          label="Sport"
+          disabled={!onPickSport}
+        />
+
+        <div className="flex items-center gap-2">
+          <div className="text-[12px] text-white/55 font-semibold">Market</div>
+          <SegmentedToggle
+            value={market}
+            options={[
+              { value: "spread", label: "Spread" },
+              { value: "total", label: "Totals" },
+              { value: "ml", label: "Moneyline" },
+            ]}
+            onChange={(next) => setMarket(next as Market)}
+          />
+        </div>
+
+        <SelectPill value={scope} onChange={setScope} options={ODDS_SCOPES} label="Scope" />
+
+        <SelectPill
+          value={oddsFormat}
+          onChange={(v) => setOddsFormat(v as OddsFormat)}
+          options={[
+            { value: "american", label: "American" },
+            { value: "decimal", label: "Decimal" },
+          ]}
+          label="Odds"
+        />
+
+        <div className="flex items-center gap-2">
+          <div className="text-[12px] text-white/55 font-semibold">View</div>
+          <SegmentedToggle
+            value={view}
+            options={[
+              { value: "pregame", label: "Pre-Game" },
+              { value: "live", label: "Live" },
+            ]}
+            onChange={(next) => setView(next as BoardView)}
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setUseAiAdjusted((prev) => !prev)}
+          className={[
+            "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] transition",
+            useAiAdjusted ? "text-[#d4af37]" : "text-white/60",
+          ].join(" ")}
+          style={{
+            borderColor: useAiAdjusted ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.12)",
+            background: useAiAdjusted ? "rgba(212,175,55,0.12)" : "rgba(0,0,0,0.35)",
+          }}
+        >
+          <span
+            className="inline-block h-2 w-2 rounded-full"
+            style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }}
+          />
+          ML Adjusted
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <TextInput
+          value={query}
+          onChange={setQuery}
+          placeholder="Search team or matchup"
+          onClear={() => setQuery("")}
+        />
+      </div>
+    </div>
+  );
+}
+
+function OddsBoardHeader({
+  bookOrder,
+  draggingBook,
+  onBookPointerDown,
+  onBookPointerUp,
+  onBookPointerCancel,
+  gridTemplateColumns,
+}: {
+  bookOrder: BookKey[];
+  draggingBook: BookKey | null;
+  onBookPointerDown: (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => void;
+  onBookPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
+  gridTemplateColumns: string;
+}) {
+  return (
+    <div
+      className="grid items-center border-b border-white/10 bg-[var(--surface-2)]/90 backdrop-blur"
+      style={{ gridTemplateColumns: gridTemplateColumns }}
+    >
+      <div className="px-4 py-2">
+        <div className="text-[11px] uppercase tracking-[0.18em] text-white/40">Matchup</div>
+      </div>
+
+      <div className="px-2 py-2.5 border-l border-white/5">
+        <div className="rounded-lg border border-[rgba(212,175,55,0.35)] bg-[rgba(212,175,55,0.08)] px-2 py-1.5">
+          <div className="text-[11px] font-semibold text-white/90">Custom Blend</div>
+          <div className="text-[10px] text-white/50">Prism</div>
+        </div>
+      </div>
+
+      <div className="px-2 py-2.5 border-l border-white/5">
+        <div className="rounded-lg border border-white/10 bg-white/5 px-2 py-1.5">
+          <div className="text-[11px] font-semibold text-white/90">Best Odds</div>
+          <div className="text-[10px] text-white/50">Top book</div>
+        </div>
+      </div>
+
+      <div className="px-2 py-2.5 border-l border-white/5">
+        <div className="rounded-lg border border-white/10 bg-black/40 px-2 py-1.5">
+          <div className="text-[11px] font-semibold text-white/90">Consensus</div>
+          <div className="text-[10px] text-white/50">Median</div>
+        </div>
+      </div>
+
+      {bookOrder.map((bk) => (
+        <div key={bk} className="px-2 py-2.5 border-l border-white/5">
+          <button
+            type="button"
+            data-book={bk}
+            onPointerDown={onBookPointerDown(bk)}
+            onPointerUp={onBookPointerUp}
+            onPointerCancel={onBookPointerCancel}
+            className={[
+              "w-full rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-left transition-colors",
+              draggingBook === bk ? "border-[rgba(212,175,55,0.6)] bg-[rgba(212,175,55,0.12)]" : "",
+            ].join(" ")}
+          >
+            <div className="flex items-center gap-2">
+              <img src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} className="h-6 w-6 rounded-md bg-black/50 p-0.5" />
+              <div className="text-[11px] font-semibold text-white/80">{BOOK_LABEL[bk]}</div>
+            </div>
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -702,16 +1089,6 @@ function IconPlayers() {
       <circle cx="17" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.8" />
       <path d="M4.5 18c.6-2.3 2.7-4 4.5-4s3.9 1.7 4.5 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
       <path d="M14.5 18c.4-1.6 1.8-2.7 3.5-2.7 1.4 0 2.6.7 3.2 1.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconBooks() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M6 6h8a3 3 0 0 1 3 3v9H9a3 3 0 0 0-3 3z" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M6 6v15" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M9 6h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }
@@ -1491,7 +1868,6 @@ function GameDetailsModal({
   initialTab = "pred",
   mode,
   showTabs = true,
-  initialTab = "pred",
   onClose,
 }: {
   sportKey: string;
@@ -1509,14 +1885,6 @@ function GameDetailsModal({
   useEffect(() => {
     setTab(forcedTab);
   }, [forcedTab]);
-  initialTab?: DetailsTab;
-  onClose: () => void;
-}) {
-  const [tab, setTab] = useState<DetailsTab>(initialTab);
-
-  useEffect(() => {
-    setTab(initialTab);
-  }, [initialTab]);
 
   // line movement state
   const [lmMarket, setLmMarket] = useState<Market>("ml");
@@ -2441,261 +2809,7 @@ function sportLabelForKey(sportKey: string) {
 }
 
 /* =========================================================
-   BOARD TABLE (reference-style)
-========================================================= */
-
-function DateSectionHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <tr>
-      <td
-        colSpan={BOOKS.length + 2}
-        className="p-0"
-        style={{
-          position: "sticky",
-          top: "var(--thead-h, 0px)",
-          zIndex: 60,
-          background: BOARD_STICKY_BG,
-        }}
-      >
-        <div
-          className="px-4 py-2 flex items-center justify-between border-y"
-          style={{
-            borderColor: PRISM_BORDER,
-            background: BOARD_STICKY_BG,
-            height: DATE_BAR_HEIGHT,
-          }}
-        >
-          <div className="text-[11px] font-extrabold text-white/90">
-            {label}
-            <span className="text-white/50 font-semibold ml-2">({count} games)</span>
-          </div>
-          <div className="text-[10px] font-semibold text-white/45">Pre-Game</div>
-      <td colSpan={BOOKS.length + 2} className="p-0">
-        <div
-          className="sticky top-0 z-20 px-4 py-2 flex items-center justify-between border-y"
-          style={{
-            borderColor: PRISM_BORDER,
-            background: BOARD_STICKY_BG,
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <div className="text-[12px] font-extrabold text-white/90">
-            {label}
-            <span className="text-white/50 font-semibold ml-2">({count} games)</span>
-          </div>
-          <div className="text-[11px] font-semibold text-white/45">Pre-Game</div>
-        </div>
-        <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_GOLD}, transparent)` }} />
-      </td>
-    </tr>
-  );
-}
-
-function TableHeaderRow({
-  oddsFormat,
-  displayBooks,
-  draggingKey,
-  onBookPointerDown,
-  onBookPointerUp,
-  onBookPointerCancel,
-  headerRef,
-}: {
-  oddsFormat: OddsFormat;
-  displayBooks: BookKey[];
-  draggingKey: BookKey | null;
-  onBookPointerDown: (bk: BookKey) => (e: React.PointerEvent<HTMLButtonElement>) => void;
-  onBookPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => void;
-  onBookPointerCancel: (e: React.PointerEvent<HTMLButtonElement>) => void;
-  headerRef?: React.RefObject<HTMLTableSectionElement>;
-}) {
-  const stickyCellStyle: React.CSSProperties = {
-    position: "sticky",
-    top: 0,
-    zIndex: 101,
-    background: TABLE_HEADER_BG,
-    backgroundClip: "padding-box",
-  };
-  return (
-    <thead
-      ref={headerRef}
-      style={{
-        position: "sticky",
-        top: 0,
-        zIndex: 100,
-        background: TABLE_HEADER_BG,
-      }}
-    >
-    <thead>
-      <tr
-        className="border-y"
-        style={{
-          borderColor: PRISM_BORDER,
-          background: TABLE_HEADER_BG,
-          height: HEADER_ROW_HEIGHT,
-        }}
-      >
-        <th
-          className="text-left px-4 py-2.5 text-[11px] font-extrabold text-white/80 align-middle"
-          style={{ ...stickyCellStyle, width: COL_GAME }}
-        >
-          background: BOARD_BG,
-          backdropFilter: "blur(10px)",
-        }}
-      >
-        <th className="text-left px-4 py-2.5 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
-          Game
-        </th>
-
-        {/* Consensus column like reference (subtle) */}
-        <th
-          className="text-center px-2 py-2.5 text-[11px] font-extrabold text-white/70 align-middle"
-          style={{ ...stickyCellStyle, width: COL_BOOK }}
-        >
-        <th className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
-          Cons
-          <div className="text-[9px] font-semibold text-white/45 mt-0.5">
-            {oddsFormat === "american" ? "AM" : "DEC"}
-          </div>
-        </th>
-
-        {displayBooks.map((bk) => (
-          <th
-            key={bk}
-            className="text-center px-2 py-2.5 align-middle"
-            style={{ ...stickyCellStyle, width: COL_BOOK }}
-          >
-            <div className="flex items-center justify-center">
-              <button
-                type="button"
-                data-book={bk}
-                onPointerDown={onBookPointerDown(bk)}
-                onPointerUp={onBookPointerUp}
-                onPointerCancel={onBookPointerCancel}
-                className={[
-                  "rounded-lg transition-colors cursor-grab active:cursor-grabbing",
-                  draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
-                ].join(" ")}
-                style={{ touchAction: "none" }}
-                title="Drag to reorder"
-                aria-label={`Reorder ${BOOK_LABEL[bk]}`}
-              >
-                <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} />
-              </button>
-            </div>
-          </th>
-        ))}
-        {displayBooks.map((bk) => {
-          const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
-          return (
-            <th key={bk} className="text-center px-2 py-2.5" style={{ width: COL_BOOK }}>
-              <div className="flex items-center justify-center">
-                <button
-                  type="button"
-                  data-book={bk}
-                  onPointerDown={onBookPointerDown(bk)}
-                  onPointerUp={onBookPointerUp}
-                  onPointerCancel={onBookPointerCancel}
-                  className={[
-                    "rounded-full transition-colors",
-                    draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
-                  ].join(" ")}
-                  style={{ touchAction: "none" }}
-                  title="Drag to reorder"
-                  aria-label={`Reorder ${BOOK_LABEL[bk]}`}
-                >
-                  <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
-                </button>
-              </div>
-            </th>
-          );
-        })}
-      </tr>
-    </thead>
-  );
-}
-
-function EventRowTwoLines({
-  ev,
-  market,
-  oddsFormat,
-  displayBooks,
-  onOpenDetails,
-}: {
-  ev: EventOdds;
-  market: Market;
-  oddsFormat: OddsFormat;
-  displayBooks: BookKey[];
-  onOpenDetails: (ev: EventOdds, tab?: DetailsTab) => void;
-}) {
-  const leftLabel = market === "total" ? "Over" : "Away";
-  const rightLabel = market === "total" ? "Under" : "Home";
-
-  const awayCons = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
-  const homeCons = consensusPartsForRow(ev, market, "HOME", oddsFormat);
-
-  return (
-    <>
-      {/* AWAY / OVER */}
-      <tr className="border-b border-white/10 hover:bg-white/6">
-        <td className="px-4 py-2.5 align-middle" rowSpan={2}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
-              <div className="mt-2">
-                <TeamCell team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} sub={rightLabel} />
-              </div>
-            </div>
-
-            <div className="shrink-0 flex flex-col items-end gap-2">
-              <div className="text-[11px] text-white/60 font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
-              <div className="flex items-center gap-2">
-                <IconButton label="Game details" onClick={() => onOpenDetails(ev, "pred")} icon={<IconInfo />} />
-                <IconButton label="Line movement" onClick={() => onOpenDetails(ev, "line")} icon={<IconTrend />} />
-                <IconButton label="Player props" onClick={() => onOpenDetails(ev, "props")} icon={<IconPlayers />} />
-              </div>
-            </div>
-          </div>
-        </td>
-
-        {/* Consensus chip */}
-        <td className="px-2 py-2.5">
-          <div className="flex justify-center">
-            <OddsChip parts={awayCons} />
-          </div>
-        </td>
-
-        {/* Books */}
-        {displayBooks.map((bk) => (
-          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-2.5">
-            <div className="flex justify-center">
-              <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
-            </div>
-          </td>
-        ))}
-      </tr>
-
-      {/* HOME / UNDER */}
-      <tr className="border-b border-white/10 hover:bg-white/6">
-        <td className="px-2 py-2.5">
-          <div className="flex justify-center">
-            <OddsChip parts={homeCons} />
-          </div>
-        </td>
-
-        {displayBooks.map((bk) => (
-          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-2.5">
-            <div className="flex justify-center">
-              <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
-            </div>
-          </td>
-        ))}
-      </tr>
-    </>
-  );
-}
-
-/* =========================================================
-   MOBILE CARD (kept; styled closer to reference)
+   MOBILE CARD (simplified)
 ========================================================= */
 
 function EventCardMobile({
@@ -2723,50 +2837,32 @@ function EventCardMobile({
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/35 backdrop-blur-[4px] overflow-hidden shadow-[0_14px_55px_rgba(0,0,0,0.45)]">
-      <div className="px-3 py-2.5 border-b border-white/10 flex items-center justify-between gap-3 bg-black/30">
-        <div className="text-[12px] text-white/70 font-semibold">
-          {fmtCTTimeOnly(ev.commenceTime)} CT
-        </div>
-
+      <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between bg-black/30">
+        <div className="text-[12px] text-white/70 font-semibold">{fmtCTTimeOnly(ev.commenceTime)} CT</div>
         <div className="flex items-center gap-2">
-          <IconButton
-            label={booksOpen ? "Hide books" : "Show books"}
+          <button
+            type="button"
             onClick={onToggleBooks}
-            icon={<IconBooks />}
-            active={booksOpen}
-          />
+            className="text-[11px] font-semibold text-white/70 hover:text-white"
+          >
+            {booksOpen ? "Hide books" : "Show books"}
+          </button>
           <IconButton label="Game details" onClick={() => onOpenDetails(ev, "pred")} icon={<IconInfo />} />
-          <IconButton label="Line movement" onClick={() => onOpenDetails(ev, "line")} icon={<IconTrend />} />
-          <IconButton label="Player props" onClick={() => onOpenDetails(ev, "props")} icon={<IconPlayers />} />
         </div>
       </div>
 
-      <div className="px-3 py-2.5 space-y-2.5">
+      <div className="px-3 py-3 space-y-2.5">
         <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
         <TeamCell team={ev.home?.team ?? "Home"} logoUrl={ev.home?.logoUrl ?? null} sub={rightLabel} />
+        <div className="grid grid-cols-2 gap-2">
+          <OddsChip parts={awayCons} className="w-full h-[36px]" />
+          <OddsChip parts={homeCons} className="w-full h-[36px]" />
+        </div>
       </div>
 
-      <div className="px-3 pb-3">
-        <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px] text-white font-extrabold">Consensus</div>
-            <div className="text-[11px] text-white/60 font-semibold">
-              {market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
-              <OddsChip parts={awayCons} className="w-full max-w-[140px]" />
-            </div>
-            <div className="rounded-md border border-white/10 bg-black/25 p-2 flex items-center justify-center">
-              <OddsChip parts={homeCons} className="w-full max-w-[140px]" />
-            </div>
-          </div>
-        </div>
-
-        {booksOpen && (
-          <div className="mt-3 rounded-xl border border-white/10 bg-black/25 overflow-hidden">
+      {booksOpen && (
+        <div className="px-3 pb-3">
+          <div className="rounded-xl border border-white/10 bg-black/25 overflow-hidden">
             <div className="px-3 py-2 border-b border-white/10 bg-black/30">
               <div className="text-[12px] text-white font-extrabold">Books</div>
               <div className="mt-2 grid grid-cols-[88px_1fr_1fr] gap-2 items-center">
@@ -2777,40 +2873,35 @@ function EventCardMobile({
             </div>
 
             <div className="px-3">
-              {displayBooks.map((bk) => (
-                <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
-                  <div className="grid grid-cols-[96px_1fr_1fr] items-center gap-2">
-                    <div className="flex justify-start">
-                      <BookLogoPill
-                        src={BOOK_LOGOS[bk]}
-                        alt={BOOK_LABEL[bk]}
-                        className="h-6 max-w-[96px] px-1.5"
-                        imgClassName="h-4 w-4"
-                        textClassName="text-[10px]"
-                      />
-                    </div>
               {displayBooks.map((bk) => {
                 const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
                 return (
                   <div key={bk} className="py-2 border-b border-white/10 last:border-b-0">
                     <div className="grid grid-cols-[100px_1fr_1fr] items-center gap-3">
                       <div className="flex justify-start">
-                        <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
+                        <BookLogoPill
+                          src={BOOK_LOGOS[bk]}
+                          alt={BOOK_LABEL[bk]}
+                          fallbackLabel={fb}
+                          className="h-8 w-[92px]"
+                          imgClassName="h-5 w-5"
+                          textClassName="text-[11px]"
+                        />
                       </div>
-
-                    <div className="flex justify-center">
-                      <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} className="w-full max-w-[120px]" />
-                    </div>
-                    <div className="flex justify-center">
-                      <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} className="w-full max-w-[120px]" />
+                      <div className="flex justify-center">
+                        <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} className="w-full max-w-[120px]" />
+                      </div>
+                      <div className="flex justify-center">
+                        <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} className="w-full max-w-[120px]" />
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2827,12 +2918,13 @@ export function OddsScreen({
   onPickSport?: (key: string) => void;
 }) {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>("");
   const [market, setMarket] = useState<Market>("spread");
   const [view, setView] = useState<BoardView>("pregame");
   const [oddsFormat, setOddsFormat] = useState<OddsFormat>("american");
   const [useAiAdjusted, setUseAiAdjusted] = useState(false);
   const [query, setQuery] = useState<string>("");
+  const [oddsTab, setOddsTab] = useState<OddsTab>("game-lines");
+  const [scope, setScope] = useState<string>("full");
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -2843,12 +2935,11 @@ export function OddsScreen({
   const [activeEvent, setActiveEvent] = useState<EventOdds | null>(null);
   const [detailsTab, setDetailsTab] = useState<DetailsTab>("pred");
 
+  const [mcByEvent, setMcByEvent] = useState<Record<string, MonteCarloRow>>({});
   const [mobileOpenMap, setMobileOpenMap] = useState<Record<string, boolean>>({});
   const [bookOrder, setBookOrder] = useState<BookKey[]>(BOOKS);
   const [draggingBook, setDraggingBook] = useState<BookKey | null>(null);
   const dragBookRef = useRef<BookKey | null>(null);
-  const tableScrollRef = useRef<HTMLDivElement>(null);
-  const tableHeadRef = useRef<HTMLTableSectionElement>(null);
 
   async function load() {
     setError("");
@@ -2902,6 +2993,33 @@ export function OddsScreen({
       return ta - tb;
     });
 
+    if (list.length) {
+      try {
+        const eventIds = list.map((ev) => ev.eventId);
+        const { data: mcRows, error: mcError } = await supabase
+          .from("monte_carlo_results")
+          .select(
+            "event_id,home_win_prob,away_win_prob,home_cover_prob,away_cover_prob,over_prob,under_prob,spread_line_home,total_line"
+          )
+          .in("event_id", eventIds);
+
+        if (!mcError && mcRows) {
+          const next: Record<string, MonteCarloRow> = {};
+          for (const row of mcRows) {
+            if (!row?.event_id) continue;
+            next[row.event_id] = row as MonteCarloRow;
+          }
+          setMcByEvent(next);
+        } else {
+          setMcByEvent({});
+        }
+      } catch {
+        setMcByEvent({});
+      }
+    } else {
+      setMcByEvent({});
+    }
+
     // include latest props snapshot time if available (non-blocking)
     let propsLatest: string | null = null;
     try {
@@ -2939,7 +3057,6 @@ export function OddsScreen({
   }, [sportKey]);
 
   useEffect(() => {
-    setSelectedDate("");
     setMobileOpenMap({});
     setMarket("spread");
     setDetailsOpen(false);
@@ -2968,28 +3085,6 @@ export function OddsScreen({
     }
   }, [bookOrder]);
 
-  useLayoutEffect(() => {
-    if (!tableScrollRef.current || !tableHeadRef.current) return;
-    const scrollEl = tableScrollRef.current;
-    const headEl = tableHeadRef.current;
-
-    const update = () => {
-      const height = headEl.getBoundingClientRect().height;
-      scrollEl.style.setProperty("--thead-h", `${height}px`);
-    };
-
-    update();
-
-    const ro = new ResizeObserver(update);
-    ro.observe(headEl);
-    window.addEventListener("resize", update);
-
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-
   const availableDates = useMemo(() => {
     const todayCt = ctTodayYmd();
     const nowMs = Date.now();
@@ -3009,19 +3104,6 @@ export function OddsScreen({
 
     return Array.from(set).sort();
   }, [allEvents]);
-
-  useEffect(() => {
-    if (!availableDates.length) {
-      setSelectedDate("");
-      return;
-    }
-    const today = ctTodayYmd();
-    setSelectedDate((prev) => {
-      if (prev && availableDates.includes(prev)) return prev;
-      if (availableDates.includes(today)) return today;
-      return availableDates[0];
-    });
-  }, [availableDates]);
 
   const eventsForView = useMemo(() => {
     const todayCt = ctTodayYmd();
@@ -3120,34 +3202,7 @@ export function OddsScreen({
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
 
-  const handleResetBookOrder = () => {
-    setBookOrder(BOOKS);
-    try {
-      window.localStorage.removeItem(BOOK_ORDER_STORAGE_KEY);
-    } catch {
-      // ignore
-    }
-  };
-
-  // “Top bar” height for sticky header computations:
-  // - Sports tabs bar ~ 44px
-  // - Filters bar ~ 60px
-  // => sticky header row uses top-[104px] in TableHeaderRow.
   const topSport = sportLabelForKey(sportKey);
-  const lastUpdatedAge = useMemo(() => minutesSinceIso(lastUpdatedIso), [lastUpdatedIso]);
-  const freshness = useMemo(() => {
-    if (lastUpdatedAge == null) {
-      return { label: "No recent update", tone: "text-white/50", dot: "bg-white/30" };
-    }
-    if (lastUpdatedAge <= 5) {
-      return { label: `${lastUpdatedAge}m ago`, tone: "text-emerald-300", dot: "bg-emerald-400" };
-    }
-    if (lastUpdatedAge <= 15) {
-      return { label: `${lastUpdatedAge}m ago`, tone: "text-amber-300", dot: "bg-amber-400" };
-    }
-    return { label: `${lastUpdatedAge}m ago`, tone: "text-red-300", dot: "bg-red-400" };
-  }, [lastUpdatedAge]);
-
   const emptyState = useMemo(() => {
     if (view === "live") {
       return {
@@ -3173,625 +3228,316 @@ export function OddsScreen({
     };
   }, [availableDates.length, events.length, eventsForView.length, query, view]);
 
-  const selectedDateLabel = useMemo(() => {
-    if (!selectedDate) return "—";
-    return fmtDateBtn(selectedDate);
-  }, [selectedDate]);
+  const sportOptions = useMemo(() => {
+    const base = SPORT_TABS.filter((t) => isOddsSportKey(t.key)).map((t) => ({
+      value: t.key,
+      label: t.label,
+    }));
+    if (!base.find((opt) => opt.value === sportKey)) {
+      base.unshift({ value: sportKey, label: sportLabelForKey(sportKey) });
+    }
+    return base;
+  }, [sportKey]);
+
+  const gridTemplateColumns = useMemo(
+    () =>
+      `minmax(${COL_GAME}px, ${COL_GAME}px) repeat(3, ${COL_META}px) repeat(${bookOrder.length}, ${COL_BOOK}px)`,
+    [bookOrder.length]
+  );
+
+  const boardMinWidth = useMemo(
+    () => COL_GAME + COL_META * 3 + COL_BOOK * bookOrder.length,
+    [bookOrder.length]
+  );
 
   return (
-    <div className="w-full min-h-screen" style={{ background: BOARD_BG }}>
-      <div className="w-full">
-        <div className={`${PAGE_X} relative`}>
-          <div
-            className={`${PAGE_MAX_W} mx-auto`}
-            style={{
-              background:
-                `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-                "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
-                "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
-            }}
-          >
-            {/* ===========================
-                TOP SPORTS + FILTERS BAR
-            =========================== */}
-            <div className="flex flex-col" style={{ height: FILTERS_BAR_HEIGHT }}>
-              <div
-                className="px-2 md:px-0"
-                style={{
-                  height: FILTER_ROW_HEIGHT,
-                  background: BOARD_BG,
-                  borderBottom: `1px solid ${PRISM_BORDER}`,
-                  backdropFilter: "blur(10px)",
-                }}
-              >
-                <div className="h-full flex flex-col md:flex-row md:items-center gap-2">
-                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                    {SPORT_TABS.map((t) => {
-                      const active =
-                        t.key === sportKey ||
-                        (t.key === "soccer" && sportKey.includes("soccer")) ||
-                        (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
-                      const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
-                      return (
-                        <button
-                          key={t.key}
-                          type="button"
-                          onClick={() => {
-                            if (enabled && onPickSport) onPickSport(t.key);
-                          }}
-                          disabled={!enabled}
-                          className={[
-                            "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
-                            enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                            active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
-                          ].join(" ")}
-                          style={{
-                            borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                            background: active ? "rgba(212,175,55,0.16)" : "transparent",
-                            color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
-                          }}
-                          title={
-                            !enabled
-                              ? `${t.label} (not wired)`
-                              : active
-                                ? `${t.label} (active)`
-                                : `Switch to ${t.label}`
-                          }
-                        >
-                          {t.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex flex-1 items-center gap-2 md:ml-auto">
-                    <div className="w-full md:w-auto">
-                      <TextInput
-                        value={query}
-                        onChange={setQuery}
-                        placeholder="Search teams..."
-                        onClear={() => setQuery("")}
-                      />
-                    </div>
-                    <div className="hidden lg:flex items-center gap-2">
-                      <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
-                      <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                      <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                        <span className={freshness.tone}>{freshness.label}</span>
-                      </div>
-                      <div className="h-7 w-7 rounded-full border border-white/10 bg-white/5" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div
-                className="px-2 md:px-0"
-                style={{
-                  height: FILTER_ROW_HEIGHT,
-                  background: BOARD_BG,
-                  borderBottom: `1px solid ${PRISM_BORDER}`,
-                  backdropFilter: "blur(10px)",
-    <div
-      className="w-full min-h-screen"
-      style={{
-        background:
-          `radial-gradient(1200px 700px at 12% 10%, ${PRISM_GOLD_SOFT}, transparent 55%),` +
-          "radial-gradient(1000px 700px at 85% 0%, rgba(255,255,255,0.04), transparent 58%)," +
-          "linear-gradient(180deg, #050505, #0c0c0c 50%, #060606)",
-      }}
-    >
-      <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X} relative`}>
-        {/* ===========================
-            TOP SPORTS TABS BAR
-        =========================== */}
-        <div className="sticky top-0 z-50">
-          <div
-            className="h-[42px] flex items-center justify-between px-2 md:px-0"
-            style={{
-              background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
-              borderBottom: `1px solid ${PRISM_BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-              {SPORT_TABS.map((t) => {
-                const active =
-                  t.key === sportKey ||
-                  (t.key === "soccer" && sportKey.includes("soccer")) ||
-                  (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
-                const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
-                return (
-                  <button
-                    key={t.key}
-                    type="button"
-                    onClick={() => {
-                      if (enabled && onPickSport) onPickSport(t.key);
-                    }}
-                    disabled={!enabled}
-                    className={[
-                      "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
-                      enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                      active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
-                    ].join(" ")}
-                    style={{
-                      borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                      background: active ? "rgba(212,175,55,0.16)" : "transparent",
-                      color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
-                    }}
-                    title={
-                      !enabled
-                        ? `${t.label} (not wired)`
-                        : active
-                          ? `${t.label} (active)`
-                          : `Switch to ${t.label}`
-                    }
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <div className="hidden md:flex items-center gap-2">
-                <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
-                <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                  <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                  <span className={freshness.tone}>{freshness.label}</span>
-                </div>
-              </div>
-              <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
-            </div>
-          </div>
-
-          {/* ===========================
-              FILTERS TOOLBAR
-          =========================== */}
-          <div
-            className="h-[56px] flex items-center justify-between gap-3 px-2 md:px-0"
-            style={{
-              background: "linear-gradient(180deg, rgba(12,12,12,0.85), rgba(9,9,9,0.78))",
-              borderBottom: `1px solid ${PRISM_BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-              <SelectPill
-                value={market}
-                onChange={(v) => setMarket(v as Market)}
-                label="Market"
-                options={[
-                  { value: "spread", label: "Point Spread" },
-                  { value: "total", label: "Total" },
-                  { value: "ml", label: "Moneyline" },
-                ]}
-              />
-
-              <div className="flex items-center gap-2">
-                <div className="text-[11px] text-white/60 font-semibold">View</div>
-                <SegmentedToggle
-                  value={view}
-                  options={[
-                    { value: "pregame", label: "Pre-Game" },
-                    { value: "live", label: "Live" },
-                  ]}
-                  onChange={(next) => setView(next as BoardView)}
-                />
-              </div>
-
-              <DateReminder label={selectedDateLabel} />
-
-              <div className="hidden md:block">
-                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." onClear={() => setQuery("")} />
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <div className="md:hidden">
-                <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
-              </div>
-
-              <SelectPill
-                value={oddsFormat}
-                onChange={(v) => setOddsFormat(v as OddsFormat)}
-                label="Odds"
-                options={[
-                  { value: "american", label: "American" },
-                  { value: "decimal", label: "Decimal" },
-                ]}
-              />
-
-              <SelectPill
-                value={"all"}
-                onChange={() => {}}
-                label="Sportsbooks"
-                options={[{ value: "all", label: `All (${BOOKS.length})` }]}
-              />
-              <button
-                type="button"
-                onClick={handleResetBookOrder}
-                className="text-[11px] font-semibold text-white/60 hover:text-white"
-              >
-                Reset order
-              </button>
-
-              <Btn
-                onClick={() => {
+    <PageFrame>
+      <SectionCard className="p-0 overflow-hidden">
+        <div className="w-full min-h-screen" style={{ background: BOARD_BG }}>
+          <div className={`${PAGE_X} ${PAGE_MAX_W} mx-auto`}>
+            <div className="pt-4 pb-3 border-b" style={{ borderColor: PRISM_BORDER }}>
+              <OddsHeaderBar
+                subtitle={`${topSport} • ${market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}`}
+                lastUpdated={fmtCTDateTime(lastUpdatedIso)}
+                gamesCount={events.length}
+                booksCount={bookOrder.length}
+                loading={loading}
+                onRefresh={() => {
                   setLoading(true);
                   load();
                 }}
-                disabled={loading}
-              >
-                <div className="h-full flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <SelectPill
-                      value={market}
-                      onChange={(v) => setMarket(v as Market)}
-                      label="Market"
-                      options={[
-                        { value: "spread", label: "Point Spread" },
-                        { value: "total", label: "Total" },
-                        { value: "ml", label: "Moneyline" },
-                      ]}
-                    />
-
-                    <div className="flex items-center gap-2">
-                      <div className="text-[12px] text-white/55 font-semibold">View</div>
-                      <SegmentedToggle
-                        value={view}
-                        options={[
-                          { value: "pregame", label: "Pre-Game" },
-                          { value: "live", label: "Live" },
-                        ]}
-                        onChange={(next) => setView(next as BoardView)}
-                      />
-                    </div>
-                {loading ? "Refreshing…" : "Refresh"}
-              </Btn>
-            </div>
-          </div>
-        </div>
-
-        {/* ===========================
-            BOARD BODY
-        =========================== */}
-        <div className="pt-2.5 pb-6">
-          <div
-            className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
-            style={{
-              borderColor: PRISM_BORDER,
-              background: BOARD_BG,
-              backdropFilter: "blur(6px)",
-            }}
-          >
-            <div className="px-4 py-2.5 border-b" style={{ borderColor: PRISM_BORDER }}>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-white font-extrabold text-[14px]">
-                    {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
-                    <span style={{ color: PRISM_GOLD }}>{topSport}</span>
-                  </div>
-                  <div className="text-[11px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
-                    Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
-                    {oddsFormat === "american" ? "American" : "Decimal"}
-                  </div>
-                </div>
-
-                    <DateReminder label={selectedDateLabel} />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3 md:justify-end">
-                    <SelectPill
-                      value={oddsFormat}
-                      onChange={(v) => setOddsFormat(v as OddsFormat)}
-                      label="Odds"
-                      options={[
-                        { value: "american", label: "American" },
-                        { value: "decimal", label: "Decimal" },
-                      ]}
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() => setUseAiAdjusted((prev) => !prev)}
-                      className={[
-                        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] transition",
-                        useAiAdjusted ? "text-[#d4af37]" : "text-white/60",
-                      ].join(" ")}
-                      style={{
-                        borderColor: useAiAdjusted ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.12)",
-                        background: useAiAdjusted ? "rgba(212,175,55,0.12)" : "rgba(0,0,0,0.35)",
-                      }}
-                    >
-                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }} />
-                      ML Adjusted
-                    </button>
-
-                    <SelectPill
-                      value={"all"}
-                      onChange={() => {}}
-                      label="Sportsbooks"
-                      options={[{ value: "all", label: `All (${BOOKS.length})` }]}
-                    />
-
-                    <div className="flex items-center gap-2 md:ml-1">
-                      <button
-                        type="button"
-                        onClick={handleResetBookOrder}
-                        className="text-[11px] font-semibold text-white/50 hover:text-white"
-                      >
-                        Reset order
-                      </button>
-
-                      <Btn
-                        onClick={() => {
-                          setLoading(true);
-                          load();
-                        }}
-                        disabled={loading}
-                      >
-                        {loading ? "Refreshing…" : "Refresh"}
-                      </Btn>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-end gap-2 text-[11px] font-extrabold text-white">
-                    <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
-                    <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                    <span className={freshness.tone}>{freshness.label}</span>
-                  </div>
-                </div>
-              </div>
+              />
             </div>
 
-            {/* MOBILE */}
-            <div className="md:hidden p-3">
-              {loading ? (
-                <div className="p-3 text-xs text-white/60">Loading odds…</div>
-              ) : error ? (
-                <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
-              ) : !events.length ? (
-                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-              ) : (
-                <div className="space-y-3">
-                  {eventsByDaySection.map((sec) => (
-                    <div key={sec.ymd} className="space-y-3">
-                      <div
-                        className="sticky top-0 z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
-                        style={{ background: BOARD_STICKY_BG, boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
-                      >
-                        <div className="text-[12px] font-extrabold text-white/90">
-                          {sec.label}
-                          <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
-                        </div>
-                      </div>
-                      {sec.events.map((ev) => (
-                        <EventCardMobile
-                          key={ev.eventId}
-                          ev={ev}
-                          market={market}
-                          oddsFormat={oddsFormat}
-                          displayBooks={bookOrder}
-                          booksOpen={!!mobileOpenMap[ev.eventId]}
-                          onToggleBooks={() => setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))}
-                          onOpenDetails={openDetails}
-                        />
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
+            <div className="pt-3 pb-2">
+              <OddsTabsRow active={oddsTab} onChange={setOddsTab} />
             </div>
 
-            {/* ===========================
-                BOARD BODY
-            =========================== */}
-            <div className="pt-2.5 pb-6">
-              <div
-                className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
-                style={{
-                  borderColor: PRISM_BORDER,
-                  background: BOARD_BG,
-                  backdropFilter: "blur(6px)",
-                }}
-              >
-                <div className="px-4 py-2 border-b" style={{ borderColor: PRISM_BORDER }}>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-white font-extrabold text-[13px] leading-tight">
-                        {view === "pregame" ? "Upcoming Games" : "Live Games"} •{" "}
-                        <span style={{ color: PRISM_GOLD }}>{topSport}</span>
-                      </div>
-                      <div className="text-[10px] font-semibold mt-0.5" style={{ color: PRISM_MUTED }}>
-                        Odds Board • {market === "ml" ? "Moneyline" : market === "spread" ? "Point Spread" : "Total"} •{" "}
-                        {oddsFormat === "american" ? "American" : "Decimal"}
-                      </div>
+            <div
+              className="sticky top-0 z-30 border-y"
+              style={{ borderColor: PRISM_BORDER, background: BOARD_BG }}
+            >
+              <OddsControlsBar
+                sportOptions={sportOptions}
+                sportKey={sportKey}
+                onPickSport={onPickSport}
+                market={market}
+                setMarket={setMarket}
+                scope={scope}
+                setScope={setScope}
+                oddsFormat={oddsFormat}
+                setOddsFormat={setOddsFormat}
+                query={query}
+                setQuery={setQuery}
+                view={view}
+                setView={setView}
+                useAiAdjusted={useAiAdjusted}
+                setUseAiAdjusted={setUseAiAdjusted}
+              />
+            </div>
+
+            <div className="pt-4 pb-6">
+              <TableFrame>
+                <div className="bg-[var(--surface-1)]">
+                  {error ? (
+                    <div className="border-b border-white/10 px-4 py-3 text-sm text-red-400">
+                      Supabase error: {error}
                     </div>
+                  ) : null}
 
-                    <div className="text-right">
-                      <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
-                        {events.length} games
-                      </div>
-                      <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
-                        <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
-                        <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                        <span className={freshness.tone}>{freshness.label}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-            {/* DESKTOP */}
-            <div className="hidden md:block">
-              {loading ? (
-                <div className="p-6 text-sm text-white/60">Loading odds…</div>
-              ) : error ? (
-                <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
-              ) : !events.length ? (
-                <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-              ) : (
-                <div className="max-h-[calc(100vh-240px)] overflow-auto" style={{ scrollPaddingTop: 56 }}>
-                  <table className="w-full table-fixed min-w-[1080px]">
-                    <colgroup>
-                      <col style={{ width: COL_GAME }} />
-                      <col style={{ width: COL_BOOK }} />
-                      {BOOKS.map((_, i) => (
-                        <col key={i} style={{ width: COL_BOOK }} />
-                      ))}
-                    </colgroup>
-
-                    <TableHeaderRow
-                      oddsFormat={oddsFormat}
-                      displayBooks={bookOrder}
-                      draggingKey={draggingBook}
-                      onBookPointerDown={handleBookPointerDown}
-                      onBookPointerUp={handleBookPointerUp}
-                      onBookPointerCancel={handleBookPointerCancel}
-                    />
-
-                {/* MOBILE */}
-                <div className="md:hidden p-3">
-                  {loading ? (
-                    <div className="p-3 text-xs text-white/60">Loading odds…</div>
-                  ) : error ? (
-                    <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
-                  ) : !events.length ? (
-                    <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-                  ) : (
-                    <div className="space-y-3">
-                      {eventsByDaySection.map((sec) => (
-                        <div key={sec.ymd} className="space-y-3">
-                          <div
-                            className="sticky z-20 rounded-xl border border-white/10 px-3 py-2 backdrop-blur-[8px]"
-                            style={{
-                              top: 0,
-                              background: BOARD_STICKY_BG,
-                              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
-                            }}
-                          >
-                            <div className="text-[12px] font-extrabold text-white/90">
-                              {sec.label}
-                              <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
+                  {/* MOBILE */}
+                  <div className="md:hidden p-3">
+                    {loading ? (
+                      <div className="p-3 text-xs text-white/60">Loading odds…</div>
+                    ) : error ? (
+                      <div className="p-3 text-xs text-red-400">Supabase error: {error}</div>
+                    ) : !events.length ? (
+                      <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+                    ) : (
+                      <div className="space-y-3">
+                        {eventsByDaySection.map((sec) => (
+                          <div key={sec.ymd} className="space-y-3">
+                            <div className="rounded-xl border border-white/10 px-3 py-2 bg-black/40">
+                              <div className="text-[12px] font-extrabold text-white/90">
+                                {sec.label}
+                                <span className="text-white/50 font-semibold ml-2">({sec.count} games)</span>
+                              </div>
                             </div>
+                            {sec.events.map((ev) => (
+                              <EventCardMobile
+                                key={ev.eventId}
+                                ev={ev}
+                                market={market}
+                                oddsFormat={oddsFormat}
+                                displayBooks={bookOrder}
+                                booksOpen={!!mobileOpenMap[ev.eventId]}
+                                onToggleBooks={() =>
+                                  setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
+                                }
+                                onOpenDetails={openDetails}
+                              />
+                            ))}
                           </div>
-                        <React.Fragment key={sec.ymd}>
-                          <DateSectionHeader label={sec.label} count={sec.count} />
-                          {sec.events.map((ev) => (
-                            <EventCardMobile
-                              key={ev.eventId}
-                              ev={ev}
-                              market={market}
-                              oddsFormat={oddsFormat}
-                              displayBooks={bookOrder}
-                              booksOpen={!!mobileOpenMap[ev.eventId]}
-                              onToggleBooks={() =>
-                                setMobileOpenMap((prev) => ({ ...prev, [ev.eventId]: !prev[ev.eventId] }))
-                              }
-                              onOpenDetails={openDetails}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* DESKTOP */}
+                  <div className="hidden md:block">
+                    {loading ? (
+                      <div className="p-6 text-sm text-white/60">Loading odds…</div>
+                    ) : !events.length ? (
+                      <div className="p-6">
+                        <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
+                      </div>
+                    ) : (
+                      <div
+                        className="max-h-[calc(100vh-360px)] overflow-auto"
+                        style={{ background: BOARD_BG }}
+                      >
+                        <div className="min-w-full" style={{ minWidth: boardMinWidth }}>
+                          <div className="sticky top-0 z-20">
+                            <OddsBoardHeader
+                              bookOrder={bookOrder}
+                              draggingBook={draggingBook}
+                              onBookPointerDown={handleBookPointerDown}
+                              onBookPointerUp={handleBookPointerUp}
+                              onBookPointerCancel={handleBookPointerCancel}
+                              gridTemplateColumns={gridTemplateColumns}
                             />
+                          </div>
+
+                          {eventsByDaySection.map((sec) => (
+                            <div key={sec.ymd} className="border-b border-white/10">
+                              <div
+                                className="grid"
+                                style={{ gridTemplateColumns: gridTemplateColumns }}
+                              >
+                                <div className="col-span-full px-4 py-2 text-[12px] font-semibold text-white/70 bg-black/40">
+                                  {sec.label}
+                                  <span className="text-white/40 ml-2">({sec.count})</span>
+                                </div>
+                              </div>
+                              {sec.events.map((ev) => {
+                                const leftLabel = market === "total" ? "Over" : "Away";
+                                const rightLabel = market === "total" ? "Under" : "Home";
+                                const mcRow = mcByEvent[ev.eventId] ?? null;
+                                const blendAway = blendPartsForRow(ev, market, "AWAY", oddsFormat, mcRow);
+                                const blendHome = blendPartsForRow(ev, market, "HOME", oddsFormat, mcRow);
+                                const bestAway = bestOfferForSide(ev, market, "AWAY", oddsFormat, bookOrder);
+                                const bestHome = bestOfferForSide(ev, market, "HOME", oddsFormat, bookOrder);
+                                const consensusAway = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
+                                const consensusHome = consensusPartsForRow(ev, market, "HOME", oddsFormat);
+
+                                return (
+                                  <div
+                                    key={ev.eventId}
+                                    className="grid border-t border-white/5 hover:bg-white/5"
+                                    style={{ gridTemplateColumns: gridTemplateColumns }}
+                                  >
+                                    <div className="px-4 py-3 border-r border-white/5">
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <TeamCell
+                                            team={ev.away?.team ?? "Away"}
+                                            logoUrl={ev.away?.logoUrl ?? null}
+                                            sub={leftLabel}
+                                          />
+                                          <div className="mt-2">
+                                            <TeamCell
+                                              team={ev.home?.team ?? "Home"}
+                                              logoUrl={ev.home?.logoUrl ?? null}
+                                              sub={rightLabel}
+                                            />
+                                          </div>
+                                          <div className="mt-2 text-[11px] text-white/50 font-semibold">
+                                            {fmtCTTimeOnly(ev.commenceTime)} CT
+                                          </div>
+                                        </div>
+                                        <div className="shrink-0 flex flex-col items-end gap-2">
+                                          <div className="flex items-center gap-2">
+                                            <IconButton label="Game details" onClick={() => openDetails(ev, "pred")} icon={<IconInfo />} />
+                                            <IconButton label="Line movement" onClick={() => openDetails(ev, "line")} icon={<IconTrend />} />
+                                            <IconButton label="Player props" onClick={() => openDetails(ev, "props")} icon={<IconPlayers />} />
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="px-2 py-3 border-l border-white/5 bg-[rgba(212,175,55,0.08)]/60">
+                                      <div className="flex flex-col items-center gap-1.5">
+                                        <OddsChip
+                                          parts={blendAway}
+                                          className="w-[96px] h-[36px] border-[rgba(212,175,55,0.4)]"
+                                        />
+                                        <OddsChip
+                                          parts={blendHome}
+                                          className="w-[96px] h-[36px] border-[rgba(212,175,55,0.4)]"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div className="px-2 py-3 border-l border-white/5 bg-white/5">
+                                      <div className="flex flex-col items-center gap-1.5">
+                                        <div className="flex items-center gap-2">
+                                          {bestAway?.bookKey ? (
+                                            BOOK_LOGOS[bestAway.bookKey] ? (
+                                              <img
+                                                src={BOOK_LOGOS[bestAway.bookKey]}
+                                                alt={BOOK_LABEL[bestAway.bookKey]}
+                                                className="h-6 w-6 rounded-md bg-black/50 p-0.5"
+                                              />
+                                            ) : (
+                                              <div className="h-6 w-6 rounded-md border border-white/10 bg-black/40 text-[9px] text-white/70 flex items-center justify-center font-semibold">
+                                                {BOOK_SHORT[bestAway.bookKey]}
+                                              </div>
+                                            )
+                                          ) : null}
+                                          <OddsChip
+                                            parts={bestAway?.parts ?? { top: "—" }}
+                                            className="w-[96px] h-[36px] border-white/20"
+                                          />
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          {bestHome?.bookKey ? (
+                                            BOOK_LOGOS[bestHome.bookKey] ? (
+                                              <img
+                                                src={BOOK_LOGOS[bestHome.bookKey]}
+                                                alt={BOOK_LABEL[bestHome.bookKey]}
+                                                className="h-6 w-6 rounded-md bg-black/50 p-0.5"
+                                              />
+                                            ) : (
+                                              <div className="h-6 w-6 rounded-md border border-white/10 bg-black/40 text-[9px] text-white/70 flex items-center justify-center font-semibold">
+                                                {BOOK_SHORT[bestHome.bookKey]}
+                                              </div>
+                                            )
+                                          ) : null}
+                                          <OddsChip
+                                            parts={bestHome?.parts ?? { top: "—" }}
+                                            className="w-[96px] h-[36px] border-white/20"
+                                          />
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="px-2 py-3 border-l border-white/5">
+                                      <div className="flex flex-col items-center gap-1.5">
+                                        <OddsChip parts={consensusAway} className="w-[96px] h-[36px]" />
+                                        <OddsChip parts={consensusHome} className="w-[96px] h-[36px]" />
+                                      </div>
+                                    </div>
+
+                                    {bookOrder.map((bk) => {
+                                      const awayParts = partsForBookSide(ev, market, "AWAY", bk, oddsFormat);
+                                      const homeParts = partsForBookSide(ev, market, "HOME", bk, oddsFormat);
+                                      return (
+                                        <div key={`${ev.eventId}-${bk}`} className="px-2 py-3 border-l border-white/5">
+                                          <div className="flex flex-col items-center gap-1.5">
+                                            <OddsChip
+                                              parts={awayParts}
+                                              className={[
+                                                "w-[96px] h-[36px]",
+                                              ].join(" ")}
+                                            />
+                                            <OddsChip
+                                              parts={homeParts}
+                                              className={[
+                                                "w-[96px] h-[36px]",
+                                              ].join(" ")}
+                                            />
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })}
+                            </div>
                           ))}
                         </div>
-                      ))}
-                    </div>
-                  )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-
-                {/* DESKTOP */}
-                <div className="hidden md:block">
-                  {loading ? (
-                    <div className="p-6 text-sm text-white/60">Loading odds…</div>
-                  ) : error ? (
-                    <div className="p-6 text-sm text-red-400">Supabase error: {error}</div>
-                  ) : !events.length ? (
-                    <EmptyState title={emptyState.title} subtitle={emptyState.subtitle} />
-                  ) : (
-                    <div
-                      ref={tableScrollRef}
-                      className="max-h-[calc(100vh-240px)] overflow-auto"
-                      style={{
-                        scrollPaddingTop: DATE_BAR_HEIGHT + HEADER_ROW_HEIGHT + 24,
-                        background: BOARD_BG,
-                      }}
-                    >
-                      <table
-                        className="w-full table-fixed min-w-[1080px]"
-                        style={{ background: BOARD_BG, borderCollapse: "separate", borderSpacing: 0 }}
-                      >
-                        <colgroup>
-                          <col style={{ width: COL_GAME }} />
-                          <col style={{ width: COL_BOOK }} />
-                          {bookOrder.map((_, i) => (
-                            <col key={i} style={{ width: COL_BOOK }} />
-                          ))}
-                        </colgroup>
-
-                        <TableHeaderRow
-                          oddsFormat={oddsFormat}
-                          displayBooks={bookOrder}
-                          draggingKey={draggingBook}
-                          onBookPointerDown={handleBookPointerDown}
-                          onBookPointerUp={handleBookPointerUp}
-                          onBookPointerCancel={handleBookPointerCancel}
-                          headerRef={tableHeadRef}
-                        />
-
-                        <tbody>
-                          {eventsByDaySection.map((sec) => (
-                            <React.Fragment key={sec.ymd}>
-                              <DateSectionHeader label={sec.label} count={sec.count} />
-                              {sec.events.map((ev) => (
-                                <EventRowTwoLines
-                                  key={ev.eventId}
-                                  ev={ev}
-                                  market={market}
-                                  oddsFormat={oddsFormat}
-                                  displayBooks={bookOrder}
-                                  onOpenDetails={openDetails}
-                                />
-                              ))}
-                            </React.Fragment>
-                          ))}
-                        </tbody>
-                      </table>
-
-                      <div className="h-3" />
-                    </div>
-                  )}
-                </div>
-              </div>
+              </TableFrame>
             </div>
           </div>
         </div>
 
-        {/* Modal */}
         {detailsOpen && activeEvent && (
           <GameDetailsModal
             sportKey={sportKey}
             ev={activeEvent}
             oddsFormat={oddsFormat}
+            useAiAdjusted={useAiAdjusted}
             initialTab={detailsTab}
             onClose={() => setDetailsOpen(false)}
           />
         )}
-      </div>
-
-      {/* Modal */}
-      {detailsOpen && activeEvent && (
-        <GameDetailsModal
-          sportKey={sportKey}
-          ev={activeEvent}
-          oddsFormat={oddsFormat}
-          useAiAdjusted={useAiAdjusted}
-          initialTab={detailsTab}
-          mode={detailsTab}
-          showTabs={false}
-          onClose={() => setDetailsOpen(false)}
-        />
-      )}
-    </div>
+      </SectionCard>
+    </PageFrame>
   );
 }
+
  

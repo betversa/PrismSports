@@ -18,7 +18,9 @@
 // - Locks background scroll when modal open
 
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
+import { hasSupabaseEnv, missingSupabaseVars, supabase } from "../../lib/supabaseClient";
+import { DataSourceErrorPanel } from "../ui/PrismUI";
+import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import { calcBetAmount } from "../../../lib/odds/bet";
 import { clampNumber, safeNumber } from "../../../lib/odds/math";
 import { formatAmerican, formatMoney, formatPercent } from "../../../lib/odds/format";
@@ -367,6 +369,9 @@ type FantasyProsApiResponse =
 ========================================================= */
 
 export function PropsScreen() {
+  if (!hasSupabaseEnv) {
+    return <DataSourceErrorPanel missing={missingSupabaseVars} />;
+  }
   const [selectedMarket, setSelectedMarket] = useState<UiMarket>("Points");
   const [selectedBook, setSelectedBook] = useState<BookFilter>("any");
 
@@ -582,59 +587,60 @@ export function PropsScreen() {
     () => filtered.filter((r) => r.bestKelly > 0).length,
     [filtered]
   );
+  const uniqueMarkets = useMemo(() => {
+    const set = new Set(rows.map((row) => row.ui_market));
+    return Array.from(set).filter(Boolean);
+  }, [rows]);
+  const uniqueTeams = useMemo(() => {
+    const set = new Set(rows.map((row) => row.team));
+    return Array.from(set).filter(Boolean);
+  }, [rows]);
 
   return (
-    <div className="space-y-4">
-      {/* HERO */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 md:p-5">
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
-          }}
+    <ScreenShell
+      title="Prop Insights"
+      subtitle="Scan model-rated player props, price gaps, and hit-rate overlays across your highest leverage markets."
+      status={[
+        {
+          label: "Props Loaded",
+          value: loading ? "…" : String(rows.length),
+          helper: `${filtered.length} after filters`,
+        },
+        {
+          label: "Markets",
+          value: String(uniqueMarkets.length),
+          helper: "Active prop types",
+        },
+        {
+          label: "Teams",
+          value: String(uniqueTeams.length),
+          helper: "Coverage depth",
+        },
+        {
+          label: "Bankroll",
+          value: bankroll ? formatMoney(bankroll) : "—",
+          helper: kellyFactor ? `${(kellyFactor * 100).toFixed(1)}% Kelly` : "Kelly not set",
+        },
+      ]}
+    >
+      <SectionCard>
+        <SectionHeader
+          title="Live Prop Filters"
+          description="Filter props by market, matchup, or price window before diving into details."
         />
-        <div className="relative flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ background: "#d4af37" }}
-              />
-              Player Props
-            </div>
-            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">
-              Top +EV Props
-            </h2>
-            <p className="text-xs text-[#a8a8a8] mt-1">
-              {loading ? "Loading…" : `${filtered.length} props · ${playable} playable`}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 text-[11px] flex-wrap">
-            <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
-              Bankroll:{" "}
-              <span className="text-white">
-                {bankroll ? formatMoney(bankroll, 0) : "—"}
-              </span>
-            </div>
-            <div className="px-2 py-1 bg-black/40 border border-[#2a2a2a] rounded text-[#9a9a9a]">
-              Kelly:{" "}
-              <span className="text-white">
-                {settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"}
-              </span>
-            </div>
-          </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-white/60">
+          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">Playable: {loading ? "…" : playable}</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">Selected market: {selectedMarket}</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1">Book filter: {selectedBook}</span>
         </div>
 
         {err ? (
-          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/40 border border-red-900/50 rounded-lg">
+          <div className="mt-3 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
             {err}
           </div>
         ) : null}
 
-        {/* Filters */}
-        <div className="relative mt-4 flex flex-col gap-3">
+        <div className="mt-4 space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
             {UI_MARKETS.map((m) => (
               <button
@@ -670,82 +676,82 @@ export function PropsScreen() {
             ))}
           </div>
         </div>
-      </div>
+      </SectionCard>
 
-      {/* DESKTOP TABLE (md+) */}
-      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
-        <div className="relative overflow-auto" style={{ maxHeight: "calc(100vh - 360px)" }}>
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 z-30">
-              <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-40 min-w-[360px]">
-                  Pick
-                </th>
-                <th className="text-left p-3 text-[#808080]">Team</th>
-                <th className="text-left p-3 text-[#808080]">Opp</th>
-                <th className="text-center p-3 text-[#808080]">Projection</th>
-                <th className="text-center p-3 text-[#808080]">Line</th>
-                <th className="text-center p-3 text-[#808080]">Books</th>
-                <th className="text-center p-3 text-[#808080]">Fair</th>
-                <th className="text-center p-3 text-[#808080]">EV%</th>
-                <th className="text-center p-3 text-[#808080]">Score</th>
-                <th className="text-center p-3 text-[#808080]">Bet $</th>
-              </tr>
-            </thead>
+      <SectionCard className="p-0 overflow-hidden">
+        <div className="hidden md:block bg-[#0f0f0f]">
+          <div className="relative overflow-auto" style={{ maxHeight: "calc(100vh - 360px)" }}>
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 z-30">
+                <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
+                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-40 min-w-[360px]">
+                    Pick
+                  </th>
+                  <th className="text-left p-3 text-[#808080]">Team</th>
+                  <th className="text-left p-3 text-[#808080]">Opp</th>
+                  <th className="text-center p-3 text-[#808080]">Projection</th>
+                  <th className="text-center p-3 text-[#808080]">Line</th>
+                  <th className="text-center p-3 text-[#808080]">Books</th>
+                  <th className="text-center p-3 text-[#808080]">Fair</th>
+                  <th className="text-center p-3 text-[#808080]">EV%</th>
+                  <th className="text-center p-3 text-[#808080]">Score</th>
+                  <th className="text-center p-3 text-[#808080]">Bet $</th>
+                </tr>
+              </thead>
 
-            <tbody className="divide-y divide-[#1a1a1a]">
-              {loading ? (
-                <tr>
-                  <td className="p-4 text-[#808080]" colSpan={10}>
-                    Loading props…
-                  </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td className="p-4 text-[#808080]" colSpan={10}>
-                    No props for this filter.
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((r) => (
-                  <PropRowDesktop
-                    key={r.key}
-                    row={r}
-                    bankroll={bankroll}
-                    kellyFactor={kellyFactor}
-                    settingsReady={settingsReady}
-                    onOpen={() => openModal(r)}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
+              <tbody className="divide-y divide-[#1a1a1a]">
+                {loading ? (
+                  <tr>
+                    <td className="p-4 text-[#808080]" colSpan={10}>
+                      Loading props…
+                    </td>
+                  </tr>
+                ) : filtered.length === 0 ? (
+                  <tr>
+                    <td className="p-4 text-[#808080]" colSpan={10}>
+                      No props for this filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((r) => (
+                    <PropRowDesktop
+                      key={r.key}
+                      row={r}
+                      bankroll={bankroll}
+                      kellyFactor={kellyFactor}
+                      settingsReady={settingsReady}
+                      onOpen={() => openModal(r)}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
 
-      {/* MOBILE LIST (<= md) */}
-      <div className="md:hidden space-y-2">
-        {loading ? (
-          <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4 text-xs text-[#808080]">
-            Loading props…
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4 text-xs text-[#808080]">
-            No props for this filter.
-          </div>
-        ) : (
-          filtered.map((r) => (
-            <PropCardMobile
-              key={r.key}
-              row={r}
-              bankroll={bankroll}
-              kellyFactor={kellyFactor}
-              settingsReady={settingsReady}
-              onOpen={() => openModal(r)}
-            />
-          ))
-        )}
-      </div>
+        <div className="md:hidden space-y-2 p-4">
+          {loading ? (
+            <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4 text-xs text-[#808080]">
+              Loading props…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl p-4 text-xs text-[#808080]">
+              No props for this filter.
+            </div>
+          ) : (
+            filtered.map((r) => (
+              <PropCardMobile
+                key={r.key}
+                row={r}
+                bankroll={bankroll}
+                kellyFactor={kellyFactor}
+                settingsReady={settingsReady}
+                onOpen={() => openModal(r)}
+              />
+            ))
+          )}
+        </div>
+      </SectionCard>
 
       <PropDetailsModal
         open={modalOpen}
@@ -755,9 +761,11 @@ export function PropsScreen() {
         kellyFactor={kellyFactor}
         settingsReady={settingsReady}
       />
-    </div>
+    </ScreenShell>
   );
 }
+
+
 
 /* =========================================================
    Desktop row

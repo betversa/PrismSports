@@ -36,6 +36,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import {
   ResponsiveContainer,
   LineChart,
@@ -1367,168 +1368,166 @@ export const ModelScreen = () => {
   const steamCount = useMemo(() => Object.keys(steamEligible).length, [steamEligible]);
 
   return (
-    <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
-      {/* HERO / HEADER */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#2a2a2a] bg-[#0b0b0b] p-4 md:p-5">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-100"
-          style={{
-            background:
-              "radial-gradient(700px 260px at 18% 0%, rgba(212,175,55,0.14), transparent 60%), radial-gradient(520px 220px at 86% 10%, rgba(255,255,255,0.05), transparent 60%)",
-          }}
+    <ScreenShell
+      title="Model Edge Board"
+      subtitle="Aggregated +EV plays across games and props, with soft-book comparisons and model confidence grading."
+      status={[
+        {
+          label: "Total Plays",
+          value: loading ? "…" : String(filtered.length),
+          helper: `${games.length} games • ${props.length} props`,
+        },
+        {
+          label: "Best EV",
+          value: loading ? "…" : pct(headerStats.bestEv, 1),
+          helper: `Top score ${Math.round(headerStats.bestScore)}`,
+        },
+        {
+          label: "Steam Signals",
+          value: steamLoading ? "…" : String(steamCount),
+          helper: `Lookback ${STEAM_LOOKBACK_HOURS}h`,
+        },
+        {
+          label: "Bankroll",
+          value: bankroll ? formatMoney(bankroll) : "—",
+          helper: settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}% Kelly` : "Kelly not set",
+        },
+      ]}
+    >
+      <SectionCard>
+        <SectionHeader
+          title="Play Filters & Gates"
+          description="Odds, EV, and score gates applied before aggregation. Tap a pick to open the full model breakdown."
         />
-
-        <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#2a2a2a] bg-black/40 px-3 py-1 text-[11px] text-[#b0b0b0]">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
-              Prism Model Picks
-            </div>
-
-            <h2 className="text-lg md:text-xl text-white mt-2 tracking-tight">Best +EV Plays</h2>
-
-            <div className="text-xs text-[#a8a8a8] mt-1 leading-relaxed">
-              Aggregated to 1 row per play. Tap/click the <span className="text-white">Pick</span> to open details.
-              <span className="text-[#404040]"> · </span>
-              Steam is <span className="text-white">detected and annotated</span> (never filters).
-            </div>
-
-            <div className="text-[11px] text-[#9a9a9a] mt-2 leading-relaxed">
-              Gates: Odds {ODDS_MIN} to +{ODDS_MAX} • Games EV ≤ {MAX_EV_PCT}% • Props EV {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}% • Steam lookback{" "}
-              {STEAM_LOOKBACK_HOURS}h
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              <Pill label="Plays" value={loading ? "…" : String(filtered.length)} />
-              <Pill label="Best EV" value={loading ? "…" : pct(headerStats.bestEv, 1)} tone={evTone(headerStats.bestEv)} />
-              <Pill label="Best Score" value={loading ? "…" : String(Math.round(headerStats.bestScore))} />
-              <Pill label="Steam Signals" value={steamLoading ? "…" : String(steamCount)} />
-              <Pill label="Bankroll" value={bankroll ? formatMoney(bankroll) : "—"} />
-              <Pill label="Kelly" value={settings?.kelly_factor != null ? `${(kellyFactor * 100).toFixed(1)}%` : "—"} />
-            </div>
-          </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+          <Pill label="Gates" value={`Odds ${ODDS_MIN} to +${ODDS_MAX}`} />
+          <Pill label="Games EV" value={`≤ ${MAX_EV_PCT}%`} />
+          <Pill label="Props EV" value={`${MIN_EV_PCT_PROPS}–${MAX_EV_PCT}%`} />
+          <Pill label="Steam" value={`${STEAM_LOOKBACK_HOURS}h window`} />
+          <Pill label="Mode" value="Soft books only" />
         </div>
 
         {loading ? (
-          <div className="relative mt-4 text-xs text-[#808080] px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg">
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/60">
             Loading EV plays…
           </div>
         ) : null}
 
         {steamLoading ? (
-          <div className="relative mt-2 text-xs text-[#808080] px-3 py-2 bg-black/40 border border-[#2a2a2a] rounded-lg">
-            Computing steam signals from odds_snapshot_history (line + price)…
+          <div className="mt-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/60">
+            Computing steam signals from odds history…
           </div>
         ) : null}
 
         {error ? (
-          <div className="relative mt-3 text-xs text-red-400 px-3 py-2 bg-black/40 border border-red-900/50 rounded-lg">
+          <div className="mt-3 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
             Failed to load ev_plays: {error}
           </div>
         ) : null}
-      </div>
+      </SectionCard>
 
-      {/* Desktop table */}
-      <div className="hidden md:block bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl overflow-hidden">
-        <div className="max-h-[72vh] overflow-y-auto">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 z-20">
-                <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
-                  <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">Matchup</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
-                  <th className="text-left p-3 text-[#808080] min-w-[360px]">Pick</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[84px]">Line</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">Fair</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">DK</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">FD</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[120px]">MGM</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[100px]">EV</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[80px]">Score</th>
-                  <th className="text-center p-3 text-[#808080] min-w-[110px]">Bet $</th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-[#141414]">
-                {filtered.map((p, idx) => {
-                  const prev = idx > 0 ? filtered[idx - 1] : null;
-                  const showDivider = !!prev && prev.event_id !== p.event_id;
-
-                  const sInfo =
-                    p.kind === "game"
-                      ? steamEligible[steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side)]
-                      : undefined;
-
-                  return (
-                    <FragmentRow
-                      key={p.playKey}
-                      showDivider={showDivider}
-                      dividerColSpan={11}
-                      dividerLabel={p.matchup ?? "—"}
-                      dividerTime={p.commence_time ? fmtDateTimeCT(p.commence_time) : "—"}
-                    >
-                      <PlayRow
-                        play={p}
-                        bankroll={bankroll}
-                        kellyFactor={kellyFactor}
-                        settingsReady={settingsReady}
-                        onOpenDetails={() => openDetails(p)}
-                        steamInfo={sInfo}
-                        teamUi={teamUi}
-                      />
-                    </FragmentRow>
-                  );
-                })}
-
-                {!loading && !filtered.length ? (
-                  <tr>
-                    <td colSpan={11} className="p-10 text-center text-xs text-[#808080]">
-                      No plays found after gates.
-                      <div className="text-[11px] text-[#606060] mt-1">
-                        Check odds ({ODDS_MIN}..+{ODDS_MAX}) and EV caps (Games ≤ {MAX_EV_PCT}%, Props {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}%).
-                      </div>
-                    </td>
+      <SectionCard className="p-0 overflow-hidden">
+        <div className="hidden md:block bg-[#0f0f0f]">
+          <div className="max-h-[72vh] overflow-y-auto">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 z-20">
+                  <tr className="bg-[#0a0a0a] border-b border-[#2a2a2a]">
+                    <th className="text-left p-3 text-[#808080] sticky left-0 bg-[#0a0a0a] z-30 min-w-[340px]">Matchup</th>
+                    <th className="text-left p-3 text-[#808080] min-w-[120px]">Market</th>
+                    <th className="text-left p-3 text-[#808080] min-w-[360px]">Pick</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[84px]">Line</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[110px]">Fair</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[120px]">DK</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[120px]">FD</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[120px]">MGM</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[100px]">EV</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[80px]">Score</th>
+                    <th className="text-center p-3 text-[#808080] min-w-[110px]">Bet $</th>
                   </tr>
-                ) : null}
-              </tbody>
-            </table>
+                </thead>
+
+                <tbody className="divide-y divide-[#141414]">
+                  {filtered.map((p, idx) => {
+                    const prev = idx > 0 ? filtered[idx - 1] : null;
+                    const showDivider = !!prev && prev.event_id !== p.event_id;
+
+                    const sInfo =
+                      p.kind === "game"
+                        ? steamEligible[steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side)]
+                        : undefined;
+
+                    return (
+                      <FragmentRow
+                        key={p.playKey}
+                        showDivider={showDivider}
+                        dividerColSpan={11}
+                        dividerLabel={p.matchup ?? "—"}
+                        dividerTime={p.commence_time ? fmtDateTimeCT(p.commence_time) : "—"}
+                      >
+                        <PlayRow
+                          play={p}
+                          bankroll={bankroll}
+                          kellyFactor={kellyFactor}
+                          settingsReady={settingsReady}
+                          onOpenDetails={() => openDetails(p)}
+                          steamInfo={sInfo}
+                          teamUi={teamUi}
+                        />
+                      </FragmentRow>
+                    );
+                  })}
+
+                  {!loading && !filtered.length ? (
+                    <tr>
+                      <td colSpan={11} className="p-10 text-center text-xs text-[#808080]">
+                        No plays found after gates.
+                        <div className="text-[11px] text-[#606060] mt-1">
+                          Check odds ({ODDS_MIN}..+{ODDS_MAX}) and EV caps (Games ≤ {MAX_EV_PCT}%, Props {MIN_EV_PCT_PROPS}–{MAX_EV_PCT}%).
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Mobile cards */}
-      <div className="md:hidden space-y-3">
-        {!loading && !filtered.length ? (
-          <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
-            No plays found after gates.
-          </div>
-        ) : null}
+        <div className="md:hidden space-y-3 p-4">
+          {!loading && !filtered.length ? (
+            <div className="text-xs text-[#808080] px-3 py-10 bg-[#0f0f0f] border border-[#2a2a2a] rounded-xl text-center">
+              No plays found after gates.
+            </div>
+          ) : null}
 
-        {filtered.map((p) => {
-          const sInfo =
-            p.kind === "game"
-              ? steamEligible[steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side)]
-              : undefined;
+          {filtered.map((p) => {
+            const sInfo =
+              p.kind === "game"
+                ? steamEligible[steamKey(p.sport_key, p.event_id, p.gameMeta!.market, p.gameMeta!.side)]
+                : undefined;
 
-          return (
-            <PlayCard
-              key={p.playKey}
-              play={p}
-              bankroll={bankroll}
-              kellyFactor={kellyFactor}
-              settingsReady={settingsReady}
-              onOpenDetails={() => openDetails(p)}
-              steamInfo={sInfo}
-              teamUi={teamUi}
-            />
-          );
-        })}
-      </div>
+            return (
+              <PlayCard
+                key={p.playKey}
+                play={p}
+                bankroll={bankroll}
+                kellyFactor={kellyFactor}
+                settingsReady={settingsReady}
+                onOpenDetails={() => openDetails(p)}
+                steamInfo={sInfo}
+                teamUi={teamUi}
+              />
+            );
+          })}
+        </div>
+      </SectionCard>
 
       <PlayDetailsModal open={detailsOpen} play={selected} onClose={closeDetails} />
-    </div>
+    </ScreenShell>
   );
 };
+
 
 /* =========================================================
    Premium divider fragment (desktop grouping)

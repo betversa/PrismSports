@@ -14,6 +14,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "../../lib/supabaseClient";
+import { ScreenShell, SectionCard, SectionHeader } from "../ScreenShell";
 import type { SportKey } from "../../App";
 import { medianOrNull, safeNumber } from "../../../lib/odds/math";
 import {
@@ -260,15 +261,6 @@ function GlowDot() {
       <span className="absolute inline-flex h-full w-full rounded-full opacity-60" style={{ background: "rgba(212,175,55,0.35)" }} />
       <span className="relative inline-flex h-2 w-2 rounded-full" style={{ background: "#d4af37" }} />
     </span>
-  );
-}
-
-function StatPill({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-[#252525] bg-black/35 px-3 py-1">
-      <div className="text-[10px] tracking-[0.16em] uppercase text-[#8a8a8a] font-semibold">{label}</div>
-      <div className="text-[11px] font-black tabular-nums text-white">{value}</div>
-    </div>
   );
 }
 
@@ -1750,25 +1742,44 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
 
   const loading = loadingRun || loadingResults;
 
-  const consensusStamp = useMemo(() => {
-    const stamps: number[] = [];
-    for (const ev of events) {
-      if (ev.consensusTs) {
-        const t = new Date(ev.consensusTs).getTime();
-        if (Number.isFinite(t)) stamps.push(t);
-      }
-    }
-    if (!stamps.length) return null;
-    return new Date(Math.max(...stamps)).toLocaleString();
-  }, [events]);
-
   const openModel = (ev: EventBundle) => {
     setModelEvent(ev);
     setModelOpen(true);
   };
 
+  const sportLabel = sportKey.replace(/_/g, " ").toUpperCase();
+  const lastUpdateLabel = run?.created_at ? `${fmtDateCentral(run.created_at)} ${fmtTimeCentral(run.created_at)}` : "—";
+
   return (
-    <div className="h-[calc(100vh-120px)] md:h-[calc(100vh-140px)] overflow-y-auto pr-1 space-y-4">
+    <ScreenShell
+      title="Monte Carlo Projections"
+      subtitle="Live win probabilities, projected scores, and confidence bands derived from simulation runs."
+      status={[
+        {
+          label: "Simulations",
+          value: run?.simulations ? run.simulations.toLocaleString() : "—",
+          helper: run?.created_at ? fmtDateCentral(run.created_at) : "Awaiting run",
+        },
+        {
+          label: "Events",
+          value: String(events.length),
+          helper: loading ? "Loading board" : "Live slate",
+        },
+        {
+          label: "Sport",
+          value: sportLabel,
+          helper: "Active feed",
+        },
+        {
+          label: "Updated",
+          value: lastUpdateLabel,
+          helper: "CT timezone",
+        },
+      ]}
+    >
+      <SectionCard>
+        <SectionHeader title="Simulation Console" description="Filter projections, check confidence deltas, and export matchups." />
+        <div className="mt-4 space-y-4">
       <ModelModalPortal
         open={modelOpen}
         onClose={() => setModelOpen(false)}
@@ -1777,72 +1788,12 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         logoMap={logoMap}
         abbrMap={abbrMap}
       />
-
-      {/* HERO */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#252525] bg-[#0b0b0b] p-5">
-        <div
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(1000px 320px at 16% 0%, rgba(212,175,55,0.22), transparent 62%), radial-gradient(700px 240px at 88% 10%, rgba(255,255,255,0.06), transparent 60%)",
-          }}
-        />
-        <div className="relative flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#252525] bg-black/35 px-3 py-1 text-[10px] tracking-[0.18em] uppercase text-[#b0b0b0] font-semibold">
-              <GlowDot />
-              Matchups
-            </div>
-
-            <h2 className="text-[18px] md:text-[20px] text-white mt-2 font-black tracking-tight">
-              Predictions
-            </h2>
-
-            <div className="text-[12px] text-[#a8a8a8] mt-1 leading-relaxed font-semibold">
-              Percentages live in the bars now — and winners/losers are color-coded.
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <StatPill label="Sport" value={String(sportKey).toUpperCase()} />
-              <StatPill label="Games" value={loading ? "…" : String(events.length)} />
-              <StatPill label="Updated" value={run?.created_at ? formatTs(run.created_at) : "—"} />
-              <StatPill label="Consensus" value={loadingConsensus ? "…" : consensusStamp ?? "—"} />
-              <button
-                type="button"
-                onClick={() => setUseAiAdjusted((prev) => !prev)}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold tracking-[0.18em] uppercase transition",
-                  useAiAdjusted ? "text-[#d4af37]" : "text-[#b0b0b0]",
-                ].join(" ")}
-                style={{
-                  borderColor: useAiAdjusted ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.12)",
-                  background: useAiAdjusted ? "rgba(212,175,55,0.12)" : "rgba(0,0,0,0.35)",
-                }}
-              >
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: useAiAdjusted ? "#d4af37" : "#3a3a3a" }} />
-                ML Adjusted {loadingAi ? "…" : ""}
-              </button>
-            </div>
-          </div>
-
-          <div className="w-full md:w-auto">
-            {loading ? (
-              <div className="mt-1 md:mt-0 rounded-xl border border-[#252525] bg-black/35 px-4 py-3">
-                <SkeletonLine w="w-40" />
-                <div className="mt-2">
-                  <SkeletonLine w="w-56" />
-                </div>
-              </div>
-            ) : null}
-
-            {errorText ? (
-              <div className="mt-2 rounded-xl border border-red-900/50 bg-black/35 px-4 py-3 text-[11px] text-red-400 font-semibold">
-                {errorText}
-              </div>
-            ) : null}
-          </div>
+      {errorText ? (
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
+          {errorText}
         </div>
-      </div>
+      ) : null}
+
 
       {/* DESKTOP */}
       <div className="hidden md:block bg-[#0b0b0b] border border-[#252525] rounded-2xl overflow-hidden">
@@ -1988,7 +1939,10 @@ export const MonteCarloScreen = ({ sportKey }: { sportKey: SportKey }) => {
         })}
       </div>
     </div>
+      </SectionCard>
+    </ScreenShell>
   );
 };
+
 
 export default MonteCarloScreen;
