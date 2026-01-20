@@ -634,8 +634,9 @@ function BookLogoPill({
   const label = fallbackLabel ?? alt;
   const imageClasses =
     variant === "quantum"
-      ? "h-[70%] max-h-5 w-auto max-w-[92px] object-contain"
+      ? "w-auto object-contain"
       : "h-5 w-5 rounded-md object-contain bg-black/50 p-0.5 opacity-85";
+  const imageStyle = variant === "quantum" ? { height: 32, width: "auto", maxHeight: "none" } : undefined;
   return (
     <div
       className={[
@@ -649,6 +650,7 @@ function BookLogoPill({
         src={src}
         alt={alt}
         className={[imageClasses, imgClassName ?? ""].join(" ")}
+        style={imageStyle}
         loading="lazy"
         onError={(e) => {
           (e.currentTarget as HTMLImageElement).style.display = "none";
