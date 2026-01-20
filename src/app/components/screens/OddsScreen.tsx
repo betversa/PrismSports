@@ -29,7 +29,7 @@ import React, {
   useState,
 } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { americanToDecimal, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
+import { americanToDecimal, impliedProbFromAmerican, median, probToAmerican, safeNumberOrNull, toProb01 } from "../../../lib/odds/math";
 import { formatOddsPrice, formatPercent } from "../../../lib/odds/format";
 import {
   ResponsiveContainer,
@@ -73,6 +73,7 @@ type EventOdds = {
   away?: SideOdds;
   home?: SideOdds;
   latestUpdatedAt: string | null;
+  mc?: MonteCarloRow | null;
 };
 
 const CT_TZ = "America/Chicago";
@@ -82,8 +83,6 @@ const PRISM_BORDER = "rgba(255,255,255,0.08)";
 const PRISM_GOLD = "#d4af37";
 const PRISM_GOLD_SOFT = "rgba(212,175,55,0.18)";
 const PRISM_MUTED = "rgba(232,232,232,0.60)";
-const BOARD_BG = "linear-gradient(180deg, rgba(10,10,10,0.88), rgba(8,8,8,0.96))";
-const BOARD_STICKY_BG = BOARD_BG;
 const TABLE_HEADER_BG = "#0b0b0b";
 const FILTER_ROW_HEIGHT = 48;
 const FILTERS_BAR_HEIGHT = FILTER_ROW_HEIGHT * 2;
@@ -117,6 +116,10 @@ const BOOK_LOGOS: Record<BookKey, string> = {
   pin: "/books/pinsquare.png",
   bol: "/books/bolsquare.png",
 };
+const QUANTUM_LOGO = "/books/quantumlogo.png";
+const SHARP_BOOKS: BookKey[] = ["pin", "bol"];
+const CUSTOM_BLEND_WEIGHT = 0.6;
+const LINE_EPSILON = 0.01;
 
 const COL_GAME = 380;
 const COL_BOOK = 120;
@@ -321,6 +324,141 @@ function cellLineOdds(line: number | null, price: string): CellParts {
   return { top: String(line), bottom: price === "—" ? "—" : price };
 }
 
+type BlendPair = { away: number; home: number };
+type BlendOdds = {
+  awayLine: number | null;
+  homeLine: number | null;
+  awayOdds: number | null;
+  homeOdds: number | null;
+};
+
+function isLineMatch(a: number | null | undefined, b: number | null | undefined) {
+  if (a == null || b == null) return false;
+  return Math.abs(a - b) <= LINE_EPSILON;
+}
+
+function normalizePair(away: number | null, home: number | null): BlendPair | null {
+  if (away == null || home == null) return null;
+  const sum = away + home;
+  if (!Number.isFinite(sum) || sum <= 0) return null;
+  return { away: away / sum, home: home / sum };
+}
+
+function devigPairFromOdds(awayOdds: number | null, homeOdds: number | null): BlendPair | null {
+  if (awayOdds == null || homeOdds == null) return null;
+  const awayProb = impliedProbFromAmerican(awayOdds);
+  const homeProb = impliedProbFromAmerican(homeOdds);
+  if (!Number.isFinite(awayProb) || !Number.isFinite(homeProb)) return null;
+  return normalizePair(awayProb, homeProb);
+}
+
+function averagePairs(pairs: BlendPair[]): BlendPair | null {
+  if (!pairs.length) return null;
+  const sum = pairs.reduce(
+    (acc, cur) => ({ away: acc.away + cur.away, home: acc.home + cur.home }),
+    { away: 0, home: 0 }
+  );
+  return normalizePair(sum.away / pairs.length, sum.home / pairs.length);
+}
+
+function blendPairs(mc: BlendPair | null, sharp: BlendPair | null): BlendPair | null {
+  if (!mc && !sharp) return null;
+  if (!mc) return sharp;
+  if (!sharp) return mc;
+  const away = CUSTOM_BLEND_WEIGHT * mc.away + (1 - CUSTOM_BLEND_WEIGHT) * sharp.away;
+  const home = CUSTOM_BLEND_WEIGHT * mc.home + (1 - CUSTOM_BLEND_WEIGHT) * sharp.home;
+  return normalizePair(away, home);
+}
+
+function probToAmericanNumber(prob: number | null): number | null {
+  if (prob == null || prob <= 0 || prob >= 1) return null;
+  if (prob >= 0.5) return -Math.round((prob / (1 - prob)) * 100);
+  return Math.round(((1 - prob) / prob) * 100);
+}
+
+function sharpDevigPairForMarket(ev: EventOdds, market: Market): BlendPair | null {
+  const pairs: BlendPair[] = [];
+  const spreadLineHome = ev.mc?.spread_line_home ?? null;
+  const totalLine = ev.mc?.total_line ?? null;
+
+  for (const book of SHARP_BOOKS) {
+    if (market === "ml") {
+      const pair = devigPairFromOdds(ev.away?.ml[book] ?? null, ev.home?.ml[book] ?? null);
+      if (pair) pairs.push(pair);
+      continue;
+    }
+
+    if (market === "spread") {
+      if (spreadLineHome == null) continue;
+      const awayCell = ev.away?.spread[book];
+      const homeCell = ev.home?.spread[book];
+      if (!isLineMatch(homeCell?.line, spreadLineHome)) continue;
+      if (!isLineMatch(awayCell?.line, -spreadLineHome)) continue;
+      const pair = devigPairFromOdds(awayCell?.odds ?? null, homeCell?.odds ?? null);
+      if (pair) pairs.push(pair);
+      continue;
+    }
+
+    if (market === "total") {
+      if (totalLine == null) continue;
+      const awayTotal = ev.away?.total[book];
+      const homeTotal = ev.home?.total[book];
+      if (!isLineMatch(awayTotal?.line, totalLine)) continue;
+      if (!isLineMatch(homeTotal?.line, totalLine)) continue;
+      const pair = devigPairFromOdds(awayTotal?.over ?? null, homeTotal?.under ?? null);
+      if (pair) pairs.push(pair);
+    }
+  }
+
+  return averagePairs(pairs);
+}
+
+function customBlendOddsForMarket(ev: EventOdds, market: Market): BlendOdds | null {
+  const mc = ev.mc ?? null;
+  if (!mc) return null;
+
+  if (market === "ml") {
+    const mcPair = normalizePair(toProb01(mc.away_win_prob ?? null), toProb01(mc.home_win_prob ?? null));
+    const sharpPair = sharpDevigPairForMarket(ev, "ml");
+    const blend = blendPairs(mcPair, sharpPair);
+    if (!blend) return null;
+    return {
+      awayLine: null,
+      homeLine: null,
+      awayOdds: probToAmericanNumber(blend.away),
+      homeOdds: probToAmericanNumber(blend.home),
+    };
+  }
+
+  if (market === "spread") {
+    const spreadLineHome = mc.spread_line_home ?? null;
+    if (spreadLineHome == null) return null;
+    const mcPair = normalizePair(toProb01(mc.away_cover_prob ?? null), toProb01(mc.home_cover_prob ?? null));
+    const sharpPair = sharpDevigPairForMarket(ev, "spread");
+    const blend = blendPairs(mcPair, sharpPair);
+    if (!blend) return null;
+    return {
+      awayLine: -spreadLineHome,
+      homeLine: spreadLineHome,
+      awayOdds: probToAmericanNumber(blend.away),
+      homeOdds: probToAmericanNumber(blend.home),
+    };
+  }
+
+  const totalLine = mc.total_line ?? null;
+  if (totalLine == null) return null;
+  const mcPair = normalizePair(toProb01(mc.over_prob ?? null), toProb01(mc.under_prob ?? null));
+  const sharpPair = sharpDevigPairForMarket(ev, "total");
+  const blend = blendPairs(mcPair, sharpPair);
+  if (!blend) return null;
+  return {
+    awayLine: totalLine,
+    homeLine: totalLine,
+    awayOdds: probToAmericanNumber(blend.away),
+    homeOdds: probToAmericanNumber(blend.home),
+  };
+}
+
 function consensusPartsForRow(
   ev: EventOdds,
   market: Market,
@@ -328,6 +466,22 @@ function consensusPartsForRow(
   oddsFormat: OddsFormat
 ): CellParts {
   const src = side === "AWAY" ? ev.away : ev.home;
+
+  const blend = customBlendOddsForMarket(ev, market);
+  if (blend) {
+    if (market === "ml") {
+      const price = side === "AWAY" ? blend.awayOdds : blend.homeOdds;
+      return cellMl(fmtPrice(price, oddsFormat));
+    }
+    if (market === "spread") {
+      const line = side === "AWAY" ? blend.awayLine : blend.homeLine;
+      const price = side === "AWAY" ? blend.awayOdds : blend.homeOdds;
+      return cellLineOdds(line, fmtPrice(price, oddsFormat));
+    }
+    const line = side === "AWAY" ? blend.awayLine : blend.homeLine;
+    const price = side === "AWAY" ? blend.awayOdds : blend.homeOdds;
+    return cellLineOdds(line, fmtPrice(price, oddsFormat));
+  }
 
   if (market === "ml") {
     const odds: number[] = [];
@@ -380,6 +534,55 @@ function consensusPartsForRow(
   return cellLineOdds(mLine == null ? null : mLine, fmtPrice(mUnder == null ? null : mUnder, oddsFormat));
 }
 
+type BestOffer = { book: BookKey | null; parts: CellParts };
+
+function bestOddsPartsForRow(
+  ev: EventOdds,
+  market: Market,
+  side: "AWAY" | "HOME",
+  oddsFormat: OddsFormat
+): BestOffer {
+  const src = side === "AWAY" ? ev.away : ev.home;
+  if (!src) return { book: null, parts: { top: "—" } };
+
+  let bestBook: BookKey | null = null;
+  let bestOdds: number | null = null;
+  let bestLine: number | null = null;
+  let bestDec = -Infinity;
+
+  const consider = (book: BookKey, odds: number | null, line: number | null) => {
+    if (odds == null) return;
+    const dec = americanToDecimal(odds);
+    if (!Number.isFinite(dec)) return;
+    if (dec > bestDec) {
+      bestDec = dec;
+      bestBook = book;
+      bestOdds = odds;
+      bestLine = line;
+    }
+  };
+
+  if (market === "ml") {
+    for (const book of BOOKS) consider(book, src.ml[book], null);
+    return { book: bestBook, parts: cellMl(fmtPrice(bestOdds, oddsFormat)) };
+  }
+
+  if (market === "spread") {
+    for (const book of BOOKS) {
+      const cell = src.spread[book];
+      consider(book, cell?.odds ?? null, cell?.line ?? null);
+    }
+    return { book: bestBook, parts: cellLineOdds(bestLine, fmtPrice(bestOdds, oddsFormat)) };
+  }
+
+  for (const book of BOOKS) {
+    const cell = src.total[book];
+    const odds = side === "AWAY" ? cell?.over ?? null : cell?.under ?? null;
+    consider(book, odds, cell?.line ?? null);
+  }
+  return { book: bestBook, parts: cellLineOdds(bestLine, fmtPrice(bestOdds, oddsFormat)) };
+}
+
 function partsForBookSide(
   ev: EventOdds,
   market: Market,
@@ -415,20 +618,26 @@ function BookLogoPill({
   className,
   imgClassName,
   textClassName,
+  showLabel = true,
+  fallbackLabel,
 }: {
   src: string;
   alt: string;
   className?: string;
   imgClassName?: string;
   textClassName?: string;
+  showLabel?: boolean;
+  fallbackLabel?: string;
 }) {
+  const label = fallbackLabel ?? alt;
   return (
     <div
       className={[
-        "h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center gap-2 shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]",
+        "h-7 w-full max-w-[120px] rounded-lg bg-black/40 border border-white/10 px-2 flex items-center shadow-[0_12px_32px_rgba(0,0,0,0.35)] transition-colors hover:border-[rgba(212,175,55,0.45)]",
+        showLabel ? "gap-2" : "justify-center",
         className ?? "",
       ].join(" ")}
-      title={alt}
+      title={label}
     >
       <img
         src={src}
@@ -442,9 +651,11 @@ function BookLogoPill({
           (e.currentTarget as HTMLImageElement).style.display = "none";
         }}
       />
-      <span className={["text-[11px] font-semibold text-white/75 truncate", textClassName ?? ""].join(" ")}>
-        {alt}
-      </span>
+      {showLabel ? (
+        <span className={["text-[11px] font-semibold text-white/75 truncate", textClassName ?? ""].join(" ")}>
+          {label}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -495,13 +706,33 @@ function OddsChip({
         className ?? "",
       ].join(" ")}
     >
-    <div className="w-[104px] h-[42px] rounded-md border border-white/10 bg-white/5 flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.30)]">
       <div className="text-white font-extrabold tabular-nums text-[12px] leading-none">
         {parts.top}
       </div>
       <div className="text-white/70 font-semibold tabular-nums text-[11px] leading-none mt-1">
         {parts.bottom ?? " "}
       </div>
+    </div>
+  );
+}
+
+function BestOddsCell({ offer }: { offer: BestOffer }) {
+  return (
+    <div className="flex items-center justify-center gap-2">
+      {offer.book ? (
+        <img
+          src={BOOK_LOGOS[offer.book]}
+          alt={BOOK_LABEL[offer.book]}
+          className="h-5 w-5 rounded-md object-contain bg-black/50 p-0.5"
+          loading="lazy"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : (
+        <div className="h-5 w-5 rounded-md bg-white/5 border border-white/10" />
+      )}
+      <OddsChip parts={offer.parts} className="w-[90px]" />
     </div>
   );
 }
@@ -1999,21 +2230,21 @@ function GameDetailsModal({
                   <div>
                     <div className="text-white font-extrabold text-[13px]">Key Lines</div>
                     <div className="text-[11px] text-white/60 font-semibold mt-0.5">
-                      Consensus lines in one place
+                      Custom Blend lines in one place
                     </div>
                   </div>
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-2">
                   <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-                    <div className="text-[11px] text-white/60 font-semibold">Consensus ML</div>
+                    <div className="text-[11px] text-white/60 font-semibold">Custom Blend ML</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
                       {awayTeam}: {consMlAway.top} • {homeTeam}: {consMlHome.top}
                     </div>
                   </div>
 
                   <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-                    <div className="text-[11px] text-white/60 font-semibold">Consensus Spread</div>
+                    <div className="text-[11px] text-white/60 font-semibold">Custom Blend Spread</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
                       {awayTeam}: {consSprAway.top}{" "}
                       {consSprAway.bottom ? <span className="text-white/60">({consSprAway.bottom})</span> : null}
@@ -2024,7 +2255,7 @@ function GameDetailsModal({
                   </div>
 
                   <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-                    <div className="text-[11px] text-white/60 font-semibold">Consensus Total</div>
+                    <div className="text-[11px] text-white/60 font-semibold">Custom Blend Total</div>
                     <div className="mt-1 text-white font-extrabold tabular-nums text-[12px]">
                       Over: {consTotOver.top}{" "}
                       {consTotOver.bottom ? <span className="text-white/60">({consTotOver.bottom})</span> : null}
@@ -2448,7 +2679,7 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <tr>
       <td
-        colSpan={BOOKS.length + 2}
+        colSpan={BOOKS.length + 3}
         className="p-0"
         style={{
           position: "sticky",
@@ -2470,20 +2701,6 @@ function DateSectionHeader({ label, count }: { label: string; count: number }) {
             <span className="text-white/50 font-semibold ml-2">({count} games)</span>
           </div>
           <div className="text-[10px] font-semibold text-white/45">Pre-Game</div>
-      <td colSpan={BOOKS.length + 2} className="p-0">
-        <div
-          className="sticky top-0 z-20 px-4 py-2 flex items-center justify-between border-y"
-          style={{
-            borderColor: PRISM_BORDER,
-            background: BOARD_STICKY_BG,
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <div className="text-[12px] font-extrabold text-white/90">
-            {label}
-            <span className="text-white/50 font-semibold ml-2">({count} games)</span>
-          </div>
-          <div className="text-[11px] font-semibold text-white/45">Pre-Game</div>
         </div>
         <div className="h-[2px]" style={{ background: `linear-gradient(90deg, transparent, ${PRISM_GOLD}, transparent)` }} />
       </td>
@@ -2525,7 +2742,6 @@ function TableHeaderRow({
         background: TABLE_HEADER_BG,
       }}
     >
-    <thead>
       <tr
         className="border-y"
         style={{
@@ -2535,24 +2751,29 @@ function TableHeaderRow({
         }}
       >
         <th
-          className="text-left px-4 py-2.5 text-[11px] font-extrabold text-white/80 align-middle"
+          className="text-left px-4 py-2.5 text-[12px] font-extrabold text-white/80 align-middle"
           style={{ ...stickyCellStyle, width: COL_GAME }}
         >
-          background: BOARD_BG,
-          backdropFilter: "blur(10px)",
-        }}
-      >
-        <th className="text-left px-4 py-2.5 text-[12px] font-extrabold text-white/80" style={{ width: COL_GAME }}>
           Game
         </th>
 
-        {/* Consensus column like reference (subtle) */}
+        <th className="text-center px-2 py-2.5" style={{ ...stickyCellStyle, width: COL_BOOK }}>
+          <div className="flex items-center justify-center">
+            <BookLogoPill
+              src={QUANTUM_LOGO}
+              alt="Quantum"
+              showLabel={false}
+              className="bg-black"
+              imgClassName="opacity-100"
+            />
+          </div>
+        </th>
+
         <th
-          className="text-center px-2 py-2.5 text-[11px] font-extrabold text-white/70 align-middle"
+          className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70"
           style={{ ...stickyCellStyle, width: COL_BOOK }}
         >
-        <th className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70" style={{ width: COL_BOOK }}>
-          Cons
+          Best Odds
           <div className="text-[9px] font-semibold text-white/45 mt-0.5">
             {oddsFormat === "american" ? "AM" : "DEC"}
           </div>
@@ -2584,31 +2805,6 @@ function TableHeaderRow({
             </div>
           </th>
         ))}
-        {displayBooks.map((bk) => {
-          const fb = bk === "dk" ? "DK" : bk === "fd" ? "FD" : bk === "mgm" ? "MGM" : bk === "pin" ? "PIN" : "BOL";
-          return (
-            <th key={bk} className="text-center px-2 py-2.5" style={{ width: COL_BOOK }}>
-              <div className="flex items-center justify-center">
-                <button
-                  type="button"
-                  data-book={bk}
-                  onPointerDown={onBookPointerDown(bk)}
-                  onPointerUp={onBookPointerUp}
-                  onPointerCancel={onBookPointerCancel}
-                  className={[
-                    "rounded-full transition-colors",
-                    draggingKey === bk ? "ring-2 ring-[rgba(212,175,55,0.5)]" : "",
-                  ].join(" ")}
-                  style={{ touchAction: "none" }}
-                  title="Drag to reorder"
-                  aria-label={`Reorder ${BOOK_LABEL[bk]}`}
-                >
-                  <BookLogoPill src={BOOK_LOGOS[bk]} alt={BOOK_LABEL[bk]} fallbackLabel={fb} />
-                </button>
-              </div>
-            </th>
-          );
-        })}
       </tr>
     </thead>
   );
@@ -2632,6 +2828,8 @@ function EventRowTwoLines({
 
   const awayCons = consensusPartsForRow(ev, market, "AWAY", oddsFormat);
   const homeCons = consensusPartsForRow(ev, market, "HOME", oddsFormat);
+  const awayBest = bestOddsPartsForRow(ev, market, "AWAY", oddsFormat);
+  const homeBest = bestOddsPartsForRow(ev, market, "HOME", oddsFormat);
 
   return (
     <>
@@ -2664,6 +2862,10 @@ function EventRowTwoLines({
           </div>
         </td>
 
+        <td className="px-2 py-2.5">
+          <BestOddsCell offer={awayBest} />
+        </td>
+
         {/* Books */}
         {displayBooks.map((bk) => (
           <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-2.5">
@@ -2680,6 +2882,10 @@ function EventRowTwoLines({
           <div className="flex justify-center">
             <OddsChip parts={homeCons} />
           </div>
+        </td>
+
+        <td className="px-2 py-2.5">
+          <BestOddsCell offer={homeBest} />
         </td>
 
         {displayBooks.map((bk) => (
@@ -2749,7 +2955,7 @@ function EventCardMobile({
       <div className="px-3 pb-3">
         <div className="rounded-xl border border-white/10 bg-black/30 p-3">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[12px] text-white font-extrabold">Consensus</div>
+            <div className="text-[12px] text-white font-extrabold">Custom Blend</div>
             <div className="text-[11px] text-white/60 font-semibold">
               {market === "ml" ? "Moneyline" : market === "spread" ? "Spread" : "Total"}
             </div>
@@ -2868,6 +3074,48 @@ export function OddsScreen({
       return;
     }
 
+    const eventIds = Array.from(
+      new Set((data ?? []).map((row) => String(row.event_id ?? "")).filter((id) => id))
+    );
+    const mcByEvent = new Map<string, MonteCarloRow>();
+
+    if (eventIds.length) {
+      const { data: mcData, error: mcError } = await supabase
+        .from("monte_carlo_results")
+        .select(
+          [
+            "event_id",
+            "home_win_prob",
+            "away_win_prob",
+            "home_cover_prob",
+            "away_cover_prob",
+            "over_prob",
+            "under_prob",
+            "spread_line_home",
+            "total_line",
+          ].join(",")
+        )
+        .in("event_id", eventIds);
+
+      if (!mcError && mcData) {
+        for (const row of mcData as any[]) {
+          const eventId = String(row.event_id ?? "").trim();
+          if (!eventId) continue;
+          mcByEvent.set(eventId, {
+            event_id: eventId,
+            home_win_prob: safeNumberOrNull(row.home_win_prob),
+            away_win_prob: safeNumberOrNull(row.away_win_prob),
+            home_cover_prob: safeNumberOrNull(row.home_cover_prob),
+            away_cover_prob: safeNumberOrNull(row.away_cover_prob),
+            over_prob: safeNumberOrNull(row.over_prob),
+            under_prob: safeNumberOrNull(row.under_prob),
+            spread_line_home: safeNumberOrNull(row.spread_line_home),
+            total_line: safeNumberOrNull(row.total_line),
+          });
+        }
+      }
+    }
+
     const byEvent = new Map<string, EventOdds>();
     let globalLatest: string | null = null;
 
@@ -2896,11 +3144,16 @@ export function OddsScreen({
       byEvent.set(eventId, cur);
     }
 
-    const list = Array.from(byEvent.values()).sort((a, b) => {
-      const ta = new Date(normalizeIso(a.commenceTime) ?? a.commenceTime).getTime();
-      const tb = new Date(normalizeIso(b.commenceTime) ?? b.commenceTime).getTime();
-      return ta - tb;
-    });
+    const list = Array.from(byEvent.values())
+      .map((ev) => ({
+        ...ev,
+        mc: mcByEvent.get(ev.eventId) ?? null,
+      }))
+      .sort((a, b) => {
+        const ta = new Date(normalizeIso(a.commenceTime) ?? a.commenceTime).getTime();
+        const tb = new Date(normalizeIso(b.commenceTime) ?? b.commenceTime).getTime();
+        return ta - tb;
+      });
 
     // include latest props snapshot time if available (non-blocking)
     let propsLatest: string | null = null;
@@ -3638,6 +3891,7 @@ export function OddsScreen({
                     <colgroup>
                       <col style={{ width: COL_GAME }} />
                       <col style={{ width: COL_BOOK }} />
+                      <col style={{ width: COL_BOOK }} />
                       {BOOKS.map((_, i) => (
                         <col key={i} style={{ width: COL_BOOK }} />
                       ))}
@@ -3722,6 +3976,7 @@ export function OddsScreen({
                       >
                         <colgroup>
                           <col style={{ width: COL_GAME }} />
+                          <col style={{ width: COL_BOOK }} />
                           <col style={{ width: COL_BOOK }} />
                           {bookOrder.map((_, i) => (
                             <col key={i} style={{ width: COL_BOOK }} />
