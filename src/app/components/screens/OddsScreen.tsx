@@ -109,14 +109,15 @@ const BOOK_STROKES: Record<BookKey, string> = {
   bol: "#ef4444",
 };
 
+const BOOK_LOGO_DIR = "/books";
 const BOOK_LOGOS: Record<BookKey, string> = {
-  dk: "/books/dksquare.png",
-  fd: "/books/fdsquare.png",
-  mgm: "/books/mgmsquare.png",
-  pin: "/books/pinsquare.png",
-  bol: "/books/bolsquare.png",
+  dk: `${BOOK_LOGO_DIR}/dksquare.png`,
+  fd: `${BOOK_LOGO_DIR}/fdsquare.png`,
+  mgm: `${BOOK_LOGO_DIR}/mgmsquare.png`,
+  pin: `${BOOK_LOGO_DIR}/pinsquare.png`,
+  bol: `${BOOK_LOGO_DIR}/bolsquare.png`,
 };
-const QUANTUM_LOGO = "/books/quantumlogo.png";
+const QUANTUM_LOGO = `${BOOK_LOGO_DIR}/quantumlogo.png`;
 const SHARP_BOOKS: BookKey[] = ["pin", "bol"];
 const CUSTOM_BLEND_WEIGHT = 0.6;
 const LINE_EPSILON = 0.01;
