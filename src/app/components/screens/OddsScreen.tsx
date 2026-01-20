@@ -757,19 +757,29 @@ function SelectPill({
   onChange,
   options,
   label,
+  disabled = false,
+  className,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
   label?: string;
+  disabled?: boolean;
+  className?: string;
 }) {
   return (
     <div className="flex items-center gap-2">
       {label ? <div className="text-[12px] text-white/55 font-semibold">{label}</div> : null}
       <select
-        className="h-8 rounded-lg border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-2.5 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className={[
+          "h-10 rounded-xl border border-white/10 bg-black/35 text-white text-[13px] font-extrabold px-3 outline-none",
+          "focus:border-[rgba(212,175,55,0.55)]",
+          disabled ? "opacity-60 cursor-not-allowed" : "",
+          className ?? "",
+        ].join(" ")}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
       >
         {options.map((o) => (
           <option key={o.value} value={o.value} className="bg-[#0b0b0b]">
@@ -796,7 +806,7 @@ function TextInput({
   return (
     <div className="relative">
       <input
-        className="h-9 w-[240px] md:w-[320px] rounded-lg border border-white/10 bg-black/35 text-white text-sm font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
+        className="h-10 w-[240px] md:w-[320px] rounded-xl border border-white/10 bg-black/35 text-white text-[13px] font-semibold px-3 pr-10 outline-none focus:border-[rgba(212,175,55,0.55)]"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -866,7 +876,7 @@ function SegmentedToggle<T extends string>({
   onChange: (next: T) => void;
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-white/10 bg-black/35 p-1">
+    <div className="inline-flex h-10 rounded-xl border border-white/10 bg-black/35 p-1">
       {options.map((opt) => {
         const active = value === opt.value;
         return (
@@ -875,7 +885,7 @@ function SegmentedToggle<T extends string>({
             type="button"
             onClick={() => onChange(opt.value)}
             className={[
-              "h-7 px-3 rounded-md text-[11px] font-extrabold transition-colors",
+              "h-full px-3 rounded-lg text-[12px] font-extrabold transition-colors",
               active
                 ? "bg-[rgba(212,175,55,0.22)] text-white border border-[rgba(212,175,55,0.55)]"
                 : "text-white/70 hover:text-white",
@@ -2650,6 +2660,15 @@ const SPORT_TABS: SportTab[] = [
   { key: "mma_mixed_martial_arts", label: "UFC" },
 ];
 
+const ODDS_PAGE_TABS = [
+  { id: "game-lines", label: "Game Lines" },
+  { id: "player-props", label: "Player Props" },
+  { id: "game-props", label: "Game Props" },
+  { id: "team-futures", label: "Team Futures" },
+  { id: "player-futures", label: "Player Futures" },
+  { id: "draft-odds", label: "Draft Odds" },
+] as const;
+
 const ODDS_SPORT_KEYS = new Set([
   "baseball_mlb",
   "football_nfl",
@@ -2773,7 +2792,7 @@ function TableHeaderRow({
         </th>
 
         <th
-          className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70"
+          className="text-center px-2 py-2.5 text-[12px] font-extrabold text-white/70 border-r border-white/10"
           style={{ ...stickyCellStyle, width: COL_BOOK }}
         >
           Best Odds
@@ -2833,12 +2852,19 @@ function EventRowTwoLines({
   const homeCons = consensusPartsForRow(ev, market, "HOME", oddsFormat);
   const awayBest = bestOddsPartsForRow(ev, market, "AWAY", oddsFormat);
   const homeBest = bestOddsPartsForRow(ev, market, "HOME", oddsFormat);
+  const rowSurface = "bg-white/5 group-hover:bg-white/8 transition-colors";
 
   return (
     <>
       {/* AWAY / OVER */}
-      <tr className="border-b border-white/10 hover:bg-white/6">
-        <td className="px-4 py-2.5 align-middle" rowSpan={2}>
+      <tr className="group">
+        <td
+          className={[
+            "px-4 py-2.5 align-middle border-y border-l border-white/10 rounded-l-2xl",
+            rowSurface,
+          ].join(" ")}
+          rowSpan={2}
+        >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <TeamCell team={ev.away?.team ?? "Away"} logoUrl={ev.away?.logoUrl ?? null} sub={leftLabel} />
@@ -2859,45 +2885,69 @@ function EventRowTwoLines({
         </td>
 
         {/* Consensus chip */}
-        <td className="px-2 py-2.5">
+        <td className={`px-2 py-2.5 border-t border-white/10 ${rowSurface}`}>
           <div className="flex justify-center">
             <OddsChip parts={awayCons} />
           </div>
         </td>
 
-        <td className="px-2 py-2.5">
+        <td className={`px-2 py-2.5 border-t border-r border-white/10 ${rowSurface}`}>
           <BestOddsCell offer={awayBest} />
         </td>
 
         {/* Books */}
-        {displayBooks.map((bk) => (
-          <td key={`a-${ev.eventId}-${bk}`} className="px-2 py-2.5">
+        {displayBooks.map((bk, idx) => {
+          const isLast = idx === displayBooks.length - 1;
+          return (
+            <td
+              key={`a-${ev.eventId}-${bk}`}
+              className={[
+                "px-2 py-2.5 border-t border-white/10",
+                rowSurface,
+                isLast ? "border-r border-white/10 rounded-tr-2xl" : "",
+              ].join(" ")}
+            >
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "AWAY", bk, oddsFormat)} />
             </div>
-          </td>
-        ))}
+            </td>
+          );
+        })}
       </tr>
 
       {/* HOME / UNDER */}
-      <tr className="border-b border-white/10 hover:bg-white/6">
-        <td className="px-2 py-2.5">
+      <tr className="group">
+        <td className={`px-2 py-2.5 border-b border-white/10 ${rowSurface}`}>
           <div className="flex justify-center">
             <OddsChip parts={homeCons} />
           </div>
         </td>
 
-        <td className="px-2 py-2.5">
+        <td className={`px-2 py-2.5 border-b border-r border-white/10 ${rowSurface}`}>
           <BestOddsCell offer={homeBest} />
         </td>
 
-        {displayBooks.map((bk) => (
-          <td key={`h-${ev.eventId}-${bk}`} className="px-2 py-2.5">
+        {displayBooks.map((bk, idx) => {
+          const isLast = idx === displayBooks.length - 1;
+          return (
+            <td
+              key={`h-${ev.eventId}-${bk}`}
+              className={[
+                "px-2 py-2.5 border-b border-white/10",
+                rowSurface,
+                isLast ? "border-r border-white/10 rounded-br-2xl" : "",
+              ].join(" ")}
+            >
             <div className="flex justify-center">
               <OddsChip parts={partsForBookSide(ev, market, "HOME", bk, oddsFormat)} />
             </div>
-          </td>
-        ))}
+            </td>
+          );
+        })}
+      </tr>
+
+      <tr aria-hidden="true">
+        <td colSpan={displayBooks.length + 3} className="h-3" />
       </tr>
     </>
   );
@@ -3038,10 +3088,12 @@ export function OddsScreen({
   onPickSport?: (key: string) => void;
 }) {
   const [allEvents, setAllEvents] = useState<EventOdds[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>("");
+  const [, setSelectedDate] = useState<string>("");
   const [market, setMarket] = useState<Market>("spread");
-  const [view, setView] = useState<BoardView>("pregame");
+  const [view] = useState<BoardView>("pregame");
   const [oddsFormat, setOddsFormat] = useState<OddsFormat>("american");
+  const [oddsTab, setOddsTab] = useState<(typeof ODDS_PAGE_TABS)[number]["id"]>("game-lines");
+  const [scope, setScope] = useState("full-game");
   const [useAiAdjusted, setUseAiAdjusted] = useState(false);
   const [query, setQuery] = useState<string>("");
 
@@ -3387,10 +3439,7 @@ export function OddsScreen({
     }
   };
 
-  // “Top bar” height for sticky header computations:
-  // - Sports tabs bar ~ 44px
-  // - Filters bar ~ 60px
-  // => sticky header row uses top-[104px] in TableHeaderRow.
+  // Sticky controls row lives above the board; table header sticks within its scroll container.
   const topSport = sportLabelForKey(sportKey);
   const lastUpdatedAge = useMemo(() => minutesSinceIso(lastUpdatedIso), [lastUpdatedIso]);
   const freshness = useMemo(() => {
@@ -3431,11 +3480,6 @@ export function OddsScreen({
     };
   }, [availableDates.length, events.length, eventsForView.length, query, view]);
 
-  const selectedDateLabel = useMemo(() => {
-    if (!selectedDate) return "—";
-    return fmtDateBtn(selectedDate);
-  }, [selectedDate]);
-
   return (
     <div
       className="w-full min-h-screen"
@@ -3447,111 +3491,110 @@ export function OddsScreen({
       }}
     >
       <div className={`${PAGE_MAX_W} mx-auto ${PAGE_X} relative`}>
-        <div className="sticky top-0 z-50">
-          <div
-            className="h-[42px] flex items-center justify-between px-2 md:px-0"
-            style={{
-              background: "linear-gradient(180deg, rgba(10,10,10,0.92), rgba(8,8,8,0.86))",
-              borderBottom: `1px solid ${PRISM_BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-              {SPORT_TABS.map((t) => {
-                const active =
-                  t.key === sportKey ||
-                  (t.key === "soccer" && sportKey.includes("soccer")) ||
-                  (t.key === "mma_mixed_martial_arts" && sportKey.includes("mma"));
-                const enabled = isOddsSportKey(t.key) && Boolean(onPickSport);
+        <div className="pt-4 pb-2">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-white text-[22px] font-extrabold leading-tight">Odds</div>
+              <div className="text-[12px] text-white/60 font-semibold mt-1">
+                Compact board view for {topSport} lines, best prices, and sharper sources.
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="hidden md:flex items-center gap-2 h-8 px-3 rounded-full border border-white/10 bg-black/40 text-[11px] font-semibold text-white/70">
+                <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                <span>Updated {fmtCTDateTime(lastUpdatedIso)}</span>
+                <span className={freshness.tone}>{freshness.label}</span>
+              </div>
+              <div className="hidden md:flex items-center h-8 px-3 rounded-full border border-white/10 bg-black/40 text-[11px] font-semibold text-white/70">
+                {events.length} games
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoading(true);
+                  load();
+                }}
+                className="h-9 px-4 rounded-full border border-white/10 bg-white/5 text-[12px] font-extrabold text-white hover:border-white/20 hover:bg-white/10"
+                disabled={loading}
+              >
+                {loading ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 border-b border-white/10">
+            <div className="flex items-center gap-5 overflow-x-auto no-scrollbar">
+              {ODDS_PAGE_TABS.map((tab) => {
+                const active = oddsTab === tab.id;
                 return (
                   <button
-                    key={t.key}
+                    key={tab.id}
                     type="button"
-                    onClick={() => {
-                      if (enabled && onPickSport) onPickSport(t.key);
-                    }}
-                    disabled={!enabled}
+                    onClick={() => setOddsTab(tab.id)}
                     className={[
-                      "shrink-0 px-3 py-2 text-[12px] font-extrabold rounded-md border transition-colors",
-                      enabled ? "cursor-pointer" : "cursor-not-allowed opacity-60",
-                      active ? "shadow-[0_0_0_1px_rgba(212,175,55,0.25)]" : "",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(212,175,55,0.4)]",
+                      "py-2 text-[12px] font-extrabold tracking-wide uppercase transition-colors border-b-2",
+                      active ? "text-white border-[rgba(212,175,55,0.85)]" : "text-white/60 border-transparent",
+                      "hover:text-white",
                     ].join(" ")}
-                    style={{
-                      borderColor: active ? "rgba(212,175,55,0.55)" : "rgba(255,255,255,0.10)",
-                      background: active ? "rgba(212,175,55,0.16)" : "transparent",
-                      color: active ? PRISM_GOLD : "rgba(255,255,255,0.75)",
-                    }}
-                    title={
-                      !enabled
-                        ? `${t.label} (not wired)`
-                        : active
-                          ? `${t.label} (active)`
-                          : `Switch to ${t.label}`
-                    }
                   >
-                    {t.label}
+                    {tab.label}
                   </button>
                 );
               })}
             </div>
-
-            <div className="flex items-center gap-2">
-              <div className="hidden md:flex items-center gap-2">
-                <div className="text-[11px] text-white/60 font-semibold">Last updated:</div>
-                <div className="text-[11px] text-white font-extrabold">{fmtCTDateTime(lastUpdatedIso)}</div>
-                <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                  <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
-                  <span className={freshness.tone}>{freshness.label}</span>
-                </div>
-              </div>
-              <div className="h-8 w-8 rounded-full border border-white/10 bg-white/5" />
-            </div>
           </div>
+        </div>
 
-          <div
-            className="h-[56px] flex items-center justify-between gap-3 px-2 md:px-0"
-            style={{
-              background: "linear-gradient(180deg, rgba(12,12,12,0.85), rgba(9,9,9,0.78))",
-              borderBottom: `1px solid ${PRISM_BORDER}`,
-              backdropFilter: "blur(10px)",
-            }}
-          >
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+        <div
+          className="sticky top-0 z-40"
+          style={{
+            background: "linear-gradient(180deg, rgba(12,12,12,0.92), rgba(8,8,8,0.9))",
+            borderBottom: `1px solid ${PRISM_BORDER}`,
+            backdropFilter: "blur(10px)",
+          }}
+        >
+          <div className="py-2">
+            <div className="flex flex-wrap items-center gap-2">
               <SelectPill
-                value={market}
-                onChange={(v) => setMarket(v as Market)}
-                label="Market"
+                value={sportKey}
+                onChange={(v) => {
+                  if (onPickSport) onPickSport(v);
+                }}
+                label="Sport"
+                disabled={!onPickSport}
                 options={[
-                  { value: "spread", label: "Point Spread" },
-                  { value: "total", label: "Total" },
-                  { value: "ml", label: "Moneyline" },
+                  ...SPORT_TABS.filter((t) => isOddsSportKey(t.key)).map((t) => ({ value: t.key, label: t.label })),
+                  ...(!SPORT_TABS.some((t) => t.key === sportKey)
+                    ? [{ value: sportKey, label: sportLabelForKey(sportKey) }]
+                    : []),
                 ]}
               />
 
               <div className="flex items-center gap-2">
-                <div className="text-[11px] text-white/60 font-semibold">View</div>
+                <div className="text-[12px] text-white/55 font-semibold">Market</div>
                 <SegmentedToggle
-                  value={view}
+                  value={market}
                   options={[
-                    { value: "pregame", label: "Pre-Game" },
-                    { value: "live", label: "Live" },
+                    { value: "spread", label: "Spread" },
+                    { value: "total", label: "Totals" },
+                    { value: "ml", label: "Moneyline" },
                   ]}
-                  onChange={(next) => setView(next as BoardView)}
+                  onChange={(next) => setMarket(next as Market)}
                 />
               </div>
 
-              <DateReminder label={selectedDateLabel} />
-
-              <div className="hidden md:block">
-                <TextInput value={query} onChange={setQuery} placeholder="Search teams..." onClear={() => setQuery("")} />
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <div className="md:hidden">
-                <TextInput value={query} onChange={setQuery} placeholder="Search..." onClear={() => setQuery("")} />
-              </div>
+              <SelectPill
+                value={scope}
+                onChange={setScope}
+                label="Scope"
+                options={[
+                  { value: "full-game", label: "Full Game" },
+                  { value: "first-half", label: "1st Half" },
+                  { value: "second-half", label: "2nd Half" },
+                  { value: "quarter", label: "Quarter" },
+                ]}
+              />
 
               <SelectPill
                 value={oddsFormat}
@@ -3563,36 +3606,21 @@ export function OddsScreen({
                 ]}
               />
 
-              <SelectPill
-                value={"all"}
-                onChange={() => {}}
-                label="Sportsbooks"
-                options={[{ value: "all", label: `All (${BOOKS.length})` }]}
-              />
-              <button
-                type="button"
-                onClick={handleResetBookOrder}
-                className="text-[11px] font-semibold text-white/60 hover:text-white"
-              >
-                Reset order
-              </button>
-
-              <Btn
-                onClick={() => {
-                  setLoading(true);
-                  load();
-                }}
-                disabled={loading}
-              >
-                {loading ? "Refreshing…" : "Refresh"}
-              </Btn>
+              <div className="flex-1 min-w-[220px]">
+                <TextInput
+                  value={query}
+                  onChange={setQuery}
+                  placeholder="Search team or matchup"
+                  onClear={() => setQuery("")}
+                />
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="pt-2.5 pb-6">
+        <div className="pt-3 pb-6">
           <div
-            className="rounded-3xl border overflow-hidden shadow-[0_18px_80px_rgba(0,0,0,0.6)]"
+            className="rounded-2xl border overflow-hidden shadow-[0_16px_60px_rgba(0,0,0,0.45)]"
             style={{
               borderColor: PRISM_BORDER,
               background: BOARD_BG,
@@ -3612,13 +3640,13 @@ export function OddsScreen({
                   </div>
                 </div>
 
-                <div className="text-right">
+                <div className="flex items-center gap-2">
                   <div className="text-[10px] font-semibold" style={{ color: PRISM_MUTED }}>
                     {events.length} games
                   </div>
-                  <div className="flex items-center justify-end gap-2 text-[10px] font-extrabold text-white">
-                    <span>Updated: {fmtCTDateTime(lastUpdatedIso)}</span>
+                  <div className="flex items-center gap-2 h-7 px-3 rounded-full border border-white/10 bg-black/35 text-[10px] font-semibold text-white/70">
                     <span className={`h-2 w-2 rounded-full ${freshness.dot}`} />
+                    <span>Last updated {fmtCTDateTime(lastUpdatedIso)}</span>
                     <span className={freshness.tone}>{freshness.label}</span>
                   </div>
                 </div>
